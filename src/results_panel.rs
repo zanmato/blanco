@@ -9,6 +9,8 @@ use gpui_component::{
     v_flex, ActiveTheme,
 };
 
+use crate::database::QueryResult;
+
 #[derive(Clone, Debug)]
 pub struct ResultRow {
     pub id: usize,
@@ -20,76 +22,32 @@ pub struct ResultRow {
 
 pub struct ResultsTableDelegate {
     columns: Vec<Column>,
-    rows: Vec<ResultRow>,
+    rows: Vec<Vec<String>>,
 }
 
 impl ResultsTableDelegate {
     pub fn new() -> Self {
         Self {
-            columns: vec![
-                Column::new("id", "ID")
-                    .width(60.)
-                    .resizable(true)
-                    .sortable(),
-                Column::new("name", "Name")
-                    .width(150.)
-                    .resizable(true)
-                    .sortable(),
-                Column::new("email", "Email")
-                    .width(200.)
-                    .resizable(true)
-                    .sortable(),
-                Column::new("age", "Age")
-                    .width(80.)
-                    .resizable(true)
-                    .sortable(),
-                Column::new("city", "City")
-                    .width(150.)
-                    .resizable(true)
-                    .sortable(),
-            ],
-            rows: vec![
-                ResultRow {
-                    id: 1,
-                    name: "Alice Johnson".into(),
-                    email: "alice@example.com".into(),
-                    age: 28,
-                    city: "New York".into(),
-                },
-                ResultRow {
-                    id: 2,
-                    name: "Bob Smith".into(),
-                    email: "bob@example.com".into(),
-                    age: 34,
-                    city: "Los Angeles".into(),
-                },
-                ResultRow {
-                    id: 3,
-                    name: "Charlie Brown".into(),
-                    email: "charlie@example.com".into(),
-                    age: 25,
-                    city: "Chicago".into(),
-                },
-                ResultRow {
-                    id: 4,
-                    name: "Diana Prince".into(),
-                    email: "diana@example.com".into(),
-                    age: 31,
-                    city: "San Francisco".into(),
-                },
-                ResultRow {
-                    id: 5,
-                    name: "Eve Wilson".into(),
-                    email: "eve@example.com".into(),
-                    age: 29,
-                    city: "Seattle".into(),
-                },
-            ],
+            columns: vec![],
+            rows: vec![],
         }
     }
 
-    pub fn set_rows(&mut self, rows: Vec<ResultRow>) {
-        self.rows = rows;
+    pub fn set_query_result(&mut self, result: QueryResult) {
+        // Build columns from result
+        self.columns = result
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                Column::new(&format!("col_{}", i), name)
+                    .width(150.)
+                    .resizable(true)
+                    .sortable()
+            })
+            .collect();
+
+        self.rows = result.rows;
     }
 }
 
@@ -123,17 +81,11 @@ impl TableDelegate for ResultsTableDelegate {
         _: &mut Window,
         _: &mut Context<Table<Self>>,
     ) -> impl IntoElement {
-        let row = &self.rows[row_ix];
-        let col = &self.columns[col_ix];
-
-        let text = match col.key.as_ref() {
-            "id" => row.id.to_string(),
-            "name" => row.name.clone(),
-            "email" => row.email.clone(),
-            "age" => row.age.to_string(),
-            "city" => row.city.clone(),
-            _ => "--".to_string(),
-        };
+        let text = self.rows
+            .get(row_ix)
+            .and_then(|row| row.get(col_ix))
+            .cloned()
+            .unwrap_or_else(|| "--".to_string());
 
         div().child(text)
     }
@@ -145,22 +97,16 @@ impl TableDelegate for ResultsTableDelegate {
         _: &mut Window,
         _: &mut Context<Table<Self>>,
     ) {
-        let col = &self.columns[col_ix];
-        match col.key.as_ref() {
-            "id" => self.rows.sort_by(|a, b| match sort {
-                ColumnSort::Descending => b.id.cmp(&a.id),
-                _ => a.id.cmp(&b.id),
-            }),
-            "name" => self.rows.sort_by(|a, b| match sort {
-                ColumnSort::Descending => b.name.cmp(&a.name),
-                _ => a.name.cmp(&b.name),
-            }),
-            "age" => self.rows.sort_by(|a, b| match sort {
-                ColumnSort::Descending => b.age.cmp(&a.age),
-                _ => a.age.cmp(&b.age),
-            }),
-            _ => {}
-        }
+        // Sort rows by the specified column
+        self.rows.sort_by(|a, b| {
+            let a_val = a.get(col_ix).map(|s| s.as_str()).unwrap_or("");
+            let b_val = b.get(col_ix).map(|s| s.as_str()).unwrap_or("");
+
+            match sort {
+                ColumnSort::Descending => b_val.cmp(a_val),
+                _ => a_val.cmp(b_val),
+            }
+        });
     }
 
     fn visible_rows_changed(
@@ -194,6 +140,14 @@ impl ResultsPanel {
             focus_handle: cx.focus_handle(),
             table,
         }
+    }
+
+    pub fn set_query_result(&mut self, result: QueryResult, cx: &mut Context<Self>) {
+        self.table.update(cx, |table, cx| {
+            table.delegate_mut().set_query_result(result);
+            table.refresh(cx);
+        });
+        cx.notify();
     }
 }
 

@@ -11,14 +11,20 @@ use gpui_component::{
 use serde::Deserialize;
 
 use crate::{
-    editor_panel::EditorPanel, results_panel::ResultsPanel, sidebar::ConnectionSidebar,
+    editor_panel::{EditorPanel, EditorPanelEvent},
+    results_panel::ResultsPanel,
+    sidebar::ConnectionSidebar,
 };
 
-actions!(blanco_app, [Quit, About, NewQuery, OpenConnection]);
+actions!(blanco_app, [Quit, About, NewQuery, OpenConnection, OpenSettings]);
 
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
 #[action(namespace = blanco_app, no_json)]
 struct ToggleSidebar;
+
+
+
+use gpui::Subscription;
 
 pub struct BlancoApp {
     focus_handle: FocusHandle,
@@ -27,6 +33,7 @@ pub struct BlancoApp {
     results_panel: Entity<ResultsPanel>,
     sidebar_collapsed: bool,
     app_menu_bar: Entity<AppMenuBar>,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl BlancoApp {
@@ -38,6 +45,23 @@ impl BlancoApp {
         let results_panel = cx.new(|cx| ResultsPanel::new(window, cx));
         let app_menu_bar = AppMenuBar::new(window, cx);
 
+        // Load saved query tabs
+        editor_panel.update(cx, |panel, cx| {
+            panel.load_saved_tabs(window, cx);
+        });
+
+        // Subscribe to editor panel events
+        let results_panel_clone = results_panel.clone();
+        let subscription = cx.subscribe(&editor_panel, move |_this, _emitter, event: &EditorPanelEvent, cx| {
+            match event {
+                EditorPanelEvent::QueryExecuted(result) => {
+                    results_panel_clone.update(cx, |panel, cx| {
+                        panel.set_query_result(result.clone(), cx);
+                    });
+                }
+            }
+        });
+
         Self {
             focus_handle: cx.focus_handle(),
             sidebar,
@@ -45,10 +69,18 @@ impl BlancoApp {
             results_panel,
             sidebar_collapsed: false,
             app_menu_bar,
+            _subscriptions: vec![subscription],
         }
     }
 
     fn on_quit(&mut self, _: &Quit, _window: &mut Window, cx: &mut Context<Self>) {
+        // Save tabs before quitting
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.save_tabs(cx);
+        });
+
+        // Give a moment for the save to complete
+        std::thread::sleep(std::time::Duration::from_millis(100));
         cx.quit();
     }
 
@@ -70,6 +102,12 @@ impl BlancoApp {
         self.sidebar_collapsed = !self.sidebar_collapsed;
         cx.notify();
     }
+
+    fn on_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.add_settings_tab(window, cx);
+        });
+    }
 }
 
 impl Focusable for BlancoApp {
@@ -86,6 +124,7 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_new_query))
             .on_action(cx.listener(Self::on_open_connection))
             .on_action(cx.listener(Self::toggle_sidebar))
+            .on_action(cx.listener(Self::on_settings))
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
@@ -154,10 +193,17 @@ impl Render for BlancoApp {
 }
 
 fn init_menus(cx: &mut App) {
+    // Register keyboard shortcut for settings (Ctrl/Cmd + ,)
+    cx.bind_keys([
+        gpui::KeyBinding::new("cmd-,", OpenSettings, None),
+        gpui::KeyBinding::new("ctrl-,", OpenSettings, None),
+    ]);
     cx.set_menus(vec![
         Menu {
             name: "Blanco".into(),
             items: vec![
+                MenuItem::action("Preferences...", OpenSettings),
+                MenuItem::Separator,
                 MenuItem::action("About Blanco", About),
                 MenuItem::Separator,
                 MenuItem::action("Quit", Quit),

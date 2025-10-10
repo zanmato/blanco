@@ -1,9 +1,15 @@
 mod app;
+mod app_database;
 mod connection;
+mod database;
+mod db_service;
 mod editor_panel;
 mod results_panel;
+mod settings;
 mod sidebar;
+mod test_db;
 
+use db_service::DbService;
 use gpui::{px, size, AppContext, Application, WindowBounds, WindowOptions};
 
 fn main() {
@@ -11,8 +17,31 @@ fn main() {
 
     let app = Application::new();
 
-    app.run(|cx| {
+    // Initialize database service (creates tokio runtime)
+    let db_service = DbService::new();
+
+    // Initialize databases in background thread using the DbService runtime
+    let db_init = db_service.clone();
+    std::thread::spawn(move || {
+        // Initialize app database (already uses runtime internally)
+        if let Err(e) = db_init.init_app_db() {
+            eprintln!("Failed to initialize app database: {}", e);
+        }
+
+        // Initialize and connect to test database using the runtime
+        db_init.runtime().block_on(async {
+            let mut user_db = db_init.user_db.write().await;
+            if let Err(e) = test_db::init_test_database(&mut user_db).await {
+                eprintln!("Failed to initialize test database: {}", e);
+            } else {
+                println!("✓ Connected to test database");
+            }
+        });
+    });
+
+    app.run(move |cx| {
         gpui_component::init(cx);
+        cx.set_global(db_service);
         cx.activate(true);
 
         let window_bounds = gpui::Bounds::centered(None, size(px(1400.), px(900.)), cx);
