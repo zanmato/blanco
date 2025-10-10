@@ -1,4 +1,5 @@
 use crate::database::DatabaseManager;
+use sqlx::Row;
 use std::path::PathBuf;
 
 /// Get the path to the test database
@@ -19,65 +20,72 @@ pub async fn init_test_database(db: &mut DatabaseManager) -> Result<(), Box<dyn 
     println!("Initializing test database at: {}", db_path.display());
 
     // Connect to the database
-    db.connect(&db_path_str).await?;
+    db.connect_async(&db_path_str).await?;
 
-    // Create sample tables
-    db.execute_query(
-        "CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            email TEXT NOT NULL UNIQUE,
-            age INTEGER,
-            city TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )"
-    ).await?;
+    // Use async operations directly (caller should handle runtime)
+    {
+        // Create sample tables using the async method
+        let pool = db.pool.as_ref().ok_or("Not connected to database")?;
+        
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                email TEXT NOT NULL UNIQUE,
+                age INTEGER,
+                city TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )"
+        ).execute(pool).await?;
 
-    db.execute_query(
-        "CREATE TABLE IF NOT EXISTS orders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            product TEXT NOT NULL,
-            quantity INTEGER NOT NULL,
-            price REAL NOT NULL,
-            order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(id)
-        )"
-    ).await?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                product TEXT NOT NULL,
+                quantity INTEGER NOT NULL,
+                price REAL NOT NULL,
+                order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )"
+        ).execute(pool).await?;
 
-    // Check if we need to insert sample data
-    let users_result = db.execute_query("SELECT COUNT(*) as count FROM users").await?;
-    let has_data = users_result.rows.get(0)
-        .and_then(|row| row.get(0))
-        .and_then(|s| s.parse::<i32>().ok())
-        .unwrap_or(0) > 0;
+        // Check if we need to insert sample data
+        let count_result = sqlx::query("SELECT COUNT(*) as count FROM users")
+            .fetch_one(pool)
+            .await?;
+        let count: i64 = count_result.try_get("count")?;
+        let has_data = count > 0;
 
-    if !has_data {
-        println!("Inserting sample data...");
+        if !has_data {
+            println!("Inserting sample data...");
 
-        // Insert sample users
-        db.execute_query(
-            "INSERT INTO users (name, email, age, city) VALUES
-            ('Alice Johnson', 'alice@example.com', 28, 'San Francisco'),
-            ('Bob Smith', 'bob@example.com', 34, 'New York'),
-            ('Charlie Brown', 'charlie@example.com', 25, 'Austin'),
-            ('Diana Prince', 'diana@example.com', 31, 'Seattle'),
-            ('Eve Williams', 'eve@example.com', 29, 'Portland')"
-        ).await?;
+            // Insert sample users
+            sqlx::query(
+                "INSERT INTO users (name, email, age, city) VALUES
+                ('Alice Johnson', 'alice@example.com', 28, 'San Francisco'),
+                ('Bob Smith', 'bob@example.com', 34, 'New York'),
+                ('Charlie Brown', 'charlie@example.com', 25, 'Austin'),
+                ('Diana Prince', 'diana@example.com', 31, 'Seattle'),
+                ('Eve Williams', 'eve@example.com', 29, 'Portland')"
+            ).execute(pool).await?;
 
-        // Insert sample orders
-        db.execute_query(
-            "INSERT INTO orders (user_id, product, quantity, price) VALUES
-            (1, 'Laptop', 1, 1299.99),
-            (1, 'Mouse', 2, 29.99),
-            (2, 'Keyboard', 1, 89.99),
-            (3, 'Monitor', 2, 349.99),
-            (3, 'Webcam', 1, 79.99),
-            (4, 'Headphones', 1, 199.99),
-            (5, 'Desk Chair', 1, 299.99)"
-        ).await?;
+            // Insert sample orders
+            sqlx::query(
+                "INSERT INTO orders (user_id, product, quantity, price) VALUES
+                (1, 'Laptop', 1, 1299.99),
+                (1, 'Mouse', 2, 29.99),
+                (2, 'Keyboard', 1, 89.99),
+                (3, 'Monitor', 2, 349.99),
+                (3, 'Webcam', 1, 79.99),
+                (4, 'Headphones', 1, 199.99),
+                (5, 'Desk Chair', 1, 299.99)"
+            ).execute(pool).await?;
 
-        println!("Sample data inserted successfully!");
+            println!("Sample data inserted successfully!");
+        }
+
+return Ok(());
     }
 
     Ok(())

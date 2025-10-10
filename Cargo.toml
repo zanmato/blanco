@@ -5,8 +5,8 @@ edition = "2021"
 
 [dependencies]
 gpui = "0.2.0"
-gpui-component = { path = "../../gpui-component/crates/ui" }
-anyhow = "1"
+gpui-component = { path = "../../gpui-component/crates/ui", features = ["tree-sitter-languages"] }
+anyhow = { version = "1", features = ["backtrace"] }
 env_logger = "0.11"
 log = "0.4"
 serde = { version = "1.0", features = ["derive"] }

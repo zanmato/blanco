@@ -4,6 +4,7 @@ mod connection;
 mod database;
 mod db_service;
 mod editor_panel;
+mod gpui_tokio;
 mod results_panel;
 mod settings;
 mod sidebar;
@@ -17,30 +18,26 @@ fn main() {
 
     let app = Application::new();
 
-    // Initialize database service (creates tokio runtime)
+    // Initialize database service
     let db_service = DbService::new();
 
-    // Initialize databases in background thread using the DbService runtime
-    let db_init = db_service.clone();
-    std::thread::spawn(move || {
-        // Initialize app database (already uses runtime internally)
-        if let Err(e) = db_init.init_app_db() {
-            eprintln!("Failed to initialize app database: {}", e);
+    // Initialize test database synchronously before starting GPUI
+    {
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+        let user_db_handle = db_service.user_db_handle();
+        if let Err(e) = rt.block_on(async {
+            let mut user_db = user_db_handle.write().await;
+            test_db::init_test_database(&mut *user_db).await
+        }) {
+            eprintln!("Failed to initialize test database: {}", e);
+        } else {
+            println!("✓ Connected to test database");
         }
-
-        // Initialize and connect to test database using the runtime
-        db_init.runtime().block_on(async {
-            let mut user_db = db_init.user_db.write().await;
-            if let Err(e) = test_db::init_test_database(&mut user_db).await {
-                eprintln!("Failed to initialize test database: {}", e);
-            } else {
-                println!("✓ Connected to test database");
-            }
-        });
-    });
+    }
 
     app.run(move |cx| {
         gpui_component::init(cx);
+        gpui_tokio::init(cx);
         cx.set_global(db_service);
         cx.activate(true);
 
