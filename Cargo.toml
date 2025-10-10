@@ -1,0 +1,14 @@
+[package]
+name = "blanco"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gpui = "0.2.0"
+gpui-component = { path = "../../gpui-component/crates/ui" }
+anyhow = "1"
+env_logger = "0.11"
+log = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1"
+smol = "1"
