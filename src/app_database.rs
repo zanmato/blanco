@@ -40,13 +40,25 @@ impl AppDatabase {
                 title TEXT NOT NULL,
                 content TEXT NOT NULL,
                 position INTEGER NOT NULL,
+                connection_id INTEGER,
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
+                updated_at INTEGER NOT NULL,
+                FOREIGN KEY (connection_id) REFERENCES connections(id) ON DELETE SET NULL
             )
             "#,
         )
         .execute(&self.pool)
         .await?;
+
+        // Migrate existing query_tabs table if needed (add connection_id column)
+        sqlx::query(
+            r#"
+            ALTER TABLE query_tabs ADD COLUMN connection_id INTEGER
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .ok(); // Ignore error if column already exists
 
         // Query history table
         sqlx::query(
@@ -99,13 +111,14 @@ impl AppDatabase {
             sqlx::query(
                 r#"
                 UPDATE query_tabs
-                SET title = ?, content = ?, position = ?, updated_at = ?
+                SET title = ?, content = ?, position = ?, connection_id = ?, updated_at = ?
                 WHERE id = ?
                 "#,
             )
             .bind(&tab.title)
             .bind(&tab.content)
             .bind(tab.position)
+            .bind(tab.connection_id)
             .bind(now)
             .bind(id)
             .execute(&self.pool)
@@ -115,13 +128,14 @@ impl AppDatabase {
             // Insert new tab
             let result = sqlx::query(
                 r#"
-                INSERT INTO query_tabs (title, content, position, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO query_tabs (title, content, position, connection_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(&tab.title)
             .bind(&tab.content)
             .bind(tab.position)
+            .bind(tab.connection_id)
             .bind(now)
             .bind(now)
             .execute(&self.pool)
@@ -134,7 +148,7 @@ impl AppDatabase {
     pub async fn load_query_tabs(&self) -> Result<Vec<QueryTabData>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
-            SELECT id, title, content, position, created_at, updated_at
+            SELECT id, title, content, position, connection_id
             FROM query_tabs
             ORDER BY position ASC
             "#,
@@ -149,6 +163,7 @@ impl AppDatabase {
                 title: row.get(1),
                 content: row.get(2),
                 position: row.get(3),
+                connection_id: row.get(4),
             })
             .collect();
 
@@ -312,6 +327,7 @@ pub struct QueryTabData {
     pub title: String,
     pub content: String,
     pub position: i32,
+    pub connection_id: Option<i64>,
 }
 
 #[derive(Debug, Clone)]

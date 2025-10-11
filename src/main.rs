@@ -3,14 +3,17 @@ mod app_database;
 mod assets;
 mod connection;
 mod connection_modal;
+mod connection_sidebar;
 mod database;
 mod db_service;
 mod editor_panel;
 mod gpui_tokio;
+mod postgres;
 mod results_panel;
 mod settings;
 mod sidebar;
 mod test_db;
+mod theme_loader;
 
 use assets::Assets;
 use db_service::DbService;
@@ -24,6 +27,11 @@ fn main() {
     app.run(move |cx| {
         gpui_component::init(cx);
         gpui_tokio::init(cx);
+
+        // Load and apply the One Dark theme (converted from Zed format)
+        if let Err(e) = theme_loader::load_and_apply_theme("themes/one-dark-darkened-converted.json", cx) {
+            eprintln!("Failed to load theme: {}", e);
+        }
 
         // Load Fira Code fonts
         let font_paths = cx.asset_source().list("fonts/fira-code").unwrap();
@@ -46,22 +54,68 @@ fn main() {
         // Initialize database service
         let db_service = DbService::new();
 
+        // Initialize app database (for query tabs, history, connections)
+        let app_db_handle = db_service.app_db_handle();
+        gpui_tokio::Tokio::spawn_result(cx, async move {
+            match app_database::AppDatabase::new().await {
+                Ok(db) => {
+                    let mut app_db = app_db_handle.write().await;
+                    *app_db = Some(db);
+                    log::info!("App database initialized");
+                    Ok(())
+                }
+                Err(e) => {
+                    log::error!("Failed to initialize app database: {}", e);
+                    Err(anyhow::anyhow!("App database init failed: {}", e))
+                }
+            }
+        })
+        .detach();
+
         // Initialize test database using the global tokio runtime
         let user_db_handle = db_service.user_db_handle();
         gpui_tokio::Tokio::spawn_result(cx, async move {
             let mut user_db = user_db_handle.write().await;
             match test_db::init_test_database(&mut *user_db).await {
                 Ok(_) => {
-                    println!("✓ Connected to test database");
+                    log::info!("Connected to test database");
                     Ok(())
                 }
                 Err(e) => {
-                    eprintln!("Failed to initialize test database: {}", e);
+                    log::error!("Failed to initialize test database: {}", e);
                     Err(anyhow::anyhow!("Test database init failed: {}", e))
                 }
             }
         })
         .detach();
+
+        // Initialize PostgreSQL connection from pg_dsn.txt
+        let pg_dsn_path = std::path::Path::new("pg_dsn.txt");
+        if pg_dsn_path.exists() {
+            if let Ok(dsn) = std::fs::read_to_string(pg_dsn_path) {
+                let dsn = dsn.trim().to_string();
+                if !dsn.is_empty() {
+                    let pg_db_handle = db_service.pg_db_handle();
+                    gpui_tokio::Tokio::spawn_result(cx, async move {
+                        let mut pg_manager = postgres::PostgresManager::new();
+                        match pg_manager.connect_async(&dsn).await {
+                            Ok(_) => {
+                                log::info!("Connected to PostgreSQL database");
+                                // Store in global state
+                                let mut pg_db = pg_db_handle.write().await;
+                                *pg_db = Some(pg_manager);
+                                Ok(())
+                            }
+                            Err(e) => {
+                                log::error!("Failed to connect to PostgreSQL: {}", e);
+                                Err(anyhow::anyhow!("PostgreSQL connection failed: {}", e))
+                            }
+                        }
+                    })
+                    .detach();
+                }
+            }
+        }
 
         cx.set_global(db_service);
         cx.activate(true);

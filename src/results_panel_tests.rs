@@ -1,0 +1,186 @@
+use gpui::{TestAppContext, Window, WindowOptions};
+use crate::database::QueryResult;
+use crate::results_panel::{ResultsPanel, CellEditState};
+
+#[gpui::test]
+fn test_results_panel_creation(cx: &mut TestAppContext) {
+    let window = cx.add_window(WindowOptions::default());
+    let panel = cx.new(|cx| ResultsPanel::new(&mut window.clone(), cx));
+    
+    // Verify the panel was created successfully
+    let panel_read = panel.read(cx);
+    assert!(panel_read.current_result.is_none());
+    assert!(panel_read.editing_input.is_none());
+    assert!(panel_read.editing_cell.is_none());
+}
+
+#[gpui::test]
+fn test_cell_edit_state(cx: &mut TestAppContext) {
+    let mut edit_state = CellEditState::default();
+    
+    // Test initial state
+    assert!(!edit_state.is_editing(0, 0));
+    assert!(!edit_state.is_edited(0, 0));
+    assert!(!edit_state.has_unsaved_changes());
+    
+    // Test starting editing
+    edit_state.start_editing(0, 0, "original".to_string());
+    assert!(edit_state.is_editing(0, 0));
+    assert!(!edit_state.is_edited(0, 0));
+    
+    // Test updating value
+    edit_state.update_editing_value(0, 0, "modified".to_string());
+    assert!(edit_state.is_edited(0, 0));
+    assert_eq!(edit_state.get_edited_value(0, 0), Some(&"modified".to_string()));
+    assert_eq!(edit_state.get_original_value(0, 0), Some(&"original".to_string()));
+    
+    // Test committing edit
+    let committed = edit_state.commit_edit(0, 0);
+    assert_eq!(committed, Some("modified".to_string()));
+    assert!(!edit_state.is_editing(0, 0));
+    assert!(!edit_state.is_edited(0, 0));
+}
+
+#[gpui::test]
+fn test_results_panel_set_query_result(cx: &mut TestAppContext) {
+    let window = cx.add_window(WindowOptions::default());
+    let mut panel = cx.new(|cx| ResultsPanel::new(&mut window.clone(), cx));
+    
+    // Create a test query result
+    let test_result = QueryResult {
+        columns: vec!["id".to_string(), "name".to_string()],
+        rows: vec![
+            vec!["1".to_string(), "Alice".to_string()],
+            vec!["2".to_string(), "Bob".to_string()],
+        ],
+        query_text: Some("SELECT * FROM users".to_string()),
+        execution_time_ms: Some(50),
+    };
+    
+    // Set the query result
+    panel.update(cx, |panel, cx| {
+        panel.set_query_result(test_result.clone(), cx);
+    });
+    
+    // Verify the result was set
+    let panel_read = panel.read(cx);
+    assert!(panel_read.current_result.is_some());
+    assert_eq!(panel_read.current_result.as_ref().unwrap().rows.len(), 2);
+}
+
+#[gpui::test]
+fn test_results_panel_add_row(cx: &mut TestAppContext) {
+    let window = cx.add_window(WindowOptions::default());
+    let mut panel = cx.new(|cx| ResultsPanel::new(&mut window.clone(), cx));
+    
+    // Set initial data
+    let test_result = QueryResult {
+        columns: vec!["id".to_string(), "name".to_string()],
+        rows: vec![
+            vec!["1".to_string(), "Alice".to_string()],
+        ],
+        query_text: Some("SELECT * FROM users".to_string()),
+        execution_time_ms: Some(50),
+    };
+    
+    panel.update(cx, |panel, cx| {
+        panel.set_query_result(test_result, cx);
+    });
+    
+    // Add a new row
+    panel.update(cx, |panel, cx| {
+        panel.add_new_row(cx);
+    });
+    
+    // Verify the row was added
+    let panel_read = panel.read(cx);
+    let table_read = panel_read.table.read(cx);
+    assert_eq!(table_read.delegate().rows.len(), 2);
+    
+    // Verify the new row is marked as pending
+    assert!(table_read.delegate().edit_state.pending_new_rows.contains(&1));
+}
+
+#[gpui::test]
+fn test_results_panel_duplicate_row(cx: &mut TestAppContext) {
+    let window = cx.add_window(WindowOptions::default());
+    let mut panel = cx.new(|cx| ResultsPanel::new(&mut window.clone(), cx));
+    
+    // Set initial data
+    let test_result = QueryResult {
+        columns: vec!["id".to_string(), "name".to_string()],
+        rows: vec![
+            vec!["1".to_string(), "Alice".to_string()],
+            vec!["2".to_string(), "Bob".to_string()],
+        ],
+        query_text: Some("SELECT * FROM users".to_string()),
+        execution_time_ms: Some(50),
+    };
+    
+    panel.update(cx, |panel, cx| {
+        panel.set_query_result(test_result, cx);
+    });
+    
+    // Duplicate the first row
+    panel.update(cx, |panel, cx| {
+        panel.duplicate_row(0, cx);
+    });
+    
+    // Verify the row was duplicated
+    let panel_read = panel.read(cx);
+    let table_read = panel_read.table.read(cx);
+    assert_eq!(table_read.delegate().rows.len(), 3);
+    
+    // Verify the duplicated row has the same data
+    let duplicated_row = &table_read.delegate().rows[2];
+    assert_eq!(duplicated_row[0], "1");
+    assert_eq!(duplicated_row[1], "Alice");
+    
+    // Verify the new row is marked as pending
+    assert!(table_read.delegate().edit_state.pending_new_rows.contains(&2));
+}
+
+#[gpui::test]
+fn test_results_panel_cell_editing(cx: &mut TestAppContext) {
+    let window = cx.add_window(WindowOptions::default());
+    let mut panel = cx.new(|cx| ResultsPanel::new(&mut window.clone(), cx));
+    
+    // Set initial data
+    let test_result = QueryResult {
+        columns: vec!["id".to_string(), "name".to_string()],
+        rows: vec![
+            vec!["1".to_string(), "Alice".to_string()],
+        ],
+        query_text: Some("SELECT * FROM users".to_string()),
+        execution_time_ms: Some(50),
+    };
+    
+    panel.update(cx, |panel, cx| {
+        panel.set_query_result(test_result, cx);
+    });
+    
+    // Start editing a cell
+    panel.update(cx, |panel, cx| {
+        panel.start_cell_edit(0, 1, &mut window.clone(), cx);
+    });
+    
+    // Verify editing state
+    let panel_read = panel.read(cx);
+    assert!(panel_read.is_editing(cx));
+    assert_eq!(panel_read.editing_cell, Some((0, 1)));
+    assert!(panel_read.editing_input.is_some());
+    
+    // Commit the edit with a new value
+    panel.update(cx, |panel, cx| {
+        panel.commit_cell_edit(0, 1, "Alice Smith".to_string(), cx);
+    });
+    
+    // Verify the edit was committed
+    let panel_read = panel.read(cx);
+    assert!(!panel_read.is_editing(cx));
+    assert!(panel_read.has_unsaved_changes(cx));
+    
+    // Check the actual data was updated
+    let table_read = panel_read.table.read(cx);
+    assert_eq!(table_read.delegate().rows[0][1], "Alice Smith");
+}
