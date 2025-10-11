@@ -7,11 +7,13 @@ use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{InputState, TabSize, TextInput},
+    sidebar::SidebarToggleButton,
     tab::{Tab, TabBar},
-    v_flex, ActiveTheme, IconName, Kbd, Sizable,
+    v_flex, ActiveTheme, IconName, Kbd, Side, Sizable,
 };
 use serde_json;
 
+use crate::app::{ToggleSidebar};
 use crate::app_database::{QueryHistoryData, QueryTabData};
 use crate::db_service::DbService;
 use crate::database::QueryResult;
@@ -19,7 +21,7 @@ use crate::settings::Settings;
 
 #[derive(Clone)]
 pub enum EditorPanelEvent {
-    QueryExecuted(QueryResult),
+    // No longer needed - tabs handle their own views
 }
 
 pub enum TabType {
@@ -30,8 +32,10 @@ pub enum TabType {
 pub struct QueryTab {
     pub id: usize,
     pub title: String,
+    pub connection_name: String,
     pub editor: Entity<InputState>,
     pub db_id: Option<i64>, // Database ID for persistence
+    pub results_panel: Entity<crate::results_panel::ResultsPanel>, // Each tab has its own results
 }
 
 pub struct SettingsTab {
@@ -49,6 +53,7 @@ pub struct EditorPanel {
     tabs: Vec<TabType>,
     active_tab_ix: usize,
     next_tab_id: usize,
+    sidebar_collapsed: bool,
 }
 
 impl EditorPanel {
@@ -56,6 +61,7 @@ impl EditorPanel {
         let first_tab = QueryTab {
             id: 0,
             title: "Query 1".to_string(),
+            connection_name: "Test Database".to_string(),
             editor: cx.new(|cx| {
                 InputState::new(window, cx)
                     .code_editor("sql".to_string())
@@ -68,6 +74,7 @@ impl EditorPanel {
                     .placeholder("Enter your SQL query here...")
             }),
             db_id: None,
+            results_panel: cx.new(|cx| crate::results_panel::ResultsPanel::new(window, cx)),
         };
 
         Self {
@@ -75,7 +82,13 @@ impl EditorPanel {
             tabs: vec![TabType::Query(first_tab)],
             active_tab_ix: 0,
             next_tab_id: 1,
+            sidebar_collapsed: false,
         }
+    }
+
+    pub fn set_sidebar_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
+        self.sidebar_collapsed = collapsed;
+        cx.notify();
     }
 
     fn add_new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -85,6 +98,7 @@ impl EditorPanel {
         let new_tab = QueryTab {
             id: tab_id,
             title: format!("Query {}", tab_id + 1),
+            connection_name: "Test Database".to_string(),
             editor: cx.new(|cx| {
                 InputState::new(window, cx)
                     .code_editor("sql".to_string())
@@ -97,6 +111,7 @@ impl EditorPanel {
                     .placeholder("Enter your SQL query here...")
             }),
             db_id: None,
+            results_panel: cx.new(|cx| crate::results_panel::ResultsPanel::new(window, cx)),
         };
 
         self.tabs.push(TabType::Query(new_tab));
@@ -160,109 +175,191 @@ impl EditorPanel {
         }
     }
 
+    /// Extract the query to execute based on selection or cursor position
+    fn extract_current_query(text: &str, cursor_pos: usize, has_selection: bool) -> String {
+        let chars: Vec<char> = text.chars().collect();
+
+        // If there's a selection, we can't easily get it due to API limitations
+        // For now, we'll just use cursor position
+
+        // Find start: read backward until we hit an empty line (double newline) or semicolon or start of text
+        let mut start = cursor_pos.min(chars.len());
+        let mut found_content = false;
+        let mut prev_was_newline = false;
+
+        for i in (0..start).rev() {
+            if let Some(&ch) = chars.get(i) {
+                if ch == ';' {
+                    // Found a semicolon, start after it
+                    start = (i + 1).min(chars.len());
+                    break;
+                } else if ch == '\n' {
+                    if prev_was_newline && found_content {
+                        // Found empty line (double newline) after some content
+                        start = (i + 1).min(chars.len());
+                        break;
+                    }
+                    prev_was_newline = true;
+                } else if !ch.is_whitespace() {
+                    found_content = true;
+                    prev_was_newline = false;
+                }
+            }
+            if i == 0 {
+                start = 0;
+                break;
+            }
+        }
+
+        // Find end: read forward until we hit a semicolon or empty line or end of text
+        let mut end = cursor_pos;
+        prev_was_newline = false;
+
+        for i in cursor_pos..chars.len() {
+            if let Some(&ch) = chars.get(i) {
+                if ch == ';' {
+                    end = i + 1;
+                    break;
+                } else if ch == '\n' {
+                    if prev_was_newline {
+                        // Found empty line (double newline)
+                        end = i;
+                        break;
+                    }
+                    prev_was_newline = true;
+                } else if !ch.is_whitespace() {
+                    prev_was_newline = false;
+                }
+            }
+            if i == chars.len() - 1 {
+                end = chars.len();
+                break;
+            }
+        }
+
+        // Extract the query and trim whitespace
+        chars[start..end].iter().collect::<String>().trim().to_string()
+    }
+
     fn run_query(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(tab) = self.tabs.get(self.active_tab_ix) {
             match tab {
                 TabType::Query(query_tab) => {
-                    let query = query_tab.editor.read(cx).text().to_string();
+                    // Get text and cursor position from editor
+                    let editor = query_tab.editor.read(cx);
+                    let full_text = editor.text().to_string();
+                    let cursor_pos = editor.cursor();
+
+                    let query = Self::extract_current_query(
+                        &full_text,
+                        cursor_pos,
+                        false  // TODO: Detect actual selection state when API is available
+                    );
+
+                    if query.is_empty() {
+                        println!("No query to execute");
+                        return;
+                    }
+
                     println!("Executing query: {}", query);
 
                     // Get database service
-                    let _db_service = DbService::global(cx).clone();
-                    let _user_db = _db_service.user_db_handle();
-                    let _app_db = _db_service.app_db_handle();
+                    let db_service = DbService::global(cx).clone();
+                    let user_db = db_service.user_db_handle();
+                    let app_db = db_service.app_db_handle();
 
-                    // Execute the query using gpui_tokio
-                    let query_task = {
-                        let user_db_clone = _user_db.clone();
-                        let app_db_clone = _app_db.clone();
-                        let query_clone = query.clone();
-                        
-                        cx.spawn(async move |this, mut cx| {
-                            // Use gpui_tokio to run the query on Tokio runtime
-                            let result = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
-                                let rt = tokio::runtime::Runtime::new()
-                                    .map_err(|e| anyhow::anyhow!("Failed to create runtime: {}", e))?;
-                                
-                                rt.block_on(async {
-                                    let db = user_db_clone.read().await;
-                                    
-                                    // Check if connected
-                                    if !db.is_connected() {
-                                        return Ok(None);
+                    // Track execution timing
+                    let start_time = std::time::Instant::now();
+                    let executed_at = chrono::Utc::now().timestamp();
+
+                    // Execute query using Tokio::spawn_result to ensure tokio context
+                    let db_task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
+                        let db = user_db.read().await;
+
+                        let query_result = if !db.is_connected() {
+                            Err(anyhow::anyhow!("Not connected to a database"))
+                        } else {
+                            db.execute_query_async(&query).await.map_err(|e| anyhow::anyhow!("{}", e))
+                        };
+
+                        let duration_ms = start_time.elapsed().as_millis() as i64;
+
+                        match query_result {
+                            Ok(mut result) => {
+                                println!("Query executed successfully: {} rows", result.row_count());
+
+                                // Add execution metadata
+                                result.query_text = Some(query.clone());
+                                result.execution_time_ms = Some(duration_ms);
+                                result.is_error = false;
+
+                                // Save to query history
+                                if let Some(app_db) = app_db.read().await.as_ref() {
+                                    let history = QueryHistoryData {
+                                        id: None,
+                                        query_text: query.clone(),
+                                        executed_at,
+                                        duration_ms: Some(duration_ms),
+                                        rows_affected: Some(result.rows_affected as i64),
+                                        row_count: Some(result.row_count() as i64),
+                                        success: true,
+                                        error_message: None,
+                                    };
+
+                                    if let Err(e) = app_db.save_query_history(&history).await {
+                                        eprintln!("Failed to save query history: {}", e);
                                     }
+                                }
 
-                                    // Track execution time
-                                    let start_time = std::time::Instant::now();
-                                    let executed_at = chrono::Utc::now().timestamp();
-
-                                    // Execute the query
-                                    match db.execute_query_async(&query_clone).await {
-                                        Ok(result) => {
-                                            let duration_ms = start_time.elapsed().as_millis() as i64;
-
-                                            println!("Query executed successfully: {} rows affected", result.rows_affected);
-
-                                            // Save to query history
-                                            if let Some(app_db) = app_db_clone.read().await.as_ref() {
-                                                let history = crate::app_database::QueryHistoryData {
-                                                    id: None,
-                                                    query_text: query_clone.clone(),
-                                                    executed_at,
-                                                    duration_ms: Some(duration_ms),
-                                                    rows_affected: Some(result.rows_affected as i64),
-                                                    row_count: Some(result.row_count() as i64),
-                                                    success: true,
-                                                    error_message: None,
-                                                };
-
-                                                if let Err(e) = app_db.save_query_history(&history).await {
-                                                    eprintln!("Failed to save query history: {}", e);
-                                                }
-                                            }
-
-                                            Ok(Some(result))
-                                        }
-                                        Err(e) => {
-                                            let duration_ms = start_time.elapsed().as_millis() as i64;
-                                            let error_msg = e.to_string();
-
-                                            println!("Query execution failed: {}", error_msg);
-
-                                            // Save error to query history
-                                            if let Some(app_db) = app_db_clone.read().await.as_ref() {
-                                                let history = crate::app_database::QueryHistoryData {
-                                                    id: None,
-                                                    query_text: query_clone.clone(),
-                                                    executed_at,
-                                                    duration_ms: Some(duration_ms),
-                                                    rows_affected: None,
-                                                    row_count: None,
-                                                    success: false,
-                                                    error_message: Some(error_msg.clone()),
-                                                };
-
-                                                if let Err(e) = app_db.save_query_history(&history).await {
-                                                    eprintln!("Failed to save query history: {}", e);
-                                                }
-                                            }
-
-                                            Ok(None)
-                                        }
-                                    }
-                                })
-                            }).expect("Failed to spawn query task").await?;
-
-                            // Update UI with results
-                            if let Some(query_result) = result {
-                                let _ = this.update(cx, |this, cx| {
-                                    cx.emit(EditorPanelEvent::QueryExecuted(query_result));
-                                });
+                                Ok(result)
                             }
+                            Err(e) => {
+                                let error_msg = e.to_string();
+                                eprintln!("Query execution failed: {}", error_msg);
 
-                            Ok::<(), anyhow::Error>(())
-                        }).detach()
-                    };
+                                // Save error to query history
+                                if let Some(app_db) = app_db.read().await.as_ref() {
+                                    let history = QueryHistoryData {
+                                        id: None,
+                                        query_text: query.clone(),
+                                        executed_at,
+                                        duration_ms: Some(duration_ms),
+                                        rows_affected: None,
+                                        row_count: None,
+                                        success: false,
+                                        error_message: Some(error_msg.clone()),
+                                    };
+
+                                    if let Err(e) = app_db.save_query_history(&history).await {
+                                        eprintln!("Failed to save query history: {}", e);
+                                    }
+                                }
+
+                                // Return error as a result
+                                Ok(QueryResult {
+                                    columns: vec!["Error".to_string()],
+                                    rows: vec![vec![error_msg.clone()]],
+                                    rows_affected: 0,
+                                    query_text: Some(query.clone()),
+                                    execution_time_ms: Some(duration_ms),
+                                    is_error: true,
+                                })
+                            }
+                        }
+                    });
+
+                    // Get the results panel for this tab
+                    let results_panel = query_tab.results_panel.clone();
+
+                    // Update results panel when the task completes
+                    cx.spawn(async move |_editor_panel, cx| {
+                        if let Ok(result) = db_task.await {
+                            let _ = results_panel.update(cx, |panel, cx| {
+                                panel.set_query_result(result, cx);
+                            });
+                        }
+                    })
+                    .detach();
                 }
                 TabType::Settings(_) => {
                     // Settings tabs don't support query execution
@@ -328,19 +425,6 @@ impl EditorPanel {
         })
     }
 
-    fn get_tab_title(&self, tab: &TabType) -> String {
-        match tab {
-            TabType::Query(query_tab) => query_tab.title.clone(),
-            TabType::Settings(settings_tab) => {
-                let mut title = settings_tab.title.clone();
-                if !settings_tab.is_valid {
-                    title.push_str(" ⚠️");
-                }
-                title
-            }
-        }
-    }
-
     fn is_settings_tab(&self, tab: &TabType) -> bool {
         matches!(tab, TabType::Settings(_))
     }
@@ -364,57 +448,54 @@ impl EditorPanel {
             }
         }
 
-// TODO: Implement proper async tab saving
         println!("Saving {} tabs", tabs_data.len());
+
+        // Save tabs in background using global tokio runtime
+        crate::gpui_tokio::Tokio::spawn_result(cx, async move {
+            if let Some(app_db) = app_db.read().await.as_ref() {
+                for (db_id, title, content, position) in tabs_data {
+                    let tab_data = QueryTabData {
+                        id: db_id,
+                        title,
+                        content,
+                        position,
+                    };
+                    if let Err(e) = app_db.save_query_tab(&tab_data).await {
+                        eprintln!("Failed to save tab: {}", e);
+                    }
+                }
+            }
+            Ok::<(), anyhow::Error>(())
+        }).detach();
     }
 
-/// Load saved query tabs from the app database
+    /// Load saved query tabs from the app database
     pub fn load_saved_tabs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let _db_service = DbService::global(cx).clone();
-        let _app_db = _db_service.app_db_handle();
+        let db_service = DbService::global(cx).clone();
+        let app_db = db_service.app_db_handle();
 
-        // TODO: Implement proper async tab loading
-        let saved_tabs: Vec<QueryTabData> = vec![];
+        // Load tabs using global tokio runtime
+        let task: gpui::Task<()> = cx.spawn(async move |editor_panel, mut cx| {
+            let saved_tabs = if let Some(app_db) = app_db.read().await.as_ref() {
+                app_db.load_query_tabs().await.ok().unwrap_or_default()
+            } else {
+                Vec::new()
+            };
 
-        // Update UI with loaded tabs
-        if !saved_tabs.is_empty() {
-            // Clear existing tabs
-            self.tabs.clear();
+            // Update UI with loaded tabs
+            if !saved_tabs.is_empty() {
+                let _ = editor_panel.update(cx, |panel, _cx| {
+                    // Clear existing tabs
+                    panel.tabs.clear();
 
-            // Create tabs from saved data
-            for tab_data in saved_tabs {
-                let tab_id = self.next_tab_id;
-                self.next_tab_id += 1;
-
-                let editor = cx.new(|cx| {
-                    let mut state = InputState::new(window, cx)
-                        .code_editor("sql".to_string())
-                        .line_number(true)
-                        .tab_size(TabSize {
-                            tab_size: 4,
-                            hard_tabs: false,
-                        })
-                        .soft_wrap(false)
-                        .placeholder("Enter your SQL query here...");
-
-                    // Set the saved content
-                    state.replace(&tab_data.content, window, cx);
-                    state
+                    // We need window for InputState::new, but we don't have it in async context
+                    // For now, we'll skip loading tabs - this needs a different approach
+                    // TODO: Find a way to create InputState without window reference
+                    println!("Loaded {} tabs from database (UI update pending)", saved_tabs.len());
                 });
-
-                let query_tab = QueryTab {
-                    id: tab_id,
-                    title: tab_data.title,
-                    editor,
-                    db_id: tab_data.id,
-                };
-
-                self.tabs.push(TabType::Query(query_tab));
             }
-
-            self.active_tab_ix = 0;
-            cx.notify();
-        }
+        });
+        task.detach();
     }
 }
 
@@ -429,19 +510,16 @@ impl EventEmitter<EditorPanelEvent> for EditorPanel {}
 impl Render for EditorPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Handle pending text for settings tabs first
-        let is_settings_tab = if let Some(TabType::Settings(settings_tab)) = self.tabs.get_mut(self.active_tab_ix) {
+        if let Some(TabType::Settings(settings_tab)) = self.tabs.get_mut(self.active_tab_ix) {
             if let Some(pending_text) = settings_tab.pending_text.take() {
                 settings_tab.editor.update(cx, |state, cx| {
                     state.replace(&pending_text, window, cx);
                 });
             }
-            true
-        } else {
-            false
-        };
+        }
 
         let current_tab = self.tabs.get(self.active_tab_ix);
-        
+
         v_flex()
             .size_full()
             .child(
@@ -452,7 +530,36 @@ impl Render for EditorPanel {
                     .on_click(cx.listener(|this, ix: &usize, window, cx| {
                         this.set_active_tab(*ix, window, cx);
                     }))
-                    .children(self.tabs.iter().map(|tab| Tab::new(&self.get_tab_title(tab))))
+                    .prefix(
+                        SidebarToggleButton::left()
+                            .side(Side::Left)
+                            .collapsed(self.sidebar_collapsed)
+                            .on_click(cx.listener(|_this, _, _window, cx| {
+                                cx.dispatch_action(&ToggleSidebar);
+                            }))
+                    )
+                    .children(self.tabs.iter().map(|tab| {
+                        match tab {
+                            TabType::Query(query_tab) => {
+                                Tab::new(&query_tab.title)
+                                    .suffix(
+                                        div()
+                                            .ml_2()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(query_tab.connection_name.clone())
+                                            .into_any_element()
+                                    )
+                            }
+                            TabType::Settings(settings_tab) => {
+                                let mut label = settings_tab.title.clone();
+                                if !settings_tab.is_valid {
+                                    label.push_str(" ⚠️");
+                                }
+                                Tab::new(label)
+                            }
+                        }
+                    }))
                     .suffix(
                         h_flex()
                             .gap_1()
@@ -476,91 +583,132 @@ impl Render for EditorPanel {
                             ),
                     ),
             )
-            .child(
-                // Editor
-                v_flex()
-                    .flex_1()
-                    .min_h(px(200.))
-                    .border_t_1()
-                    .border_color(cx.theme().border)
-                    .when_some(self.current_editor(), |this, editor| {
+            // Render the active tab's complete view
+            .when_some(current_tab, |this, tab| {
+                match tab {
+                    TabType::Query(query_tab) => {
+                        // Query tab: Editor + Button bar + Results view
                         this.child(
-                            TextInput::new(editor)
-                                .bordered(false)
-                                .p_0()
-                                .h_full()
-                                .font_family("Monaco")
-                                .text_size(px(14.))
-                                .focus_bordered(false),
+                            v_flex()
+                                .flex_1()
+                                .overflow_hidden()
+                                // Editor
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_h_0()
+                                        .border_t_1()
+                                        .border_color(cx.theme().border)
+                                        .child(
+                                            TextInput::new(&query_tab.editor)
+                                                .bordered(false)
+                                                .p_0()
+                                                .h_full()
+                                                .font_family("Fira Code")
+                                                .text_size(px(14.))
+                                                .focus_bordered(false),
+                                        )
+                                )
+                                // Button bar (between editor and results)
+                                .child(
+                                    h_flex()
+                                        .p_3()
+                                        .gap_2()
+                                        .border_t_1()
+                                        .border_color(cx.theme().border)
+                                        .bg(cx.theme().muted.opacity(0.5))
+                                        .child(
+                                            Button::new("format-query")
+                                                .outline()
+                                                .icon(IconName::Asterisk)
+                                                .label("Format")
+                                                .children(vec![Kbd::new(Keystroke::parse("shift-f").unwrap()).into_any_element()]),
+                                        )
+                                        .child(div().flex_1())
+                                        .child(
+                                            Button::new("run-query")
+                                                .primary()
+                                                .icon(IconName::Check)
+                                                .label("Run Current")
+                                                .children(vec![Kbd::new(Keystroke::parse("shift-enter").unwrap()).into_any_element()])
+                                                .on_click(cx.listener(Self::run_query)),
+                                        )
+                                )
+                                // Results
+                                .child(
+                                    div()
+                                        .h(px(300.))
+                                        .min_h(px(100.))
+                                        .child(query_tab.results_panel.clone())
+                                )
                         )
-                    })
-                    // Show validation error for settings tab
-                    .when_some(current_tab.and_then(|tab| {
-                        if let TabType::Settings(settings_tab) = tab {
-                            settings_tab.validation_error.as_ref()
-                        } else {
-                            None
-                        }
-                    }), |this, error| {
+                    }
+                    TabType::Settings(settings_tab) => {
+                        // Settings tab: Just editor + buttons
                         this.child(
-                            div()
-                                .p_2()
-                                .bg(cx.theme().red.opacity(0.1))
-                                .border_1()
-                                .border_color(cx.theme().red)
-                                .text_color(cx.theme().red)
-                                .child(format!("❌ JSON Error: {}", error))
+                            v_flex()
+                                .flex_1()
+                                .overflow_hidden()
+                                // Editor
+                                .child(
+                                    v_flex()
+                                        .flex_1()
+                                        .border_t_1()
+                                        .border_color(cx.theme().border)
+                                        .child(
+                                            TextInput::new(&settings_tab.editor)
+                                                .bordered(false)
+                                                .p_0()
+                                                .h_full()
+                                                .font_family("Fira Code")
+                                                .text_size(px(14.))
+                                                .focus_bordered(false),
+                                        )
+                                        // Show validation error
+                                        .when_some(settings_tab.validation_error.as_ref(), |this, error| {
+                                            this.child(
+                                                div()
+                                                    .p_2()
+                                                    .bg(cx.theme().red.opacity(0.1))
+                                                    .border_1()
+                                                    .border_color(cx.theme().red)
+                                                    .text_color(cx.theme().red)
+                                                    .child(format!("❌ JSON Error: {}", error))
+                                            )
+                                        })
+                                )
+                                // Button bar
+                                .child(
+                                    h_flex()
+                                        .p_3()
+                                        .gap_2()
+                                        .border_t_1()
+                                        .border_color(cx.theme().border)
+                                        .bg(cx.theme().muted.opacity(0.5))
+                                        .child(
+                                            Button::new("reset-settings")
+                                                .outline()
+                                                .icon(IconName::Asterisk)
+                                                .label("Reset to Defaults")
+                                                .on_click(cx.listener(|this, _, _window, cx| {
+                                                    this.reset_settings(cx);
+                                                })),
+                                        )
+                                        .child(div().flex_1())
+                                        .child(
+                                            Button::new("save-settings")
+                                                .primary()
+                                                .icon(IconName::Check)
+                                                .label("Save Settings")
+                                                .children(vec![Kbd::new(Keystroke::parse("shift-enter").unwrap()).into_any_element()])
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.save_settings(window, cx);
+                                                })),
+                                        )
+                                )
                         )
-                    }),
-            )
-            .child(
-                // Button bar - different for query vs settings tabs
-                h_flex()
-                    .p_3()
-                    .gap_2()
-                    .border_t_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().muted.opacity(0.5))
-                    .when(is_settings_tab, |this| {
-                        this.child(
-                            Button::new("reset-settings")
-                                .outline()
-                                .icon(IconName::Asterisk)
-                                .label("Reset to Defaults")
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.reset_settings(cx);
-                                })),
-                        )
-                        .child(div().flex_1())
-                        .child(
-                            Button::new("save-settings")
-                                .primary()
-                                .icon(IconName::Check)
-                                .label("Save Settings")
-                                .children(vec![Kbd::new(Keystroke::parse("shift-enter").unwrap()).into_any_element()])
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.save_settings(window, cx);
-                                })),
-                        )
-                    })
-                    .when(!is_settings_tab, |this| {
-                        this.child(
-                            Button::new("format-query")
-                                .outline()
-                                .icon(IconName::Asterisk)
-                                .label("Format")
-                                .children(vec![Kbd::new(Keystroke::parse("shift-f").unwrap()).into_any_element()]),
-                        )
-                        .child(div().flex_1())
-                        .child(
-                            Button::new("run-query")
-                                .primary()
-                                .icon(IconName::Check)
-                                .label("Run Query")
-                                .children(vec![Kbd::new(Keystroke::parse("shift-enter").unwrap()).into_any_element()])
-                                .on_click(cx.listener(Self::run_query)),
-                        )
-                    }),
-            )
+                    }
+                }
+            })
     }
 }

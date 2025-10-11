@@ -1,9 +1,9 @@
 use crate::gpui_tokio::Tokio;
 use gpui::AppContext;
+use gpui::Task;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use sqlx::{Column, ConnectOptions, Row};
 use std::str::FromStr;
-use gpui::Task;
 
 pub struct DatabaseManager {
     pub pool: Option<SqlitePool>,
@@ -14,7 +14,11 @@ impl DatabaseManager {
         Self { pool: None }
     }
 
-    pub fn connect<C: AppContext>(&mut self, database_path: &str, cx: &C) -> C::Result<Task<anyhow::Result<()>>> {
+    pub fn connect<C: AppContext>(
+        &mut self,
+        database_path: &str,
+        cx: &C,
+    ) -> C::Result<Task<anyhow::Result<()>>> {
         let database_path = database_path.to_string();
         Tokio::spawn_result(cx, async move {
             let options = SqliteConnectOptions::from_str(&database_path)?
@@ -28,7 +32,10 @@ impl DatabaseManager {
         })
     }
 
-    pub async fn execute_query_async(&self, query: &str) -> Result<QueryResult, Box<dyn std::error::Error>> {
+    pub async fn execute_query_async(
+        &self,
+        query: &str,
+    ) -> Result<QueryResult, Box<dyn std::error::Error>> {
         let pool = self.pool.as_ref().ok_or("Not connected to database")?;
 
         // Try to execute as a query that returns rows
@@ -39,6 +46,9 @@ impl DatabaseManager {
                         columns: vec![],
                         rows: vec![],
                         rows_affected: 0,
+                        query_text: None,
+                        execution_time_ms: None,
+                        is_error: false,
                     });
                 }
 
@@ -58,15 +68,15 @@ impl DatabaseManager {
                             .iter()
                             .enumerate()
                             .map(|(i, _)| {
-                                // Try to get value as different types
-                                if let Ok(val) = row.try_get::<String, _>(i) {
-                                    val
-                                } else if let Ok(val) = row.try_get::<i64, _>(i) {
-                                    val.to_string()
-                                } else if let Ok(val) = row.try_get::<f64, _>(i) {
-                                    val.to_string()
-                                } else if let Ok(val) = row.try_get::<bool, _>(i) {
-                                    val.to_string()
+                                // Check if the value is NULL first
+                                if let Ok(val) = row.try_get::<Option<String>, _>(i) {
+                                    val.unwrap_or_else(|| "NULL".to_string())
+                                } else if let Ok(val) = row.try_get::<Option<i64>, _>(i) {
+                                    val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
+                                } else if let Ok(val) = row.try_get::<Option<f64>, _>(i) {
+                                    val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
+                                } else if let Ok(val) = row.try_get::<Option<bool>, _>(i) {
+                                    val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
                                 } else {
                                     "NULL".to_string()
                                 }
@@ -79,27 +89,37 @@ impl DatabaseManager {
                     columns,
                     rows: data_rows,
                     rows_affected: 0,
+                    query_text: None,
+                    execution_time_ms: None,
+                    is_error: false,
                 })
             }
-            Err(e) => {
+            Err(_e) => {
                 // If it's not a SELECT query, try executing it as a statement
                 let result = sqlx::query(query).execute(pool).await?;
                 Ok(QueryResult {
                     columns: vec![],
                     rows: vec![],
                     rows_affected: result.rows_affected(),
+                    query_text: None,
+                    execution_time_ms: None,
+                    is_error: false,
                 })
             }
         }
     }
 
-    pub fn execute_query<C: AppContext>(&self, query: String, cx: &C) -> C::Result<Task<anyhow::Result<QueryResult>>> {
+    pub fn execute_query<C: AppContext>(
+        &self,
+        query: String,
+        cx: &C,
+    ) -> C::Result<Task<anyhow::Result<QueryResult>>> {
         let query_clone = query.clone();
         let pool = self.pool.clone();
-        
+
         Tokio::spawn_result(cx, async move {
             let pool = pool.ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
-            
+
             // Try to execute as a query that returns rows
             match sqlx::query(&query_clone).fetch_all(&pool).await {
                 Ok(rows) => {
@@ -108,6 +128,9 @@ impl DatabaseManager {
                             columns: vec![],
                             rows: vec![],
                             rows_affected: 0,
+                            query_text: None,
+                            execution_time_ms: None,
+                            is_error: false,
                         });
                     }
 
@@ -127,15 +150,15 @@ impl DatabaseManager {
                                 .iter()
                                 .enumerate()
                                 .map(|(i, _)| {
-                                    // Try to get value as different types
-                                    if let Ok(val) = row.try_get::<String, _>(i) {
-                                        val
-                                    } else if let Ok(val) = row.try_get::<i64, _>(i) {
-                                        val.to_string()
-                                    } else if let Ok(val) = row.try_get::<f64, _>(i) {
-                                        val.to_string()
-                                    } else if let Ok(val) = row.try_get::<bool, _>(i) {
-                                        val.to_string()
+                                    // Check if the value is NULL first
+                                    if let Ok(val) = row.try_get::<Option<String>, _>(i) {
+                                        val.unwrap_or_else(|| "NULL".to_string())
+                                    } else if let Ok(val) = row.try_get::<Option<i64>, _>(i) {
+                                        val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
+                                    } else if let Ok(val) = row.try_get::<Option<f64>, _>(i) {
+                                        val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
+                                    } else if let Ok(val) = row.try_get::<Option<bool>, _>(i) {
+                                        val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
                                     } else {
                                         "NULL".to_string()
                                     }
@@ -148,15 +171,21 @@ impl DatabaseManager {
                         columns,
                         rows: data_rows,
                         rows_affected: 0,
+                        query_text: None,
+                        execution_time_ms: None,
+                        is_error: false,
                     })
                 }
-                Err(e) => {
+                Err(_e) => {
                     // If it's not a SELECT query, try executing it as a statement
                     let result = sqlx::query(&query_clone).execute(&pool).await?;
                     Ok(QueryResult {
                         columns: vec![],
                         rows: vec![],
                         rows_affected: result.rows_affected(),
+                        query_text: None,
+                        execution_time_ms: None,
+                        is_error: false,
                     })
                 }
             }
@@ -188,6 +217,22 @@ impl DatabaseManager {
         self.pool = Some(pool);
         Ok(())
     }
+
+    /// Get list of table names from the database
+    pub async fn get_tables(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let pool = self.pool.as_ref().ok_or("Not connected to database")?;
+
+        let rows = sqlx::query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .fetch_all(pool)
+            .await?;
+
+        let tables: Vec<String> = rows
+            .iter()
+            .filter_map(|row| row.try_get::<String, _>("name").ok())
+            .collect();
+
+        Ok(tables)
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -195,6 +240,9 @@ pub struct QueryResult {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<String>>,
     pub rows_affected: u64,
+    pub query_text: Option<String>,
+    pub execution_time_ms: Option<i64>,
+    pub is_error: bool,
 }
 
 impl QueryResult {

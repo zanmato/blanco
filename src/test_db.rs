@@ -60,14 +60,14 @@ pub async fn init_test_database(db: &mut DatabaseManager) -> Result<(), Box<dyn 
         if !has_data {
             println!("Inserting sample data...");
 
-            // Insert sample users
+            // Insert sample users (some with NULL values for testing)
             sqlx::query(
                 "INSERT INTO users (name, email, age, city) VALUES
                 ('Alice Johnson', 'alice@example.com', 28, 'San Francisco'),
                 ('Bob Smith', 'bob@example.com', 34, 'New York'),
-                ('Charlie Brown', 'charlie@example.com', 25, 'Austin'),
-                ('Diana Prince', 'diana@example.com', 31, 'Seattle'),
-                ('Eve Williams', 'eve@example.com', 29, 'Portland')"
+                ('Charlie Brown', 'charlie@example.com', NULL, 'Austin'),
+                ('Diana Prince', 'diana@example.com', 31, NULL),
+                ('Eve Williams', 'eve@example.com', NULL, NULL)"
             ).execute(pool).await?;
 
             // Insert sample orders

@@ -1,6 +1,8 @@
 mod app;
 mod app_database;
+mod assets;
 mod connection;
+mod connection_modal;
 mod database;
 mod db_service;
 mod editor_panel;
@@ -10,34 +12,57 @@ mod settings;
 mod sidebar;
 mod test_db;
 
+use assets::Assets;
 use db_service::DbService;
 use gpui::{px, size, AppContext, Application, WindowBounds, WindowOptions};
 
 fn main() {
     env_logger::init();
 
-    let app = Application::new();
-
-    // Initialize database service
-    let db_service = DbService::new();
-
-    // Initialize test database synchronously before starting GPUI
-    {
-        let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-        let user_db_handle = db_service.user_db_handle();
-        if let Err(e) = rt.block_on(async {
-            let mut user_db = user_db_handle.write().await;
-            test_db::init_test_database(&mut *user_db).await
-        }) {
-            eprintln!("Failed to initialize test database: {}", e);
-        } else {
-            println!("✓ Connected to test database");
-        }
-    }
+    let app = Application::new().with_assets(Assets);
 
     app.run(move |cx| {
         gpui_component::init(cx);
         gpui_tokio::init(cx);
+
+        // Load Fira Code fonts
+        let font_paths = cx.asset_source().list("fonts/fira-code").unwrap();
+        let mut embedded_fonts = Vec::new();
+        for font_path in font_paths {
+            if font_path.ends_with(".ttf") {
+                let font_bytes = cx
+                    .asset_source()
+                    .load(&font_path)
+                    .ok()
+                    .flatten()
+                    .map(|bytes| bytes.to_vec());
+                if let Some(bytes) = font_bytes {
+                    embedded_fonts.push(bytes.into());
+                }
+            }
+        }
+        cx.text_system().add_fonts(embedded_fonts).unwrap();
+
+        // Initialize database service
+        let db_service = DbService::new();
+
+        // Initialize test database using the global tokio runtime
+        let user_db_handle = db_service.user_db_handle();
+        gpui_tokio::Tokio::spawn_result(cx, async move {
+            let mut user_db = user_db_handle.write().await;
+            match test_db::init_test_database(&mut *user_db).await {
+                Ok(_) => {
+                    println!("✓ Connected to test database");
+                    Ok(())
+                }
+                Err(e) => {
+                    eprintln!("Failed to initialize test database: {}", e);
+                    Err(anyhow::anyhow!("Test database init failed: {}", e))
+                }
+            }
+        })
+        .detach();
+
         cx.set_global(db_service);
         cx.activate(true);
 

@@ -72,7 +72,13 @@ impl AppDatabase {
             CREATE TABLE IF NOT EXISTS connections (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,
-                database_path TEXT NOT NULL,
+                db_type TEXT NOT NULL,
+                host TEXT,
+                port INTEGER,
+                database_name TEXT,
+                username TEXT,
+                password TEXT,
+                database_path TEXT,
                 last_used_at INTEGER,
                 created_at INTEGER NOT NULL
             )
@@ -218,11 +224,18 @@ impl AppDatabase {
             sqlx::query(
                 r#"
                 UPDATE connections
-                SET name = ?, database_path = ?, last_used_at = ?
+                SET name = ?, db_type = ?, host = ?, port = ?, database_name = ?,
+                    username = ?, password = ?, database_path = ?, last_used_at = ?
                 WHERE id = ?
                 "#,
             )
             .bind(&conn.name)
+            .bind(&conn.db_type)
+            .bind(&conn.host)
+            .bind(conn.port)
+            .bind(&conn.database_name)
+            .bind(&conn.username)
+            .bind(&conn.password)
             .bind(&conn.database_path)
             .bind(now)
             .bind(id)
@@ -233,11 +246,17 @@ impl AppDatabase {
             // Insert new connection
             let result = sqlx::query(
                 r#"
-                INSERT INTO connections (name, database_path, last_used_at, created_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO connections (name, db_type, host, port, database_name, username, password, database_path, last_used_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(&conn.name)
+            .bind(&conn.db_type)
+            .bind(&conn.host)
+            .bind(conn.port)
+            .bind(&conn.database_name)
+            .bind(&conn.username)
+            .bind(&conn.password)
             .bind(&conn.database_path)
             .bind(now)
             .bind(now)
@@ -251,7 +270,7 @@ impl AppDatabase {
     pub async fn get_connections(&self) -> Result<Vec<ConnectionData>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
-            SELECT id, name, database_path, last_used_at
+            SELECT id, name, db_type, host, port, database_name, username, password, database_path, last_used_at
             FROM connections
             ORDER BY last_used_at DESC NULLS LAST
             "#,
@@ -264,8 +283,14 @@ impl AppDatabase {
             .map(|row| ConnectionData {
                 id: Some(row.get::<i64, _>(0)),
                 name: row.get(1),
-                database_path: row.get(2),
-                last_used_at: row.get(3),
+                db_type: row.get(2),
+                host: row.get(3),
+                port: row.get(4),
+                database_name: row.get(5),
+                username: row.get(6),
+                password: row.get(7),
+                database_path: row.get(8),
+                last_used_at: row.get(9),
             })
             .collect();
 
@@ -305,6 +330,29 @@ pub struct QueryHistoryData {
 pub struct ConnectionData {
     pub id: Option<i64>,
     pub name: String,
-    pub database_path: String,
+    pub db_type: String,
+    pub host: Option<String>,
+    pub port: Option<i32>,
+    pub database_name: Option<String>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub database_path: Option<String>,
     pub last_used_at: Option<i64>,
+}
+
+impl ConnectionData {
+    pub fn new_sqlite(name: String, database_path: String) -> Self {
+        Self {
+            id: None,
+            name,
+            db_type: "SQLite".to_string(),
+            host: None,
+            port: None,
+            database_name: None,
+            username: None,
+            password: None,
+            database_path: Some(database_path),
+            last_used_at: None,
+        }
+    }
 }

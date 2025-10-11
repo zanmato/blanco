@@ -1,12 +1,14 @@
 use std::ops::Range;
 
 use gpui::{
-    div, App, AppContext, Context, Entity, FocusHandle, Focusable,
+    div, px, prelude::FluentBuilder, App, AppContext, Context, Entity, FocusHandle, Focusable,
     IntoElement, ParentElement, Render, Styled, Window,
 };
 use gpui_component::{
+    h_flex,
+    Icon,
     table::{Column, ColumnSort, Table, TableDelegate},
-    v_flex, ActiveTheme,
+    v_flex, ActiveTheme, IconName,
 };
 
 use crate::database::QueryResult;
@@ -71,7 +73,9 @@ impl TableDelegate for ResultsTableDelegate {
         _: &mut Context<Table<Self>>,
     ) -> impl IntoElement {
         let col = &self.columns[col_ix];
-        div().child(col.name.clone())
+        div()
+            .font_family("Fira Code")
+            .child(col.name.clone())
     }
 
     fn render_td(
@@ -79,7 +83,7 @@ impl TableDelegate for ResultsTableDelegate {
         row_ix: usize,
         col_ix: usize,
         _: &mut Window,
-        _: &mut Context<Table<Self>>,
+        cx: &mut Context<Table<Self>>,
     ) -> impl IntoElement {
         let text = self.rows
             .get(row_ix)
@@ -87,7 +91,17 @@ impl TableDelegate for ResultsTableDelegate {
             .cloned()
             .unwrap_or_else(|| "--".to_string());
 
-        div().child(text)
+        // Check if the value is NULL
+        let is_null = text.eq_ignore_ascii_case("null") || text == "--";
+        let display_text = if is_null { "NULL".to_string() } else { text };
+
+        div()
+            .font_family("Fira Code")
+            .when(is_null, |this| {
+                this.text_color(cx.theme().muted_foreground)
+                    .italic()
+            })
+            .child(display_text)
     }
 
     fn perform_sort(
@@ -129,6 +143,7 @@ impl TableDelegate for ResultsTableDelegate {
 pub struct ResultsPanel {
     focus_handle: FocusHandle,
     table: Entity<Table<ResultsTableDelegate>>,
+    current_result: Option<QueryResult>,
 }
 
 impl ResultsPanel {
@@ -139,14 +154,25 @@ impl ResultsPanel {
         Self {
             focus_handle: cx.focus_handle(),
             table,
+            current_result: None,
         }
     }
 
     pub fn set_query_result(&mut self, result: QueryResult, cx: &mut Context<Self>) {
         self.table.update(cx, |table, cx| {
-            table.delegate_mut().set_query_result(result);
+            table.delegate_mut().set_query_result(result.clone());
             table.refresh(cx);
         });
+        self.current_result = Some(result);
+        cx.notify();
+    }
+
+    pub fn clear_results(&mut self, cx: &mut Context<Self>) {
+        self.table.update(cx, |table, cx| {
+            table.delegate_mut().set_query_result(QueryResult::default());
+            table.refresh(cx);
+        });
+        self.current_result = None;
         cx.notify();
     }
 }
@@ -159,21 +185,91 @@ impl Focusable for ResultsPanel {
 
 impl Render for ResultsPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let row_count = self.table.read(cx).delegate().rows_count(cx);
+
         v_flex()
             .size_full()
             .border_t_1()
             .border_color(cx.theme().border)
-            .child(self.table.clone())
+            // The table component has built-in scrolling (both vertical and horizontal)
             .child(
                 div()
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.table.clone())
+            )
+            .child(
+                h_flex()
                     .px_4()
                     .py_2()
+                    .gap_3()
                     .bg(cx.theme().muted)
                     .border_t_1()
                     .border_color(cx.theme().border)
                     .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(format!("Results: {} rows", self.table.read(cx).delegate().rows_count(cx)))
+                    .items_center()
+                    .when_some(self.current_result.as_ref(), |this, result| {
+                        this
+                            // Status indicator
+                            .child(
+                                h_flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .when(!result.is_error, |this| {
+                                        this.text_color(cx.theme().green)
+                                            .child(Icon::new(IconName::CircleCheck).size(px(14.)))
+                                            .child("Success")
+                                    })
+                                    .when(result.is_error, |this| {
+                                        this.text_color(cx.theme().red)
+                                            .child(Icon::new(IconName::CircleX).size(px(14.)))
+                                            .child("Error")
+                                    })
+                            )
+                            // Separator
+                            .child(
+                                div()
+                                    .h(px(16.))
+                                    .w(px(1.))
+                                    .bg(cx.theme().border)
+                            )
+                            // Query text (truncated)
+                            .when_some(result.query_text.as_ref(), |this, query| {
+                                let truncated = if query.len() > 60 {
+                                    format!("{}...", &query[..60].trim())
+                                } else {
+                                    query.clone()
+                                };
+                                this.child(
+                                    div()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(truncated.replace("\n", " "))
+                                )
+                            })
+                            // Spacer
+                            .child(div().flex_1())
+                            // Execution time
+                            .when_some(result.execution_time_ms, |this, time_ms| {
+                                this.child(
+                                    div()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(format!("{}ms", time_ms))
+                                )
+                            })
+                            // Row count
+                            .child(
+                                h_flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(Icon::new(IconName::ChevronsUpDown).size(px(14.)))
+                                    .child(format!("{} rows", row_count))
+                            )
+                    })
+                    .when(self.current_result.is_none(), |this| {
+                        this.text_color(cx.theme().muted_foreground)
+                            .child("No query executed")
+                    })
             )
     }
 }

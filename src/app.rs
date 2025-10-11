@@ -1,39 +1,41 @@
 use gpui::{
-    div, px, prelude::FluentBuilder, Action, App, AppContext, Context, Entity, FocusHandle,
-    Focusable, InteractiveElement, IntoElement, Menu, MenuItem, MouseButton, ParentElement,
-    Render, Styled, Window, actions,
+    actions, div, Action, App, AppContext, Context, Entity,
+    FocusHandle, Focusable, InteractiveElement, IntoElement, Menu, MenuItem, MouseButton,
+    ParentElement, Render, Styled, Window,
 };
 use gpui_component::{
-    h_flex, v_flex, ActiveTheme, IconName, Sizable, TitleBar,
     button::{Button, ButtonVariants},
+    dropdown::{Dropdown, DropdownState},
+    h_flex,
+    input::{InputState, TextInput},
     menu::AppMenuBar,
+    v_flex, ActiveTheme, ContextModal as _, Icon, IconName, IndexPath, Sizable, TitleBar,
 };
 use serde::Deserialize;
 
 use crate::{
-    editor_panel::{EditorPanel, EditorPanelEvent},
-    results_panel::ResultsPanel,
+    app_database::ConnectionData,
+    connection_modal::NewConnectionModal,
+    db_service::DbService,
+    editor_panel::EditorPanel,
     sidebar::ConnectionSidebar,
 };
 
-actions!(blanco_app, [Quit, About, NewQuery, OpenConnection, OpenSettings]);
+actions!(
+    blanco_app,
+    [Quit, About, NewQuery, OpenConnection, OpenSettings, OpenNewConnectionModal]
+);
 
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
 #[action(namespace = blanco_app, no_json)]
-struct ToggleSidebar;
-
-
-
-use gpui::Subscription;
+pub struct ToggleSidebar;
 
 pub struct BlancoApp {
     focus_handle: FocusHandle,
     sidebar: Entity<ConnectionSidebar>,
     editor_panel: Entity<EditorPanel>,
-    results_panel: Entity<ResultsPanel>,
     sidebar_collapsed: bool,
     app_menu_bar: Entity<AppMenuBar>,
-    _subscriptions: Vec<Subscription>,
 }
 
 impl BlancoApp {
@@ -42,7 +44,6 @@ impl BlancoApp {
 
         let sidebar = cx.new(|cx| ConnectionSidebar::new(window, cx));
         let editor_panel = cx.new(|cx| EditorPanel::new(window, cx));
-        let results_panel = cx.new(|cx| ResultsPanel::new(window, cx));
         let app_menu_bar = AppMenuBar::new(window, cx);
 
         // Load saved query tabs
@@ -50,26 +51,12 @@ impl BlancoApp {
             panel.load_saved_tabs(window, cx);
         });
 
-        // Subscribe to editor panel events
-        let results_panel_clone = results_panel.clone();
-        let subscription = cx.subscribe(&editor_panel, move |_this, _emitter, event: &EditorPanelEvent, cx| {
-            match event {
-                EditorPanelEvent::QueryExecuted(result) => {
-                    results_panel_clone.update(cx, |panel, cx| {
-                        panel.set_query_result(result.clone(), cx);
-                    });
-                }
-            }
-        });
-
         Self {
             focus_handle: cx.focus_handle(),
             sidebar,
             editor_panel,
-            results_panel,
             sidebar_collapsed: false,
             app_menu_bar,
-            _subscriptions: vec![subscription],
         }
     }
 
@@ -100,12 +87,86 @@ impl BlancoApp {
 
     fn toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
         self.sidebar_collapsed = !self.sidebar_collapsed;
+
+        // Update sidebar's collapse state
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.set_collapsed(self.sidebar_collapsed, cx);
+        });
+
+        // Update editor panel's sidebar state
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.set_sidebar_collapsed(self.sidebar_collapsed, cx);
+        });
+
         cx.notify();
     }
 
     fn on_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
         self.editor_panel.update(cx, |panel, cx| {
             panel.add_settings_tab(window, cx);
+        });
+    }
+
+    fn on_new_connection_modal(&mut self, _: &OpenNewConnectionModal, window: &mut Window, cx: &mut Context<Self>) {
+        println!("DEBUG: on_new_connection_modal called in BlancoApp");
+        window.open_modal(cx, |modal, window, cx| {
+            println!("DEBUG: Inside modal builder in BlancoApp");
+
+            let modal_content = cx.new(|cx| NewConnectionModal::new(window, cx));
+            let content_clone = modal_content.clone();
+
+            modal
+                .title("New Connection")
+                .w(gpui::px(500.))
+                .child(modal_content.clone())
+                .footer({
+                    let content = content_clone.clone();
+                    move |ok, cancel, window, cx| {
+                        let test_btn = Button::new("test-connection")
+                            .label("Test Connection")
+                            .on_click({
+                                let content = content.clone();
+                                move |_, window, cx| {
+                                    content.update(cx, |modal, cx| {
+                                        modal.test_connection(window, cx);
+                                    });
+                                }
+                            })
+                            .into_any_element();
+
+                        vec![
+                            test_btn,
+                            cancel(window, cx),
+                            ok(window, cx),
+                        ]
+                    }
+                })
+                .on_ok({
+                    let content = content_clone.clone();
+                    move |_, window, cx| {
+                        if let Some(conn_data) = content.read(cx).get_connection_data(cx) {
+                            // Save connection to database
+                            let db_service = DbService::global(cx).clone();
+                            let app_db = db_service.app_db_handle();
+
+                            crate::gpui_tokio::Tokio::spawn_result(cx, async move {
+                                if let Some(db) = app_db.read().await.as_ref() {
+                                    db.save_connection(&conn_data).await
+                                        .map_err(|e| anyhow::anyhow!("Failed to save connection: {}", e))
+                                } else {
+                                    Err(anyhow::anyhow!("App database not initialized"))
+                                }
+                            })
+                            .detach();
+
+                            window.push_notification("Connection saved successfully", cx);
+                            true
+                        } else {
+                            window.push_notification("Please fill in all required fields", cx);
+                            false
+                        }
+                    }
+                })
         });
     }
 }
@@ -125,6 +186,7 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_open_connection))
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::on_settings))
+            .on_action(cx.listener(Self::on_new_connection_modal))
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
@@ -156,38 +218,19 @@ impl Render for BlancoApp {
                 h_flex()
                     .flex_1()
                     .overflow_hidden()
-                    // Sidebar
-                    .when(!self.sidebar_collapsed, |this| {
-                        this.child(
-                            div()
-                                .w(px(250.))
-                                .h_full()
-                                .border_r_1()
-                                .border_color(cx.theme().border)
-                                .child(self.sidebar.clone()),
-                        )
-                    })
+                    // Sidebar (always visible, handles its own collapsed state)
+                    .child(
+                        div()
+                            .h_full()
+                            .border_r_1()
+                            .border_color(cx.theme().border)
+                            .child(self.sidebar.clone()),
+                    )
                     // Main panel
                     .child(
-                        v_flex()
-                            .flex_1()
-                            .h_full()
-                            .overflow_hidden()
-                            // Editor panel (with tabs and editor)
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_h_0()
-                                    .child(self.editor_panel.clone()),
-                            )
-                            // Results panel
-                            .child(
-                                div()
-                                    .h(px(300.))
-                                    .min_h(px(100.))
-                                    .child(self.results_panel.clone()),
-                            ),
-                    ),
+                        // Editor panel (now contains everything - tabs, editor, results)
+                        self.editor_panel.clone(),
+                    )
             )
     }
 }
@@ -214,6 +257,7 @@ fn init_menus(cx: &mut App) {
             items: vec![
                 MenuItem::action("New Query", NewQuery),
                 MenuItem::Separator,
+                MenuItem::action("New Connection", OpenNewConnectionModal),
                 MenuItem::action("Open Connection", OpenConnection),
             ],
         },
