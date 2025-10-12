@@ -399,4 +399,26 @@ impl ConnectionData {
             last_used_at: None,
         }
     }
+
+    pub fn new_postgres(
+        name: String,
+        host: String,
+        port: i32,
+        database: String,
+        username: String,
+        password: String,
+    ) -> Self {
+        Self {
+            id: None,
+            name,
+            db_type: "PostgreSQL".to_string(),
+            host: Some(host),
+            port: Some(port),
+            database_name: Some(database),
+            username: Some(username),
+            password: Some(password),
+            database_path: None,
+            last_used_at: None,
+        }
+    }
 }

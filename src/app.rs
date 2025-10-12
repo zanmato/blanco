@@ -1,31 +1,34 @@
 use gpui::{
-    actions, div, px, prelude::FluentBuilder, Action, App, AppContext, Context, Entity,
+    actions, div, prelude::FluentBuilder, px, Action, App, AppContext, Context, Entity,
     FocusHandle, Focusable, InteractiveElement, IntoElement, Menu, MenuItem, MouseButton,
     ParentElement, Render, Styled, Window,
 };
 use gpui_component::{
     button::{Button, ButtonVariants},
-    dropdown::{Dropdown, DropdownState},
     h_flex,
-    input::{InputState, TextInput},
     menu::AppMenuBar,
-    v_flex, ActiveTheme, ContextModal as _, Icon, IconName, IndexPath, Sizable, TitleBar,
+    v_flex, ActiveTheme, ContextModal as _, IconName, Root, Sizable, TitleBar,
 };
 use log::{debug, error, info};
 use serde::Deserialize;
 
 use crate::{
-    app_database::ConnectionData,
     connection_modal::NewConnectionModal,
     db_service::{DbService, PgConnectionKey},
     editor_panel::EditorPanel,
     sidebar::ConnectionSidebar,
-
 };
 
 actions!(
     blanco_app,
-    [Quit, About, NewQuery, OpenConnection, OpenSettings, OpenNewConnectionModal]
+    [
+        Quit,
+        About,
+        NewQuery,
+        OpenConnection,
+        OpenSettings,
+        OpenNewConnectionModal
+    ]
 );
 
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
@@ -88,7 +91,10 @@ impl BlancoApp {
                     if app_db.read().await.is_some() {
                         break;
                     }
-                    debug!("Waiting for app database to initialize... (attempt {})", attempts + 1);
+                    debug!(
+                        "Waiting for app database to initialize... (attempt {})",
+                        attempts + 1
+                    );
                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                     attempts += 1;
                 }
@@ -98,8 +104,12 @@ impl BlancoApp {
                         Ok(tabs) => {
                             info!("Loaded {} tabs from database", tabs.len());
                             for tab in &tabs {
-                                debug!("Tab '{}' (db_id: {:?}, content_len: {})",
-                                    tab.title, tab.id, tab.content.len());
+                                debug!(
+                                    "Tab '{}' (db_id: {:?}, content_len: {})",
+                                    tab.title,
+                                    tab.id,
+                                    tab.content.len()
+                                );
                             }
                             tabs
                         }
@@ -113,14 +123,13 @@ impl BlancoApp {
                     Vec::new()
                 }
             })
-        }).join().unwrap_or_else(|_| Vec::new());
+        })
+        .join()
+        .unwrap_or_else(|_| Vec::new());
 
-        let editor_panel = cx.new(|cx| {
-            EditorPanel::new_with_saved_tabs(window, cx, false, saved_tabs)
-        });
+        let editor_panel =
+            cx.new(|cx| EditorPanel::new_with_saved_tabs(window, cx, false, saved_tabs));
         let app_menu_bar = AppMenuBar::new(window, cx);
-
-
 
         Self {
             focus_handle: cx.focus_handle(),
@@ -149,13 +158,27 @@ impl BlancoApp {
     fn on_new_query(&mut self, _: &NewQuery, window: &mut Window, cx: &mut Context<Self>) {
         // Create a new query tab with default connection
         self.editor_panel.update(cx, |panel, cx| {
-            panel.add_new_tab_with_connection(window, "Test Database".to_string(), ConnectionType::SQLite, None, cx);
+            panel.add_new_tab_with_connection(
+                window,
+                "Test Database".to_string(),
+                ConnectionType::SQLite,
+                None,
+                cx,
+            );
         });
         cx.notify();
     }
 
-    fn on_new_query_for_connection(&mut self, action: &NewQueryForConnection, window: &mut Window, cx: &mut Context<Self>) {
-        log::info!("on_new_query_for_connection called: {}", action.connection_name);
+    fn on_new_query_for_connection(
+        &mut self,
+        action: &NewQueryForConnection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        log::info!(
+            "on_new_query_for_connection called: {}",
+            action.connection_name
+        );
         // Create a new query tab for the specified connection
         self.editor_panel.update(cx, |panel, cx| {
             panel.add_new_tab_with_connection(
@@ -163,14 +186,22 @@ impl BlancoApp {
                 action.connection_name.clone(),
                 action.connection_type.clone(),
                 None,
-                cx
+                cx,
             );
         });
         cx.notify();
     }
 
-    fn on_new_query_for_postgres_connection(&mut self, action: &NewQueryForPostgresConnection, window: &mut Window, cx: &mut Context<Self>) {
-        log::info!("on_new_query_for_postgres_connection called: {}", action.display_name);
+    fn on_new_query_for_postgres_connection(
+        &mut self,
+        action: &NewQueryForPostgresConnection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        log::info!(
+            "on_new_query_for_postgres_connection called: {}",
+            action.display_name
+        );
         // Create a new query tab for the specified PostgreSQL connection
         self.editor_panel.update(cx, |panel, cx| {
             panel.add_new_tab_with_postgres_connection(
@@ -178,14 +209,22 @@ impl BlancoApp {
                 action.display_name.clone(),
                 action.connection_key.clone(),
                 None,
-                cx
+                cx,
             );
         });
         cx.notify();
     }
 
-    fn on_new_query_for_postgres_schema(&mut self, action: &NewQueryForPostgresSchema, window: &mut Window, cx: &mut Context<Self>) {
-        log::info!("on_new_query_for_postgres_schema called: {}", action.schema_name);
+    fn on_new_query_for_postgres_schema(
+        &mut self,
+        action: &NewQueryForPostgresSchema,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        log::info!(
+            "on_new_query_for_postgres_schema called: {}",
+            action.schema_name
+        );
         // Create a new query tab for the specified PostgreSQL schema
         self.editor_panel.update(cx, |panel, cx| {
             panel.add_new_tab_with_postgres_connection(
@@ -193,7 +232,7 @@ impl BlancoApp {
                 format!("PostgreSQL ({})", action.schema_name),
                 action.connection_key.clone(),
                 Some(action.schema_name.clone()),
-                cx
+                cx,
             );
         });
         cx.notify();
@@ -226,12 +265,17 @@ impl BlancoApp {
         });
     }
 
+    fn on_new_connection_modal(
+        &mut self,
+        _: &OpenNewConnectionModal,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Create the modal content outside the builder so we can access it
+        let modal_content = cx.new(|cx| NewConnectionModal::new(window, cx));
+        let content_for_focus = modal_content.clone();
 
-
-    fn on_new_connection_modal(&mut self, _: &OpenNewConnectionModal, window: &mut Window, cx: &mut Context<Self>) {
-        window.open_modal(cx, |modal, window, cx| {
-
-            let modal_content = cx.new(|cx| NewConnectionModal::new(window, cx));
+        window.open_modal(cx, move |modal, window, cx| {
             let content_clone = modal_content.clone();
 
             modal
@@ -253,11 +297,7 @@ impl BlancoApp {
                             })
                             .into_any_element();
 
-                        vec![
-                            test_btn,
-                            cancel(window, cx),
-                            ok(window, cx),
-                        ]
+                        vec![test_btn, cancel(window, cx), ok(window, cx)]
                     }
                 })
                 .on_ok({
@@ -270,8 +310,9 @@ impl BlancoApp {
 
                             crate::gpui_tokio::Tokio::spawn_result(cx, async move {
                                 if let Some(db) = app_db.read().await.as_ref() {
-                                    db.save_connection(&conn_data).await
-                                        .map_err(|e| anyhow::anyhow!("Failed to save connection: {}", e))
+                                    db.save_connection(&conn_data).await.map_err(|e| {
+                                        anyhow::anyhow!("Failed to save connection: {}", e)
+                                    })
                                 } else {
                                     Err(anyhow::anyhow!("App database not initialized"))
                                 }
@@ -287,6 +328,9 @@ impl BlancoApp {
                     }
                 })
         });
+
+        // Focus the first input field after the modal opens
+        content_for_focus.read(cx).first_input_focus_handle(cx).focus(window);
     }
 }
 
@@ -297,7 +341,11 @@ impl Focusable for BlancoApp {
 }
 
 impl Render for BlancoApp {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let drawer_layer = Root::render_drawer_layer(window, cx);
+        let modal_layer = Root::render_modal_layer(window, cx);
+        let notification_layer = Root::render_notification_layer(window, cx);
+
         v_flex()
             .on_action(cx.listener(Self::on_quit))
             .on_action(cx.listener(Self::on_about))
@@ -358,8 +406,11 @@ impl Render for BlancoApp {
                     .child(
                         // Editor panel (now contains everything - tabs, editor, results)
                         self.editor_panel.clone(),
-                    )
+                    ),
             )
+            .children(drawer_layer)
+            .children(modal_layer)
+            .children(notification_layer)
     }
 }
 

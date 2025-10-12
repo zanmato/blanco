@@ -18,13 +18,20 @@ mod theme_loader;
 use assets::Assets;
 use db_service::DbService;
 use gpui::{px, size, AppContext, Application, WindowBounds, WindowOptions};
+use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
 fn main() {
-    env_logger::init();
-
     let app = Application::new().with_assets(Assets);
 
     app.run(move |cx| {
+        tracing_subscriber::registry()
+            .with(tracing_subscriber::fmt::layer())
+            .with(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive("gpui_component=trace".parse().unwrap()),
+            )
+            .init();
+
         gpui_component::init(cx);
         gpui_tokio::init(cx);
 

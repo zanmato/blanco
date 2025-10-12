@@ -1,13 +1,15 @@
 use crate::connection_sidebar::{Sidebar, SidebarGroup, SidebarMenu, SidebarMenuItem};
 use gpui::{
-    div, prelude::FluentBuilder as _, Action, App, Context, FocusHandle, Focusable,
+    div, px, AnyElement, App, AppContext, Context, Entity, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Window,
 };
-use gpui_component::{button::Button, h_flex, v_flex, ActiveTheme, IconName, Side};
+use gpui_component::{
+    button::Button, h_flex, v_flex, ActiveTheme, ContextModal as _, IconName, Side,
+};
 use std::collections::HashMap;
 
-use crate::app::OpenNewConnectionModal;
 use crate::connection::Connection;
+use crate::connection_modal::NewConnectionModal;
 use crate::db_service::{DbService, PgConnectionKey};
 use crate::postgres::SchemaNode;
 use log::{debug, error, info};
@@ -81,12 +83,22 @@ impl ConnectionSidebar {
             let mut connection_data = Vec::new();
 
             for (key, manager) in connections {
-                let display_name = format!("{}@{}:{}/{}", key.username, key.host, key.port, key.database);
-                
-                info!("Sidebar: Loading schemas for PostgreSQL connection: {}", display_name);
+                let display_name = format!(
+                    "{}@{}:{}/{}",
+                    key.username, key.host, key.port, key.database
+                );
+
+                info!(
+                    "Sidebar: Loading schemas for PostgreSQL connection: {}",
+                    display_name
+                );
                 match manager.get_schemas().await {
                     Ok(schemas) => {
-                        info!("Sidebar: Found {} schemas for connection: {}", schemas.len(), display_name);
+                        info!(
+                            "Sidebar: Found {} schemas for connection: {}",
+                            schemas.len(),
+                            display_name
+                        );
                         let mut schema_nodes = Vec::new();
 
                         for schema_name in schemas {
@@ -110,11 +122,14 @@ impl ConnectionSidebar {
                         connection_data.push((key, (display_name, schema_nodes, true)));
                     }
                     Err(e) => {
-                        error!("Sidebar: Failed to load schemas for connection {}: {}", display_name, e);
+                        error!(
+                            "Sidebar: Failed to load schemas for connection {}: {}",
+                            display_name, e
+                        );
                     }
                 }
             }
-            
+
             Ok(connection_data)
         });
 
@@ -144,41 +159,60 @@ impl ConnectionSidebar {
     pub fn add_postgres_connection(&mut self, connection_string: &str, cx: &mut Context<Self>) {
         let db_service = DbService::global(cx).clone();
         let connection_string = connection_string.to_string();
-        
+
         let task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
             match PgConnectionKey::from_connection_string(&connection_string) {
                 Ok(key) => {
-                    let display_name = format!("{}@{}:{}/{}", key.username, key.host, key.port, key.database);
-                    
+                    let display_name = format!(
+                        "{}@{}:{}/{}",
+                        key.username, key.host, key.port, key.database
+                    );
+
                     // Get or create connection
-                    let manager = db_service.get_or_create_pg_connection(&connection_string).await?;
-                    
+                    let manager = db_service
+                        .get_or_create_pg_connection(&connection_string)
+                        .await?;
+
                     // Load schemas
                     match manager.get_schemas().await {
                         Ok(schemas) => {
-                            info!("Loaded {} schemas for connection: {}", schemas.len(), display_name);
+                            info!(
+                                "Loaded {} schemas for connection: {}",
+                                schemas.len(),
+                                display_name
+                            );
                             let mut schema_nodes = Vec::new();
 
                             for schema_name in schemas {
                                 debug!("Loading tables for schema: {}", schema_name);
                                 match manager.get_tables(&schema_name).await {
                                     Ok(tables) => {
-                                        debug!("Schema '{}' has {} tables", schema_name, tables.len());
+                                        debug!(
+                                            "Schema '{}' has {} tables",
+                                            schema_name,
+                                            tables.len()
+                                        );
                                         let mut node = SchemaNode::new(schema_name.clone());
                                         node.tables = tables;
                                         node.expanded = schema_name == "public"; // Expand public by default
                                         schema_nodes.push(node);
                                     }
                                     Err(e) => {
-                                        error!("Failed to load tables for schema '{}': {}", schema_name, e);
+                                        error!(
+                                            "Failed to load tables for schema '{}': {}",
+                                            schema_name, e
+                                        );
                                     }
                                 }
                             }
-                            
+
                             Ok(Some((key, (display_name, schema_nodes, true))))
                         }
                         Err(e) => {
-                            error!("Failed to load schemas for connection {}: {}", display_name, e);
+                            error!(
+                                "Failed to load schemas for connection {}: {}",
+                                display_name, e
+                            );
                             Err(anyhow::anyhow!("{}", e))
                         }
                     }
@@ -234,7 +268,6 @@ impl Render for ConnectionSidebar {
                                             .id("test-database")  // Unique ID for Test Database
                                             .context_menu({
                                                 let table_count = self.test_db_tables.len();
-                                                log::info!("SETTING UP context menu for Test Database with {} tables", table_count);
                                                 move |menu, window, cx| {
                                                     log::info!("BUILDING context menu for Test Database with {} tables", table_count);
                                                     let result = menu.menu("New Query", Box::new(crate::app::NewQueryForConnection {
@@ -266,7 +299,7 @@ impl Render for ConnectionSidebar {
                                             let display_name_for_click = display_name.clone();
                                             let display_name_for_menu = display_name.clone();
                                             let expanded_for_children = *expanded;
-                                            
+
                                             let mut schema_items = Vec::new();
                                             if expanded_for_children {
                                                 for (schema_ix, schema) in schemas_clone.iter().enumerate() {
@@ -275,7 +308,7 @@ impl Render for ConnectionSidebar {
                                                     let key_for_schema_click = key_for_click.clone();
                                                     let key_for_schema_menu = key_for_menu.clone();
                                                     let schema_expanded_for_children = schema.expanded;
-                                                    
+
                                                     let mut table_items = Vec::new();
                                                     if schema_expanded_for_children {
                                                         for (table_ix, table) in schema.tables.iter().enumerate() {
@@ -286,7 +319,7 @@ impl Render for ConnectionSidebar {
                                                             );
                                                         }
                                                     }
-                                                    
+
                                                     schema_items.push(
                                                         SidebarMenuItem::new(SharedString::from(schema_name_for_click.clone()))
                                                             .icon(IconName::Folder)
@@ -317,7 +350,7 @@ impl Render for ConnectionSidebar {
                                                     );
                                                 }
                                             }
-                                            
+
                                             items.push(
                                                 SidebarMenuItem::new(SharedString::from(display_name_for_click.clone()))
                                                     .icon(IconName::Globe)
@@ -362,10 +395,109 @@ impl Render for ConnectionSidebar {
                             .outline()
                             .icon(IconName::Plus)
                             .label("New Connection")
-                            .on_click(cx.listener(|_this, _event, window, cx| {
-                                // Dispatch the action to open the connection modal
-                                let action = OpenNewConnectionModal;
-                                window.dispatch_action(action.boxed_clone(), cx);
+                            .on_click(cx.listener(move |this, _event, window, cx| {
+                                log::info!("New Connection button clicked");
+
+                                // Create the modal content outside the builder so we can access it
+                                let modal_content = cx.new(|cx| NewConnectionModal::new(window, cx));
+                                let content_for_focus = modal_content.clone();
+
+                                window.open_modal(cx, move |modal, window, cx| {
+                                    let content_clone = modal_content.clone();
+
+                                    modal
+                                        .title("New Connection")
+                                        .w(gpui::px(500.))
+                                        .child(modal_content.clone())
+                                        .footer({
+                                            let content = content_clone.clone();
+                                            move |ok, cancel, window, cx| {
+                                                let test_btn = Button::new("test-connection")
+                                                    .label("Test Connection")
+                                                    .on_click({
+                                                        let content = content.clone();
+                                                        move |_, window, cx| {
+                                                            content.update(cx, |modal, cx| {
+                                                                modal.test_connection(window, cx);
+                                                            });
+                                                        }
+                                                    })
+                                                    .into_any_element();
+
+                                                vec![test_btn, cancel(window, cx), ok(window, cx)]
+                                            }
+                                        })
+                                        .on_ok({
+                                            let content = content_clone.clone();
+                                            move |_, window, cx| {
+                                                if let Some(conn_data) = content.read(cx).get_connection_data(cx) {
+                                                    // Save connection to database
+                                                    let db_service = DbService::global(cx).clone();
+                                                    let app_db = db_service.app_db_handle();
+
+                                                    // For PostgreSQL connections, we need to construct the connection string
+                                                    // and add it to the sidebar
+                                                    if conn_data.db_type == "PostgreSQL" {
+                                                        if let (Some(host), Some(port), Some(database), Some(username), Some(password)) = (
+                                                            conn_data.host.as_ref(),
+                                                            conn_data.port,
+                                                            conn_data.database_name.as_ref(),
+                                                            conn_data.username.as_ref(),
+                                                            conn_data.password.as_ref()
+                                                        ) {
+                                                            let connection_string = format!(
+                                                                "postgresql://{}:{}@{}:{}/{}",
+                                                                username, password, host, port, database
+                                                            );
+
+                                                            // Save to database
+                                                            crate::gpui_tokio::Tokio::spawn_result(cx, async move {
+                                                                if let Some(db) = app_db.read().await.as_ref() {
+                                                                    db.save_connection(&conn_data).await.map_err(|e| {
+                                                                        anyhow::anyhow!("Failed to save connection: {}", e)
+                                                                    })
+                                                                } else {
+                                                                    Err(anyhow::anyhow!("App database not initialized"))
+                                                                }
+                                                            })
+                                                            .detach();
+
+                                                            // TODO: Add the connection to sidebar's pg_connections
+                                                            // This would require passing a handle to the sidebar
+                                                            // For now, the user can restart the app to see the new connection
+
+                                                            window.push_notification("PostgreSQL connection saved successfully", cx);
+                                                        } else {
+                                                            window.push_notification("Missing PostgreSQL connection details", cx);
+                                                            return false;
+                                                        }
+                                                    } else {
+                                                        // SQLite or other database types
+                                                        crate::gpui_tokio::Tokio::spawn_result(cx, async move {
+                                                            if let Some(db) = app_db.read().await.as_ref() {
+                                                                db.save_connection(&conn_data).await.map_err(|e| {
+                                                                    anyhow::anyhow!("Failed to save connection: {}", e)
+                                                                })
+                                                            } else {
+                                                                Err(anyhow::anyhow!("App database not initialized"))
+                                                            }
+                                                        })
+                                                        .detach();
+
+                                                        window.push_notification("Connection saved successfully", cx);
+                                                    }
+
+                                                    true
+                                                } else {
+                                                    window.push_notification("Please fill in all required fields", cx);
+                                                    false
+                                                }
+                                            }
+                                        })
+                                });
+
+                                // Focus the first input field after the modal opens
+                                content_for_focus.read(cx).first_input_focus_handle(cx).focus(window);
                             }))
                     ),
             )
