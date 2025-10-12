@@ -1,24 +1,43 @@
-[package]
-name = "blanco"
-version = "0.1.0"
-edition = "2021"
+[workspace]
+resolver = "2"
+members = [
+    "crates/blanco",
+    "crates/postgres-lsp",
+]
 
-[dependencies]
+[workspace.dependencies]
+# Core GPUI dependencies
 gpui = "0.2.0"
 gpui-component = { path = "../../gpui-component/crates/ui", features = ["tree-sitter-languages"] }
+
+# LSP dependencies
+lsp-types = "0.97.0"
+
+# Common dependencies
 anyhow = { version = "1", features = ["backtrace"] }
-env_logger = "0.11"
-log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
-smol = "1"
-async-compat = "0.2"
-dirs = "5"
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "postgres", "uuid", "chrono", "json", "bigdecimal"] }
-tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "process", "io-util"] }
+log = "0.4"
 uuid = { version = "1.0", features = ["v4"] }
 chrono = "0.4"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+thiserror = "1.0"
+
+# Database dependencies
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "postgres", "uuid", "chrono", "json", "bigdecimal"] }
+
+# HTTP client for downloading
+reqwest = { version = "0.11", features = ["json"] }
+tempfile = "3.8"
+dirs = "5"
+
+# Additional dependencies
+env_logger = "0.11"
+smol = "1"
+async-compat = "0.2"
 rust-embed = { version = "8", features = ["interpolate-folder-path"] }
 url = "2.5"
+flate2 = "1.0"
+tar = "0.4"

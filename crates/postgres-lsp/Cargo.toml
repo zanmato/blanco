@@ -1,0 +1,38 @@
+[package]
+name = "postgres-lsp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Core GPUI dependencies
+gpui = { workspace = true }
+gpui-component = { workspace = true }
+
+# LSP dependencies
+lsp-types = { workspace = true }
+
+# Common dependencies
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+log = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+
+# HTTP client for downloading
+reqwest = { workspace = true }
+tempfile = { workspace = true }
+dirs = { workspace = true }
+
+# Archive handling
+flate2 = { workspace = true }
+tar = { workspace = true }
+
+# Text handling
+ropey = "1.6"
+
+# Additional utilities
+url = { workspace = true }
