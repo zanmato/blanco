@@ -14,10 +14,10 @@ use gpui_component::{
 use log::{debug, error, info};
 use serde_json;
 
-use crate::app::ToggleSidebar;
+use crate::app::{ConnectionType, ToggleSidebar};
 use crate::app_database::{QueryHistoryData, QueryTabData};
 use crate::database::QueryResult;
-use crate::db_service::DbService;
+use crate::db_service::{DbService, PgConnectionKey};
 use crate::settings::Settings;
 
 #[derive(Clone)]
@@ -34,6 +34,8 @@ pub struct QueryTab {
     pub id: usize,
     pub title: String,
     pub connection_name: String,
+    pub connection_type: ConnectionType,
+    pub pg_connection_key: Option<PgConnectionKey>, // For PostgreSQL connections
     pub connection_id: Option<i64>, // Connection ID to tie this tab to a connection
     pub editor: Entity<InputState>,
     pub db_id: Option<i64>, // Database ID for persistence
@@ -74,6 +76,8 @@ impl EditorPanel {
             id: 0,
             title: "Query 1".to_string(),
             connection_name: "Test Database".to_string(),
+            connection_type: ConnectionType::SQLite,
+            pg_connection_key: None,
             connection_id: None,
             editor: cx.new(|cx| {
                 InputState::new(window, cx)
@@ -145,6 +149,8 @@ impl EditorPanel {
             id: tab_id,
             title: format!("Query {}", tab_id + 1),
             connection_name: "Test Database".to_string(),
+            connection_type: ConnectionType::SQLite,
+            pg_connection_key: None,
             connection_id: None,
             editor,
             db_id: None,
@@ -199,10 +205,21 @@ impl EditorPanel {
             }
         };
 
+        // Extract PostgreSQL connection key from connection name if it's a PostgreSQL connection
+        let pg_connection_key = if connection_type == crate::app::ConnectionType::PostgreSQL {
+            // Try to parse the connection name as a display name to extract the key
+            // This is a workaround - ideally we should pass the key directly
+            Self::extract_pg_key_from_display_name(&connection_name)
+        } else {
+            None
+        };
+
         let new_tab = QueryTab {
             id: tab_id,
             title,
             connection_name: connection_name.clone(),
+            connection_type,
+            pg_connection_key,
             connection_id: None,
             editor,
             db_id: None,
@@ -212,6 +229,90 @@ impl EditorPanel {
         self.tabs.push(TabType::Query(new_tab));
         self.active_tab_ix = self.tabs.len() - 1;
         cx.notify();
+    }
+
+    /// Add a new query tab specifically for PostgreSQL connections
+    pub fn add_new_tab_with_postgres_connection(
+        &mut self,
+        window: &mut Window,
+        display_name: String,
+        pg_connection_key: PgConnectionKey,
+        schema_name: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let tab_id = self.next_tab_id;
+        self.next_tab_id += 1;
+
+        let editor = cx.new(|cx| {
+            InputState::new(window, cx)
+                .code_editor("sql".to_string())
+                .line_number(true)
+                .tab_size(TabSize {
+                    tab_size: 4,
+                    hard_tabs: false,
+                })
+                .soft_wrap(false)
+                .placeholder("Enter your SQL query here...")
+        });
+
+        // Subscribe to editor changes
+        let subscription = cx.subscribe(&editor, |this, _editor, event, cx| {
+            if let InputEvent::Change = event {
+                this.trigger_auto_save(cx);
+            }
+        });
+        self._subscriptions.push(subscription);
+
+        let title = match &schema_name {
+            Some(schema) => format!("PostgreSQL - {}", schema),
+            None => display_name.clone(),
+        };
+
+        let new_tab = QueryTab {
+            id: tab_id,
+            title,
+            connection_name: display_name.clone(),
+            connection_type: ConnectionType::PostgreSQL,
+            pg_connection_key: Some(pg_connection_key),
+            connection_id: None,
+            editor,
+            db_id: None,
+            results_panel: cx.new(|cx| crate::results_panel::ResultsPanel::new(window, cx)),
+        };
+
+        self.tabs.push(TabType::Query(new_tab));
+        self.active_tab_ix = self.tabs.len() - 1;
+        cx.notify();
+    }
+
+    /// Extract PostgreSQL connection key from display name
+    /// This is a workaround - ideally we should pass the key directly from the sidebar
+    fn extract_pg_key_from_display_name(display_name: &str) -> Option<PgConnectionKey> {
+        // Parse display name format: "username@host:port/database"
+        if let Some(at_pos) = display_name.find('@') {
+            let username = display_name[..at_pos].to_string();
+            let remaining = &display_name[at_pos + 1..];
+            
+            if let Some(colon_pos) = remaining.find(':') {
+                let host = remaining[..colon_pos].to_string();
+                let remaining = &remaining[colon_pos + 1..];
+                
+                if let Some(slash_pos) = remaining.find('/') {
+                    let port_str = &remaining[..slash_pos];
+                    let database = remaining[slash_pos + 1..].to_string();
+                    
+                    if let Ok(port) = port_str.parse::<u16>() {
+                        return Some(PgConnectionKey {
+                            host,
+                            port,
+                            database,
+                            username,
+                        });
+                    }
+                }
+            }
+        }
+        None
     }
 
     fn close_tab(&mut self, tab_index: usize, cx: &mut Context<Self>) {
@@ -403,7 +504,7 @@ impl EditorPanel {
                         return;
                     }
 
-                    println!("Executing query: {}", query);
+                    println!("Executing query: {} on {}", query, query_tab.connection_name);
 
                     // Get database service
                     let db_service = DbService::global(cx).clone();
@@ -414,16 +515,43 @@ impl EditorPanel {
                     let start_time = std::time::Instant::now();
                     let executed_at = chrono::Utc::now().timestamp();
 
+                    // Clone connection details for the async task
+                    let connection_type = query_tab.connection_type.clone();
+                    let pg_connection_key = query_tab.pg_connection_key.clone();
+
                     // Execute query using Tokio::spawn_result to ensure tokio context
                     let db_task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
-                        let db = user_db.read().await;
-
-                        let query_result = if !db.is_connected() {
-                            Err(anyhow::anyhow!("Not connected to a database"))
-                        } else {
-                            db.execute_query_async(&query)
-                                .await
-                                .map_err(|e| anyhow::anyhow!("{}", e))
+                        let query_result = match connection_type {
+                            ConnectionType::SQLite => {
+                                let db = user_db.read().await;
+                                if !db.is_connected() {
+                                    Err(anyhow::anyhow!("Not connected to SQLite database"))
+                                } else {
+                                    db.execute_query_async(&query)
+                                        .await
+                                        .map_err(|e| anyhow::anyhow!("{}", e))
+                                }
+                            }
+                            ConnectionType::PostgreSQL => {
+                                if let Some(pg_key) = pg_connection_key {
+                                    // Get or create PostgreSQL connection
+                                    match db_service.get_or_create_pg_connection(&format!(
+                                        "postgresql://{}@{}:{}/{}",
+                                        pg_key.username, pg_key.host, pg_key.port, pg_key.database
+                                    )).await {
+                                        Ok(pg_manager) => {
+                                            pg_manager.execute_query_async(&query)
+                                                .await
+                                                .map_err(|e| anyhow::anyhow!("{}", e))
+                                        }
+                                        Err(e) => {
+                                            Err(anyhow::anyhow!("Failed to connect to PostgreSQL: {}", e))
+                                        }
+                                    }
+                                } else {
+                                    Err(anyhow::anyhow!("PostgreSQL connection key not found"))
+                                }
+                            }
                         };
 
                         let duration_ms = start_time.elapsed().as_millis() as i64;
@@ -485,6 +613,7 @@ impl EditorPanel {
                                 // Return error as a result
                                 Ok(QueryResult {
                                     columns: vec!["Error".to_string()],
+                                    column_types: vec!["TEXT".to_string()],
                                     rows: vec![vec![error_msg.clone()]],
                                     rows_affected: 0,
                                     query_text: Some(query.clone()),
@@ -583,6 +712,14 @@ impl EditorPanel {
         for (pos, tab) in self.tabs.iter().enumerate() {
             if let TabType::Query(query_tab) = tab {
                 let content = query_tab.editor.read(cx).text().to_string();
+                let connection_type = match query_tab.connection_type {
+                    ConnectionType::SQLite => Some("SQLite".to_string()),
+                    ConnectionType::PostgreSQL => Some("PostgreSQL".to_string()),
+                };
+                let pg_connection_key = query_tab.pg_connection_key.as_ref().map(|key| {
+                    format!("postgres://{}@{}:{}/{}",
+                        key.username, key.host, key.port, key.database)
+                });
                 tabs_data.push((
                     pos,
                     query_tab.db_id,
@@ -590,6 +727,8 @@ impl EditorPanel {
                     content,
                     pos as i32,
                     query_tab.connection_id,
+                    connection_type,
+                    pg_connection_key,
                 ));
             }
         }
@@ -600,13 +739,15 @@ impl EditorPanel {
         let save_task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
             let mut saved_ids = Vec::new();
             if let Some(app_db) = app_db.read().await.as_ref() {
-                for (tab_index, db_id, title, content, position, connection_id) in tabs_data {
+                for (tab_index, db_id, title, content, position, connection_id, connection_type, pg_connection_key) in tabs_data {
                     let tab_data = QueryTabData {
                         id: db_id,
                         title: title.clone(),
                         content: content.clone(),
                         position,
                         connection_id,
+                        connection_type,
+                        pg_connection_key,
                     };
                     debug!("Saving tab '{}' (db_id: {:?}, content_len: {})", title, db_id, content.len());
                     match app_db.save_query_tab(&tab_data).await {
@@ -665,7 +806,7 @@ impl EditorPanel {
         if saved_tabs.is_empty() {
             debug!("No saved tabs found, creating default tab");
             // No saved tabs, create default tab
-            panel.create_and_add_tab(window, "Query 1", "", None, None, cx);
+            panel.create_and_add_tab(window, "Query 1", "", None, None, &None, &None, cx);
         } else {
             // Restore saved tabs
             for tab_data in saved_tabs {
@@ -677,6 +818,8 @@ impl EditorPanel {
                     &tab_data.content,
                     tab_data.id,
                     tab_data.connection_id,
+                    &tab_data.connection_type,
+                    &tab_data.pg_connection_key,
                     cx,
                 );
             }
@@ -694,6 +837,8 @@ impl EditorPanel {
         content: &str,
         db_id: Option<i64>,
         connection_id: Option<i64>,
+        connection_type: &Option<String>,
+        pg_connection_key: &Option<String>,
         cx: &mut Context<Self>,
     ) {
         let tab_id = self.next_tab_id;
@@ -727,10 +872,34 @@ impl EditorPanel {
         });
         self._subscriptions.push(subscription);
 
+        // Determine connection type and create appropriate tab
+        let (connection_name, connection_type, pg_connection_key) = match connection_type {
+            Some(conn_type) if conn_type == "PostgreSQL" => {
+                let pg_key = pg_connection_key.as_ref().and_then(|key_str| {
+                    crate::db_service::PgConnectionKey::from_connection_string(key_str).ok()
+                });
+                (
+                    "PostgreSQL".to_string(),
+                    ConnectionType::PostgreSQL,
+                    pg_key,
+                )
+            }
+            _ => {
+                // Default to SQLite for backward compatibility
+                (
+                    "Test Database".to_string(),
+                    ConnectionType::SQLite,
+                    None,
+                )
+            }
+        };
+
         let query_tab = QueryTab {
             id: tab_id,
             title: title.to_string(),
-            connection_name: "Test Database".to_string(),
+            connection_name,
+            connection_type,
+            pg_connection_key,
             connection_id,
             editor,
             db_id,
@@ -744,12 +913,22 @@ impl EditorPanel {
     fn save_current_tab_immediate(&mut self, cx: &mut Context<Self>) {
         if let Some(TabType::Query(query_tab)) = self.tabs.get(self.active_tab_ix) {
             let content = query_tab.editor.read(cx).text().to_string();
+            let connection_type = match query_tab.connection_type {
+                ConnectionType::SQLite => Some("SQLite".to_string()),
+                ConnectionType::PostgreSQL => Some("PostgreSQL".to_string()),
+            };
+            let pg_connection_key = query_tab.pg_connection_key.as_ref().map(|key| {
+                format!("postgres://{}@{}:{}/{}",
+                    key.username, key.host, key.port, key.database)
+            });
             let tab_data = QueryTabData {
                 id: query_tab.db_id,
                 title: query_tab.title.clone(),
                 content: content.clone(),
                 position: self.active_tab_ix as i32,
                 connection_id: query_tab.connection_id,
+                connection_type,
+                pg_connection_key,
             };
 
             debug!("Saving tab '{}' (db_id: {:?}, position: {}, content_len: {})",

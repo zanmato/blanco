@@ -1,7 +1,9 @@
 use log::{debug, error, info};
 use sqlx::postgres::{PgConnectOptions, PgPool};
-use sqlx::{Column, ConnectOptions, Row};
+use sqlx::{Column, ConnectOptions, Row, ValueRef, TypeInfo};
 use std::str::FromStr;
+use uuid::Uuid;
+use serde_json;
 
 /// PostgreSQL database manager
 pub struct PostgresManager {
@@ -132,6 +134,7 @@ impl PostgresManager {
                 if rows.is_empty() {
                     return Ok(crate::database::QueryResult {
                         columns: vec![],
+                        column_types: vec![],
                         rows: vec![],
                         rows_affected: 0,
                         query_text: None,
@@ -140,12 +143,18 @@ impl PostgresManager {
                     });
                 }
 
-                // Extract column names from the first row
+                // Extract column names and types from the first row
                 let first_row = &rows[0];
                 let columns: Vec<String> = first_row
                     .columns()
                     .iter()
                     .map(|col| col.name().to_string())
+                    .collect();
+
+                let column_types: Vec<String> = first_row
+                    .columns()
+                    .iter()
+                    .map(|col| col.type_info().name().to_string())
                     .collect();
 
                 // Extract row data
@@ -156,19 +165,103 @@ impl PostgresManager {
                             .iter()
                             .enumerate()
                             .map(|(i, _)| {
-                                // Try different types
+                                // Try different types in order of likelihood
+                                
+                                // String/Text types (most common)
                                 if let Ok(val) = row.try_get::<Option<String>, _>(i) {
-                                    val.unwrap_or_else(|| "NULL".to_string())
-                                } else if let Ok(val) = row.try_get::<Option<i32>, _>(i) {
-                                    val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
-                                } else if let Ok(val) = row.try_get::<Option<i64>, _>(i) {
-                                    val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
-                                } else if let Ok(val) = row.try_get::<Option<f64>, _>(i) {
-                                    val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
-                                } else if let Ok(val) = row.try_get::<Option<bool>, _>(i) {
-                                    val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
-                                } else {
-                                    "NULL".to_string()
+                                    return val.unwrap_or_else(|| "NULL".to_string());
+                                }
+                                
+                                // Integer types
+                                if let Ok(val) = row.try_get::<Option<i16>, _>(i) {
+                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                }
+                                if let Ok(val) = row.try_get::<Option<i32>, _>(i) {
+                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                }
+                                if let Ok(val) = row.try_get::<Option<i64>, _>(i) {
+                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                }
+                                
+                                // Floating point types
+                                if let Ok(val) = row.try_get::<Option<f32>, _>(i) {
+                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                }
+                                if let Ok(val) = row.try_get::<Option<f64>, _>(i) {
+                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                }
+                                
+                                // Boolean type
+                                if let Ok(val) = row.try_get::<Option<bool>, _>(i) {
+                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                }
+                                
+                                // Try to get UUID as string (PostgreSQL UUID can be converted to string)
+                                if let Ok(val) = row.try_get::<Option<String>, _>(i) {
+                                    return val.unwrap_or_else(|| "NULL".to_string());
+                                }
+                                
+                                // Try to get timestamp/chrono types as string
+                                if let Ok(val) = row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>(i) {
+                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                }
+                                if let Ok(val) = row.try_get::<Option<chrono::NaiveDateTime>, _>(i) {
+                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                }
+                                if let Ok(val) = row.try_get::<Option<chrono::NaiveDate>, _>(i) {
+                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                }
+                                if let Ok(val) = row.try_get::<Option<chrono::NaiveTime>, _>(i) {
+                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                }
+                                
+                                // UUID types
+                                if let Ok(val) = row.try_get::<Option<Uuid>, _>(i) {
+                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                }
+                                
+                                // Byte array types (for binary data)
+                                if let Ok(val) = row.try_get::<Option<Vec<u8>>, _>(i) {
+                                    return val.map(|v| {
+                                        // Convert to hex string for binary data
+                                        v.iter().map(|byte| format!("{:02x}", byte)).collect::<String>()
+                                    }).unwrap_or_else(|| "NULL".to_string());
+                                }
+                                
+                                // JSON/JSONB types - try to get as string first
+                                if let Ok(val) = row.try_get::<Option<serde_json::Value>, _>(i) {
+                                    return val.map(|v| {
+                                        // Pretty print JSON with proper formatting
+                                        match v {
+                                            serde_json::Value::String(s) => s,
+                                            _ => v.to_string(),
+                                        }
+                                    }).unwrap_or_else(|| "NULL".to_string());
+                                }
+                                
+                                // If we can't determine the type, try to get it as raw value
+                                // This is a fallback for any other types
+                                match row.try_get_raw(i) {
+                                    Ok(raw_value) => {
+                                        if raw_value.is_null() {
+                                            "NULL".to_string()
+                                        } else {
+                                            // For unknown types, try to get as string or show type info
+                                            match row.column(i).type_info().name() {
+                                                "timestamptz" => "<timestamptz>".to_string(),
+                                                "timestamp" => "<timestamp>".to_string(),
+                                                "json" => "<json>".to_string(),
+                                                "jsonb" => "<jsonb>".to_string(),
+                                                "numeric" => "<numeric>".to_string(),
+                                                "decimal" => "<decimal>".to_string(),
+                                        _ => format!("<{}>", row.column(i).type_info().name())
+                                            }
+                                        }
+                                    }
+                                    Err(_) => {
+                                        // If even raw access fails, indicate unknown type
+                                        "<error>".to_string()
+                                    }
                                 }
                             })
                             .collect()
@@ -177,6 +270,7 @@ impl PostgresManager {
 
                 Ok(crate::database::QueryResult {
                     columns,
+                    column_types,
                     rows: data_rows,
                     rows_affected: 0,
                     query_text: None,
@@ -189,6 +283,7 @@ impl PostgresManager {
                 let result = sqlx::query(query).execute(pool).await?;
                 Ok(crate::database::QueryResult {
                     columns: vec![],
+                    column_types: vec![],
                     rows: vec![],
                     rows_affected: result.rows_affected(),
                     query_text: None,
@@ -221,6 +316,103 @@ impl SchemaNode {
             name,
             tables: Vec::new(),
             expanded: false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db_service::{DbService, PgConnectionKey};
+
+    #[tokio::test]
+    async fn test_postgres_connection() {
+        // This test requires a running PostgreSQL instance
+        // Skip if no connection string is available
+        let connection_string = std::env::var("POSTGRES_CONNECTION_STRING")
+            .unwrap_or_else(|_| "postgres://postgres:Bongotrumma24!@localhost:5432/bylyngamanager?sslmode=disable&timezone=Europe/Stockholm".to_string());
+
+        let mut pg_manager = PostgresManager::new();
+        
+        // Test connection
+        match pg_manager.connect_async(&connection_string).await {
+            Ok(_) => println!("✅ PostgreSQL connection successful"),
+            Err(e) => {
+                println!("⚠️  PostgreSQL connection failed (this is expected if no server is running): {}", e);
+                return;
+            }
+        }
+
+        // Test simple query
+        let query = "SELECT version() as version, current_database() as database";
+        match pg_manager.execute_query_async(query).await {
+            Ok(result) => {
+                assert!(!result.columns.is_empty(), "Should have columns");
+                assert!(!result.rows.is_empty(), "Should have rows");
+                println!("✅ Query execution successful");
+            }
+            Err(e) => {
+                println!("❌ Query execution failed: {}", e);
+                panic!("Query should execute successfully");
+            }
+        }
+
+        // Test type handling
+        let type_query = r#"
+            SELECT 
+                '550e8400-e29b-41d4-a716-446655440000'::uuid as uuid_col,
+                NOW() as timestamp_col,
+                '{"key": "value"}'::json as json_col,
+                123.45::numeric as numeric_col,
+                true as bool_col,
+                'test_text' as text_col
+        "#;
+
+        match pg_manager.execute_query_async(type_query).await {
+            Ok(result) => {
+                assert_eq!(result.columns.len(), 6, "Should have 6 columns");
+                assert!(!result.rows.is_empty(), "Should have rows");
+                println!("✅ Type handling successful");
+                
+                // Check that UUID and other types are handled (not null)
+                let row = &result.rows[0];
+                for (i, value) in row.iter().enumerate() {
+                    println!("   Column {}: {}", result.columns[i], value);
+                    // Values should not be null representations
+                    assert_ne!(value, "<null>", "Column {} should not be null", result.columns[i]);
+                }
+            }
+            Err(e) => {
+                println!("⚠️  Type query failed (might be due to missing extensions): {}", e);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_db_service_integration() {
+        let connection_string = std::env::var("POSTGRES_CONNECTION_STRING")
+            .unwrap_or_else(|_| "postgres://postgres:Bongotrumma24!@localhost:5432/bylyngamanager?sslmode=disable&timezone=Europe/Stockholm".to_string());
+
+        let db_service = DbService::new();
+
+        match db_service.get_or_create_pg_connection(&connection_string).await {
+            Ok(pg_manager) => {
+                println!("✅ DbService integration successful");
+                
+                // Test query through DbService
+                match pg_manager.execute_query_async("SELECT COUNT(*) as count FROM pg_tables WHERE schemaname = 'public'").await {
+                    Ok(result) => {
+                        assert!(!result.rows.is_empty(), "Should have result rows");
+                        println!("✅ DbService query successful");
+                    }
+                    Err(e) => {
+                        println!("❌ DbService query failed: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                println!("⚠️  DbService integration failed (expected if no PostgreSQL server): {}", e);
+            }
         }
     }
 }

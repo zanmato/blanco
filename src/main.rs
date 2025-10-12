@@ -89,21 +89,17 @@ fn main() {
         })
         .detach();
 
-        // Initialize PostgreSQL connection from pg_dsn.txt
+        // Initialize PostgreSQL connection from pg_dsn.txt using new connection management
         let pg_dsn_path = std::path::Path::new("pg_dsn.txt");
         if pg_dsn_path.exists() {
             if let Ok(dsn) = std::fs::read_to_string(pg_dsn_path) {
                 let dsn = dsn.trim().to_string();
                 if !dsn.is_empty() {
-                    let pg_db_handle = db_service.pg_db_handle();
+                    let db_service_clone = db_service.clone();
                     gpui_tokio::Tokio::spawn_result(cx, async move {
-                        let mut pg_manager = postgres::PostgresManager::new();
-                        match pg_manager.connect_async(&dsn).await {
+                        match db_service_clone.get_or_create_pg_connection(&dsn).await {
                             Ok(_) => {
-                                log::info!("Connected to PostgreSQL database");
-                                // Store in global state
-                                let mut pg_db = pg_db_handle.write().await;
-                                *pg_db = Some(pg_manager);
+                                log::info!("Connected to PostgreSQL database using new connection management");
                                 Ok(())
                             }
                             Err(e) => {

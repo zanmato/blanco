@@ -17,7 +17,7 @@ use serde::Deserialize;
 use crate::{
     app_database::ConnectionData,
     connection_modal::NewConnectionModal,
-    db_service::DbService,
+    db_service::{DbService, PgConnectionKey},
     editor_panel::EditorPanel,
     sidebar::ConnectionSidebar,
 
@@ -41,7 +41,15 @@ pub struct NewQueryForConnection {
 
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
+pub struct NewQueryForPostgresConnection {
+    pub connection_key: PgConnectionKey,
+    pub display_name: String,
+}
+
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
 pub struct NewQueryForPostgresSchema {
+    pub connection_key: PgConnectionKey,
     pub schema_name: String,
 }
 
@@ -161,14 +169,29 @@ impl BlancoApp {
         cx.notify();
     }
 
+    fn on_new_query_for_postgres_connection(&mut self, action: &NewQueryForPostgresConnection, window: &mut Window, cx: &mut Context<Self>) {
+        log::info!("on_new_query_for_postgres_connection called: {}", action.display_name);
+        // Create a new query tab for the specified PostgreSQL connection
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.add_new_tab_with_postgres_connection(
+                window,
+                action.display_name.clone(),
+                action.connection_key.clone(),
+                None,
+                cx
+            );
+        });
+        cx.notify();
+    }
+
     fn on_new_query_for_postgres_schema(&mut self, action: &NewQueryForPostgresSchema, window: &mut Window, cx: &mut Context<Self>) {
         log::info!("on_new_query_for_postgres_schema called: {}", action.schema_name);
         // Create a new query tab for the specified PostgreSQL schema
         self.editor_panel.update(cx, |panel, cx| {
-            panel.add_new_tab_with_connection(
+            panel.add_new_tab_with_postgres_connection(
                 window,
                 format!("PostgreSQL ({})", action.schema_name),
-                ConnectionType::PostgreSQL,
+                action.connection_key.clone(),
                 Some(action.schema_name.clone()),
                 cx
             );
@@ -280,6 +303,7 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_about))
             .on_action(cx.listener(Self::on_new_query))
             .on_action(cx.listener(Self::on_new_query_for_connection))
+            .on_action(cx.listener(Self::on_new_query_for_postgres_connection))
             .on_action(cx.listener(Self::on_new_query_for_postgres_schema))
             .on_action(cx.listener(Self::on_open_connection))
             .on_action(cx.listener(Self::toggle_sidebar))

@@ -2,7 +2,7 @@ use crate::gpui_tokio::Tokio;
 use gpui::AppContext;
 use gpui::Task;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
-use sqlx::{Column, ConnectOptions, Row};
+use sqlx::{Column, ConnectOptions, Row, TypeInfo};
 use std::str::FromStr;
 
 pub struct DatabaseManager {
@@ -44,6 +44,7 @@ impl DatabaseManager {
                 if rows.is_empty() {
                     return Ok(QueryResult {
                         columns: vec![],
+                        column_types: vec![],
                         rows: vec![],
                         rows_affected: 0,
                         query_text: None,
@@ -52,12 +53,18 @@ impl DatabaseManager {
                     });
                 }
 
-                // Extract column names from the first row
+                // Extract column names and types from the first row
                 let first_row = &rows[0];
                 let columns: Vec<String> = first_row
                     .columns()
                     .iter()
                     .map(|col| col.name().to_string())
+                    .collect();
+
+                let column_types: Vec<String> = first_row
+                    .columns()
+                    .iter()
+                    .map(|col| col.type_info().name().to_string())
                     .collect();
 
                 // Extract row data
@@ -87,6 +94,7 @@ impl DatabaseManager {
 
                 Ok(QueryResult {
                     columns,
+                    column_types,
                     rows: data_rows,
                     rows_affected: 0,
                     query_text: None,
@@ -99,6 +107,7 @@ impl DatabaseManager {
                 let result = sqlx::query(query).execute(pool).await?;
                 Ok(QueryResult {
                     columns: vec![],
+                    column_types: vec![],
                     rows: vec![],
                     rows_affected: result.rows_affected(),
                     query_text: None,
@@ -126,6 +135,7 @@ impl DatabaseManager {
                     if rows.is_empty() {
                         return Ok(QueryResult {
                             columns: vec![],
+                            column_types: vec![],
                             rows: vec![],
                             rows_affected: 0,
                             query_text: None,
@@ -140,6 +150,12 @@ impl DatabaseManager {
                         .columns()
                         .iter()
                         .map(|col| col.name().to_string())
+                        .collect();
+
+                    let column_types: Vec<String> = first_row
+                        .columns()
+                        .iter()
+                        .map(|col| col.type_info().name().to_string())
                         .collect();
 
                     // Extract row data
@@ -169,6 +185,7 @@ impl DatabaseManager {
 
                     Ok(QueryResult {
                         columns,
+                        column_types,
                         rows: data_rows,
                         rows_affected: 0,
                         query_text: None,
@@ -181,6 +198,7 @@ impl DatabaseManager {
                     let result = sqlx::query(&query_clone).execute(&pool).await?;
                     Ok(QueryResult {
                         columns: vec![],
+                        column_types: vec![],
                         rows: vec![],
                         rows_affected: result.rows_affected(),
                         query_text: None,
@@ -238,6 +256,7 @@ impl DatabaseManager {
 #[derive(Debug, Clone, Default)]
 pub struct QueryResult {
     pub columns: Vec<String>,
+    pub column_types: Vec<String>,
     pub rows: Vec<Vec<String>>,
     pub rows_affected: u64,
     pub query_text: Option<String>,

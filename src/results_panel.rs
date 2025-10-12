@@ -418,6 +418,7 @@ impl CellEditState {
 #[derive(Default)]
 pub struct ResultsTableDelegate {
     columns: Vec<Column>,
+    column_types: Vec<String>,
     rows: Vec<Vec<String>>,
     edit_state: CellEditState,
     table_name: Option<String>,
@@ -429,6 +430,7 @@ impl ResultsTableDelegate {
     pub fn new() -> Self {
         Self {
             columns: vec![],
+            column_types: vec![],
             rows: vec![],
             edit_state: CellEditState::default(),
             table_name: None,
@@ -456,15 +458,38 @@ impl ResultsTableDelegate {
     pub fn set_query_result(&mut self, result: QueryResult) {
         // Clear previous edit state
         self.edit_state.clear_all();
+        self.pending_edit_cell = None;
         
-        // Build columns from result
+        // Store column types
+        self.column_types = result.column_types.clone();
+        
+        // Calculate column widths based on content and type
+        let column_widths: Vec<f32> = result.columns.iter().enumerate().map(|(i, col_name)| {
+            let mut max_width = col_name.len() as f32 * 7.0; // Smaller font size = smaller multiplier
+            
+            // Check some sample rows to determine content width
+            for row in result.rows.iter().take(20) { // Sample more rows for better accuracy
+                if let Some(cell_value) = row.get(i) {
+                    let content_width = cell_value.len() as f32 * 7.0; // Adjusted for smaller font
+                    max_width = max_width.max(content_width);
+                }
+            }
+            
+            // Add padding for cell content
+            max_width += 16.0; // Account for px_2 padding on each side
+            
+            // Apply minimum and maximum bounds (adjusted for smaller font)
+            max_width.max(60.0).min(400.0)
+        }).collect();
+        
+        // Build columns from result with calculated widths
         self.columns = result
             .columns
             .iter()
             .enumerate()
             .map(|(i, name)| {
                 Column::new(&format!("col_{}", i), name)
-                    .width(150.)
+                    .width(column_widths.get(i).copied().unwrap_or(150.0))
                     .resizable(true)
                     .sortable()
             })
@@ -598,6 +623,24 @@ impl ResultsTableDelegate {
     pub fn get_table_name(&self) -> Option<&str> {
         self.table_name.as_deref()
     }
+    
+    pub fn is_numeric_column(&self, col_index: usize) -> bool {
+        if let Some(column_type) = self.column_types.get(col_index) {
+            let type_lower = column_type.to_lowercase();
+            type_lower.contains("int") || 
+            type_lower.contains("float") || 
+            type_lower.contains("double") || 
+            type_lower.contains("numeric") || 
+            type_lower.contains("decimal") || 
+            type_lower.contains("real") ||
+            type_lower.contains("smallint") ||
+            type_lower.contains("bigint") ||
+            type_lower.contains("serial") ||
+            type_lower.contains("money")
+        } else {
+            false
+        }
+    }
 
     pub fn get_primary_key_column(&self) -> Option<&str> {
         self.primary_key_column.as_deref()
@@ -666,17 +709,23 @@ impl TableDelegate for ResultsTableDelegate {
             if let Some(input) = self.edit_state.get_editing_input() {
                     div()
                     .font_family("Fira Code")
+                    .text_size(px(12.))
                     .size_full()
                     .px_1()
                     .py_0p5()
+                    .when(self.is_numeric_column(col_ix), |this| {
+                        this.justify_end() // Right-align numeric columns
+                    })
                     .child(
                         TextInput::new(&input)
                             .size_full()
+                            .text_size(px(12.))
                     )
             } else {
                 // Fallback if input is not available
                 div()
                     .font_family("Fira Code")
+                    .text_size(px(12.))
                     .bg(cx.theme().background)
                     .border_1()
                     .border_color(cx.theme().blue)
@@ -684,12 +733,23 @@ impl TableDelegate for ResultsTableDelegate {
                     .py_1()
                     .rounded(cx.theme().radius)
                     .size_full()
+                    .when(self.is_numeric_column(col_ix), |this| {
+                        this.justify_end() // Right-align numeric columns
+                    })
                     .child(display_text)
             }
         } else {
+            // Check if this is a numeric column for right-alignment
+            let is_numeric = self.is_numeric_column(col_ix);
+            
             // Render static cell with double-click handler only if table is editable
             div()
                 .font_family("Fira Code")
+                .text_size(px(12.))
+                .when(is_numeric, |this| {
+                    this.justify_end() // Right-align numeric columns
+                        .text_color(cx.theme().foreground) // Ensure numeric text is visible
+                })
                 .when(is_edited, |this| {
                     this.bg(cx.theme().yellow.opacity(0.1))
                         .border_l_2()
@@ -1392,7 +1452,7 @@ impl Render for ResultsPanel {
                     _ => {}
                 }
             }))
-            // The table component has built-in scrolling (both vertical and horizontal)
+            // The table component (table should have built-in scrolling)
             .child(
                 div()
                     .flex_1()

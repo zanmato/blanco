@@ -96,7 +96,7 @@ impl SidebarMenuItem {
     }
 
     /// Set id to the menu item.
-    fn id(mut self, id: impl Into<ElementId>) -> Self {
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
         self.id = id.into();
         self
     }
@@ -178,71 +178,86 @@ impl RenderOnce for SidebarMenuItem {
         let label = self.label.clone();
         let click_label = label.clone();
         let context_label = label.clone();
+        let children = self.children;
 
-        let item_content = div()
+        let main_item = h_flex()
             .id(self.id.clone())
-            .w_full()
-            .child(
-                h_flex()
-                    .size_full()
-                    .id("item")
-                    .overflow_x_hidden()
-                    .flex_shrink_0()
-                    .p_2()
-                    .gap_x_2()
-                    .rounded(cx.theme().radius)
-                    .text_sm()
-                    .hover(|this| {
-                        if is_active {
-                            return this;
-                        }
+            .size_full()
+            .overflow_x_hidden()
+            .flex_shrink_0()
+            .p_2()
+            .gap_x_2()
+            .rounded(cx.theme().radius)
+            .text_sm()
+            .hover(|this| {
+                if is_active {
+                    return this;
+                }
 
-                        this.bg(cx.theme().sidebar_accent.opacity(0.8))
-                            .text_color(cx.theme().sidebar_accent_foreground)
-                    })
-                    .when(is_active && !is_submenu, |this| {
-                        this.font_medium()
-                            .bg(cx.theme().sidebar_accent)
-                            .text_color(cx.theme().sidebar_accent_foreground)
-                    })
-                    .when_some(self.icon.clone(), |this, icon| this.child(icon))
-                    .when(is_collapsed, |this| {
-                        this.justify_center().when(is_active, |this| {
-                            this.bg(cx.theme().sidebar_accent)
-                                .text_color(cx.theme().sidebar_accent_foreground)
-                        })
-                    })
-                    .when(!is_collapsed, |this| {
-                        this.h_7()
+                this.bg(cx.theme().sidebar_accent.opacity(0.8))
+                    .text_color(cx.theme().sidebar_accent_foreground)
+            })
+            .when(is_active && !is_submenu, |this| {
+                this.font_medium()
+                    .bg(cx.theme().sidebar_accent)
+                    .text_color(cx.theme().sidebar_accent_foreground)
+            })
+            .when_some(self.icon.clone(), |this, icon| this.child(icon))
+            .when(is_collapsed, |this| {
+                this.justify_center().when(is_active, |this| {
+                    this.bg(cx.theme().sidebar_accent)
+                        .text_color(cx.theme().sidebar_accent_foreground)
+                })
+            })
+            .when(!is_collapsed, |this| {
+                this.h_7()
+                    .child(
+                        h_flex()
+                            .flex_1()
+                            .gap_x_2()
+                            .justify_between()
+                            .overflow_x_hidden()
                             .child(
                                 h_flex()
                                     .flex_1()
-                                    .gap_x_2()
-                                    .justify_between()
                                     .overflow_x_hidden()
-                                    .child(
-                                        h_flex()
-                                            .flex_1()
-                                            .overflow_x_hidden()
-                                            .child(self.label.clone()),
-                                    )
-                                    .when_some(self.suffix, |this, suffix| this.child(suffix)),
+                                    .child(self.label.clone()),
                             )
-                            .when(is_submenu, |this| {
-                                this.child(
-                                    Icon::new(IconName::ChevronRight)
-                                        .size_4()
-                                        .when(is_open, |this| this.rotate(percentage(90. / 360.))),
-                                )
-                            })
+                            .when_some(self.suffix, |this, suffix| this.child(suffix)),
+                    )
+                    .when(is_submenu, |this| {
+                        this.child(
+                            Icon::new(IconName::ChevronRight)
+                                .size_4()
+                                .when(is_open, |this| this.rotate(percentage(90. / 360.))),
+                        )
                     })
-                    .on_click(move |ev, window, cx| {
-                        log::info!("SidebarMenuItem clicked: label={}", click_label);
-                        handler(ev, window, cx)
-                    })
+            })
+            .on_click(move |ev, window, cx| {
+                log::info!("SidebarMenuItem clicked: label={}", click_label);
+                handler(ev, window, cx)
+            });
 
-            )
-            .when(is_submenu && is_open && !is_collapsed, |this| {
+        // Add context menu if one is provided
+        let item_with_context_menu = match context_menu {
+            Some(menu_builder) => {
+                // log::info!("Setting up context menu for item: {}", context_label);
+                main_item.context_menu(move |menu, window, cx| {
+                    log::info!("Context menu TRIGGERED for item: {}", context_label);
+                    let built_menu = menu_builder(menu, window, cx);
+                    log::info!("Context menu BUILT successfully for: {}", context_label);
+                    built_menu
+                })
+            }
+            None => {
+                //  log::info!("No context menu for item: {}", context_label);
+                main_item
+            }
+        };
+
+        div().w_full().child(item_with_context_menu).when(
+            is_submenu && is_open && !is_collapsed,
+            |this| {
                 this.child(
                     v_flex()
                         .id("submenu")
@@ -253,30 +268,13 @@ impl RenderOnce for SidebarMenuItem {
                         .pl_2p5()
                         .py_0p5()
                         .children(
-                            self.children
+                            children
                                 .into_iter()
                                 .enumerate()
                                 .map(|(ix, item)| item.id(ix)),
                         ),
                 )
-            });
-
-        // Add context menu if one is provided
-        match context_menu {
-            Some(menu_builder) => {
-                log::info!("Setting up context menu for item: {}", context_label);
-                item_content
-                    .context_menu(move |menu, window, cx| {
-                        log::info!("Context menu TRIGGERED for item: {}", context_label);
-                        let built_menu = menu_builder(menu, window, cx);
-                        log::info!("Context menu BUILT successfully for: {}", context_label);
-                        built_menu
-                    })
-            }
-            None => {
-                log::info!("No context menu for item: {}", context_label);
-                item_content
-            }
-        }
+            },
+        )
     }
 }

@@ -60,6 +60,26 @@ impl AppDatabase {
         .await
         .ok(); // Ignore error if column already exists
 
+        // Add connection_type column for distinguishing SQLite vs PostgreSQL
+        sqlx::query(
+            r#"
+            ALTER TABLE query_tabs ADD COLUMN connection_type TEXT
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .ok(); // Ignore error if column already exists
+
+        // Add pg_connection_key column for PostgreSQL connection identification
+        sqlx::query(
+            r#"
+            ALTER TABLE query_tabs ADD COLUMN pg_connection_key TEXT
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .ok(); // Ignore error if column already exists
+
         // Query history table
         sqlx::query(
             r#"
@@ -111,7 +131,7 @@ impl AppDatabase {
             sqlx::query(
                 r#"
                 UPDATE query_tabs
-                SET title = ?, content = ?, position = ?, connection_id = ?, updated_at = ?
+                SET title = ?, content = ?, position = ?, connection_id = ?, connection_type = ?, pg_connection_key = ?, updated_at = ?
                 WHERE id = ?
                 "#,
             )
@@ -119,6 +139,8 @@ impl AppDatabase {
             .bind(&tab.content)
             .bind(tab.position)
             .bind(tab.connection_id)
+            .bind(&tab.connection_type)
+            .bind(&tab.pg_connection_key)
             .bind(now)
             .bind(id)
             .execute(&self.pool)
@@ -128,14 +150,16 @@ impl AppDatabase {
             // Insert new tab
             let result = sqlx::query(
                 r#"
-                INSERT INTO query_tabs (title, content, position, connection_id, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO query_tabs (title, content, position, connection_id, connection_type, pg_connection_key, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(&tab.title)
             .bind(&tab.content)
             .bind(tab.position)
             .bind(tab.connection_id)
+            .bind(&tab.connection_type)
+            .bind(&tab.pg_connection_key)
             .bind(now)
             .bind(now)
             .execute(&self.pool)
@@ -148,7 +172,7 @@ impl AppDatabase {
     pub async fn load_query_tabs(&self) -> Result<Vec<QueryTabData>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
-            SELECT id, title, content, position, connection_id
+            SELECT id, title, content, position, connection_id, connection_type, pg_connection_key
             FROM query_tabs
             ORDER BY position ASC
             "#,
@@ -164,6 +188,8 @@ impl AppDatabase {
                 content: row.get(2),
                 position: row.get(3),
                 connection_id: row.get(4),
+                connection_type: row.get(5),
+                pg_connection_key: row.get(6),
             })
             .collect();
 
@@ -328,6 +354,8 @@ pub struct QueryTabData {
     pub content: String,
     pub position: i32,
     pub connection_id: Option<i64>,
+    pub connection_type: Option<String>,
+    pub pg_connection_key: Option<String>,
 }
 
 #[derive(Debug, Clone)]
