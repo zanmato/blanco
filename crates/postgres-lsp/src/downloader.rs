@@ -1,5 +1,5 @@
 //! Binary downloader for PostgreSQL language server
-//! 
+//!
 //! This module handles downloading the PostgreSQL language server binary from GitHub releases,
 //! with support for different architectures and caching.
 
@@ -55,7 +55,7 @@ impl Architecture {
     /// Get the binary name for this architecture
     pub fn binary_name(&self) -> &'static str {
         match self {
-            Architecture::X86_64UnknownLinuxGnu => "postgrestools_x86_64-unknown-linux-gnu",
+            Architecture::X86_64UnknownLinuxGnu => "postgrestools", //"postgrestools_x86_64-unknown-linux-gnu",
             Architecture::X86_64AppleDarwin => "postgrestools_x86_64-apple-darwin",
             Architecture::Aarch64AppleDarwin => "postgrestools_aarch64-apple-darwin",
             Architecture::X86_64PcWindowsMsvc => "postgrestools_x86_64-pc-windows-msvc.exe",
@@ -148,15 +148,23 @@ impl BinaryDownloader {
         // First check cache directory
         let cached_binary = self.cache_dir.join(self.architecture.binary_name());
         if cached_binary.exists() && self.is_binary_executable(&cached_binary).await? {
+            info!("Found cached binary: {:?}", cached_binary);
             return Ok(Some(cached_binary));
         }
 
         // Check project directory (for development)
-        let project_binary = PathBuf::from("postgrestools_x86_64-unknown-linux-gnu");
+        let project_binary = PathBuf::from(self.architecture.binary_name());
+        debug!("Checking for project binary at: {:?}", project_binary);
         if project_binary.exists() && self.is_binary_executable(&project_binary).await? {
-            return Ok(Some(project_binary));
+            // Convert to absolute path for process spawning
+            let absolute_path = project_binary
+                .canonicalize()
+                .unwrap_or_else(|_| project_binary.clone());
+            info!("Found project binary: {:?}", absolute_path);
+            return Ok(Some(absolute_path));
         }
 
+        debug!("No local binary found, will need to download");
         Ok(None)
     }
 
@@ -168,7 +176,7 @@ impl BinaryDownloader {
             let metadata = fs::metadata(path).await?;
             Ok(metadata.permissions().mode() & 0o111 != 0)
         }
-        
+
         #[cfg(windows)]
         {
             // On Windows, just check if the file exists and has .exe extension
@@ -178,16 +186,23 @@ impl BinaryDownloader {
 
     /// Download the binary from GitHub releases
     async fn download_binary(&self) -> Result<PathBuf, DownloadError> {
-        info!("Downloading PostgreSQL LSP binary for architecture: {:?}", self.architecture);
+        info!(
+            "Downloading PostgreSQL LSP binary for architecture: {:?}",
+            self.architecture
+        );
 
         // Get latest release information
         let release = self.get_latest_release().await?;
         debug!("Found latest release: {}", release.tag_name);
 
         // Find the appropriate asset
-        let asset = release.assets.into_iter()
+        let asset = release
+            .assets
+            .into_iter()
             .find(|a| a.name == self.architecture.asset_name())
-            .ok_or_else(|| DownloadError::AssetNotFound(self.architecture.asset_name().to_string()))?;
+            .ok_or_else(|| {
+                DownloadError::AssetNotFound(self.architecture.asset_name().to_string())
+            })?;
 
         info!("Downloading asset: {}", asset.name);
 
@@ -195,7 +210,7 @@ impl BinaryDownloader {
         let response = self.client.get(&asset.browser_download_url).send().await?;
         if !response.status().is_success() {
             return Err(DownloadError::Http(reqwest::Error::from(
-                response.error_for_status().unwrap_err()
+                response.error_for_status().unwrap_err(),
             )));
         }
 
@@ -208,8 +223,9 @@ impl BinaryDownloader {
     /// Get the latest release from GitHub
     async fn get_latest_release(&self) -> Result<Release, DownloadError> {
         let url = "https://api.github.com/repos/supabase-community/postgres-language-server/releases/latest";
-        
-        let response = self.client
+
+        let response = self
+            .client
             .get(url)
             .header("User-Agent", "blanco-sql-editor")
             .send()
@@ -217,7 +233,7 @@ impl BinaryDownloader {
 
         if !response.status().is_success() {
             return Err(DownloadError::Http(reqwest::Error::from(
-                response.error_for_status().unwrap_err()
+                response.error_for_status().unwrap_err(),
             )));
         }
 
@@ -248,7 +264,10 @@ impl BinaryDownloader {
             fs::set_permissions(&binary_path, perms).await?;
         }
 
-        info!("Successfully extracted PostgreSQL LSP binary to: {:?}", binary_path);
+        info!(
+            "Successfully extracted PostgreSQL LSP binary to: {:?}",
+            binary_path
+        );
         Ok(binary_path)
     }
 
@@ -286,13 +305,13 @@ mod tests {
     #[test]
     fn test_architecture_properties() {
         let arch = Architecture::current().unwrap();
-        
+
         // Check that binary name is not empty
         assert!(!arch.binary_name().is_empty());
-        
+
         // Check that asset name is not empty
         assert!(!arch.asset_name().is_empty());
-        
+
         // Check that asset name ends with .tar.gz
         assert!(arch.asset_name().ends_with(".tar.gz"));
     }

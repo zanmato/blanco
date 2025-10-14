@@ -1,5 +1,5 @@
 //! Process management for PostgreSQL language server
-//! 
+//!
 //! This module handles the lifecycle of the PostgreSQL language server process,
 //! including startup, communication, and shutdown.
 
@@ -37,14 +37,17 @@ pub struct PostgresLspProcess {
 
 impl PostgresLspProcess {
     /// Create a new PostgreSQL language server process
-    /// 
+    ///
     /// # Arguments
     /// * `binary_path` - Path to the postgrestools binary
     /// * `workspace_path` - Path to the workspace directory
-    /// 
+    ///
     /// # Returns
     /// * `Result<Self, ProcessError>` - Process handle or error
-    pub async fn new(binary_path: PathBuf, workspace_path: &Path) -> Result<Self, ProcessError> {
+    pub async fn new(
+        binary_path: PathBuf,
+        workspace_path: &Path,
+    ) -> Result<Self, ProcessError> {
         info!("Starting PostgreSQL LSP process: {:?}", binary_path);
         debug!("Workspace path: {:?}", workspace_path);
 
@@ -64,11 +67,11 @@ impl PostgresLspProcess {
             )));
         }
 
-        // Start the process
-        let mut child = AsyncCommand::new(&binary_path)
+        // Start the process without --config-path argument
+        // The LSP server will use workspace folder detection instead
+        info!("🔧 Spawning LSP process with cwd: {:?}", workspace_path);
+        let child = AsyncCommand::new(&binary_path)
             .arg("lsp-proxy")
-            .arg("--config-path")
-            .arg(workspace_path.join("postgrestools.jsonc"))
             .current_dir(workspace_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -76,9 +79,9 @@ impl PostgresLspProcess {
             .spawn()
             .map_err(|e| ProcessError::Start(format!("Failed to spawn process: {}", e)))?;
 
-        let pid = child.id().ok_or_else(|| {
-            ProcessError::Start("Failed to get process ID".to_string())
-        })?;
+        let pid = child
+            .id()
+            .ok_or_else(|| ProcessError::Start("Failed to get process ID".to_string()))?;
 
         info!("Started PostgreSQL LSP process with PID: {}", pid);
 
@@ -93,14 +96,16 @@ impl PostgresLspProcess {
     }
 
     /// Wait for the process to be ready
-    /// 
+    ///
     /// This method waits for the LSP server to initialize and be ready to accept requests.
     pub async fn wait_for_ready(&mut self) -> Result<(), ProcessError> {
         info!("Waiting for PostgreSQL LSP process to be ready...");
 
         // Take stderr to monitor startup messages
-        let stderr = self.child.stderr.take()
-            .ok_or_else(|| ProcessError::Communication("Failed to capture stderr".to_string()))?;
+        let stderr =
+            self.child.stderr.take().ok_or_else(|| {
+                ProcessError::Communication("Failed to capture stderr".to_string())
+            })?;
 
         let mut reader = BufReader::new(stderr).lines();
         let mut ready = false;
@@ -110,21 +115,22 @@ impl PostgresLspProcess {
 
         while let Ok(result) = timeout(timeout_duration, reader.next_line()).await {
             if let Ok(Some(line)) = result {
-            debug!("LSP stderr: {}", line);
-            
-            // Look for ready indicators
-            if line.contains("LSP server started") || 
-               line.contains("Server initialized") ||
-               line.contains("Listening") {
-                ready = true;
-                break;
+                debug!("LSP stderr: {}", line);
+
+                // Look for ready indicators
+                if line.contains("LSP server started")
+                    || line.contains("Server initialized")
+                    || line.contains("Listening")
+                {
+                    ready = true;
+                    break;
+                }
+
+                // Look for error indicators
+                if line.contains("error") || line.contains("Error") || line.contains("failed") {
+                    warn!("LSP process reported error: {}", line);
+                }
             }
-            
-            // Look for error indicators
-            if line.contains("error") || line.contains("Error") || line.contains("failed") {
-                warn!("LSP process reported error: {}", line);
-            }
-        }
         }
 
         if !ready {
@@ -187,12 +193,12 @@ impl PostgresLspProcess {
                 .arg("-TERM")
                 .arg(self.pid.to_string())
                 .output();
-                
+
             match result {
                 Ok(output) => {
                     if output.status.success() {
                         debug!("Sent SIGTERM to LSP process");
-                        
+
                         // Wait up to 5 seconds for graceful shutdown
                         match timeout(Duration::from_secs(5), self.child.wait()).await {
                             Ok(Ok(status)) => {
@@ -223,7 +229,8 @@ impl PostgresLspProcess {
         }
 
         // Force kill if graceful shutdown failed
-        let mut process = std::mem::replace(&mut self.child, AsyncCommand::new("echo").spawn().unwrap());
+        let mut process =
+            std::mem::replace(&mut self.child, AsyncCommand::new("echo").spawn().unwrap());
         process.kill().await;
         Ok(())
     }
@@ -231,7 +238,7 @@ impl PostgresLspProcess {
     /// Force kill the process
     pub async fn kill(&mut self) {
         warn!("Force killing PostgreSQL LSP process (PID: {})", self.pid);
-        
+
         if let Err(e) = self.child.kill().await {
             error!("Failed to kill LSP process: {}", e);
         }
@@ -244,11 +251,9 @@ impl PostgresLspProcess {
         // Kill current process
         self.kill();
 
-        // Start new process
-        let mut new_process = Self::new(
-            self.binary_path.clone(),
-            &self.workspace_path,
-        ).await?;
+        // Start new process without config path
+        let mut new_process =
+            Self::new(self.binary_path.clone(), &self.workspace_path).await?;
 
         // Wait for new process to be ready
         new_process.wait_for_ready().await?;
@@ -263,7 +268,7 @@ impl PostgresLspProcess {
 
 /// Process manager for handling multiple LSP processes
 pub struct ProcessManager {
-    processes: Vec<PostgresLspProcess>,
+    pub(crate) processes: Vec<PostgresLspProcess>,
 }
 
 impl ProcessManager {
@@ -350,21 +355,23 @@ impl Default for ProcessManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use std::fs;
+    use tempfile::TempDir;
 
     #[test]
     fn test_process_creation() {
         // This test requires a real binary, so we'll just test the structure
         let temp_dir = TempDir::new().unwrap();
         let binary_path = PathBuf::from("/nonexistent/binary");
-        
+
         // This should fail because the binary doesn't exist
         let result = std::thread::spawn(move || {
-            tokio::runtime::Runtime::new().unwrap().block_on(async {
-                PostgresLspProcess::new(binary_path, temp_dir.path()).await
-            })
-        }).join().unwrap();
+            tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(async { PostgresLspProcess::new(binary_path, temp_dir.path()).await })
+        })
+        .join()
+        .unwrap();
 
         assert!(result.is_err());
     }
@@ -379,7 +386,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_manager_cleanup() {
         let mut manager = ProcessManager::new();
-        
+
         // Add a mock process (we can't actually start one without a binary)
         // This test just verifies the structure
         manager.cleanup_dead().await;

@@ -6,19 +6,24 @@ use gpui::{
 use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
-    input::{InputEvent, InputState, TabSize, TextInput},
+    highlighter::{Diagnostic, DiagnosticSeverity},
+    input::{InputEvent, InputState, Position, TabSize, TextInput},
     sidebar::SidebarToggleButton,
     tab::{Tab, TabBar},
     v_flex, ActiveTheme, IconName, Kbd, Side, Sizable,
 };
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
+use lsp_types::{PublishDiagnosticsParams, Uri};
 use serde_json;
 
 use crate::app::{ConnectionType, ToggleSidebar};
 use crate::app_database::{QueryHistoryData, QueryTabData};
 use crate::database::QueryResult;
 use crate::db_service::{DbService, PgConnectionKey};
+use crate::query_file::QueryFileManager;
 use crate::settings::Settings;
+use postgres_lsp::PostgresLspManager;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub enum EditorPanelEvent {
@@ -36,10 +41,27 @@ pub struct QueryTab {
     pub connection_name: String,
     pub connection_type: ConnectionType,
     pub pg_connection_key: Option<PgConnectionKey>, // For PostgreSQL connections
-    pub connection_id: Option<i64>, // Connection ID to tie this tab to a connection
+    pub connection_id: Option<i64>,                 // Connection ID to tie this tab to a connection
     pub editor: Entity<InputState>,
     pub db_id: Option<i64>, // Database ID for persistence
     pub results_panel: Entity<crate::results_panel::ResultsPanel>, // Each tab has its own results
+    pub lsp_manager: Option<PostgresLspManager>, // LSP manager for PostgreSQL connections
+    pub document_version: i32, // LSP document version for tracking changes
+    pub file_uri: Option<String>, // File URI for LSP integration
+    pub pending_diagnostics: Option<Vec<Diagnostic>>, // Store diagnostics from LSP
+    pub diagnostics_dirty: bool, // Flag to indicate diagnostics need updating
+}
+
+impl QueryTab {
+    /// Get the URI for this query tab
+    fn uri(&self) -> String {
+        // Use file URI if available (for LSP integration), otherwise fall back to synthetic URI
+        if let Some(ref file_uri) = self.file_uri {
+            file_uri.clone()
+        } else {
+            format!("inmemory://blanco/query_{}.sql", self.id)
+        }
+    }
 }
 
 pub struct SettingsTab {
@@ -60,6 +82,7 @@ pub struct EditorPanel {
     sidebar_collapsed: bool,
     pending_save_task: Option<gpui::Task<()>>,
     _subscriptions: Vec<gpui::Subscription>,
+    query_file_manager: Arc<QueryFileManager>,
 }
 
 impl EditorPanel {
@@ -72,6 +95,16 @@ impl EditorPanel {
         cx: &mut Context<Self>,
         sidebar_collapsed: bool,
     ) -> Self {
+        // Initialize QueryFileManager
+        let query_file_manager = Arc::new(
+            QueryFileManager::new()
+                .map_err(|e| {
+                    error!("Failed to initialize QueryFileManager: {}", e);
+                    e
+                })
+                .expect("Failed to create QueryFileManager"),
+        );
+
         let first_tab = QueryTab {
             id: 0,
             title: "Query 1".to_string(),
@@ -92,6 +125,11 @@ impl EditorPanel {
             }),
             db_id: None,
             results_panel: cx.new(|cx| crate::results_panel::ResultsPanel::new(window, cx)),
+            lsp_manager: None, // No LSP for SQLite
+            document_version: 0,
+            file_uri: None, // Will be set when saved
+            pending_diagnostics: None,
+            diagnostics_dirty: false,
         };
 
         let mut panel = Self {
@@ -102,12 +140,40 @@ impl EditorPanel {
             sidebar_collapsed,
             pending_save_task: None,
             _subscriptions: Vec::new(),
+            query_file_manager,
         };
 
         // Subscribe to the first tab's editor changes
-        let subscription = cx.subscribe(&first_tab.editor, |this, _editor, event, cx| {
+        let subscription = cx.subscribe(&first_tab.editor, |this, editor_entity, event, cx| {
             if let InputEvent::Change = event {
                 this.trigger_auto_save(cx);
+
+                // Send didChange to LSP if this is a PostgreSQL tab and the first tab is active
+                if this.tabs.len() > 0 {
+                    if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(0) {
+                        if let Some(ref lsp_manager) = query_tab.lsp_manager {
+                            query_tab.document_version += 1;
+                            let version = query_tab.document_version;
+                            let uri_str = query_tab.uri();
+                            let content = editor_entity.read(cx).text().to_string();
+                            let lsp_clone = lsp_manager.clone();
+                            let tab_title = query_tab.title.clone();
+
+                            crate::gpui_tokio::Tokio::spawn_result(cx, async move {
+                                if let Ok(uri) = uri_str.parse::<Uri>() {
+                                    info!("📤 Sending didChange notification for tab '{}' version {}", tab_title, version);
+                                    lsp_clone.did_change(uri, version, content).await
+                                        .map_err(|e| anyhow::anyhow!("didChange failed: {:?}", e))?;
+                                    info!("✅ didChange notification sent successfully for tab '{}' version {}", tab_title, version);
+                                    Ok(())
+                                } else {
+                                    error!("Failed to parse URI for didChange: {}", uri_str);
+                                    Err(anyhow::anyhow!("URI parse failed"))
+                                }
+                            }).detach();
+                        }
+                    }
+                }
             }
         });
 
@@ -138,9 +204,34 @@ impl EditorPanel {
         });
 
         // Subscribe to editor changes
-        let subscription = cx.subscribe(&editor, |this, _editor, event, cx| {
+        let subscription = cx.subscribe(&editor, |this, editor_entity, event, cx| {
             if let InputEvent::Change = event {
                 this.trigger_auto_save(cx);
+
+                // Send didChange to LSP if this is a PostgreSQL tab
+                if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
+                    if let Some(ref lsp_manager) = query_tab.lsp_manager {
+                        query_tab.document_version += 1;
+                        let version = query_tab.document_version;
+                        let uri_str = query_tab.uri();
+                        let content = editor_entity.read(cx).text().to_string();
+                        let lsp_clone = lsp_manager.clone();
+                        let tab_title = query_tab.title.clone();
+
+                        crate::gpui_tokio::Tokio::spawn_result(cx, async move {
+                            if let Ok(uri) = uri_str.parse::<Uri>() {
+                                info!("📤 Sending didChange notification for tab '{}' version {}", tab_title, version);
+                                lsp_clone.did_change(uri, version, content).await
+                                    .map_err(|e| anyhow::anyhow!("didChange failed: {:?}", e))?;
+                                info!("✅ didChange notification sent successfully for tab '{}' version {}", tab_title, version);
+                                Ok(())
+                            } else {
+                                error!("Failed to parse URI for didChange: {}", uri_str);
+                                Err(anyhow::anyhow!("URI parse failed"))
+                            }
+                        }).detach();
+                    }
+                }
             }
         });
         self._subscriptions.push(subscription);
@@ -155,6 +246,11 @@ impl EditorPanel {
             editor,
             db_id: None,
             results_panel: cx.new(|cx| crate::results_panel::ResultsPanel::new(window, cx)),
+            lsp_manager: None, // No LSP for SQLite
+            document_version: 0,
+            file_uri: None, // Will be set when saved
+            pending_diagnostics: None,
+            diagnostics_dirty: false,
         };
 
         self.tabs.push(TabType::Query(new_tab));
@@ -186,9 +282,34 @@ impl EditorPanel {
         });
 
         // Subscribe to editor changes
-        let subscription = cx.subscribe(&editor, |this, _editor, event, cx| {
+        let subscription = cx.subscribe(&editor, |this, editor_entity, event, cx| {
             if let InputEvent::Change = event {
                 this.trigger_auto_save(cx);
+
+                // Send didChange to LSP if this is a PostgreSQL tab
+                if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
+                    if let Some(ref lsp_manager) = query_tab.lsp_manager {
+                        query_tab.document_version += 1;
+                        let version = query_tab.document_version;
+                        let uri_str = query_tab.uri();
+                        let content = editor_entity.read(cx).text().to_string();
+                        let lsp_clone = lsp_manager.clone();
+                        let tab_title = query_tab.title.clone();
+
+                        crate::gpui_tokio::Tokio::spawn_result(cx, async move {
+                            if let Ok(uri) = uri_str.parse::<Uri>() {
+                                info!("📤 Sending didChange notification for tab '{}' version {}", tab_title, version);
+                                lsp_clone.did_change(uri, version, content).await
+                                    .map_err(|e| anyhow::anyhow!("didChange failed: {:?}", e))?;
+                                info!("✅ didChange notification sent successfully for tab '{}' version {}", tab_title, version);
+                                Ok(())
+                            } else {
+                                error!("Failed to parse URI for didChange: {}", uri_str);
+                                Err(anyhow::anyhow!("URI parse failed"))
+                            }
+                        }).detach();
+                    }
+                }
             }
         });
         self._subscriptions.push(subscription);
@@ -197,12 +318,8 @@ impl EditorPanel {
             (crate::app::ConnectionType::PostgreSQL, Some(schema)) => {
                 format!("PostgreSQL - {}", schema)
             }
-            (crate::app::ConnectionType::PostgreSQL, None) => {
-                "PostgreSQL".to_string()
-            }
-            (crate::app::ConnectionType::SQLite, _) => {
-                connection_name.clone()
-            }
+            (crate::app::ConnectionType::PostgreSQL, None) => "PostgreSQL".to_string(),
+            (crate::app::ConnectionType::SQLite, _) => connection_name.clone(),
         };
 
         // Extract PostgreSQL connection key from connection name if it's a PostgreSQL connection
@@ -224,6 +341,11 @@ impl EditorPanel {
             editor,
             db_id: None,
             results_panel: cx.new(|cx| crate::results_panel::ResultsPanel::new(window, cx)),
+            lsp_manager: None, // Will be initialized later if needed
+            document_version: 0,
+            file_uri: None, // Will be set when saved
+            pending_diagnostics: None,
+            diagnostics_dirty: false,
         };
 
         self.tabs.push(TabType::Query(new_tab));
@@ -256,9 +378,34 @@ impl EditorPanel {
         });
 
         // Subscribe to editor changes
-        let subscription = cx.subscribe(&editor, |this, _editor, event, cx| {
+        let subscription = cx.subscribe(&editor, |this, editor_entity, event, cx| {
             if let InputEvent::Change = event {
                 this.trigger_auto_save(cx);
+
+                // Send didChange to LSP if this is a PostgreSQL tab
+                if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
+                    if let Some(ref lsp_manager) = query_tab.lsp_manager {
+                        query_tab.document_version += 1;
+                        let version = query_tab.document_version;
+                        let uri_str = query_tab.uri();
+                        let content = editor_entity.read(cx).text().to_string();
+                        let lsp_clone = lsp_manager.clone();
+                        let tab_title = query_tab.title.clone();
+
+                        crate::gpui_tokio::Tokio::spawn_result(cx, async move {
+                            if let Ok(uri) = uri_str.parse::<Uri>() {
+                                info!("📤 Sending didChange notification for tab '{}' version {}", tab_title, version);
+                                lsp_clone.did_change(uri, version, content).await
+                                    .map_err(|e| anyhow::anyhow!("didChange failed: {:?}", e))?;
+                                info!("✅ didChange notification sent successfully for tab '{}' version {}", tab_title, version);
+                                Ok(())
+                            } else {
+                                error!("Failed to parse URI for didChange: {}", uri_str);
+                                Err(anyhow::anyhow!("URI parse failed"))
+                            }
+                        }).detach();
+                    }
+                }
             }
         });
         self._subscriptions.push(subscription);
@@ -268,9 +415,10 @@ impl EditorPanel {
             None => display_name.clone(),
         };
 
+        // Create the new PostgreSQL tab
         let new_tab = QueryTab {
             id: tab_id,
-            title,
+            title: title.clone(),
             connection_name: display_name.clone(),
             connection_type: ConnectionType::PostgreSQL,
             pg_connection_key: Some(pg_connection_key),
@@ -278,11 +426,21 @@ impl EditorPanel {
             editor,
             db_id: None,
             results_panel: cx.new(|cx| crate::results_panel::ResultsPanel::new(window, cx)),
+            lsp_manager: None, // Will be initialized asynchronously
+            document_version: 0,
+            file_uri: None, // Will be set when saved
+            pending_diagnostics: None,
+            diagnostics_dirty: false,
         };
 
         self.tabs.push(TabType::Query(new_tab));
         self.active_tab_ix = self.tabs.len() - 1;
         cx.notify();
+
+        // Initialize LSP for the new PostgreSQL tab
+        info!("🚀 Initializing LSP for new PostgreSQL tab: {}", title);
+        let new_tab_index = self.tabs.len() - 1; // Index of the just-added tab
+        self.initialize_lsp_for_tab_at_index(new_tab_index, window, cx);
     }
 
     /// Extract PostgreSQL connection key from display name
@@ -292,21 +450,22 @@ impl EditorPanel {
         if let Some(at_pos) = display_name.find('@') {
             let username = display_name[..at_pos].to_string();
             let remaining = &display_name[at_pos + 1..];
-            
+
             if let Some(colon_pos) = remaining.find(':') {
                 let host = remaining[..colon_pos].to_string();
                 let remaining = &remaining[colon_pos + 1..];
-                
+
                 if let Some(slash_pos) = remaining.find('/') {
                     let port_str = &remaining[..slash_pos];
                     let database = remaining[slash_pos + 1..].to_string();
-                    
+
                     if let Ok(port) = port_str.parse::<u16>() {
                         return Some(PgConnectionKey {
                             host,
                             port,
                             database,
                             username,
+                            password: None, // No password in display name format
                         });
                     }
                 }
@@ -339,7 +498,9 @@ impl EditorPanel {
 
                 crate::gpui_tokio::Tokio::spawn_result(cx, async move {
                     if let Some(app_db) = app_db.read().await.as_ref() {
-                        app_db.delete_query_tab(db_id).await
+                        app_db
+                            .delete_query_tab(db_id)
+                            .await
                             .map_err(|e| anyhow::anyhow!("Failed to delete tab: {}", e))
                     } else {
                         Err(anyhow::anyhow!("App database not initialized"))
@@ -504,7 +665,10 @@ impl EditorPanel {
                         return;
                     }
 
-                    println!("Executing query: {} on {}", query, query_tab.connection_name);
+                    println!(
+                        "Executing query: {} on {}",
+                        query, query_tab.connection_name
+                    );
 
                     // Get database service
                     let db_service = DbService::global(cx).clone();
@@ -535,18 +699,38 @@ impl EditorPanel {
                             ConnectionType::PostgreSQL => {
                                 if let Some(pg_key) = pg_connection_key {
                                     // Get or create PostgreSQL connection
-                                    match db_service.get_or_create_pg_connection(&format!(
-                                        "postgresql://{}@{}:{}/{}",
-                                        pg_key.username, pg_key.host, pg_key.port, pg_key.database
-                                    )).await {
-                                        Ok(pg_manager) => {
-                                            pg_manager.execute_query_async(&query)
-                                                .await
-                                                .map_err(|e| anyhow::anyhow!("{}", e))
-                                        }
-                                        Err(e) => {
-                                            Err(anyhow::anyhow!("Failed to connect to PostgreSQL: {}", e))
-                                        }
+                                    let connection_string =
+                                        if let Some(ref password) = pg_key.password {
+                                            format!(
+                                                "postgresql://{}:{}@{}:{}/{}",
+                                                pg_key.username,
+                                                password,
+                                                pg_key.host,
+                                                pg_key.port,
+                                                pg_key.database
+                                            )
+                                        } else {
+                                            format!(
+                                                "postgresql://{}@{}:{}/{}",
+                                                pg_key.username,
+                                                pg_key.host,
+                                                pg_key.port,
+                                                pg_key.database
+                                            )
+                                        };
+
+                                    match db_service
+                                        .get_or_create_pg_connection(&connection_string)
+                                        .await
+                                    {
+                                        Ok(pg_manager) => pg_manager
+                                            .execute_query_async(&query)
+                                            .await
+                                            .map_err(|e| anyhow::anyhow!("{}", e)),
+                                        Err(e) => Err(anyhow::anyhow!(
+                                            "Failed to connect to PostgreSQL: {}",
+                                            e
+                                        )),
                                     }
                                 } else {
                                     Err(anyhow::anyhow!("PostgreSQL connection key not found"))
@@ -717,8 +901,17 @@ impl EditorPanel {
                     ConnectionType::PostgreSQL => Some("PostgreSQL".to_string()),
                 };
                 let pg_connection_key = query_tab.pg_connection_key.as_ref().map(|key| {
-                    format!("postgres://{}@{}:{}/{}",
-                        key.username, key.host, key.port, key.database)
+                    if let Some(ref password) = key.password {
+                        format!(
+                            "postgres://{}:{}@{}:{}/{}",
+                            key.username, password, key.host, key.port, key.database
+                        )
+                    } else {
+                        format!(
+                            "postgres://{}@{}:{}/{}",
+                            key.username, key.host, key.port, key.database
+                        )
+                    }
                 });
                 tabs_data.push((
                     pos,
@@ -736,29 +929,81 @@ impl EditorPanel {
         info!("Saving {} query tabs on app quit", tabs_data.len());
 
         // Save tabs in background using global tokio runtime
+        let query_file_manager = self.query_file_manager.clone();
         let save_task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
             let mut saved_ids = Vec::new();
             if let Some(app_db) = app_db.read().await.as_ref() {
-                for (tab_index, db_id, title, content, position, connection_id, connection_type, pg_connection_key) in tabs_data {
-                    let tab_data = QueryTabData {
+                for (
+                    tab_index,
+                    db_id,
+                    title,
+                    content,
+                    position,
+                    connection_id,
+                    connection_type,
+                    pg_connection_key,
+                ) in tabs_data
+                {
+                    // First save to get or create the database ID
+                    let temp_tab_data = QueryTabData {
                         id: db_id,
                         title: title.clone(),
                         content: content.clone(),
                         position,
                         connection_id,
-                        connection_type,
-                        pg_connection_key,
+                        connection_type: connection_type.clone(),
+                        pg_connection_key: pg_connection_key.clone(),
+                        file_uri: None, // Will be updated after file creation
                     };
-                    debug!("Saving tab '{}' (db_id: {:?}, content_len: {})", title, db_id, content.len());
-                    match app_db.save_query_tab(&tab_data).await {
+
+                    let final_db_id = match app_db.save_query_tab(&temp_tab_data).await {
                         Ok(saved_id) => {
                             debug!("Tab '{}' saved with db_id: {}", title, saved_id);
-                            saved_ids.push((tab_index, saved_id));
+                            saved_id
                         }
                         Err(e) => {
                             error!("Failed to save tab '{}': {}", title, e);
+                            continue;
+                        }
+                    };
+
+                    // Create/update the query file on disk
+                    let file_uri = match query_file_manager
+                        .create_query_file(final_db_id, &content)
+                        .await
+                    {
+                        Ok(_) => {
+                            let uri = query_file_manager.query_file_uri(final_db_id);
+                            debug!("Created query file for tab '{}' with URI: {}", title, uri);
+                            Some(uri)
+                        }
+                        Err(e) => {
+                            error!("Failed to create query file for tab '{}': {}", title, e);
+                            None
+                        }
+                    };
+
+                    // Update the database record with the file URI
+                    if let Some(ref file_uri) = file_uri {
+                        let updated_tab_data = QueryTabData {
+                            id: Some(final_db_id),
+                            title: title.clone(),
+                            content: content.clone(),
+                            position,
+                            connection_id,
+                            connection_type: connection_type.clone(),
+                            pg_connection_key: pg_connection_key.clone(),
+                            file_uri: Some(file_uri.clone()),
+                        };
+
+                        if let Err(e) = app_db.save_query_tab(&updated_tab_data).await {
+                            error!("Failed to update file URI for tab '{}': {}", title, e);
+                        } else {
+                            debug!("Updated file URI for tab '{}': {}", title, file_uri);
                         }
                     }
+
+                    saved_ids.push((tab_index, final_db_id));
                 }
             } else {
                 error!("App database not initialized");
@@ -774,6 +1019,19 @@ impl EditorPanel {
                         if let Some(TabType::Query(query_tab)) = panel.tabs.get_mut(tab_index) {
                             if query_tab.db_id.is_none() {
                                 query_tab.db_id = Some(db_id);
+                                // Set the file URI on the QueryTab
+                                if let Some(file_uri) =
+                                    panel.query_file_manager.query_file_uri(db_id).into()
+                                {
+                                    let file_uri_debug = file_uri.clone();
+                                    query_tab.file_uri = Some(file_uri);
+                                    debug!(
+                                        "Updated tab with db_id: {} and file_uri: {}",
+                                        db_id, file_uri_debug
+                                    );
+                                } else {
+                                    debug!("Updated tab with db_id: {}", db_id);
+                                }
                             }
                         }
                     }
@@ -793,6 +1051,16 @@ impl EditorPanel {
     ) -> Self {
         info!("Loading {} saved tabs", saved_tabs.len());
 
+        // Initialize QueryFileManager
+        let query_file_manager = Arc::new(
+            QueryFileManager::new()
+                .map_err(|e| {
+                    error!("Failed to initialize QueryFileManager: {}", e);
+                    e
+                })
+                .expect("Failed to create QueryFileManager"),
+        );
+
         let mut panel = Self {
             focus_handle: cx.focus_handle(),
             tabs: vec![],
@@ -801,6 +1069,7 @@ impl EditorPanel {
             sidebar_collapsed,
             pending_save_task: None,
             _subscriptions: Vec::new(),
+            query_file_manager,
         };
 
         if saved_tabs.is_empty() {
@@ -810,8 +1079,16 @@ impl EditorPanel {
         } else {
             // Restore saved tabs
             for tab_data in saved_tabs {
-                debug!("Restoring tab '{}' with content_len: {} (db_id: {:?})",
-                    tab_data.title, tab_data.content.len(), tab_data.id);
+                debug!(
+                    "Restoring tab '{}' with content_len: {} (db_id: {:?}, file_uri: {:?})",
+                    tab_data.title,
+                    tab_data.content.len(),
+                    tab_data.id,
+                    tab_data.file_uri
+                );
+
+                // Note: File creation will be handled asynchronously in the background
+
                 panel.create_and_add_tab(
                     window,
                     &tab_data.title,
@@ -865,9 +1142,34 @@ impl EditorPanel {
         }
 
         // Subscribe to editor changes
-        let subscription = cx.subscribe(&editor, |this, _editor, event, cx| {
+        let subscription = cx.subscribe(&editor, |this, editor_entity, event, cx| {
             if let InputEvent::Change = event {
                 this.trigger_auto_save(cx);
+
+                // Send didChange to LSP if this is a PostgreSQL tab
+                if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
+                    if let Some(ref lsp_manager) = query_tab.lsp_manager {
+                        query_tab.document_version += 1;
+                        let version = query_tab.document_version;
+                        let uri_str = query_tab.uri();
+                        let content = editor_entity.read(cx).text().to_string();
+                        let lsp_clone = lsp_manager.clone();
+                        let tab_title = query_tab.title.clone();
+
+                        crate::gpui_tokio::Tokio::spawn_result(cx, async move {
+                            if let Ok(uri) = uri_str.parse::<Uri>() {
+                                info!("📤 Sending didChange notification for tab '{}' version {}", tab_title, version);
+                                lsp_clone.did_change(uri, version, content).await
+                                    .map_err(|e| anyhow::anyhow!("didChange failed: {:?}", e))?;
+                                info!("✅ didChange notification sent successfully for tab '{}' version {}", tab_title, version);
+                                Ok(())
+                            } else {
+                                error!("Failed to parse URI for didChange: {}", uri_str);
+                                Err(anyhow::anyhow!("URI parse failed"))
+                            }
+                        }).detach();
+                    }
+                }
             }
         });
         self._subscriptions.push(subscription);
@@ -875,24 +1177,24 @@ impl EditorPanel {
         // Determine connection type and create appropriate tab
         let (connection_name, connection_type, pg_connection_key) = match connection_type {
             Some(conn_type) if conn_type == "PostgreSQL" => {
+                info!(
+                    "🔍 Creating PostgreSQL tab with connection_type: {:?}",
+                    connection_type
+                );
                 let pg_key = pg_connection_key.as_ref().and_then(|key_str| {
                     crate::db_service::PgConnectionKey::from_connection_string(key_str).ok()
                 });
-                (
-                    "PostgreSQL".to_string(),
-                    ConnectionType::PostgreSQL,
-                    pg_key,
-                )
+                ("PostgreSQL".to_string(), ConnectionType::PostgreSQL, pg_key)
             }
             _ => {
                 // Default to SQLite for backward compatibility
-                (
-                    "Test Database".to_string(),
-                    ConnectionType::SQLite,
-                    None,
-                )
+                ("Test Database".to_string(), ConnectionType::SQLite, None)
             }
         };
+
+        // Initialize LSP manager for PostgreSQL connections
+        // For now, we'll set this to None and initialize it asynchronously
+        let lsp_manager = None;
 
         let query_tab = QueryTab {
             id: tab_id,
@@ -904,9 +1206,362 @@ impl EditorPanel {
             editor,
             db_id,
             results_panel: cx.new(|cx| crate::results_panel::ResultsPanel::new(window, cx)),
+            lsp_manager,
+            document_version: 0,
+            file_uri: db_id.and_then(|id| {
+                // Try to get the file URI for existing saved tabs
+                self.query_file_manager.query_file_uri(id).into()
+            }),
+            pending_diagnostics: None,
+            diagnostics_dirty: false,
         };
 
         self.tabs.push(TabType::Query(query_tab));
+
+        // Initialize LSP providers for PostgreSQL tabs
+        if let TabType::Query(ref query_tab) = self.tabs.last().unwrap() {
+            info!(
+                "🔍 Checking LSP initialization for tab with connection_type: {:?}",
+                query_tab.connection_type
+            );
+            if query_tab.connection_type == ConnectionType::PostgreSQL {
+                info!(
+                    "🚀 Initializing LSP for PostgreSQL tab: {}",
+                    query_tab.title
+                );
+                let new_tab_index = self.tabs.len() - 1; // Index of the just-added tab
+                self.initialize_lsp_for_tab_at_index(new_tab_index, window, cx);
+            } else {
+                info!("⏭️ Skipping LSP initialization for non-PostgreSQL tab");
+            }
+        }
+    }
+
+    /// Initialize LSP providers for a PostgreSQL tab at specific index
+    fn initialize_lsp_for_tab_at_index(
+        &mut self,
+        tab_index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        info!(
+            "🔧 initialize_lsp_for_tab_at_index called for tab_index: {}",
+            tab_index
+        );
+        if let Some(TabType::Query(query_tab)) = self.tabs.get_mut(tab_index) {
+            info!(
+                "🔧 Found tab: {}, connection_type: {:?}",
+                query_tab.title, query_tab.connection_type
+            );
+            if query_tab.connection_type == ConnectionType::PostgreSQL {
+                info!("🔧 Tab is PostgreSQL, proceeding with LSP initialization");
+                let editor = query_tab.editor.clone();
+                let tab_id = query_tab.id;
+                let pg_connection_key = query_tab.pg_connection_key.clone();
+                let connection_name = query_tab.connection_name.clone();
+
+                // Get the file manager reference and tab db_id for the async task
+                let query_file_manager = self.query_file_manager.clone();
+                let tab_db_id = query_tab.db_id;
+
+                // Initialize LSP providers asynchronously using Tokio runtime
+                let lsp_task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
+                    use postgres_lsp::{PostgresLspConfig, PostgresLspManager};
+                    use std::rc::Rc;
+
+                    // Create LSP config from actual connection
+                    let config = if let Some(conn_key) = pg_connection_key {
+                        info!("🔍 Creating LSP config - conn_key.username: {}, conn_key.host: {}, conn_key.port: {}, conn_key.database: {}, conn_key.password: {}",
+                            conn_key.username, conn_key.host, conn_key.port, conn_key.database,
+                            if conn_key.password.is_some() { "<present>" } else { "<none>" });
+
+                        let connection_string = if let Some(ref password) = conn_key.password {
+                            let conn_str = format!(
+                                "postgresql://{}:{}@{}:{}/{}",
+                                conn_key.username,
+                                password,
+                                conn_key.host,
+                                conn_key.port,
+                                conn_key.database
+                            );
+                            info!("🔍 LSP connection string with password: {}",
+                                conn_str.replace(password, "<hidden>"));
+                            conn_str
+                        } else {
+                            let conn_str = format!(
+                                "postgresql://{}@{}:{}/{}",
+                                conn_key.username, conn_key.host, conn_key.port, conn_key.database
+                            );
+                            info!("🔍 LSP connection string without password: {}", conn_str);
+                            conn_str
+                        };
+
+                        info!(
+                            "Creating LSP config for connection: {} ({})",
+                            connection_name, connection_string
+                        );
+
+                        PostgresLspConfig::new(
+                            connection_string,
+                            conn_key.host.clone(),
+                            conn_key.port,
+                            conn_key.database.clone(),
+                            conn_key.username.clone(),
+                            Some("public".to_string()), // Default schema
+                        )
+                    } else {
+                        warn!(
+                            "No connection key available for tab {}, using default config",
+                            tab_id
+                        );
+                        PostgresLspConfig::default()
+                    };
+
+                    // Create LSP manager
+                    let mut lsp_manager = match PostgresLspManager::new(config).await {
+                        Ok(manager) => manager,
+                        Err(e) => {
+                            error!("Failed to create LSP manager for tab {}: {:?}", tab_id, e);
+                            return Err(anyhow::anyhow!("Failed to create LSP manager: {:?}", e));
+                        }
+                    };
+
+                    // Set up diagnostic handler using the query tab's diagnostic storage
+                    let editor_clone_for_diagnostics = editor.clone();
+                    let tab_id_for_diagnostics = tab_id;
+
+                    // Create a diagnostic handler that stores diagnostics in the editor
+                    let editor_clone_for_diagnostic_storage = editor.clone();
+                    lsp_manager.set_diagnostic_handler(Arc::new(move |diagnostic_params: PublishDiagnosticsParams| {
+                        info!("🔍 Received {} diagnostics from LSP for tab {}: {:?}",
+                              diagnostic_params.diagnostics.len(), tab_id_for_diagnostics, diagnostic_params.uri);
+
+                        // Convert LSP diagnostics to GPUI diagnostics
+                        let mut diagnostics = Vec::new();
+                        for lsp_diag in &diagnostic_params.diagnostics {
+                            let start = Position::new(
+                                lsp_diag.range.start.line as u32,
+                                lsp_diag.range.start.character as u32
+                            );
+                            let end = Position::new(
+                                lsp_diag.range.end.line as u32,
+                                lsp_diag.range.end.character as u32
+                            );
+
+                            let severity = match lsp_diag.severity {
+                                Some(lsp_types::DiagnosticSeverity::ERROR) => DiagnosticSeverity::Error,
+                                Some(lsp_types::DiagnosticSeverity::WARNING) => DiagnosticSeverity::Warning,
+                                Some(lsp_types::DiagnosticSeverity::INFORMATION) => DiagnosticSeverity::Info,
+                                Some(lsp_types::DiagnosticSeverity::HINT) => DiagnosticSeverity::Hint,
+                                Some(_) => DiagnosticSeverity::Warning,
+                                None => DiagnosticSeverity::Error,
+                            };
+
+                            let diagnostic = Diagnostic::new(start..end, lsp_diag.message.clone())
+                                .with_severity(severity)
+                                .with_source("postgres-lsp");
+
+                            diagnostics.push(diagnostic);
+                        }
+
+                        info!("🔧 Created {} diagnostics for tab {}", diagnostics.len(), tab_id_for_diagnostics);
+
+                        // Store diagnostics in the editor for rendering
+                        // Note: For now, we'll just log the diagnostics since we need a proper way to
+                        // update the editor from this async context. The hover/completion providers
+                        // are already set up and working.
+                        info!("🔧 Diagnostics ready for tab {} ({} diagnostics)", tab_id_for_diagnostics, diagnostics.len());
+                        // TODO: Implement proper diagnostic storage in editor when we have access to the GPUI context
+                    })).await;
+
+                    // Initialize the LSP manager
+                    if let Err(e) = lsp_manager.initialize().await {
+                        error!(
+                            "Failed to initialize LSP manager for tab {}: {:?}",
+                            tab_id, e
+                        );
+                        return Err(anyhow::anyhow!("Failed to initialize LSP manager: {:?}", e));
+                    }
+
+                    Ok::<(PostgresLspManager, (), (), ()), anyhow::Error>((lsp_manager, (), (), ()))
+                });
+
+                // Update the editor with LSP providers when initialization completes
+                cx.spawn(async move |editor_panel, cx| {
+                    match lsp_task.await {
+                        Ok((lsp_manager, _, _, _)) => {
+                            // Store the LSP manager in the query tab and set up LSP providers
+                            let _ = editor_panel.update(cx, |panel, cx| {
+                                if let Some(TabType::Query(query_tab)) = panel.tabs.get_mut(tab_index) {
+                                    query_tab.lsp_manager = Some(lsp_manager.clone());
+
+                                    // Create and set up LSP providers for the editor
+                                    let uri_str = query_tab.uri();
+                                    if let Ok(uri) = uri_str.parse::<Uri>() {
+                                        info!("🔧 Setting up LSP providers for tab '{}' with URI: {}", query_tab.title, uri_str);
+
+                                        // Create hover provider
+                                        if let Some(hover_provider) = lsp_manager.create_hover_provider(uri.clone()) {
+                                            info!("✅ Created hover provider for tab '{}'", query_tab.title);
+                                            query_tab.editor.update(cx, |editor, cx| {
+                                                editor.lsp.hover_provider = Some(std::rc::Rc::new(hover_provider));
+                                                info!("🖱️ Hover provider set for tab '{}'", query_tab.title);
+                                            });
+                                        } else {
+                                            warn!("⚠️ Failed to create hover provider for tab '{}'", query_tab.title);
+                                        }
+
+                                        // Create completion provider
+                                        if let Some(completion_provider) = lsp_manager.create_completion_provider(uri.clone()) {
+                                            info!("✅ Created completion provider for tab '{}'", query_tab.title);
+                                            query_tab.editor.update(cx, |editor, cx| {
+                                                editor.lsp.completion_provider = Some(std::rc::Rc::new(completion_provider));
+                                                info!("🧩 Completion provider set for tab '{}'", query_tab.title);
+                                            });
+                                        } else {
+                                            warn!("⚠️ Failed to create completion provider for tab '{}'", query_tab.title);
+                                        }
+
+                                        // Create code action provider
+                                        if let Some(code_action_provider) = lsp_manager.create_code_action_provider(uri) {
+                                            info!("✅ Created code action provider for tab '{}'", query_tab.title);
+                                            query_tab.editor.update(cx, |editor, cx| {
+                                                editor.lsp.code_action_providers.push(std::rc::Rc::new(code_action_provider));
+                                                info!("⚡ Code action provider set for tab '{}'", query_tab.title);
+                                            });
+                                        } else {
+                                            warn!("⚠️ Failed to create code action provider for tab '{}'", query_tab.title);
+                                        }
+                                    } else {
+                                        error!("❌ Failed to parse URI for LSP providers: {}", uri_str);
+                                    }
+
+                                    // Send workspace configuration before didOpen
+                                    let pg_connection_key = query_tab.pg_connection_key.clone();
+                                    if let Some(conn_key) = pg_connection_key {
+                                        let lsp_clone = lsp_manager.clone();
+                                        let tab_title = query_tab.title.clone();
+                                        let uri_str = query_tab.uri();
+                                        let editor_for_content = query_tab.editor.clone();
+
+                                        let tab_title_for_task = tab_title.clone();
+                                        let uri_str_for_task = uri_str.clone();
+                                        let lsp_for_task = lsp_manager.clone();
+                                        let content_for_task = editor_for_content.read(cx).text().to_string();
+
+                                        crate::gpui_tokio::Tokio::spawn_result(cx, async move {
+                                            // Create workspace configuration for this tab's connection
+                                            let connection_string = if let Some(ref password) = conn_key.password {
+                                                format!(
+                                                    "postgresql://{}:{}@{}:{}/{}",
+                                                    conn_key.username, password, conn_key.host, conn_key.port, conn_key.database
+                                                )
+                                            } else {
+                                                format!(
+                                                    "postgresql://{}@{}:{}/{}",
+                                                    conn_key.username, conn_key.host, conn_key.port, conn_key.database
+                                                )
+                                            };
+
+                                            let workspace_settings = serde_json::json!({
+                                                "postgreslsp": {
+                                                    "database": {
+                                                        "connectionString": connection_string,
+                                                        "database": conn_key.database,
+                                                        "schema": "public"
+                                                    },
+                                                    "sql": {
+                                                        "dialect": "postgresql",
+                                                        "completion": {
+                                                            "enableSchemas": true,
+                                                            "enableTables": true,
+                                                            "enableColumns": true,
+                                                            "enableFunctions": true,
+                                                            "enableKeywords": true,
+                                                            "triggerCharacters": [".", " ", "(", ","]
+                                                        },
+                                                        "diagnostics": {
+                                                            "enableSyntax": true,
+                                                            "enableSemantic": true,
+                                                            "enableSchema": true,
+                                                            "enableLinting": true
+                                                        },
+                                                        "formatting": {
+                                                            "enabled": true,
+                                                            "keywordCase": "upper",
+                                                            "identifierCase": "preserve",
+                                                            "indentSize": 2,
+                                                            "lineWidth": 80
+                                                        }
+                                                    },
+                                                    "workspace": {
+                                                        "root": ".",
+                                                        "cacheEnabled": true
+                                                    }
+                                                }
+                                            });
+
+                                            info!("🔧 Sending workspace/configuration for tab '{}' with connection: {}", tab_title_for_task, connection_string);
+
+                                            // Send workspace configuration change notification
+                                            lsp_for_task.set_configuration(workspace_settings).await
+                                                .map_err(|e| anyhow::anyhow!("workspace/configuration failed: {:?}", e))?;
+
+                                            info!("✅ Workspace configuration sent successfully for tab '{}'", tab_title_for_task);
+
+                                            // Now send didOpen notification
+                                            let content = content_for_task;
+                                            if let Ok(uri) = uri_str_for_task.parse::<Uri>() {
+                                                info!("📤 Sending didOpen notification for tab '{}' with URI: {}", tab_title_for_task, uri_str_for_task);
+                                                lsp_for_task.did_open(
+                                                    uri,
+                                                    "sql".to_string(),
+                                                    1, // Initial version
+                                                    content,
+                                                ).await
+                                                .map_err(|e| anyhow::anyhow!("didOpen failed: {:?}", e))?;
+                                                info!("✅ didOpen notification sent successfully for tab '{}'", tab_title_for_task);
+                                                Ok(())
+                                            } else {
+                                                error!("Failed to parse URI for didOpen: {}", uri_str_for_task);
+                                                Err(anyhow::anyhow!("URI parse failed"))
+                                            }
+                                        }).detach();
+                                    } else {
+                                        error!("No connection key available for workspace configuration");
+                                    }
+                                }
+                            });
+
+                            info!("LSP initialized for tab {}", tab_id);
+                        }
+                        Err(e) => {
+                            error!("LSP initialization failed for tab {}: {:?}", tab_id, e);
+                        }
+                    }
+                }).detach();
+            }
+        }
+    }
+
+    /// Initialize LSP providers for a PostgreSQL tab (legacy method for backward compatibility)
+    fn initialize_lsp_for_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.initialize_lsp_for_tab_at_index(self.active_tab_ix, window, cx);
+    }
+
+    /// Get LSP status for the current tab
+    fn get_lsp_status(&self, cx: &Context<Self>) -> Option<&'static str> {
+        if let Some(TabType::Query(query_tab)) = self.tabs.get(self.active_tab_ix) {
+            if query_tab.connection_type == ConnectionType::PostgreSQL {
+                // For now, return a placeholder status
+                // In the future, this will check the actual LSP manager status
+                Some("LSP Ready")
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     }
 
     /// Save the current tab immediately (used when switching tabs)
@@ -918,8 +1573,17 @@ impl EditorPanel {
                 ConnectionType::PostgreSQL => Some("PostgreSQL".to_string()),
             };
             let pg_connection_key = query_tab.pg_connection_key.as_ref().map(|key| {
-                format!("postgres://{}@{}:{}/{}",
-                    key.username, key.host, key.port, key.database)
+                if let Some(ref password) = key.password {
+                    format!(
+                        "postgres://{}:{}@{}:{}/{}",
+                        key.username, password, key.host, key.port, key.database
+                    )
+                } else {
+                    format!(
+                        "postgres://{}@{}:{}/{}",
+                        key.username, key.host, key.port, key.database
+                    )
+                }
             });
             let tab_data = QueryTabData {
                 id: query_tab.db_id,
@@ -929,27 +1593,73 @@ impl EditorPanel {
                 connection_id: query_tab.connection_id,
                 connection_type,
                 pg_connection_key,
+                file_uri: None, // Will be updated after file creation
             };
 
-            debug!("Saving tab '{}' (db_id: {:?}, position: {}, content_len: {})",
-                tab_data.title, tab_data.id, tab_data.position, content.len());
+            debug!(
+                "Saving tab '{}' (db_id: {:?}, position: {}, content_len: {})",
+                tab_data.title,
+                tab_data.id,
+                tab_data.position,
+                content.len()
+            );
 
             let db_service = DbService::global(cx).clone();
             let app_db = db_service.app_db_handle();
             let tab_index = self.active_tab_ix;
+            let query_file_manager = self.query_file_manager.clone();
 
             let save_task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
                 if let Some(app_db) = app_db.read().await.as_ref() {
-                    match app_db.save_query_tab(&tab_data).await {
+                    // First save to get or create the database ID
+                    let final_db_id = match app_db.save_query_tab(&tab_data).await {
                         Ok(db_id) => {
                             debug!("Tab saved successfully with db_id: {}", db_id);
-                            Ok(db_id)
+                            db_id
                         }
                         Err(e) => {
                             error!("Failed to save tab: {}", e);
-                            Err(anyhow::anyhow!("Failed to save tab: {}", e))
+                            return Err(anyhow::anyhow!("Failed to save tab: {}", e));
+                        }
+                    };
+
+                    // Create/update the query file on disk
+                    let file_uri = match query_file_manager
+                        .create_query_file(final_db_id, &content)
+                        .await
+                    {
+                        Ok(_) => {
+                            let uri = query_file_manager.query_file_uri(final_db_id);
+                            debug!("Created query file for tab with URI: {}", uri);
+                            Some(uri)
+                        }
+                        Err(e) => {
+                            error!("Failed to create query file: {}", e);
+                            None
+                        }
+                    };
+
+                    // Update the database record with the file URI
+                    if let Some(ref file_uri) = file_uri {
+                        let updated_tab_data = QueryTabData {
+                            id: Some(final_db_id),
+                            title: tab_data.title.clone(),
+                            content: tab_data.content.clone(),
+                            position: tab_data.position,
+                            connection_id: tab_data.connection_id,
+                            connection_type: tab_data.connection_type.clone(),
+                            pg_connection_key: tab_data.pg_connection_key.clone(),
+                            file_uri: Some(file_uri.clone()),
+                        };
+
+                        if let Err(e) = app_db.save_query_tab(&updated_tab_data).await {
+                            error!("Failed to update file URI: {}", e);
+                        } else {
+                            debug!("Updated file URI: {}", file_uri);
                         }
                     }
+
+                    Ok(final_db_id)
                 } else {
                     error!("App database not initialized");
                     Err(anyhow::anyhow!("App database not initialized"))
@@ -963,7 +1673,19 @@ impl EditorPanel {
                         if let Some(TabType::Query(query_tab)) = panel.tabs.get_mut(tab_index) {
                             if query_tab.db_id.is_none() {
                                 query_tab.db_id = Some(db_id);
-                                debug!("Updated tab with db_id: {}", db_id);
+                                // Set the file URI on the QueryTab
+                                if let Some(file_uri) =
+                                    panel.query_file_manager.query_file_uri(db_id).into()
+                                {
+                                    let file_uri_debug = file_uri.clone();
+                                    query_tab.file_uri = Some(file_uri);
+                                    debug!(
+                                        "Updated tab with db_id: {} and file_uri: {}",
+                                        db_id, file_uri_debug
+                                    );
+                                } else {
+                                    debug!("Updated tab with db_id: {}", db_id);
+                                }
                             }
                         }
                     });
@@ -980,7 +1702,9 @@ impl EditorPanel {
 
         // Schedule a new save after 500ms delay
         let task = cx.spawn(async move |editor_panel, mut cx| {
-            cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(500))
+                .await;
 
             let _ = editor_panel.update(cx, |panel, cx| {
                 panel.save_current_tab_immediate(cx);
@@ -988,6 +1712,34 @@ impl EditorPanel {
         });
 
         self.pending_save_task = Some(task);
+    }
+
+    /// Shutdown all LSP processes when the application quits
+    pub fn shutdown_lsp_processes(&mut self, cx: &mut Context<Self>) {
+        info!("🧹 Shutting down LSP processes...");
+
+        // Collect all LSP managers from PostgreSQL tabs
+        let mut lsp_managers: Vec<PostgresLspManager> = Vec::new();
+        for tab in &mut self.tabs.iter_mut() {
+            if let TabType::Query(query_tab) = tab {
+                if let Some(ref lsp_manager) = query_tab.lsp_manager {
+                    lsp_managers.push(lsp_manager.clone());
+                }
+            }
+        }
+
+        // Shutdown all LSP processes
+        for lsp_manager in lsp_managers {
+            crate::gpui_tokio::Tokio::spawn_result(cx, async move {
+                info!("🔹 Shutting down LSP manager...");
+                lsp_manager.shutdown().await.map_err(|e| {
+                    error!("Failed to shutdown LSP manager: {}", e);
+                    anyhow::anyhow!("Failed to shutdown LSP manager: {}", e)
+                })
+            }).detach();
+        }
+
+        info!("✅ LSP processes shut down successfully");
     }
 }
 
@@ -1136,6 +1888,37 @@ impl Render for EditorPanel {
                                                 .label("Format")
                                                 .children(vec![Kbd::new(Keystroke::parse("shift-f").unwrap()).into_any_element()]),
                                         )
+                                        // LSP status indicator for PostgreSQL tabs
+                                        .when_some(self.get_lsp_status(cx), |this, status| {
+                                            this.child(
+                                                div()
+                                                    .px_2()
+                                                    .py_1()
+                                                    .bg(cx.theme().primary.opacity(0.1))
+                                                    .border_1()
+                                                    .border_color(cx.theme().primary)
+                                                    .rounded_md()
+                                                    .child(
+                                                        h_flex()
+                                                            .gap_1()
+                                                            .items_center()
+                                                            .child(
+                                                                div()
+                                                                    .w_2()
+                                                                    .h_2()
+                                                                    .bg(cx.theme().primary)
+                                                                    .rounded_full()
+                                                            )
+                                                            .child(
+                                                                div()
+                                                                    .text_xs()
+                                                                    .text_color(cx.theme().primary)
+                                                                    .font_family("Fira Code")
+                                                                    .child(status)
+                                                            )
+                                                    )
+                                            )
+                                        })
                                         .child(div().flex_1())
                                         // Edit controls (shown when editing)
                                         .when(query_tab.results_panel.read(cx).is_editing(cx), |this| {

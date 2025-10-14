@@ -146,8 +146,13 @@ impl BlancoApp {
             panel.save_tabs(cx);
         });
 
-        // Give a moment for the save to complete
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        // Clean up LSP processes
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.shutdown_lsp_processes(cx);
+        });
+
+        // Give a moment for operations to complete
+        std::thread::sleep(std::time::Duration::from_millis(200));
         cx.quit();
     }
 

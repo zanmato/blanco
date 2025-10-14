@@ -17,6 +17,7 @@ chrono = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 sqlx = { workspace = true }
+lsp-types = { workspace = true }
 
 # Local dependencies
 postgres-lsp = { path = "../postgres-lsp" }

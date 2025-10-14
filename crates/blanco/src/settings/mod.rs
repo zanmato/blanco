@@ -9,6 +9,7 @@ pub struct Settings {
     pub editor: EditorSettings,
     pub database: DatabaseSettings,
     pub appearance: AppearanceSettings,
+    pub lsp: LspSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +51,39 @@ pub struct AppearanceSettings {
     pub compact_mode: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LspSettings {
+    pub enabled: bool,
+    pub auto_download: bool,
+    pub completion: LspCompletionSettings,
+    pub diagnostics: LspDiagnosticsSettings,
+    pub formatting: LspFormattingSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LspCompletionSettings {
+    pub auto_trigger: bool,
+    pub trigger_characters: Vec<String>,
+    pub max_suggestions: u32,
+    pub show_documentation: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LspDiagnosticsSettings {
+    pub enabled: bool,
+    pub real_time_validation: bool,
+    pub underline_errors: bool,
+    pub show_warnings: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LspFormattingSettings {
+    pub enabled: bool,
+    pub format_on_save: bool,
+    pub format_on_type: bool,
+    pub sql_dialect: String,
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -57,6 +91,7 @@ impl Default for Settings {
             editor: EditorSettings::default(),
             database: DatabaseSettings::default(),
             appearance: AppearanceSettings::default(),
+            lsp: LspSettings::default(),
         }
     }
 }
@@ -108,6 +143,51 @@ impl Default for AppearanceSettings {
             results_panel_height: 300,
             show_status_bar: true,
             compact_mode: false,
+        }
+    }
+}
+
+impl Default for LspSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            auto_download: true,
+            completion: LspCompletionSettings::default(),
+            diagnostics: LspDiagnosticsSettings::default(),
+            formatting: LspFormattingSettings::default(),
+        }
+    }
+}
+
+impl Default for LspCompletionSettings {
+    fn default() -> Self {
+        Self {
+            auto_trigger: true,
+            trigger_characters: vec![".".to_string(), " ".to_string(), "(".to_string()],
+            max_suggestions: 20,
+            show_documentation: true,
+        }
+    }
+}
+
+impl Default for LspDiagnosticsSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            real_time_validation: true,
+            underline_errors: true,
+            show_warnings: true,
+        }
+    }
+}
+
+impl Default for LspFormattingSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            format_on_save: false,
+            format_on_type: false,
+            sql_dialect: "postgresql".to_string(),
         }
     }
 }

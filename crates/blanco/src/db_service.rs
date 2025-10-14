@@ -2,9 +2,12 @@ use crate::app_database::AppDatabase;
 use crate::database::DatabaseManager;
 use crate::postgres::PostgresManager;
 use gpui::{App, Global};
+use sqlx::postgres::PgConnectOptions;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::str::FromStr;
 use tokio::sync::RwLock;
+use url;
 
 /// Connection key for PostgreSQL connections
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -13,25 +16,42 @@ pub struct PgConnectionKey {
     pub port: u16,
     pub database: String,
     pub username: String,
+    pub password: Option<String>,
 }
 
 impl PgConnectionKey {
     pub fn from_connection_string(conn_str: &str) -> Result<Self, anyhow::Error> {
-        // Parse connection string to extract connection details
-        // Expected format: postgresql://username[:password]@host:port/database
-        let url = url::Url::parse(conn_str)
-            .map_err(|e| anyhow::anyhow!("Invalid URL: {}", e))?;
-        
-        let host = url.host_str().unwrap_or("localhost").to_string();
-        let port = url.port().unwrap_or(5432);
-        let database = url.path().trim_start_matches('/').to_string();
-        let username = url.username().to_string();
-        
+        // Parse connection string using SQLX's built-in DSN parser
+        // This handles all PostgreSQL connection string formats including query parameters
+        log::info!("🔍 PgConnectionKey parsing connection string using SQLX: {}", conn_str);
+
+        let options = PgConnectOptions::from_str(conn_str)
+            .map_err(|e| anyhow::anyhow!("Failed to parse PostgreSQL connection string: {}", e))?;
+
+        // Extract connection details from SQLX options
+        let host = options.get_host().to_string();
+        let port = options.get_port();
+        let database = options.get_database().map(|db| db.to_string()).unwrap_or_default();
+        let username = options.get_username().to_string();
+
+        // SQLX doesn't expose password directly, so we need to parse it from the original string
+        // We'll use URL parsing as a fallback just for the password
+        let password = if let Ok(url) = url::Url::parse(conn_str) {
+            url.password().map(|p| p.to_string())
+        } else {
+            None
+        };
+
+        log::info!("🔍 PgConnectionKey extracted via SQLX - host: {}, port: {}, database: {}, username: {}, password: {}",
+            host, port, database, username,
+            if password.as_ref().map_or(false, |p| !p.is_empty()) { "<present>" } else { "<none>" });
+
         Ok(PgConnectionKey {
             host,
             port,
             database,
             username,
+            password,
         })
     }
 }
@@ -71,6 +91,7 @@ impl DbService {
 
     /// Get or create a PostgreSQL connection for the given connection string
     pub async fn get_or_create_pg_connection(&self, connection_string: &str) -> Result<Arc<PostgresManager>, anyhow::Error> {
+        log::info!("🔍 DbService.get_or_create_pg_connection called with: {}", connection_string);
         let key = PgConnectionKey::from_connection_string(connection_string)?;
         
         let mut connections = self.pg_connections.write().await;

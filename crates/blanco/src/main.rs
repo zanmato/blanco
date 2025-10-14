@@ -9,6 +9,7 @@ mod db_service;
 mod editor_panel;
 mod gpui_tokio;
 mod postgres;
+mod query_file;
 mod results_panel;
 mod settings;
 mod sidebar;
@@ -69,6 +70,15 @@ fn main() {
                     let mut app_db = app_db_handle.write().await;
                     *app_db = Some(db);
                     log::info!("App database initialized");
+
+                    // Drop the write lock before migration
+                    drop(app_db);
+
+                    // Run migration for existing tabs without file_uri
+                    if let Err(e) = migrate_existing_tabs_to_files(&app_db_handle).await {
+                        log::error!("Failed to migrate existing tabs to files: {}", e);
+                    }
+
                     Ok(())
                 }
                 Err(e) => {
@@ -101,6 +111,7 @@ fn main() {
         if pg_dsn_path.exists() {
             if let Ok(dsn) = std::fs::read_to_string(pg_dsn_path) {
                 let dsn = dsn.trim().to_string();
+                log::info!("🔍 Loaded DSN from pg_dsn.txt: {}", dsn);
                 if !dsn.is_empty() {
                     let db_service_clone = db_service.clone();
                     gpui_tokio::Tokio::spawn_result(cx, async move {
@@ -155,4 +166,76 @@ fn main() {
         })
         .expect("Failed to open window");
     });
+}
+
+/// Migrate existing tabs in the database to file-based storage
+/// This creates .sql files on disk for tabs that don't have file_uri set
+async fn migrate_existing_tabs_to_files(
+    app_db_handle: &std::sync::Arc<tokio::sync::RwLock<Option<app_database::AppDatabase>>>,
+) -> Result<(), anyhow::Error> {
+    use app_database::AppDatabase;
+    use query_file::QueryFileManager;
+
+    log::info!("🔄 Starting migration of existing tabs to file-based storage");
+
+    // Find tabs that need migration (no file_uri)
+    let tabs_needing_migration = {
+        let db_guard = app_db_handle.read().await;
+        let app_db = db_guard.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("App database not initialized"))?;
+        app_db.find_tabs_needing_migration().await?
+    };
+
+    if tabs_needing_migration.is_empty() {
+        log::info!("✅ No tabs need migration - all tabs already have file_uri");
+        return Ok(());
+    }
+
+    log::info!("📋 Found {} tabs that need migration", tabs_needing_migration.len());
+
+    // Initialize query file manager
+    let query_file_manager = QueryFileManager::new()?;
+
+    // Migrate each tab
+    let total_tabs = tabs_needing_migration.len();
+    let mut migrated_count = 0;
+    for tab in tabs_needing_migration {
+        let tab_id = tab.id.ok_or_else(|| anyhow::anyhow!("Tab missing ID"))?;
+
+        log::debug!("🔄 Migrating tab '{}' (ID: {}) to file", tab.title, tab_id);
+
+        // Create the query file on disk
+        match query_file_manager.create_query_file(tab_id, &tab.content).await {
+            Ok(_) => {
+                // Get the file URI
+                let file_uri = query_file_manager.query_file_uri(tab_id);
+
+                // Update the database record with the file URI
+                {
+                    let db_guard = app_db_handle.read().await;
+                    if let Some(app_db) = db_guard.as_ref() {
+                        match app_db.update_tab_file_uri(tab_id, &file_uri).await {
+                            Ok(_) => {
+                                log::info!("✅ Migrated tab '{}' (ID: {}) to file: {}", tab.title, tab_id, file_uri);
+                                migrated_count += 1;
+                            }
+                            Err(e) => {
+                                log::error!("❌ Failed to update file URI for tab '{}': {}", tab.title, e);
+                            }
+                        }
+                    } else {
+                        log::error!("❌ App database not available for updating tab file URI");
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("❌ Failed to create query file for tab '{}': {}", tab.title, e);
+            }
+        }
+    }
+
+    log::info!("🎉 Migration completed: {}/{} tabs migrated to file-based storage",
+              migrated_count, total_tabs);
+
+    Ok(())
 }

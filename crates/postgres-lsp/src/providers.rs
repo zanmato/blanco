@@ -10,23 +10,58 @@ use gpui_component::input::{
 };
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionResponse, CompletionItemKind,
-    InsertTextFormat, Documentation, MarkupKind, Hover, HoverContents, MarkupContent,
+    InsertTextFormat, Documentation, Hover, HoverContents, MarkupContent, MarkupKind,
     CodeAction, CodeActionKind, WorkspaceEdit, Command,
+    CompletionParams, TextDocumentIdentifier, Position,
+    HoverParams, TextDocumentPositionParams,
+    CodeActionParams, Range, Uri,
 };
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use std::str::FromStr;
+use std::time::{Duration, Instant};
+use tokio::task::JoinHandle;
+use async_io::Timer;
 
-use tracing::debug;
+use tracing::{debug, info, error};
 use anyhow::Result;
 
 /// PostgreSQL completion provider
 pub struct PostgresCompletionProvider {
-    _client: (), // Placeholder - will be implemented with proper client sharing
+    client: Arc<Mutex<Option<PostgresLspClient>>>,
     config: PostgresLspConfig,
+    document_uri: Uri,
 }
 
 impl PostgresCompletionProvider {
     /// Create a new PostgreSQL completion provider
-    pub fn new(_client: (), config: PostgresLspConfig) -> Self {
-        Self { _client, config }
+    pub fn new(client: Arc<Mutex<Option<PostgresLspClient>>>, config: PostgresLspConfig, document_uri: Uri) -> Self {
+        Self { client, config, document_uri }
+    }
+
+    /// Set the LSP client
+    pub async fn set_client(&self, client: PostgresLspClient) {
+        let mut client_guard = self.client.lock().await;
+        *client_guard = Some(client);
+    }
+
+
+
+    /// Convert byte offset to LSP position
+    fn offset_to_position(&self, text: &str, offset: usize) -> Result<Position, anyhow::Error> {
+        let lines: Vec<&str> = text.lines().collect();
+        let mut current_offset = 0;
+        
+        for (line_num, line) in lines.iter().enumerate() {
+            if current_offset + line.len() >= offset {
+                let character = offset - current_offset;
+                return Ok(Position::new(line_num as u32, character as u32));
+            }
+            current_offset += line.len() + 1; // +1 for newline
+        }
+        
+        // If offset is beyond the text, return the last position
+        Ok(Position::new(lines.len().saturating_sub(1) as u32, 0))
     }
 }
 
@@ -35,16 +70,56 @@ impl CompletionProvider for PostgresCompletionProvider {
         &self,
         text: &Rope,
         offset: usize,
-        trigger: CompletionContext,
+        _trigger: CompletionContext,
         window: &mut Window,
         cx: &mut Context<InputState>,
     ) -> gpui::Task<Result<CompletionResponse>> {
-        let _text = text.to_string();
-        
-        cx.spawn(async move |_handle, cx| {
-            debug!("Requesting PostgreSQL completions at offset {}", offset);
+        let text_str = text.to_string();
+        let client = self.client.clone();
+        let document_uri = self.document_uri.clone();
 
-            // For now, return some example completions
+        info!("🧩 Completion Provider called at offset {}", offset);
+        debug!("🧩 Text context: {}", &text_str[..text_str.len().min(100)]);
+
+        cx.spawn(async move |_handle, _cx| {
+            info!("🧩 Starting PostgreSQL completion request at offset {}", offset);
+
+            // Try to get completions from LSP server
+            let mut client_guard = client.lock().await;
+            if let Some(client) = client_guard.as_mut() {
+                info!("🧩 LSP client available, requesting completions");
+                // Use the correct document URI for this tab
+                // Convert offset to LSP position (simplified)
+                let position = Position::new(0, offset as u32);
+
+                let params = CompletionParams {
+                    text_document_position: TextDocumentPositionParams {
+                        text_document: TextDocumentIdentifier { uri: document_uri },
+                        position,
+                    },
+                    context: Some(CompletionContext {
+                        trigger_kind: lsp_types::CompletionTriggerKind::INVOKED,
+                        trigger_character: None,
+                    }),
+                    work_done_progress_params: Default::default(),
+                    partial_result_params: Default::default(),
+                };
+
+                info!("🧩 Sending completion request with position: {:?}", position);
+                match client.completion(params).await {
+                    Ok(lsp_response) => {
+                        info!("🧩 ✅ Got completion response from LSP");
+                        return Ok(lsp_response);
+                    }
+                    Err(e) => {
+                        info!("🧩 ❌ LSP completion request failed: {}", e);
+                    }
+                }
+            } else {
+                info!("🧩 ⚠️ LSP client not available, using fallback completions");
+            }
+
+            // Fallback to example completions if LSP is not available
             let example_completions = vec![
                 CompletionItem {
                     label: "SELECT".to_string(),
@@ -132,14 +207,48 @@ impl CompletionProvider for PostgresCompletionProvider {
 
 /// PostgreSQL hover provider
 pub struct PostgresHoverProvider {
-    _client: (), // Placeholder - will be implemented with proper client sharing
+    client: Arc<Mutex<Option<PostgresLspClient>>>,
     config: PostgresLspConfig,
+    document_uri: Uri,
+    pending_request: Arc<Mutex<Option<JoinHandle<Result<Option<lsp_types::Hover>, anyhow::Error>>>>>,
+    last_request_time: Arc<Mutex<Instant>>,
 }
 
 impl PostgresHoverProvider {
     /// Create a new PostgreSQL hover provider
-    pub fn new(_client: (), config: PostgresLspConfig) -> Self {
-        Self { _client, config }
+    pub fn new(client: Arc<Mutex<Option<PostgresLspClient>>>, config: PostgresLspConfig, document_uri: Uri) -> Self {
+        Self {
+            client,
+            config,
+            document_uri,
+            pending_request: Arc::new(Mutex::new(None)),
+            last_request_time: Arc::new(Mutex::new(Instant::now())),
+        }
+    }
+
+    /// Set the LSP client
+    pub async fn set_client(&self, client: PostgresLspClient) {
+        let mut client_guard = self.client.lock().await;
+        *client_guard = Some(client);
+    }
+
+
+
+    /// Convert byte offset to LSP position
+    fn offset_to_position(&self, text: &str, offset: usize) -> Result<Position, anyhow::Error> {
+        let lines: Vec<&str> = text.lines().collect();
+        let mut current_offset = 0;
+        
+        for (line_num, line) in lines.iter().enumerate() {
+            if current_offset + line.len() >= offset {
+                let character = offset - current_offset;
+                return Ok(Position::new(line_num as u32, character as u32));
+            }
+            current_offset += line.len() + 1; // +1 for newline
+        }
+        
+        // If offset is beyond the text, return the last position
+        Ok(Position::new(lines.len().saturating_sub(1) as u32, 0))
     }
 }
 
@@ -148,18 +257,93 @@ impl HoverProvider for PostgresHoverProvider {
         &self,
         text: &Rope,
         offset: usize,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut App,
     ) -> gpui::Task<Result<Option<lsp_types::Hover>, anyhow::Error>> {
         let text_str = text.to_string();
-        
-        // Get the word at the current position
-        let word = self.get_word_at_position(&text_str, offset);
-        
-        cx.spawn(async move |cx| {
-            debug!("Requesting PostgreSQL hover for word: {:?}", word);
+        let client = self.client.clone();
+        let document_uri = self.document_uri.clone();
+        let pending_request = self.pending_request.clone();
+        let last_request_time = self.last_request_time.clone();
 
-            // For now, return some example hover information
+        info!("🖱️ Hover Provider called at offset {}", offset);
+        debug!("🖱️ Text context: {}", &text_str[..text_str.len().min(100)]);
+
+        cx.spawn(async move |_cx| {
+            info!("🖱️ Hover request received at offset {}", offset);
+
+            // Update last request time first
+            let request_start_time = {
+                let mut last_time = last_request_time.lock().await;
+                *last_time = Instant::now();
+                last_time.clone()
+            };
+
+            // Cancel any pending request
+            {
+                let mut pending = pending_request.lock().await;
+                if let Some(handle) = pending.take() {
+                    handle.abort();
+                    info!("🖱️ Cancelled previous hover request");
+                }
+            }
+
+            // Debounce delay - wait 200ms before sending request
+            Timer::after(Duration::from_millis(200)).await;
+
+            // Check if this request is still the latest one
+            let should_proceed = {
+                let last_time = last_request_time.lock().await;
+                // Compare the time - if another request came in while we were sleeping,
+                // last_time will be newer than request_start_time
+                *last_time == request_start_time
+            };
+
+            if !should_proceed {
+                info!("🖱️ Hover request cancelled by newer request");
+                return Ok(None);
+            }
+
+            info!("🖱️ Starting PostgreSQL hover request at offset {}", offset);
+
+            // Try to get hover from LSP server
+            let mut client_guard = client.lock().await;
+            if let Some(client) = client_guard.as_mut() {
+                info!("🖱️ LSP client available, requesting hover");
+
+                // Document content is now read from disk, no need to sync virtual content
+                info!("🖱️ Using file-based document for hover request");
+
+                // Convert offset to LSP position (simplified)
+                let position = Position::new(0, offset as u32);
+
+                let params = HoverParams {
+                    text_document_position_params: TextDocumentPositionParams {
+                        text_document: TextDocumentIdentifier { uri: document_uri },
+                        position,
+                    },
+                    work_done_progress_params: Default::default(),
+                };
+
+                info!("🖱️ Sending hover request with position: {:?}", position);
+                match client.hover(params).await {
+                    Ok(Some(hover)) => {
+                        info!("🖱️ ✅ Got hover response from LSP");
+                        return Ok(Some(hover));
+                    }
+                    Ok(None) => {
+                        info!("🖱️ ⚠️ LSP returned no hover information");
+                    }
+                    Err(e) => {
+                        info!("🖱️ ❌ LSP hover request failed: {}", e);
+                    }
+                }
+            } else {
+                info!("🖱️ ⚠️ LSP client not available, using fallback hover");
+            }
+
+            // Fallback to example hover information
+            let word = get_word_at_position_static(&text_str, offset);
             let hover_content = match word.as_deref() {
                 Some("SELECT") => Some(MarkupContent {
                     kind: MarkupKind::Markdown,
@@ -200,55 +384,62 @@ impl HoverProvider for PostgresHoverProvider {
     }
 }
 
-impl PostgresHoverProvider {
-    /// Get the word at the current position
-    fn get_word_at_position(&self, text: &str, offset: usize) -> Option<String> {
-        let chars: Vec<char> = text.chars().collect();
-        if offset >= chars.len() {
-            return None;
-        }
+/// Get the word at the current position (static helper)
+fn get_word_at_position_static(text: &str, offset: usize) -> Option<String> {
+    let chars: Vec<char> = text.chars().collect();
+    if offset >= chars.len() {
+        return None;
+    }
 
-        // Find start of word
-        let mut start = offset;
-        while start > 0 {
-            let c = chars[start - 1];
-            if c.is_alphanumeric() || c == '_' {
-                start -= 1;
-            } else {
-                break;
-            }
-        }
-
-        // Find end of word
-        let mut end = offset;
-        while end < chars.len() {
-            let c = chars[end];
-            if c.is_alphanumeric() || c == '_' {
-                end += 1;
-            } else {
-                break;
-            }
-        }
-
-        if start < end {
-            Some(chars[start..end].iter().collect())
+    // Find start of word
+    let mut start = offset;
+    while start > 0 {
+        let c = chars[start - 1];
+        if c.is_alphanumeric() || c == '_' {
+            start -= 1;
         } else {
-            None
+            break;
         }
+    }
+
+    // Find end of word
+    let mut end = offset;
+    while end < chars.len() {
+        let c = chars[end];
+        if c.is_alphanumeric() || c == '_' {
+            end += 1;
+        } else {
+            break;
+        }
+    }
+
+    if start < end {
+        Some(chars[start..end].iter().collect())
+    } else {
+        None
     }
 }
 
 /// PostgreSQL code action provider
 pub struct PostgresCodeActionProvider {
-    _client: (), // Placeholder - will be implemented with proper client sharing
+    client: Arc<Mutex<Option<PostgresLspClient>>>,
     config: PostgresLspConfig,
+    document_uri: Uri,
 }
 
 impl PostgresCodeActionProvider {
     /// Create a new PostgreSQL code action provider
-    pub fn new(_client: (), config: PostgresLspConfig) -> Self {
-        Self { _client, config }
+    pub fn new(client: Arc<Mutex<Option<PostgresLspClient>>>, config: PostgresLspConfig, document_uri: Uri) -> Self {
+        Self { client, config, document_uri }
     }
+
+    /// Set the LSP client
+    pub async fn set_client(&self, client: PostgresLspClient) {
+        let mut client_guard = self.client.lock().await;
+        *client_guard = Some(client);
+    }
+
+
 }
 
 impl CodeActionProvider for PostgresCodeActionProvider {
@@ -258,15 +449,55 @@ impl CodeActionProvider for PostgresCodeActionProvider {
 
     fn code_actions(
         &self,
-        state: Entity<InputState>,
+        _state: Entity<InputState>,
         range: std::ops::Range<usize>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut App,
     ) -> gpui::Task<Result<Vec<lsp_types::CodeAction>, anyhow::Error>> {
-        cx.spawn(async move |cx| {
-            debug!("Requesting PostgreSQL code actions for range: {:?}", range);
+        let client = self.client.clone();
+        let document_uri = self.document_uri.clone();
 
-            // For now, return some example code actions
+        info!("⚡ Code Action Provider called for range: {:?}", range);
+
+        cx.spawn(async move |_cx| {
+            info!("⚡ Starting PostgreSQL code actions request for range: {:?}", range);
+
+            // Convert byte range to LSP range (simplified)
+            let lsp_range = Range::new(
+                Position::new(0, range.start as u32),
+                Position::new(0, range.end as u32),
+            );
+
+            // Try to get code actions from LSP server
+            let mut client_guard = client.lock().await;
+            if let Some(client) = client_guard.as_mut() {
+                info!("⚡ LSP client available, requesting code actions");
+                let params = CodeActionParams {
+                    text_document: TextDocumentIdentifier { uri: document_uri },
+                    range: lsp_range,
+                    context: lsp_types::CodeActionContext::default(),
+                    work_done_progress_params: Default::default(),
+                    partial_result_params: Default::default(),
+                };
+
+                info!("⚡ Sending code actions request with range: {:?}", lsp_range);
+                match client.code_actions(params).await {
+                    Ok(Some(actions)) => {
+                        info!("⚡ ✅ Got {} code actions from LSP", actions.len());
+                        return Ok(actions);
+                    }
+                    Ok(None) => {
+                        info!("⚡ ⚠️ LSP returned no code actions");
+                    }
+                    Err(e) => {
+                        info!("⚡ ❌ LSP code actions request failed: {}", e);
+                    }
+                }
+            } else {
+                info!("⚡ ⚠️ LSP client not available, using fallback code actions");
+            }
+
+            // Fallback to example code actions
             let mut actions = Vec::new();
 
             // Add SQL formatting action
@@ -322,10 +553,11 @@ impl CodeActionProvider for PostgresCodeActionProvider {
         cx: &mut App,
     ) -> gpui::Task<Result<(), anyhow::Error>> {
         cx.spawn(async move |cx| {
-            debug!("Performing PostgreSQL code action: {}", action.title);
+            info!("⚡ 🎯 Performing PostgreSQL code action: {} (preview: {})", action.title, preview);
             
             // For now, just log the action
             // In a real implementation, we would apply the edits
+            info!("⚡ 🎯 Code action completed (placeholder implementation)");
             Ok(())
         })
     }
@@ -337,27 +569,22 @@ mod tests {
 
     #[test]
     fn test_get_word_at_position() {
-        let provider = PostgresHoverProvider::new(
-            unsafe { std::mem::zeroed() },
-            PostgresLspConfig::default(),
-        );
-
         let text = "SELECT * FROM table_name WHERE id = 1";
         
         // Test getting "SELECT"
-        let word = provider.get_word_at_position(text, 3);
+        let word = get_word_at_position_static(text, 3);
         assert_eq!(word, Some("SELECT".to_string()));
 
         // Test getting "FROM"
-        let word = provider.get_word_at_position(text, 10);
+        let word = get_word_at_position_static(text, 10);
         assert_eq!(word, Some("FROM".to_string()));
 
         // Test getting "table_name"
-        let word = provider.get_word_at_position(text, 15);
+        let word = get_word_at_position_static(text, 15);
         assert_eq!(word, Some("table_name".to_string()));
 
         // Test getting "WHERE"
-        let word = provider.get_word_at_position(text, 25);
+        let word = get_word_at_position_static(text, 25);
         assert_eq!(word, Some("WHERE".to_string()));
     }
 }

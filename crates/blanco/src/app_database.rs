@@ -80,6 +80,16 @@ impl AppDatabase {
         .await
         .ok(); // Ignore error if column already exists
 
+        // Add file_uri column for file-based storage
+        sqlx::query(
+            r#"
+            ALTER TABLE query_tabs ADD COLUMN file_uri TEXT
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .ok(); // Ignore error if column already exists
+
         // Query history table
         sqlx::query(
             r#"
@@ -131,7 +141,7 @@ impl AppDatabase {
             sqlx::query(
                 r#"
                 UPDATE query_tabs
-                SET title = ?, content = ?, position = ?, connection_id = ?, connection_type = ?, pg_connection_key = ?, updated_at = ?
+                SET title = ?, content = ?, position = ?, connection_id = ?, connection_type = ?, pg_connection_key = ?, file_uri = ?, updated_at = ?
                 WHERE id = ?
                 "#,
             )
@@ -141,6 +151,7 @@ impl AppDatabase {
             .bind(tab.connection_id)
             .bind(&tab.connection_type)
             .bind(&tab.pg_connection_key)
+            .bind(&tab.file_uri)
             .bind(now)
             .bind(id)
             .execute(&self.pool)
@@ -150,8 +161,8 @@ impl AppDatabase {
             // Insert new tab
             let result = sqlx::query(
                 r#"
-                INSERT INTO query_tabs (title, content, position, connection_id, connection_type, pg_connection_key, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO query_tabs (title, content, position, connection_id, connection_type, pg_connection_key, file_uri, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(&tab.title)
@@ -160,6 +171,7 @@ impl AppDatabase {
             .bind(tab.connection_id)
             .bind(&tab.connection_type)
             .bind(&tab.pg_connection_key)
+            .bind(&tab.file_uri)
             .bind(now)
             .bind(now)
             .execute(&self.pool)
@@ -172,7 +184,7 @@ impl AppDatabase {
     pub async fn load_query_tabs(&self) -> Result<Vec<QueryTabData>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
-            SELECT id, title, content, position, connection_id, connection_type, pg_connection_key
+            SELECT id, title, content, position, connection_id, connection_type, pg_connection_key, file_uri
             FROM query_tabs
             ORDER BY position ASC
             "#,
@@ -190,6 +202,7 @@ impl AppDatabase {
                 connection_id: row.get(4),
                 connection_type: row.get(5),
                 pg_connection_key: row.get(6),
+                file_uri: row.get(7),
             })
             .collect();
 
@@ -201,6 +214,56 @@ impl AppDatabase {
             .bind(id)
             .execute(&self.pool)
             .await?;
+        Ok(())
+    }
+
+    /// Find tabs that need migration (no file_uri set)
+    pub async fn find_tabs_needing_migration(&self) -> Result<Vec<QueryTabData>, sqlx::Error> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, title, content, position, connection_id, connection_type, pg_connection_key, file_uri
+            FROM query_tabs
+            WHERE file_uri IS NULL
+            ORDER BY position ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let tabs = rows
+            .into_iter()
+            .map(|row| QueryTabData {
+                id: Some(row.get::<i64, _>(0)),
+                title: row.get(1),
+                content: row.get(2),
+                position: row.get(3),
+                connection_id: row.get(4),
+                connection_type: row.get(5),
+                pg_connection_key: row.get(6),
+                file_uri: row.get(7),
+            })
+            .collect();
+
+        Ok(tabs)
+    }
+
+    /// Update file_uri for a specific tab
+    pub async fn update_tab_file_uri(&self, id: i64, file_uri: &str) -> Result<(), sqlx::Error> {
+        let now = chrono::Utc::now().timestamp();
+
+        sqlx::query(
+            r#"
+            UPDATE query_tabs
+            SET file_uri = ?, updated_at = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(file_uri)
+        .bind(now)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+
         Ok(())
     }
 
@@ -356,6 +419,7 @@ pub struct QueryTabData {
     pub connection_id: Option<i64>,
     pub connection_type: Option<String>,
     pub pg_connection_key: Option<String>,
+    pub file_uri: Option<String>,
 }
 
 #[derive(Debug, Clone)]

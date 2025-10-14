@@ -36,3 +36,5 @@ ropey = "1.6"
 
 # Additional utilities
 url = { workspace = true }
+smol = { workspace = true }
+async-io = { workspace = true }

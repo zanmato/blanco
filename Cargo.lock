@@ -796,6 +796,7 @@ dependencies = [
  "gpui",
  "gpui-component",
  "log",
+ "lsp-types",
  "postgres-lsp",
  "rust-embed",
  "serde",
@@ -4599,6 +4600,7 @@ name = "postgres-lsp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-io 1.13.0",
  "chrono",
  "dirs 5.0.1",
  "flate2",
@@ -4610,6 +4612,7 @@ dependencies = [
  "ropey 1.6.1",
  "serde",
  "serde_json",
+ "smol 1.3.0",
  "tar",
  "tempfile",
  "thiserror 1.0.69",

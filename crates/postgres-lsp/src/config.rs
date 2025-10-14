@@ -1,5 +1,5 @@
 //! Configuration management for PostgreSQL LSP
-//! 
+//!
 //! This module handles configuration generation and management for the PostgreSQL language server,
 //! including workspace configuration and connection-specific settings.
 
@@ -171,6 +171,24 @@ pub enum ConfigError {
     Invalid(String),
 }
 
+impl Default for PostgresLspConfig {
+    fn default() -> Self {
+        Self {
+            connection: ConnectionConfig {
+                connection_string: "postgresql://localhost:5432/postgres".to_string(),
+                host: "localhost".to_string(),
+                port: 5432,
+                database: "postgres".to_string(),
+                username: "postgres".to_string(),
+                schema: Some("public".to_string()),
+            },
+            database: DatabaseConfig::default(),
+            sql: SqlConfig::default(),
+            workspace: WorkspaceConfig::default(),
+        }
+    }
+}
+
 impl PostgresLspConfig {
     /// Create a new configuration with the given connection details
     pub fn new(
@@ -230,7 +248,6 @@ impl PostgresLspConfig {
             },
             "workspace": {
                 "root": self.workspace.root,
-                "configFile": self.workspace.config_file,
                 "cacheEnabled": self.workspace.cache_enabled
             }
         });
@@ -242,7 +259,7 @@ impl PostgresLspConfig {
     pub fn create_workspace_config(&self, workspace_root: &PathBuf) -> Result<(), ConfigError> {
         let config_path = workspace_root.join(&self.workspace.config_file);
         let config_content = self.generate_postgrestools_config()?;
-        
+
         // Write with JSONC format (with comments)
         let jsonc_content = format!(
             r#"// PostgreSQL Language Server Configuration
@@ -255,7 +272,7 @@ impl PostgresLspConfig {
 "#,
             serde_json::to_string_pretty(&config_content)?
         );
-        
+
         std::fs::write(config_path, jsonc_content)?;
         Ok(())
     }
@@ -287,11 +304,15 @@ impl PostgresLspConfig {
     /// Validate configuration
     pub fn validate(&self) -> Result<(), ConfigError> {
         if self.connection.connection_string.is_empty() {
-            return Err(ConfigError::Invalid("Connection string cannot be empty".to_string()));
+            return Err(ConfigError::Invalid(
+                "Connection string cannot be empty".to_string(),
+            ));
         }
 
         if self.connection.database.is_empty() {
-            return Err(ConfigError::Invalid("Database name cannot be empty".to_string()));
+            return Err(ConfigError::Invalid(
+                "Database name cannot be empty".to_string(),
+            ));
         }
 
         if self.connection.username.is_empty() {
@@ -299,7 +320,9 @@ impl PostgresLspConfig {
         }
 
         if self.connection.port == 0 {
-            return Err(ConfigError::Invalid("Port must be greater than 0".to_string()));
+            return Err(ConfigError::Invalid(
+                "Port must be greater than 0".to_string(),
+            ));
         }
 
         Ok(())

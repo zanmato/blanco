@@ -777,12 +777,18 @@ impl TableDelegate for ResultsTableDelegate {
                     .font_family("Fira Code")
                     .text_size(px(12.))
                     .size_full()
-                    .px_1()
-                    .py_0p5()
+                    .p_0() // No padding since the cell already has padding
                     .when(self.is_numeric_column(col_ix), |this| {
                         this.justify_end() // Right-align numeric columns
                     })
-                    .child(TextInput::new(&input).size_full().text_size(px(12.)))
+                    .child(
+                        TextInput::new(&input)
+                            .size_full()
+                            .text_size(px(12.))
+                            .border_0() // No border on the input
+                            .px_0() // No horizontal padding
+                            .py_0() // No vertical padding
+                    )
             } else {
                 // Fallback if input is not available
                 div()
