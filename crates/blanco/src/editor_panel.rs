@@ -1,7 +1,7 @@
 use gpui::{
     div, prelude::FluentBuilder, px, Action, App, AppContext, ClickEvent, Context, Entity,
-    EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, Keystroke,
-    ParentElement, Render, StatefulInteractiveElement, Styled, Window,
+    EventEmitter, FocusHandle, Focusable, IntoElement, Keystroke, ParentElement, Render, Styled,
+    Window,
 };
 use gpui_component::{
     button::{Button, ButtonVariants},
@@ -14,7 +14,6 @@ use gpui_component::{
 };
 use log::{debug, error, info, warn};
 use lsp_types::{PublishDiagnosticsParams, Uri};
-use serde_json;
 
 use crate::app::{ConnectionType, ToggleSidebar};
 use crate::app_database::{QueryHistoryData, QueryTabData};
@@ -148,7 +147,7 @@ impl EditorPanel {
                 this.trigger_auto_save(cx);
 
                 // Send didChange to LSP if this is a PostgreSQL tab and the first tab is active
-                if this.tabs.len() > 0 {
+                if !this.tabs.is_empty() {
                     if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(0) {
                         if let Some(ref lsp_manager) = query_tab.lsp_manager {
                             query_tab.document_version += 1;
@@ -573,7 +572,7 @@ impl EditorPanel {
     }
 
     /// Extract the query to execute based on selection or cursor position
-    fn extract_current_query(text: &str, cursor_pos: usize, has_selection: bool) -> String {
+    fn extract_current_query(text: &str, cursor_pos: usize, _has_selection: bool) -> String {
         let chars: Vec<char> = text.chars().collect();
 
         // If there's a selection, we can't easily get it due to API limitations
@@ -824,7 +823,7 @@ impl EditorPanel {
         }
     }
 
-    fn save_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn save_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(TabType::Settings(settings_tab)) = self.tabs.get_mut(self.active_tab_ix) {
             let json_text = settings_tab.editor.read(cx).text().to_string();
 
@@ -872,9 +871,9 @@ impl EditorPanel {
     }
 
     fn current_editor(&self) -> Option<&Entity<InputState>> {
-        self.tabs.get(self.active_tab_ix).and_then(|tab| match tab {
-            TabType::Query(query_tab) => Some(&query_tab.editor),
-            TabType::Settings(settings_tab) => Some(&settings_tab.editor),
+        self.tabs.get(self.active_tab_ix).map(|tab| match tab {
+            TabType::Query(query_tab) => &query_tab.editor,
+            TabType::Settings(settings_tab) => &settings_tab.editor,
         })
     }
 
@@ -1008,9 +1007,9 @@ impl EditorPanel {
         });
 
         // Update db_ids in tabs after save completes
-        cx.spawn(async move |editor_panel, mut cx| {
+        cx.spawn(async move |editor_panel, cx| {
             if let Ok(saved_ids) = save_task.await {
-                let _ = editor_panel.update(cx, |panel, cx| {
+                let _ = editor_panel.update(cx, |panel, _cx| {
                     for (tab_index, db_id) in saved_ids {
                         if let Some(TabType::Query(query_tab)) = panel.tabs.get_mut(tab_index) {
                             if query_tab.db_id.is_none() {
@@ -1236,7 +1235,7 @@ impl EditorPanel {
     fn initialize_lsp_for_tab_at_index(
         &mut self,
         tab_index: usize,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         info!(
@@ -1256,8 +1255,8 @@ impl EditorPanel {
                 let connection_name = query_tab.connection_name.clone();
 
                 // Get the file manager reference and tab db_id for the async task
-                let query_file_manager = self.query_file_manager.clone();
-                let tab_db_id = query_tab.db_id;
+                let _query_file_manager = self.query_file_manager.clone();
+                let _tab_db_id = query_tab.db_id;
 
                 // Capture the executor before moving into async task
                 let executor = cx.background_executor().clone();
@@ -1265,7 +1264,6 @@ impl EditorPanel {
                 // Initialize LSP providers asynchronously using Tokio runtime
                 let lsp_task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
                     use postgres_lsp::{PostgresLspConfig, PostgresLspManager};
-                    use std::rc::Rc;
 
                     // Create LSP config from actual connection
                     let config = if let Some(conn_key) = pg_connection_key {
@@ -1282,8 +1280,10 @@ impl EditorPanel {
                                 conn_key.port,
                                 conn_key.database
                             );
-                            info!("🔍 LSP connection string with password: {}",
-                                conn_str.replace(password, "<hidden>"));
+                            info!(
+                                "🔍 LSP connection string with password: {}",
+                                conn_str.replace(password, "<hidden>")
+                            );
                             conn_str
                         } else {
                             let conn_str = format!(
@@ -1325,8 +1325,8 @@ impl EditorPanel {
                     };
 
                     // Set up diagnostic handler using the query tab's diagnostic storage
-                    let editor_clone_for_diagnostics = editor.clone();
-                    let tab_id_for_diagnostics = tab_id;
+                    let _editor_clone_for_diagnostics = editor.clone();
+                    let _tab_id_for_diagnostics = tab_id;
 
                     // Initialize the LSP manager first
                     if let Err(e) = lsp_manager.initialize().await {
@@ -1349,12 +1349,12 @@ impl EditorPanel {
                         let mut diagnostics = Vec::new();
                         for lsp_diag in &diagnostic_params.diagnostics {
                             let start = Position::new(
-                                lsp_diag.range.start.line as u32,
-                                lsp_diag.range.start.character as u32
+                                lsp_diag.range.start.line,
+                                lsp_diag.range.start.character
                             );
                             let end = Position::new(
-                                lsp_diag.range.end.line as u32,
-                                lsp_diag.range.end.character as u32
+                                lsp_diag.range.end.line,
+                                lsp_diag.range.end.character
                             );
 
                             let severity = match lsp_diag.severity {
@@ -1407,7 +1407,7 @@ impl EditorPanel {
                                         // Create hover provider
                                         if let Some(hover_provider) = lsp_manager.create_hover_provider(uri.clone()) {
                                             info!("✅ Created hover provider for tab '{}'", query_tab.title);
-                                            query_tab.editor.update(cx, |editor, cx| {
+                                            query_tab.editor.update(cx, |editor, _cx| {
                                                 editor.lsp.hover_provider = Some(std::rc::Rc::new(hover_provider));
                                                 info!("🖱️ Hover provider set for tab '{}'", query_tab.title);
                                             });
@@ -1418,7 +1418,7 @@ impl EditorPanel {
                                         // Create completion provider
                                         if let Some(completion_provider) = lsp_manager.create_completion_provider(uri.clone()) {
                                             info!("✅ Created completion provider for tab '{}'", query_tab.title);
-                                            query_tab.editor.update(cx, |editor, cx| {
+                                            query_tab.editor.update(cx, |editor, _cx| {
                                                 editor.lsp.completion_provider = Some(std::rc::Rc::new(completion_provider));
                                                 info!("🧩 Completion provider set for tab '{}'", query_tab.title);
                                             });
@@ -1429,7 +1429,7 @@ impl EditorPanel {
                                         // Create code action provider
                                         if let Some(code_action_provider) = lsp_manager.create_code_action_provider(uri) {
                                             info!("✅ Created code action provider for tab '{}'", query_tab.title);
-                                            query_tab.editor.update(cx, |editor, cx| {
+                                            query_tab.editor.update(cx, |editor, _cx| {
                                                 editor.lsp.code_action_providers.push(std::rc::Rc::new(code_action_provider));
                                                 info!("⚡ Code action provider set for tab '{}'", query_tab.title);
                                             });
@@ -1443,7 +1443,7 @@ impl EditorPanel {
                                     // Send workspace configuration before didOpen
                                     let pg_connection_key = query_tab.pg_connection_key.clone();
                                     if let Some(conn_key) = pg_connection_key {
-                                        let lsp_clone = lsp_manager.clone();
+                                        let _lsp_clone = lsp_manager.clone();
                                         let tab_title = query_tab.title.clone();
                                         let uri_str = query_tab.uri();
                                         let editor_for_content = query_tab.editor.clone();
@@ -1557,7 +1557,7 @@ impl EditorPanel {
 
                             // Optional: Periodic health check (can be removed if not needed)
                             let lsp_manager_for_health = lsp_manager.clone();
-                            cx.spawn(async move |cx| {
+                            cx.spawn(async move |_cx| {
                                 info!("🏥 LSP health check task started for tab {}", tab_id);
                                 loop {
                                     // Wait for 30 seconds (much less frequent than before)
@@ -1591,7 +1591,7 @@ impl EditorPanel {
     }
 
     /// Get LSP status for the current tab
-    fn get_lsp_status(&self, cx: &Context<Self>) -> Option<&'static str> {
+    fn get_lsp_status(&self, _cx: &Context<Self>) -> Option<&'static str> {
         if let Some(TabType::Query(query_tab)) = self.tabs.get(self.active_tab_ix) {
             if query_tab.connection_type == ConnectionType::PostgreSQL {
                 // For now, return a placeholder status
@@ -1708,9 +1708,9 @@ impl EditorPanel {
             });
 
             // Update the tab's db_id after save completes
-            cx.spawn(async move |editor_panel, mut cx| {
+            cx.spawn(async move |editor_panel, cx| {
                 if let Ok(db_id) = save_task.await {
-                    let _ = editor_panel.update(cx, |panel, cx| {
+                    let _ = editor_panel.update(cx, |panel, _cx| {
                         if let Some(TabType::Query(query_tab)) = panel.tabs.get_mut(tab_index) {
                             if query_tab.db_id.is_none() {
                                 query_tab.db_id = Some(db_id);
@@ -1742,7 +1742,7 @@ impl EditorPanel {
         self.pending_save_task = None;
 
         // Schedule a new save after 500ms delay
-        let task = cx.spawn(async move |editor_panel, mut cx| {
+        let task = cx.spawn(async move |editor_panel, cx| {
             cx.background_executor()
                 .timer(std::time::Duration::from_millis(500))
                 .await;
@@ -1777,7 +1777,8 @@ impl EditorPanel {
                     error!("Failed to shutdown LSP manager: {}", e);
                     anyhow::anyhow!("Failed to shutdown LSP manager: {}", e)
                 })
-            }).detach();
+            })
+            .detach();
         }
 
         info!("✅ LSP processes shut down successfully");
@@ -1971,7 +1972,7 @@ impl Render for EditorPanel {
                                                             .outline()
                                                             .icon(IconName::CircleX)
                                                             .label("Cancel")
-                                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                            .on_click(cx.listener(|this, _, _window, cx| {
                                                                 if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
                                                                     query_tab.results_panel.update(cx, |panel, cx| {
                                                                         panel.cancel_all_edits(cx);
@@ -1984,7 +1985,7 @@ impl Render for EditorPanel {
                                                             .primary()
                                                             .icon(IconName::Check)
                                                             .label("Commit Changes")
-                                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                            .on_click(cx.listener(|this, _, _window, cx| {
                                                                 if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
                                                                     let changes = query_tab.results_panel.update(cx, |panel, cx| {
                                                                         panel.commit_all_edits(cx)

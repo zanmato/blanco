@@ -14,9 +14,7 @@ mod footer;
 mod group;
 mod header;
 mod menu;
-pub use footer::*;
 pub use group::*;
-pub use header::*;
 pub use menu::*;
 
 const DEFAULT_WIDTH: Pixels = px(255.);
@@ -166,12 +164,10 @@ impl RenderOnce for SidebarToggleButton {
             } else {
                 IconName::PanelRightOpen
             }
+        } else if self.side.is_left() {
+            IconName::PanelLeftClose
         } else {
-            if self.side.is_left() {
-                IconName::PanelLeftClose
-            } else {
-                IconName::PanelRightClose
-            }
+            IconName::PanelRightClose
         };
 
         self.btn

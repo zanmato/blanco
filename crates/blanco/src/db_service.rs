@@ -7,7 +7,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::str::FromStr;
 use tokio::sync::RwLock;
-use url;
 
 /// Connection key for PostgreSQL connections
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -44,7 +43,7 @@ impl PgConnectionKey {
 
         log::info!("🔍 PgConnectionKey extracted via SQLX - host: {}, port: {}, database: {}, username: {}, password: {}",
             host, port, database, username,
-            if password.as_ref().map_or(false, |p| !p.is_empty()) { "<present>" } else { "<none>" });
+            if password.as_ref().is_some_and(|p| !p.is_empty()) { "<present>" } else { "<none>" });
 
         Ok(PgConnectionKey {
             host,

@@ -13,7 +13,9 @@ pub fn test_db_path() -> PathBuf {
 }
 
 /// Initialize the test database with sample data
-pub async fn init_test_database(db: &mut DatabaseManager) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn init_test_database(
+    db: &mut DatabaseManager,
+) -> Result<(), Box<dyn std::error::Error>> {
     let db_path = test_db_path();
     let db_path_str = format!("sqlite://{}", db_path.display());
 
@@ -26,7 +28,7 @@ pub async fn init_test_database(db: &mut DatabaseManager) -> Result<(), Box<dyn 
     {
         // Create sample tables using the async method
         let pool = db.pool.as_ref().ok_or("Not connected to database")?;
-        
+
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,8 +37,10 @@ pub async fn init_test_database(db: &mut DatabaseManager) -> Result<(), Box<dyn 
                 age INTEGER,
                 city TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )"
-        ).execute(pool).await?;
+            )",
+        )
+        .execute(pool)
+        .await?;
 
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS orders (
@@ -47,8 +51,10 @@ pub async fn init_test_database(db: &mut DatabaseManager) -> Result<(), Box<dyn 
                 price REAL NOT NULL,
                 order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(id)
-            )"
-        ).execute(pool).await?;
+            )",
+        )
+        .execute(pool)
+        .await?;
 
         // Check if we need to insert sample data
         let count_result = sqlx::query("SELECT COUNT(*) as count FROM users")
@@ -67,8 +73,10 @@ pub async fn init_test_database(db: &mut DatabaseManager) -> Result<(), Box<dyn 
                 ('Bob Smith', 'bob@example.com', 34, 'New York'),
                 ('Charlie Brown', 'charlie@example.com', NULL, 'Austin'),
                 ('Diana Prince', 'diana@example.com', 31, NULL),
-                ('Eve Williams', 'eve@example.com', NULL, NULL)"
-            ).execute(pool).await?;
+                ('Eve Williams', 'eve@example.com', NULL, NULL)",
+            )
+            .execute(pool)
+            .await?;
 
             // Insert sample orders
             sqlx::query(
@@ -79,14 +87,13 @@ pub async fn init_test_database(db: &mut DatabaseManager) -> Result<(), Box<dyn 
                 (3, 'Monitor', 2, 349.99),
                 (3, 'Webcam', 1, 79.99),
                 (4, 'Headphones', 1, 199.99),
-                (5, 'Desk Chair', 1, 299.99)"
-            ).execute(pool).await?;
+                (5, 'Desk Chair', 1, 299.99)",
+            )
+            .execute(pool)
+            .await?;
 
             println!("Sample data inserted successfully!");
         }
-
-return Ok(());
     }
-
     Ok(())
 }

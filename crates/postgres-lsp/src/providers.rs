@@ -18,12 +18,11 @@ use lsp_types::{
 };
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use std::str::FromStr;
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 use async_io::Timer;
 
-use tracing::{debug, info, error, warn};
+use tracing::{debug, info, warn};
 use anyhow::Result;
 
 /// Convert byte offset to LSP position (line/column)
@@ -46,14 +45,13 @@ fn offset_to_position_lsp(text: &str, offset: usize) -> Result<Position, anyhow:
 /// PostgreSQL completion provider
 pub struct PostgresCompletionProvider {
     client: Arc<Mutex<Option<PostgresLspClient>>>,
-    config: PostgresLspConfig,
     document_uri: Uri,
 }
 
 impl PostgresCompletionProvider {
     /// Create a new PostgreSQL completion provider
-    pub fn new(client: Arc<Mutex<Option<PostgresLspClient>>>, config: PostgresLspConfig, document_uri: Uri) -> Self {
-        Self { client, config, document_uri }
+    pub fn new(client: Arc<Mutex<Option<PostgresLspClient>>>, _config: PostgresLspConfig, document_uri: Uri) -> Self {
+        Self { client, document_uri }
     }
 
     /// Set the LSP client
@@ -64,23 +62,7 @@ impl PostgresCompletionProvider {
 
 
 
-    /// Convert byte offset to LSP position
-    fn offset_to_position(&self, text: &str, offset: usize) -> Result<Position, anyhow::Error> {
-        let lines: Vec<&str> = text.lines().collect();
-        let mut current_offset = 0;
-        
-        for (line_num, line) in lines.iter().enumerate() {
-            if current_offset + line.len() >= offset {
-                let character = offset - current_offset;
-                return Ok(Position::new(line_num as u32, character as u32));
-            }
-            current_offset += line.len() + 1; // +1 for newline
-        }
-        
-        // If offset is beyond the text, return the last position
-        Ok(Position::new(lines.len().saturating_sub(1) as u32, 0))
     }
-}
 
 impl CompletionProvider for PostgresCompletionProvider {
     fn completions(
@@ -88,7 +70,7 @@ impl CompletionProvider for PostgresCompletionProvider {
         text: &Rope,
         offset: usize,
         _trigger: CompletionContext,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<InputState>,
     ) -> gpui::Task<Result<CompletionResponse>> {
         let text_str = text.to_string();
@@ -234,7 +216,7 @@ impl CompletionProvider for PostgresCompletionProvider {
         })
     }
 
-    fn is_completion_trigger(&self, offset: usize, text: &str, cx: &mut Context<InputState>) -> bool {
+    fn is_completion_trigger(&self, offset: usize, text: &str, _cx: &mut Context<InputState>) -> bool {
         // Check if the character at offset-1 is a trigger character
         if offset > 0 {
             if let Some(prev_char) = text.chars().nth(offset - 1) {
@@ -248,7 +230,6 @@ impl CompletionProvider for PostgresCompletionProvider {
 /// PostgreSQL hover provider
 pub struct PostgresHoverProvider {
     client: Arc<Mutex<Option<PostgresLspClient>>>,
-    config: PostgresLspConfig,
     document_uri: Uri,
     pending_request: Arc<Mutex<Option<JoinHandle<Result<Option<lsp_types::Hover>, anyhow::Error>>>>>,
     last_request_time: Arc<Mutex<Instant>>,
@@ -256,10 +237,9 @@ pub struct PostgresHoverProvider {
 
 impl PostgresHoverProvider {
     /// Create a new PostgreSQL hover provider
-    pub fn new(client: Arc<Mutex<Option<PostgresLspClient>>>, config: PostgresLspConfig, document_uri: Uri) -> Self {
+    pub fn new(client: Arc<Mutex<Option<PostgresLspClient>>>, _config: PostgresLspConfig, document_uri: Uri) -> Self {
         Self {
             client,
-            config,
             document_uri,
             pending_request: Arc::new(Mutex::new(None)),
             last_request_time: Arc::new(Mutex::new(Instant::now())),
@@ -274,23 +254,7 @@ impl PostgresHoverProvider {
 
 
 
-    /// Convert byte offset to LSP position
-    fn offset_to_position(&self, text: &str, offset: usize) -> Result<Position, anyhow::Error> {
-        let lines: Vec<&str> = text.lines().collect();
-        let mut current_offset = 0;
-        
-        for (line_num, line) in lines.iter().enumerate() {
-            if current_offset + line.len() >= offset {
-                let character = offset - current_offset;
-                return Ok(Position::new(line_num as u32, character as u32));
-            }
-            current_offset += line.len() + 1; // +1 for newline
-        }
-        
-        // If offset is beyond the text, return the last position
-        Ok(Position::new(lines.len().saturating_sub(1) as u32, 0))
     }
-}
 
 impl HoverProvider for PostgresHoverProvider {
     fn hover(
@@ -316,7 +280,7 @@ impl HoverProvider for PostgresHoverProvider {
             let request_start_time = {
                 let mut last_time = last_request_time.lock().await;
                 *last_time = Instant::now();
-                last_time.clone()
+                *last_time
             };
 
             // Cancel any pending request
@@ -466,14 +430,13 @@ fn get_word_at_position_static(text: &str, offset: usize) -> Option<String> {
 /// PostgreSQL code action provider
 pub struct PostgresCodeActionProvider {
     client: Arc<Mutex<Option<PostgresLspClient>>>,
-    config: PostgresLspConfig,
     document_uri: Uri,
 }
 
 impl PostgresCodeActionProvider {
     /// Create a new PostgreSQL code action provider
-    pub fn new(client: Arc<Mutex<Option<PostgresLspClient>>>, config: PostgresLspConfig, document_uri: Uri) -> Self {
-        Self { client, config, document_uri }
+    pub fn new(client: Arc<Mutex<Option<PostgresLspClient>>>, _config: PostgresLspConfig, document_uri: Uri) -> Self {
+        Self { client, document_uri }
     }
 
     /// Set the LSP client
@@ -541,10 +504,10 @@ impl CodeActionProvider for PostgresCodeActionProvider {
             }
 
             // Fallback to example code actions
-            let mut actions = Vec::new();
+            let actions = vec![
 
             // Add SQL formatting action
-            actions.push(CodeAction {
+            CodeAction {
                 title: "Format SQL".to_string(),
                 kind: Some(CodeActionKind::SOURCE),
                 diagnostics: None,
@@ -561,10 +524,10 @@ impl CodeActionProvider for PostgresCodeActionProvider {
                     command: "sql.format".to_string(),
                     arguments: None,
                 }),
-            });
+            },
 
             // Add uppercase keywords action
-            actions.push(CodeAction {
+            CodeAction {
                 title: "Convert Keywords to Uppercase".to_string(),
                 kind: Some(CodeActionKind::QUICKFIX),
                 diagnostics: None,
@@ -581,7 +544,8 @@ impl CodeActionProvider for PostgresCodeActionProvider {
                     command: "sql.uppercaseKeywords".to_string(),
                     arguments: None,
                 }),
-            });
+            },
+            ];
 
             Ok(actions)
         })
@@ -589,13 +553,13 @@ impl CodeActionProvider for PostgresCodeActionProvider {
 
     fn perform_code_action(
         &self,
-        state: Entity<InputState>,
+        _state: Entity<InputState>,
         action: CodeAction,
         preview: bool,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut App,
     ) -> gpui::Task<Result<(), anyhow::Error>> {
-        cx.spawn(async move |cx| {
+        cx.spawn(async move |_cx| {
             info!("⚡ 🎯 Performing PostgreSQL code action: {} (preview: {})", action.title, preview);
             
             // For now, just log the action

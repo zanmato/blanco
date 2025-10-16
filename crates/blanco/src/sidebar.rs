@@ -1,6 +1,6 @@
 use crate::connection_sidebar::{Sidebar, SidebarGroup, SidebarMenu, SidebarMenuItem};
 use gpui::{
-    div, px, AnyElement, App, AppContext, Context, Entity, FocusHandle, Focusable,
+    div, App, AppContext, Context, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Window,
 };
 use gpui_component::{
@@ -268,7 +268,7 @@ impl Render for ConnectionSidebar {
                                             .id("test-database")  // Unique ID for Test Database
                                             .context_menu({
                                                 let table_count = self.test_db_tables.len();
-                                                move |menu, window, cx| {
+                                                move |menu, _window, _cx| {
                                                     log::info!("BUILDING context menu for Test Database with {} tables", table_count);
                                                     let result = menu.menu("New Query", Box::new(crate::app::NewQueryForConnection {
                                                         connection_name: "Test Database".to_string(),
@@ -328,7 +328,7 @@ impl Render for ConnectionSidebar {
                                                             .context_menu({
                                                                 let schema_name = schema_name_for_menu.clone();
                                                                 let key = key_for_schema_menu.clone();
-                                                                move |menu, window, cx| {
+                                                                move |menu, _window, _cx| {
                                                                     log::info!("Creating context menu for PostgreSQL schema: {}", schema_name);
                                                                     menu.menu("New Query", Box::new(crate::app::NewQueryForPostgresSchema {
                                                                         connection_key: key.clone(),
@@ -359,7 +359,7 @@ impl Render for ConnectionSidebar {
                                                     .context_menu({
                                                         let display_name = display_name_for_menu.clone();
                                                         let key = key_for_menu.clone();
-                                                        move |menu, window, cx| {
+                                                        move |menu, _window, _cx| {
                                                             log::info!("Creating context menu for PostgreSQL connection: {}", display_name);
                                                             menu.menu("New Query", Box::new(crate::app::NewQueryForPostgresConnection {
                                                                 connection_key: key.clone(),
@@ -395,14 +395,14 @@ impl Render for ConnectionSidebar {
                             .outline()
                             .icon(IconName::Plus)
                             .label("New Connection")
-                            .on_click(cx.listener(move |this, _event, window, cx| {
+                            .on_click(cx.listener(move |_this, _event, window, cx| {
                                 log::info!("New Connection button clicked");
 
                                 // Create the modal content outside the builder so we can access it
                                 let modal_content = cx.new(|cx| NewConnectionModal::new(window, cx));
                                 let content_for_focus = modal_content.clone();
 
-                                window.open_modal(cx, move |modal, window, cx| {
+                                window.open_modal(cx, move |modal, _window, _cx| {
                                     let content_clone = modal_content.clone();
 
                                     modal
@@ -445,7 +445,7 @@ impl Render for ConnectionSidebar {
                                                             conn_data.username.as_ref(),
                                                             conn_data.password.as_ref()
                                                         ) {
-                                                            let connection_string = format!(
+                                                            let _connection_string = format!(
                                                                 "postgresql://{}:{}@{}:{}/{}",
                                                                 username, password, host, port, database
                                                             );

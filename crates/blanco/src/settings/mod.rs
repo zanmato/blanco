@@ -4,6 +4,7 @@ use std::fs;
 use std::io::Write;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct Settings {
     pub general: GeneralSettings,
     pub editor: EditorSettings,
@@ -84,17 +85,6 @@ pub struct LspFormattingSettings {
     pub sql_dialect: String,
 }
 
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            general: GeneralSettings::default(),
-            editor: EditorSettings::default(),
-            database: DatabaseSettings::default(),
-            appearance: AppearanceSettings::default(),
-            lsp: LspSettings::default(),
-        }
-    }
-}
 
 impl Default for GeneralSettings {
     fn default() -> Self {

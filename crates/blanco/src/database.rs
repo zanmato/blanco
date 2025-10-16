@@ -25,7 +25,7 @@ impl DatabaseManager {
                 .create_if_missing(true)
                 .disable_statement_logging();
 
-            let pool = SqlitePool::connect_with(options).await?;
+            let _pool = SqlitePool::connect_with(options).await?;
             // Note: We can't modify self from here, this needs to be handled differently
             // For now, this is a limitation of the current design
             anyhow::bail!("Database connection needs to be handled at a higher level");

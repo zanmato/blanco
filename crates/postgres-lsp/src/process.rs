@@ -103,74 +103,6 @@ impl Drop for ProcessGuard {
 }
 
 impl ProcessGuard {
-    async fn kill_process_async(pid: u32, binary_name: &str) {
-        info!("🔫 Killing {} process (PID: {}) via smol", binary_name, pid);
-
-        #[cfg(unix)]
-        {
-            use smol::process::Command;
-            match Command::new("kill")
-                .arg("-TERM")
-                .arg(pid.to_string())
-                .output()
-                .await
-            {
-                Ok(output) => {
-                    if output.status.success() {
-                        info!("✅ Successfully sent SIGTERM to {} (PID: {})", binary_name, pid);
-                        // Give it a moment to exit gracefully - this is tricky without executor access
-                        // For now, we'll use a simple sleep
-                        std::thread::sleep(Duration::from_millis(100));
-
-                        // Force kill if it's still running
-                        match Command::new("kill")
-                            .arg("-KILL")
-                            .arg(pid.to_string())
-                            .output()
-                            .await
-                        {
-                            Ok(output) => {
-                                if output.status.success() {
-                                    info!("💀 Force killed {} (PID: {})", binary_name, pid);
-                                } else {
-                                    error!("❌ Failed to force kill {} (PID: {}): {}",
-                                          binary_name, pid, String::from_utf8_lossy(&output.stderr));
-                                }
-                            }
-                            Err(e) => error!("❌ Error executing force kill for {} (PID: {}): {}",
-                                           binary_name, pid, e),
-                        }
-                    } else {
-                        error!("❌ Failed to send SIGTERM to {} (PID: {}): {}",
-                               binary_name, pid, String::from_utf8_lossy(&output.stderr));
-                    }
-                }
-                Err(e) => error!("❌ Error executing kill command for {} (PID: {}): {}",
-                               binary_name, pid, e),
-            }
-        }
-
-        #[cfg(windows)]
-        {
-            use smol::process::Command;
-            match Command::new("taskkill")
-                .args(["/F", "/PID", &pid.to_string()])
-                .output()
-                .await
-            {
-                Ok(output) => {
-                    if output.status.success() {
-                        info!("✅ Successfully killed {} process on Windows (PID: {})", binary_name, pid);
-                    } else {
-                        error!("❌ Failed to kill {} process on Windows (PID: {}): {}",
-                               binary_name, pid, String::from_utf8_lossy(&output.stderr));
-                    }
-                }
-                Err(e) => error!("❌ Error executing taskkill for {} (PID: {}): {}",
-                               binary_name, pid, e),
-            }
-        }
-    }
 
     fn kill_process_sync(pid: u32, binary_name: &str) {
         info!("🔫 Killing {} process (PID: {}) synchronously", binary_name, pid);
@@ -229,7 +161,7 @@ impl PostgresLspProcess {
     pub fn new_dummy(executor: BackgroundExecutor) -> Self {
         // This is a hack - we need to create a valid process structure
         // For now, let's just create a process that will fail when used
-        let mut child = smol::process::Command::new("echo")
+        let child = smol::process::Command::new("echo")
             .arg("dummy")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -358,7 +290,7 @@ impl PostgresLspProcess {
         // Use GPUI executor timer for timeout (following Zed's pattern)
         loop {
             let next_line = reader.next();
-            let mut timer = self.executor.timer(timeout_duration).fuse();
+            let timer = self.executor.timer(timeout_duration).fuse();
 
             match futures::future::select(next_line, timer).await {
                 futures::future::Either::Left((line_result, _)) => {
@@ -450,7 +382,7 @@ impl PostgresLspProcess {
                         // Wait up to 5 seconds for graceful shutdown
                         use futures::FutureExt;
                         let status_future = self.process_guard.child().status();
-                        let mut shutdown_timer = self.executor.timer(Duration::from_secs(5)).fuse();
+                        let shutdown_timer = self.executor.timer(Duration::from_secs(5)).fuse();
 
                         match futures::future::select(
                             Box::pin(status_future),

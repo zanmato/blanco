@@ -280,7 +280,7 @@ impl BlancoApp {
         let modal_content = cx.new(|cx| NewConnectionModal::new(window, cx));
         let content_for_focus = modal_content.clone();
 
-        window.open_modal(cx, move |modal, window, cx| {
+        window.open_modal(cx, move |modal, _window, _cx| {
             let content_clone = modal_content.clone();
 
             modal

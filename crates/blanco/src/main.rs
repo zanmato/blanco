@@ -93,7 +93,7 @@ fn main() {
         let user_db_handle = db_service.user_db_handle();
         gpui_tokio::Tokio::spawn_result(cx, async move {
             let mut user_db = user_db_handle.write().await;
-            match test_db::init_test_database(&mut *user_db).await {
+            match test_db::init_test_database(&mut user_db).await {
                 Ok(_) => {
                     log::info!("Connected to test database");
                     Ok(())
@@ -173,7 +173,6 @@ fn main() {
 async fn migrate_existing_tabs_to_files(
     app_db_handle: &std::sync::Arc<tokio::sync::RwLock<Option<app_database::AppDatabase>>>,
 ) -> Result<(), anyhow::Error> {
-    use app_database::AppDatabase;
     use query_file::QueryFileManager;
 
     log::info!("🔄 Starting migration of existing tabs to file-based storage");

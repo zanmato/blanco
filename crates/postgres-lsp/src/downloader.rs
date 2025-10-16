@@ -7,11 +7,9 @@ use anyhow::Result;
 use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use tar::Archive;
 use tokio::fs;
-use tokio::io::AsyncReadExt;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 /// Supported architectures for the PostgreSQL language server
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

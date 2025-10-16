@@ -231,7 +231,7 @@ impl PostgresLspManager {
     /// Check if an LSP instance is running
     pub async fn is_lsp_running(&self, pid: u32) -> bool {
         let manager = self.process_manager.read().await;
-        if let Some(process) = manager.get_process(pid) {
+        if let Some(_process) = manager.get_process(pid) {
             // Note: This would need to be async in a real implementation
             // For now, just check if the process exists in the manager
             true
@@ -297,7 +297,7 @@ impl PostgresLspManager {
 
         // Shutdown all processes
         {
-            let mut manager = self.process_manager.write().await;
+            let manager = self.process_manager.write().await;
             // Get all PIDs and shut them down individually
             let pids: Vec<u32> = manager.processes().iter().map(|p| p.pid()).collect();
             drop(manager);
@@ -433,7 +433,7 @@ impl PostgresLspManager {
         info!("📨 Processing pending LSP messages");
         if let Some(client) = &self.client {
             let mut client_guard = client.lock().await;
-            if let Some(client) = client_guard.as_mut() {
+            if let Some(_client) = client_guard.as_mut() {
                 // The LSP client now automatically processes incoming messages
                 // This method is mainly for compatibility and health checking
                 info!("📨 LSP client is processing messages automatically");

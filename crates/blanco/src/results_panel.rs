@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::ops::Range;
 
-use anyhow;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     div, px, App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement,
@@ -35,7 +34,12 @@ impl CellValue {
     }
 
     pub fn is_empty(&self) -> bool {
-        matches!(self, CellValue::Empty) || if let CellValue::Value(s) = self { s.is_empty() } else { false }
+        matches!(self, CellValue::Empty)
+            || if let CellValue::Value(s) = self {
+                s.is_empty()
+            } else {
+                false
+            }
     }
 
     pub fn display_text(&self) -> String {
@@ -115,11 +119,13 @@ impl TableChange {
     fn generate_prepared_statement(&mut self) -> Result<(), String> {
         match self.change_type {
             ChangeType::UpdateCell => {
-                let column_name = self.column_index
+                let column_name = self
+                    .column_index
                     .map(|_| "column_name".to_string()) // Will be filled by caller
                     .ok_or_else(|| "Invalid column index".to_string())?;
 
-                let pk_column = self.primary_key_column
+                let pk_column = self
+                    .primary_key_column
                     .clone()
                     .or_else(|| Some("id".to_string())) // Default fallback
                     .ok_or_else(|| "No primary key column".to_string())?;
@@ -147,10 +153,7 @@ impl TableChange {
             ChangeType::InsertRow => {
                 // For INSERT, we need column names from the table structure
                 // This is a placeholder - actual implementation will need column info
-                self.sql_template = Some(format!(
-                    "INSERT INTO {} VALUES ($1)",
-                    self.table_name
-                ));
+                self.sql_template = Some(format!("INSERT INTO {} VALUES ($1)", self.table_name));
 
                 if let Some(new_val) = &self.new_value {
                     self.parameters.push(new_val.clone());
@@ -159,7 +162,8 @@ impl TableChange {
                 }
             }
             ChangeType::DeleteRow => {
-                let pk_column = self.primary_key_column
+                let pk_column = self
+                    .primary_key_column
                     .clone()
                     .or_else(|| Some("id".to_string())) // Default fallback
                     .ok_or_else(|| "No primary key column".to_string())?;
@@ -180,7 +184,10 @@ impl TableChange {
         Ok(())
     }
 
-    pub fn to_prepared_statement(&mut self, columns: &[String]) -> Result<(String, Vec<String>), String> {
+    pub fn to_prepared_statement(
+        &mut self,
+        columns: &[String],
+    ) -> Result<(String, Vec<String>), String> {
         // Generate specific prepared statement based on column information
         match self.change_type {
             ChangeType::UpdateCell => {
@@ -202,7 +209,11 @@ impl TableChange {
                     .as_ref()
                     .ok_or_else(|| "No primary key value available".to_string())?;
 
-                let new_value = self.new_value.as_ref().cloned().unwrap_or_else(|| "NULL".to_string());
+                let new_value = self
+                    .new_value
+                    .as_ref()
+                    .cloned()
+                    .unwrap_or_else(|| "NULL".to_string());
 
                 let sql_template = format!(
                     "UPDATE {} SET {} = $1 WHERE {} = $2",
@@ -218,9 +229,8 @@ impl TableChange {
             }
             ChangeType::InsertRow => {
                 let column_list = columns.join(", ");
-                let placeholders: Vec<String> = (1..=columns.len())
-                    .map(|i| format!("${}", i))
-                    .collect();
+                let placeholders: Vec<String> =
+                    (1..=columns.len()).map(|i| format!("${}", i)).collect();
                 let placeholder_list = placeholders.join(", ");
 
                 let values = if let Some(new_value) = &self.new_value {
@@ -249,7 +259,8 @@ impl TableChange {
                         .clone()
                 };
 
-                let pk_value = self.primary_key_value
+                let pk_value = self
+                    .primary_key_value
                     .as_ref()
                     .ok_or_else(|| "No primary key value available".to_string())?;
 
@@ -660,7 +671,7 @@ impl CellEditState {
         self.pending_new_rows.clear();
     }
 
-    pub fn generate_sql_queries(&self, columns: &[String], table_name: &str) -> Vec<String> {
+    pub fn generate_sql_queries(&self, columns: &[String], _table_name: &str) -> Vec<String> {
         let mut queries = Vec::new();
 
         for change in &self.changes {
@@ -769,7 +780,7 @@ impl ResultsTableDelegate {
                 max_width += 2.0;
 
                 // Apply minimum and maximum bounds (adjusted for smaller font)
-                max_width.max(60.0).min(400.0)
+                max_width.clamp(60.0, 400.0)
             })
             .collect();
 
@@ -779,7 +790,7 @@ impl ResultsTableDelegate {
             .iter()
             .enumerate()
             .map(|(i, name)| {
-                Column::new(&format!("col_{}", i), name)
+                Column::new(format!("col_{}", i), name)
                     .width(column_widths.get(i).copied().unwrap_or(150.0))
                     .resizable(true)
                     .sortable()
@@ -811,7 +822,7 @@ impl ResultsTableDelegate {
             // Look for FROM keyword
             if let Some(from_pos) = query_lower.find("from") {
                 let after_from = &query[from_pos + 4..];
-                let table_part = after_from.trim().split_whitespace().next()?;
+                let table_part = after_from.split_whitespace().next()?;
                 // Remove any quotes or backticks
                 let table_name = table_part.trim_matches(|c| c == '"' || c == '\'' || c == '`');
                 return Some(table_name.to_string());
@@ -820,7 +831,7 @@ impl ResultsTableDelegate {
         None
     }
 
-    fn detect_primary_key_simple(&self, table_name: &str) -> Option<String> {
+    fn detect_primary_key_simple(&self, _table_name: &str) -> Option<String> {
         // Simple heuristic: look for common primary key column names
         let common_pk_names = ["id", "uuid", "pk", "primary_key", "rowid"];
 
@@ -847,11 +858,10 @@ impl ResultsTableDelegate {
     pub fn start_editing_cell(&mut self, row: usize, col: usize) {
         if let Some(cell_value) = self.rows.get(row).and_then(|r| r.get(col)) {
             // Store the original value if not already stored
-            if !self.edit_state.original_values.contains_key(&(row, col)) {
-                self.edit_state
-                    .original_values
-                    .insert((row, col), cell_value.clone());
-            }
+            self.edit_state
+                .original_values
+                .entry((row, col))
+                .or_insert_with(|| cell_value.clone());
             self.edit_state.editing_cell = Some((row, col));
         }
     }
@@ -975,7 +985,7 @@ impl TableDelegate for ResultsTableDelegate {
         &self,
         row_ix: usize,
         col_ix: usize,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Table<Self>>,
     ) -> impl IntoElement {
         let is_editing = self.edit_state.is_editing(row_ix, col_ix);
@@ -1017,7 +1027,7 @@ impl TableDelegate for ResultsTableDelegate {
                             .text_size(px(12.))
                             .border_0() // No border on the input
                             .px_0() // No horizontal padding
-                            .py_0() // No vertical padding
+                            .py_0(), // No vertical padding
                     )
             } else {
                 // Fallback if input is not available
@@ -1059,7 +1069,7 @@ impl TableDelegate for ResultsTableDelegate {
                 .when(!is_null && is_editable, |this| {
                     this.on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |table, event: &gpui::MouseDownEvent, window, cx| {
+                        cx.listener(move |table, event: &gpui::MouseDownEvent, _window, cx| {
                             if event.click_count == 2 {
                                 // Double-click detected - set pending edit
                                 let delegate = table.delegate_mut();
@@ -1327,8 +1337,8 @@ impl ResultsPanel {
             // Subscribe to input changes to update edited_values
             let row_clone = row;
             let col_clone = col;
-            cx.subscribe(&input, move |table, input, event, cx| match event {
-                InputEvent::Change => {
+            cx.subscribe(&input, move |table, input, event, cx| {
+                if let InputEvent::Change = event {
                     let new_text = input.read(cx).text().to_string();
                     table
                         .delegate_mut()
@@ -1337,7 +1347,6 @@ impl ResultsPanel {
                         .insert((row_clone, col_clone), new_text);
                     table.refresh(cx);
                 }
-                _ => {}
             })
             .detach();
 
@@ -1593,7 +1602,7 @@ impl ResultsPanel {
     }
 
     /// Commit all pending changes to the database
-    pub fn commit_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn commit_changes(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let changes = self.get_changes(cx);
 
         if changes.is_empty() {
@@ -1612,7 +1621,7 @@ impl ResultsPanel {
         // Get the database manager
         let db_service = DbService::global(cx);
         let user_db = db_service.user_db_handle();
-        let panel_handle = cx.entity().downgrade();
+        let _panel_handle = cx.entity().downgrade();
 
         // Execute all changes in sequence
         let user_db_clone = user_db.clone();
@@ -1632,20 +1641,22 @@ impl ResultsPanel {
                 // Create a mutable copy of the change to generate prepared statement
                 let mut mutable_change = change.clone();
                 match mutable_change.to_prepared_statement(&column_names_clone) {
-                    Ok((sql_template, parameters)) => match db.execute_prepared_query(&sql_template, &parameters).await {
-                        Ok(result) => {
-                            let affected = result.row_count();
-                            total_affected += affected;
+                    Ok((sql_template, parameters)) => {
+                        match db.execute_prepared_query(&sql_template, &parameters).await {
+                            Ok(result) => {
+                                let affected = result.row_count();
+                                total_affected += affected;
+                            }
+                            Err(e) => {
+                                return Err(anyhow::anyhow!(
+                                    "Failed to execute prepared statement change {}: {} (SQL: {})",
+                                    i + 1,
+                                    e,
+                                    sql_template
+                                ));
+                            }
                         }
-                        Err(e) => {
-                            return Err(anyhow::anyhow!(
-                                "Failed to execute prepared statement change {}: {} (SQL: {})",
-                                i + 1,
-                                e,
-                                sql_template
-                            ));
-                        }
-                    },
+                    }
                     Err(e) => {
                         return Err(anyhow::anyhow!(
                             "Failed to generate prepared statement for change {}: {}",
@@ -1660,7 +1671,7 @@ impl ResultsPanel {
         });
 
         // Handle the completion of the commit task
-        cx.spawn(async move |this, mut cx| {
+        cx.spawn(async move |this, cx| {
             match task.await {
                 Ok(_total_affected) => {
                     // Clear changes after successful commit
@@ -1688,7 +1699,7 @@ impl ResultsPanel {
                                     });
 
                                 // Handle refresh completion
-                                cx.spawn(async move |this, mut cx| {
+                                cx.spawn(async move |this, cx| {
                                     match refresh_task.await {
                                         Ok(result) => {
                                             this.update(cx, |this, cx| {
@@ -1716,7 +1727,7 @@ impl ResultsPanel {
     }
 
     /// Rollback all pending changes
-    pub fn rollback_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn rollback_changes(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let changes = self.get_changes(cx);
 
         if changes.is_empty() {
@@ -1860,9 +1871,7 @@ impl ResultsPanel {
             let delegate = table.delegate_mut();
 
             // Get current value for change tracking
-            let old_value = delegate.rows.get(row)
-                .and_then(|r| r.get(col))
-                .cloned();
+            let old_value = delegate.rows.get(row).and_then(|r| r.get(col)).cloned();
 
             // Set the cell value to NULL
             if let Some(row_data) = delegate.rows.get_mut(row) {
@@ -1873,9 +1882,7 @@ impl ResultsPanel {
 
             // Track the change
             if let Some(table_name) = &delegate.table_name {
-                let primary_key_value = delegate.rows.get(row)
-                    .and_then(|r| r.first())
-                    .cloned();
+                let primary_key_value = delegate.rows.get(row).and_then(|r| r.first()).cloned();
 
                 let change = TableChange::new(
                     ChangeType::UpdateCell,
@@ -1901,9 +1908,7 @@ impl ResultsPanel {
             let delegate = table.delegate_mut();
 
             // Get current value for change tracking
-            let old_value = delegate.rows.get(row)
-                .and_then(|r| r.get(col))
-                .cloned();
+            let old_value = delegate.rows.get(row).and_then(|r| r.get(col)).cloned();
 
             // Set the cell value to empty string
             if let Some(row_data) = delegate.rows.get_mut(row) {
@@ -1914,9 +1919,7 @@ impl ResultsPanel {
 
             // Track the change
             if let Some(table_name) = &delegate.table_name {
-                let primary_key_value = delegate.rows.get(row)
-                    .and_then(|r| r.first())
-                    .cloned();
+                let primary_key_value = delegate.rows.get(row).and_then(|r| r.first()).cloned();
 
                 let change = TableChange::new(
                     ChangeType::UpdateCell,
@@ -1964,33 +1967,35 @@ impl Render for ResultsPanel {
             .border_t_1()
             .border_color(cx.theme().border)
             // Handle keyboard events for commit/cancel
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                match event.keystroke.key.as_str() {
-                    "enter" => {
-                        if this.is_editing(cx) {
-                            this.commit_current_edit(cx);
+            .on_key_down(
+                cx.listener(|this, event: &gpui::KeyDownEvent, _window, cx| {
+                    match event.keystroke.key.as_str() {
+                        "enter" => {
+                            if this.is_editing(cx) {
+                                this.commit_current_edit(cx);
+                            }
                         }
-                    }
-                    "escape" => {
-                        if this.is_editing(cx) {
-                            this.cancel_current_edit(cx);
+                        "escape" => {
+                            if this.is_editing(cx) {
+                                this.cancel_current_edit(cx);
+                            }
                         }
-                    }
-                    "ctrl-shift-n" => {
-                        // Ctrl + Shift + N: Set current cell to NULL
-                        if let Some((row, col)) = this.get_current_editing_cell(cx) {
-                            this.set_cell_to_null(row, col, cx);
+                        "ctrl-shift-n" => {
+                            // Ctrl + Shift + N: Set current cell to NULL
+                            if let Some((row, col)) = this.get_current_editing_cell(cx) {
+                                this.set_cell_to_null(row, col, cx);
+                            }
                         }
-                    }
-                    "ctrl-shift-k" => {
-                        // Ctrl + Shift + K: Clear current cell value
-                        if let Some((row, col)) = this.get_current_editing_cell(cx) {
-                            this.clear_cell_value(row, col, cx);
+                        "ctrl-shift-k" => {
+                            // Ctrl + Shift + K: Clear current cell value
+                            if let Some((row, col)) = this.get_current_editing_cell(cx) {
+                                this.clear_cell_value(row, col, cx);
+                            }
                         }
+                        _ => {}
                     }
-                    _ => {}
-                }
-            }))
+                }),
+            )
             // The table component (table should have built-in scrolling)
             .child(self.table.clone())
             .child(

@@ -4,7 +4,7 @@
 //! including workspace configuration and connection-specific settings.
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 /// PostgreSQL LSP configuration
@@ -256,7 +256,7 @@ impl PostgresLspConfig {
     }
 
     /// Create workspace configuration file
-    pub fn create_workspace_config(&self, workspace_root: &PathBuf) -> Result<(), ConfigError> {
+    pub fn create_workspace_config(&self, workspace_root: &Path) -> Result<(), ConfigError> {
         let config_path = workspace_root.join(&self.workspace.config_file);
         let config_content = self.generate_postgrestools_config()?;
 

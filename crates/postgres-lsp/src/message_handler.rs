@@ -42,12 +42,8 @@ pub enum LspMessage {
 /// This continuously reads messages from the LSP process stdout and routes them
 /// through channels for proper asynchronous processing.
 pub struct LspMessageHandler {
-    /// Background task that handles message reading
-    pub(crate) read_task: tokio::task::JoinHandle<Result<()>>,
     /// Channel for receiving incoming messages
     pub(crate) incoming_messages: mpsc::UnboundedReceiver<LspMessage>,
-    /// Channel for connection activity notifications (for health monitoring)
-    pub(crate) connection_activity: mpsc::UnboundedSender<()>,
 }
 
 impl LspMessageHandler {
@@ -57,14 +53,11 @@ impl LspMessageHandler {
         T: tokio::io::AsyncRead + Unpin + Send + 'static,
     {
         let (message_tx, message_rx) = mpsc::unbounded_channel();
-        let (activity_tx, _activity_rx) = mpsc::unbounded_channel();
 
-        let read_task = tokio::spawn(Self::read_messages(stdout, message_tx, activity_tx.clone()));
+        tokio::spawn(Self::read_messages(stdout, message_tx));
 
         Ok(Self {
-            read_task,
             incoming_messages: message_rx,
-            connection_activity: activity_tx,
         })
     }
 
@@ -77,7 +70,6 @@ impl LspMessageHandler {
     async fn read_messages<T>(
         mut stdout: T,
         message_tx: mpsc::UnboundedSender<LspMessage>,
-        activity_tx: mpsc::UnboundedSender<()>,
     ) -> Result<()>
     where
         T: tokio::io::AsyncRead + Unpin + Send + 'static,
@@ -115,12 +107,9 @@ impl LspMessageHandler {
             trace!("📨 LspMessageHandler: Raw message: {}", message_str);
 
             // Parse and route the message
-            if let Err(e) = Self::parse_and_route_message(message_str, &message_tx, &activity_tx).await {
+            if let Err(e) = Self::parse_and_route_message(message_str, &message_tx).await {
                 error!("🔴 LspMessageHandler: Failed to process message: {}", e);
             }
-
-            // Notify about connection activity
-            let _ = activity_tx.send(());
 
             // Prevent CPU starvation
             tokio::task::yield_now().await;
@@ -172,7 +161,6 @@ impl LspMessageHandler {
     async fn parse_and_route_message(
         message_str: &str,
         message_tx: &mpsc::UnboundedSender<LspMessage>,
-        _activity_tx: &mpsc::UnboundedSender<()>,
     ) -> Result<()> {
         let json_value: Value = serde_json::from_str(message_str)
             .context("Invalid JSON in message")?;
@@ -314,12 +302,9 @@ mod tests {
         "#;
 
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let (_activity_tx, _) = mpsc::unbounded_channel();
-
         LspMessageHandler::parse_and_route_message(
             notification_json,
             &tx,
-            &_activity_tx,
         ).await.unwrap();
 
         let message = rx.recv().await.unwrap();
@@ -346,7 +331,6 @@ mod tests {
         LspMessageHandler::parse_and_route_message(
             response_json,
             &tx,
-            &_activity_tx,
         ).await.unwrap();
 
         let message = rx.recv().await.unwrap();

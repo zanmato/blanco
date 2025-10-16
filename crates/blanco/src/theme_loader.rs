@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use gpui::{App, AssetSource};
+use gpui::App;
 use std::rc::Rc;
 
 pub fn load_and_apply_theme(theme_path: &str, cx: &mut App) -> Result<()> {
@@ -24,13 +24,19 @@ pub fn load_and_apply_theme(theme_path: &str, cx: &mut App) -> Result<()> {
     // Get the first theme from the set
     let theme_config = &theme_set.themes[0];
 
-    println!("✓ Loaded theme: {} ({})", theme_config.name,
-        if theme_config.mode.is_dark() { "dark" } else { "light" });
+    println!(
+        "✓ Loaded theme: {} ({})",
+        theme_config.name,
+        if theme_config.mode.is_dark() {
+            "dark"
+        } else {
+            "light"
+        }
+    );
 
     // Apply the theme using gpui-component's built-in apply_config method
     // This handles all color mapping with proper fallbacks
-    gpui_component::theme::Theme::global_mut(cx)
-        .apply_config(&Rc::new(theme_config.clone()));
+    gpui_component::theme::Theme::global_mut(cx).apply_config(&Rc::new(theme_config.clone()));
 
     // Apply the theme mode
     gpui_component::theme::Theme::change(theme_config.mode, None, cx);
@@ -38,24 +44,4 @@ pub fn load_and_apply_theme(theme_path: &str, cx: &mut App) -> Result<()> {
     println!("✓ Applied {} theme to Blanco", theme_config.name);
 
     Ok(())
-}
-
-pub fn list_available_themes(cx: &App) -> Result<Vec<String>> {
-    let theme_files = cx
-        .asset_source()
-        .list("themes")
-        .map_err(|e| anyhow!("Failed to list themes: {}", e))?;
-
-    let themes: Vec<String> = theme_files
-        .iter()
-        .filter_map(|path| {
-            if path.ends_with(".json") {
-                Some(path.to_string())
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    Ok(themes)
 }

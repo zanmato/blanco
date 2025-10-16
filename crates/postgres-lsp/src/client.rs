@@ -14,13 +14,12 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use smol::{
-    channel::{self, Receiver, Sender},
     io::{AsyncReadExt, AsyncWriteExt},
 };
 
 use futures::{
-    AsyncRead, AsyncWrite, Future, FutureExt,
-    channel::oneshot::{self, Canceled},
+    FutureExt,
+    channel::oneshot,
     select,
 };
 
@@ -54,22 +53,6 @@ struct JsonRpcRequest {
     params: Option<Value>,
 }
 
-/// JSON-RPC response
-#[derive(Debug, Deserialize)]
-struct JsonRpcResponse {
-    jsonrpc: String,
-    id: Option<Value>,
-    result: Option<Value>,
-    error: Option<JsonRpcError>,
-}
-
-/// JSON-RPC error
-#[derive(Debug, Deserialize)]
-struct JsonRpcError {
-    code: i32,
-    message: String,
-    data: Option<Value>,
-}
 
 /// JSON-RPC notification
 #[derive(Debug, Deserialize, serde::Serialize)]
@@ -100,7 +83,6 @@ pub struct PostgresLspClient {
     process: PostgresLspProcess,
     next_id: AtomicU64,
     pending_requests: Arc<Mutex<HashMap<Value, futures::channel::oneshot::Sender<Result<Value, ClientError>>>>>,
-    config: PostgresLspConfig,
     diagnostic_handler: Option<DiagnosticHandler>,
     executor: BackgroundExecutor,
     /// Buffer for accumulating partial message data
@@ -118,7 +100,7 @@ impl PostgresLspClient {
     /// # Returns
     /// * `Result<Self, ClientError>` - LSP client or error
     pub async fn new(
-        mut process: PostgresLspProcess,
+        process: PostgresLspProcess,
         config: &PostgresLspConfig,
         workspace_path: &std::path::Path,
         executor: BackgroundExecutor,
@@ -133,7 +115,6 @@ impl PostgresLspClient {
             process,
             next_id: AtomicU64::new(1),
             pending_requests: Arc::new(Mutex::new(HashMap::new())),
-            config: config.clone(),
             diagnostic_handler: None,
             executor,
             message_buffer: Vec::new(),
@@ -201,7 +182,7 @@ impl PostgresLspClient {
             root_path: None, // deprecated, use root_uri instead
             workspace_folders: Some(vec![workspace_folder]),
             initialization_options: None,
-            capabilities: capabilities,
+            capabilities,
             trace: None,
             client_info: None,
             locale: None,
@@ -217,7 +198,7 @@ impl PostgresLspClient {
         }
         info!("  🌍 Root URI: {:?}", init_params.root_uri);
 
-        let response = self
+        let _response = self
             .request("initialize", Some(serde_json::to_value(init_params)?))
             .await?;
 
@@ -313,7 +294,7 @@ impl PostgresLspClient {
             .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in buffer: {}", e))?;
 
         debug!("📦 Current buffer size: {} bytes", self.message_buffer.len());
-        if self.message_buffer.len() > 0 {
+        if !self.message_buffer.is_empty() {
             debug!("📦 Buffer preview: {}", &buffer_str[..buffer_str.len().min(200)]);
         }
 
@@ -450,7 +431,7 @@ impl PostgresLspClient {
         let id_value = Value::Number(serde_json::Number::from(id));
 
         // Create a channel for the response
-        let (response_tx, mut response_rx) = oneshot::channel();
+        let (response_tx, response_rx) = oneshot::channel();
 
         // Register the pending request
         {
@@ -561,7 +542,7 @@ impl PostgresLspClient {
             }
 
             // Try to receive the response with a short timeout using GPUI executor timer
-            let mut timer = self.executor.timer(std::time::Duration::from_millis(10)).fuse();
+            let timer = self.executor.timer(std::time::Duration::from_millis(10)).fuse();
 
             match futures::future::select(response_rx.as_mut(), timer).await {
                 futures::future::Either::Left((response_result, _)) => {
@@ -816,50 +797,6 @@ impl PostgresLspClient {
         self.diagnostic_handler = Some(handler);
     }
 
-    /// Handle incoming notifications
-    async fn handle_notification(&self, notification: JsonRpcNotification) -> Result<(), ClientError> {
-        info!("📨 LSP Notification <- {}", notification.method);
-
-        match notification.method.as_str() {
-            "textDocument/publishDiagnostics" => {
-                if let Some(params) = notification.params {
-                    match serde_json::from_value::<PublishDiagnosticsParams>(params) {
-                        Ok(diagnostic_params) => {
-                            info!("🔍 Received {} diagnostics for {:?}",
-                                diagnostic_params.diagnostics.len(),
-                                diagnostic_params.uri);
-
-                            if let Some(ref handler) = self.diagnostic_handler {
-                                handler(diagnostic_params);
-                            } else {
-                                warn!("🟡 No diagnostic handler set, ignoring diagnostics");
-                            }
-                        }
-                        Err(e) => {
-                            error!("🔴 Failed to parse diagnostics: {}", e);
-                        }
-                    }
-                }
-            }
-            "window/logMessage" => {
-                if let Some(ref params) = notification.params {
-                    info!("📝 LSP Log Message: {}", serde_json::to_string_pretty(params)?);
-                }
-            }
-            "window/showMessage" => {
-                if let Some(ref params) = notification.params {
-                    info!("💬 LSP Show Message: {}", serde_json::to_string_pretty(params)?);
-                }
-            }
-            _ => {
-                debug!("📄 Unhandled notification: {}", notification.method);
-            }
-        }
-
-        Ok(())
-    }
-
-    
     /// Check if the process is still running
     pub async fn is_process_running(&mut self) -> bool {
         self.process.is_running().await

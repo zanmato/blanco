@@ -1,9 +1,8 @@
-use log::{debug, error, info};
+use log::info;
 use sqlx::postgres::{PgConnectOptions, PgPool};
 use sqlx::{Column, ConnectOptions, Row, ValueRef, TypeInfo};
 use std::str::FromStr;
 use uuid::Uuid;
-use serde_json;
 
 /// PostgreSQL database manager
 pub struct PostgresManager {
