@@ -5,12 +5,12 @@
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{Child as AsyncChild, Command as AsyncCommand};
-use tokio::time::timeout;
+use smol::process::{Child, Command, Stdio};
+use futures::io::{AsyncBufReadExt, BufReader};
+use futures::{StreamExt, FutureExt};
 use tracing::{debug, error, info, warn};
+use gpui::BackgroundExecutor;
 
 /// Process management errors
 #[derive(Debug, thiserror::Error)]
@@ -27,26 +27,239 @@ pub enum ProcessError {
     Io(#[from] std::io::Error),
 }
 
+/// RAII guard for child processes that automatically kills them on drop
+///
+/// This ensures that postgrestools processes are properly cleaned up
+/// when the application exits, even during panics.
+pub struct ProcessGuard {
+    child: Child,
+    pid: u32,
+    binary_name: String,
+}
+
+impl ProcessGuard {
+    /// Create a new process guard
+    pub fn new(child: Child, pid: u32, binary_name: String) -> Self {
+        Self {
+            child,
+            pid,
+            binary_name,
+        }
+    }
+
+    /// Get the process ID
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    /// Get the child process (for normal operations)
+    pub fn child(&mut self) -> &mut Child {
+        &mut self.child
+    }
+
+    /// Check if the process is still running
+    pub async fn is_running(&mut self) -> bool {
+        // smol::process::Child doesn't have try_wait, so we'll use a different approach
+        // We can check the process status by trying to kill it with signal 0
+        #[cfg(unix)]
+        {
+            use std::process::Command;
+            match Command::new("kill").arg("-0").arg(self.pid.to_string()).output() {
+                Ok(output) => output.status.success(),
+                Err(_) => false,
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            // On non-Unix platforms, we'll assume it's running
+            // In practice, you might want a different approach
+            true
+        }
+    }
+}
+
+impl Drop for ProcessGuard {
+    fn drop(&mut self) {
+        info!("🛡️ ProcessGuard dropping - automatically cleaning up {} (PID: {})",
+              self.binary_name, self.pid);
+
+        // Check if we're in a panic situation
+        let is_panicking = std::thread::panicking();
+        if is_panicking {
+            warn!("🚨 ProcessGuard dropped during panic - force killing {} (PID: {})",
+                  self.binary_name, self.pid);
+        }
+
+        // Kill the process asynchronously - we need to spawn a task since we're in Drop
+        let pid = self.pid;
+        let binary_name = self.binary_name.clone();
+
+        // In Drop, we can only use synchronous operations
+        // smol doesn't have runtime detection like tokio
+        warn!("Using synchronous kill during ProcessGuard::drop for {} (PID: {})",
+              binary_name, pid);
+        Self::kill_process_sync(pid, &binary_name);
+    }
+}
+
+impl ProcessGuard {
+    async fn kill_process_async(pid: u32, binary_name: &str) {
+        info!("🔫 Killing {} process (PID: {}) via smol", binary_name, pid);
+
+        #[cfg(unix)]
+        {
+            use smol::process::Command;
+            match Command::new("kill")
+                .arg("-TERM")
+                .arg(pid.to_string())
+                .output()
+                .await
+            {
+                Ok(output) => {
+                    if output.status.success() {
+                        info!("✅ Successfully sent SIGTERM to {} (PID: {})", binary_name, pid);
+                        // Give it a moment to exit gracefully - this is tricky without executor access
+                        // For now, we'll use a simple sleep
+                        std::thread::sleep(Duration::from_millis(100));
+
+                        // Force kill if it's still running
+                        match Command::new("kill")
+                            .arg("-KILL")
+                            .arg(pid.to_string())
+                            .output()
+                            .await
+                        {
+                            Ok(output) => {
+                                if output.status.success() {
+                                    info!("💀 Force killed {} (PID: {})", binary_name, pid);
+                                } else {
+                                    error!("❌ Failed to force kill {} (PID: {}): {}",
+                                          binary_name, pid, String::from_utf8_lossy(&output.stderr));
+                                }
+                            }
+                            Err(e) => error!("❌ Error executing force kill for {} (PID: {}): {}",
+                                           binary_name, pid, e),
+                        }
+                    } else {
+                        error!("❌ Failed to send SIGTERM to {} (PID: {}): {}",
+                               binary_name, pid, String::from_utf8_lossy(&output.stderr));
+                    }
+                }
+                Err(e) => error!("❌ Error executing kill command for {} (PID: {}): {}",
+                               binary_name, pid, e),
+            }
+        }
+
+        #[cfg(windows)]
+        {
+            use smol::process::Command;
+            match Command::new("taskkill")
+                .args(["/F", "/PID", &pid.to_string()])
+                .output()
+                .await
+            {
+                Ok(output) => {
+                    if output.status.success() {
+                        info!("✅ Successfully killed {} process on Windows (PID: {})", binary_name, pid);
+                    } else {
+                        error!("❌ Failed to kill {} process on Windows (PID: {}): {}",
+                               binary_name, pid, String::from_utf8_lossy(&output.stderr));
+                    }
+                }
+                Err(e) => error!("❌ Error executing taskkill for {} (PID: {}): {}",
+                               binary_name, pid, e),
+            }
+        }
+    }
+
+    fn kill_process_sync(pid: u32, binary_name: &str) {
+        info!("🔫 Killing {} process (PID: {}) synchronously", binary_name, pid);
+
+        #[cfg(unix)]
+        {
+            match std::process::Command::new("kill")
+                .arg("-TERM")
+                .arg(pid.to_string())
+                .output()
+            {
+                Ok(output) => {
+                    if output.status.success() {
+                        info!("✅ Successfully sent SIGTERM to {} (PID: {})", binary_name, pid);
+                    } else {
+                        error!("❌ Failed to send SIGTERM to {} (PID: {}): {}",
+                               binary_name, pid, String::from_utf8_lossy(&output.stderr));
+                    }
+                }
+                Err(e) => error!("❌ Error executing kill command for {} (PID: {}): {}",
+                               binary_name, pid, e),
+            }
+        }
+
+        #[cfg(windows)]
+        {
+            match std::process::Command::new("taskkill")
+                .args(["/F", "/PID", &pid.to_string()])
+                .output()
+            {
+                Ok(output) => {
+                    if output.status.success() {
+                        info!("✅ Successfully killed {} process on Windows (PID: {})", binary_name, pid);
+                    } else {
+                        error!("❌ Failed to kill {} process on Windows (PID: {}): {}",
+                               binary_name, pid, String::from_utf8_lossy(&output.stderr));
+                    }
+                }
+                Err(e) => error!("❌ Error executing taskkill for {} (PID: {}): {}",
+                               binary_name, pid, e),
+            }
+        }
+    }
+}
+
 /// PostgreSQL language server process
 pub struct PostgresLspProcess {
-    pub(crate) child: AsyncChild,
+    pub(crate) process_guard: ProcessGuard,
     binary_path: PathBuf,
     workspace_path: PathBuf,
-    pid: u32,
+    executor: BackgroundExecutor,
 }
 
 impl PostgresLspProcess {
+    /// Create a dummy placeholder process (for testing/temporary use)
+    pub fn new_dummy(executor: BackgroundExecutor) -> Self {
+        // This is a hack - we need to create a valid process structure
+        // For now, let's just create a process that will fail when used
+        let mut child = smol::process::Command::new("echo")
+            .arg("dummy")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Failed to create dummy process");
+
+        let pid = child.id();
+        let process_guard = ProcessGuard::new(child, pid, "dummy".to_string());
+
+        Self {
+            process_guard,
+            binary_path: PathBuf::from("dummy"),
+            workspace_path: PathBuf::from("."),
+            executor,
+        }
+    }
     /// Create a new PostgreSQL language server process
     ///
     /// # Arguments
     /// * `binary_path` - Path to the postgrestools binary
     /// * `workspace_path` - Path to the workspace directory
+    /// * `executor` - GPUI background executor for timers
     ///
     /// # Returns
     /// * `Result<Self, ProcessError>` - Process handle or error
     pub async fn new(
         binary_path: PathBuf,
         workspace_path: &Path,
+        executor: BackgroundExecutor,
     ) -> Result<Self, ProcessError> {
         info!("Starting PostgreSQL LSP process: {:?}", binary_path);
         debug!("Workspace path: {:?}", workspace_path);
@@ -70,7 +283,9 @@ impl PostgresLspProcess {
         // Start the process without --config-path argument
         // The LSP server will use workspace folder detection instead
         info!("🔧 Spawning LSP process with cwd: {:?}", workspace_path);
-        let child = AsyncCommand::new(&binary_path)
+        info!("🔧 Binary path: {:?}", binary_path);
+
+        let child = Command::new(&binary_path)
             .arg("lsp-proxy")
             .current_dir(workspace_path)
             .stdin(Stdio::piped())
@@ -79,17 +294,44 @@ impl PostgresLspProcess {
             .spawn()
             .map_err(|e| ProcessError::Start(format!("Failed to spawn process: {}", e)))?;
 
-        let pid = child
-            .id()
-            .ok_or_else(|| ProcessError::Start("Failed to get process ID".to_string()))?;
+        let pid = child.id();
 
-        info!("Started PostgreSQL LSP process with PID: {}", pid);
+        info!("✅ Started PostgreSQL LSP process with PID: {}", pid);
+        info!("🔧 Checking if process is immediately responsive...");
+
+        // Small delay to let the process start
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        // Check if the process is still running after the short delay
+        #[cfg(unix)]
+        {
+            use std::process::Command;
+            match Command::new("kill").arg("-0").arg(pid.to_string()).output() {
+                Ok(output) => {
+                    if output.status.success() {
+                        info!("✅ Process {} is running after startup", pid);
+                    } else {
+                        warn!("⚠️ Process {} is not running immediately after startup", pid);
+                        warn!("⚠️ Exit status: {}", output.status);
+                        if !output.stderr.is_empty() {
+                            warn!("⚠️ stderr: {}", String::from_utf8_lossy(&output.stderr));
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("⚠️ Failed to check process {} status: {}", pid, e);
+                }
+            }
+        }
+
+        // Wrap the child process in a ProcessGuard for automatic cleanup
+        let process_guard = ProcessGuard::new(child, pid, "postgrestools".to_string());
 
         let process = Self {
-            child,
+            process_guard,
             binary_path,
             workspace_path: workspace_path.to_path_buf(),
-            pid,
+            executor,
         };
 
         Ok(process)
@@ -103,7 +345,7 @@ impl PostgresLspProcess {
 
         // Take stderr to monitor startup messages
         let stderr =
-            self.child.stderr.take().ok_or_else(|| {
+            self.process_guard.child().stderr.take().ok_or_else(|| {
                 ProcessError::Communication("Failed to capture stderr".to_string())
             })?;
 
@@ -113,22 +355,38 @@ impl PostgresLspProcess {
         // Wait up to 30 seconds for the process to be ready
         let timeout_duration = Duration::from_secs(30);
 
-        while let Ok(result) = timeout(timeout_duration, reader.next_line()).await {
-            if let Ok(Some(line)) = result {
-                debug!("LSP stderr: {}", line);
+        // Use GPUI executor timer for timeout (following Zed's pattern)
+        loop {
+            let next_line = reader.next();
+            let mut timer = self.executor.timer(timeout_duration).fuse();
 
-                // Look for ready indicators
-                if line.contains("LSP server started")
-                    || line.contains("Server initialized")
-                    || line.contains("Listening")
-                {
-                    ready = true;
-                    break;
+            match futures::future::select(next_line, timer).await {
+                futures::future::Either::Left((line_result, _)) => {
+                    if let Some(Ok(line)) = line_result {
+                        debug!("LSP stderr: {}", line);
+
+                        // Look for ready indicators
+                        if line.contains("LSP server started")
+                            || line.contains("Server initialized")
+                            || line.contains("Listening")
+                        {
+                            ready = true;
+                            break;
+                        }
+
+                        // Look for error indicators
+                        if line.contains("error") || line.contains("Error") || line.contains("failed") {
+                            warn!("LSP process reported error: {}", line);
+                        }
+                    } else {
+                        // EOF or error
+                        break;
+                    }
                 }
-
-                // Look for error indicators
-                if line.contains("error") || line.contains("Error") || line.contains("failed") {
-                    warn!("LSP process reported error: {}", line);
+                futures::future::Either::Right((_, _)) => {
+                    // Timeout
+                    warn!("Timeout waiting for LSP process to be ready");
+                    return Err(ProcessError::Timeout);
                 }
             }
         }
@@ -143,7 +401,7 @@ impl PostgresLspProcess {
 
     /// Get the process ID
     pub fn pid(&self) -> u32 {
-        self.pid
+        self.process_guard.pid()
     }
 
     /// Get the binary path
@@ -158,32 +416,22 @@ impl PostgresLspProcess {
 
     /// Check if the process is still running
     pub async fn is_running(&mut self) -> bool {
-        match self.child.try_wait() {
-            Ok(Some(status)) => {
-                debug!("LSP process exited with status: {}", status);
-                false
-            }
-            Ok(None) => true,
-            Err(e) => {
-                error!("Error checking LSP process status: {}", e);
-                false
-            }
-        }
+        self.process_guard.is_running().await
     }
 
     /// Get the stdin handle for sending LSP messages
-    pub fn stdin(&mut self) -> Option<&mut tokio::process::ChildStdin> {
-        self.child.stdin.as_mut()
+    pub fn stdin(&mut self) -> Option<&mut smol::process::ChildStdin> {
+        self.process_guard.child().stdin.as_mut()
     }
 
     /// Get the stdout handle for receiving LSP messages
-    pub fn stdout(&mut self) -> Option<&mut tokio::process::ChildStdout> {
-        self.child.stdout.as_mut()
+    pub fn stdout(&mut self) -> Option<&mut smol::process::ChildStdout> {
+        self.process_guard.child().stdout.as_mut()
     }
 
     /// Shutdown the process gracefully
     pub async fn shutdown(mut self) -> Result<(), ProcessError> {
-        info!("Shutting down PostgreSQL LSP process (PID: {})", self.pid);
+        info!("Shutting down PostgreSQL LSP process (PID: {})", self.pid());
 
         // Try to send SIGTERM first for graceful shutdown
         #[cfg(unix)]
@@ -191,7 +439,7 @@ impl PostgresLspProcess {
             use std::process::Command;
             let result = Command::new("kill")
                 .arg("-TERM")
-                .arg(self.pid.to_string())
+                .arg(self.pid().to_string())
                 .output();
 
             match result {
@@ -200,15 +448,22 @@ impl PostgresLspProcess {
                         debug!("Sent SIGTERM to LSP process");
 
                         // Wait up to 5 seconds for graceful shutdown
-                        match timeout(Duration::from_secs(5), self.child.wait()).await {
-                            Ok(Ok(status)) => {
+                        use futures::FutureExt;
+                        let status_future = self.process_guard.child().status();
+                        let mut shutdown_timer = self.executor.timer(Duration::from_secs(5)).fuse();
+
+                        match futures::future::select(
+                            Box::pin(status_future),
+                            shutdown_timer
+                        ).await {
+                            futures::future::Either::Left((Ok(status), _)) => {
                                 info!("LSP process shut down gracefully with status: {}", status);
                                 return Ok(());
                             }
-                            Ok(Err(e)) => {
+                            futures::future::Either::Left((Err(e), _)) => {
                                 warn!("Error waiting for LSP process shutdown: {}", e);
                             }
-                            Err(_) => {
+                            futures::future::Either::Right((_, _)) => {
                                 warn!("Timeout waiting for LSP process shutdown");
                             }
                         }
@@ -229,17 +484,17 @@ impl PostgresLspProcess {
         }
 
         // Force kill if graceful shutdown failed
-        let mut process =
-            std::mem::replace(&mut self.child, AsyncCommand::new("echo").spawn().unwrap());
-        process.kill().await;
+        if let Err(e) = self.process_guard.child().kill() {
+            error!("Failed to kill LSP process during shutdown: {}", e);
+        }
         Ok(())
     }
 
     /// Force kill the process
-    pub async fn kill(&mut self) {
-        warn!("Force killing PostgreSQL LSP process (PID: {})", self.pid);
+    pub fn kill(&mut self) {
+        warn!("Force killing PostgreSQL LSP process (PID: {})", self.pid());
 
-        if let Err(e) = self.child.kill().await {
+        if let Err(e) = self.process_guard.child().kill() {
             error!("Failed to kill LSP process: {}", e);
         }
     }
@@ -253,7 +508,7 @@ impl PostgresLspProcess {
 
         // Start new process without config path
         let mut new_process =
-            Self::new(self.binary_path.clone(), &self.workspace_path).await?;
+            Self::new(self.binary_path.clone(), &self.workspace_path, self.executor.clone()).await?;
 
         // Wait for new process to be ready
         new_process.wait_for_ready().await?;

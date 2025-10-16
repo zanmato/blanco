@@ -29,3 +29,4 @@ async-compat = { workspace = true }
 dirs = { workspace = true }
 rust-embed = { workspace = true }
 url = { workspace = true }
+crossbeam-channel = "0.5"

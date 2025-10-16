@@ -18,6 +18,49 @@ use gpui_component::{
 use crate::database::QueryResult;
 use crate::db_service::DbService;
 
+/// Represents different types of cell values for proper NULL handling
+#[derive(Clone, Debug, PartialEq)]
+pub enum CellValue {
+    /// A string value (can be empty string)
+    Value(String),
+    /// Explicit NULL value
+    Null,
+    /// Empty string (distinct from NULL)
+    Empty,
+}
+
+impl CellValue {
+    pub fn is_null(&self) -> bool {
+        matches!(self, CellValue::Null)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        matches!(self, CellValue::Empty) || if let CellValue::Value(s) = self { s.is_empty() } else { false }
+    }
+
+    pub fn display_text(&self) -> String {
+        match self {
+            CellValue::Value(s) => s.clone(),
+            CellValue::Null => "NULL".to_string(),
+            CellValue::Empty => "".to_string(),
+        }
+    }
+
+    pub fn from_string(s: String, treat_empty_as_null: bool) -> Self {
+        if s.is_empty() {
+            if treat_empty_as_null {
+                CellValue::Null
+            } else {
+                CellValue::Empty
+            }
+        } else if s.eq_ignore_ascii_case("null") {
+            CellValue::Null
+        } else {
+            CellValue::Value(s)
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct TableChange {
     pub change_type: ChangeType,
@@ -28,6 +71,9 @@ pub struct TableChange {
     pub new_value: Option<String>,
     pub primary_key_value: Option<String>,
     pub primary_key_column: Option<String>,
+    // New fields for prepared statements
+    pub sql_template: Option<String>,
+    pub parameters: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -38,6 +84,190 @@ pub enum ChangeType {
 }
 
 impl TableChange {
+    pub fn new(
+        change_type: ChangeType,
+        table_name: String,
+        row_index: usize,
+        column_index: Option<usize>,
+        old_value: Option<String>,
+        new_value: Option<String>,
+        primary_key_value: Option<String>,
+        primary_key_column: Option<String>,
+    ) -> Self {
+        let mut change = Self {
+            change_type,
+            table_name,
+            row_index,
+            column_index,
+            old_value,
+            new_value,
+            primary_key_value,
+            primary_key_column,
+            sql_template: None,
+            parameters: Vec::new(),
+        };
+
+        // Generate prepared statement immediately
+        let _ = change.generate_prepared_statement();
+        change
+    }
+
+    fn generate_prepared_statement(&mut self) -> Result<(), String> {
+        match self.change_type {
+            ChangeType::UpdateCell => {
+                let column_name = self.column_index
+                    .map(|_| "column_name".to_string()) // Will be filled by caller
+                    .ok_or_else(|| "Invalid column index".to_string())?;
+
+                let pk_column = self.primary_key_column
+                    .clone()
+                    .or_else(|| Some("id".to_string())) // Default fallback
+                    .ok_or_else(|| "No primary key column".to_string())?;
+
+                // UPDATE table_name SET column_name = $1 WHERE pk_column = $2
+                self.sql_template = Some(format!(
+                    "UPDATE {} SET {} = $1 WHERE {} = $2",
+                    self.table_name, column_name, pk_column
+                ));
+
+                // Parameters: $1 = new_value, $2 = pk_value
+                self.parameters.clear();
+                if let Some(new_val) = &self.new_value {
+                    self.parameters.push(new_val.clone());
+                } else {
+                    self.parameters.push("NULL".to_string());
+                }
+
+                if let Some(pk_val) = &self.primary_key_value {
+                    self.parameters.push(pk_val.clone());
+                } else {
+                    return Err("No primary key value available".to_string());
+                }
+            }
+            ChangeType::InsertRow => {
+                // For INSERT, we need column names from the table structure
+                // This is a placeholder - actual implementation will need column info
+                self.sql_template = Some(format!(
+                    "INSERT INTO {} VALUES ($1)",
+                    self.table_name
+                ));
+
+                if let Some(new_val) = &self.new_value {
+                    self.parameters.push(new_val.clone());
+                } else {
+                    self.parameters.push("NULL".to_string());
+                }
+            }
+            ChangeType::DeleteRow => {
+                let pk_column = self.primary_key_column
+                    .clone()
+                    .or_else(|| Some("id".to_string())) // Default fallback
+                    .ok_or_else(|| "No primary key column".to_string())?;
+
+                // DELETE FROM table_name WHERE pk_column = $1
+                self.sql_template = Some(format!(
+                    "DELETE FROM {} WHERE {} = $1",
+                    self.table_name, pk_column
+                ));
+
+                if let Some(pk_val) = &self.primary_key_value {
+                    self.parameters.push(pk_val.clone());
+                } else {
+                    return Err("No primary key value available".to_string());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn to_prepared_statement(&mut self, columns: &[String]) -> Result<(String, Vec<String>), String> {
+        // Generate specific prepared statement based on column information
+        match self.change_type {
+            ChangeType::UpdateCell => {
+                let column_name = columns
+                    .get(self.column_index.unwrap_or(0))
+                    .ok_or_else(|| "Invalid column index".to_string())?;
+
+                let pk_column_name = if let Some(pk_col) = &self.primary_key_column {
+                    pk_col.clone()
+                } else {
+                    columns
+                        .first()
+                        .ok_or_else(|| "No columns available".to_string())?
+                        .clone()
+                };
+
+                let pk_value = self
+                    .primary_key_value
+                    .as_ref()
+                    .ok_or_else(|| "No primary key value available".to_string())?;
+
+                let new_value = self.new_value.as_ref().cloned().unwrap_or_else(|| "NULL".to_string());
+
+                let sql_template = format!(
+                    "UPDATE {} SET {} = $1 WHERE {} = $2",
+                    self.table_name, column_name, pk_column_name
+                );
+
+                let parameters = vec![new_value, pk_value.clone()];
+
+                self.sql_template = Some(sql_template.clone());
+                self.parameters = parameters.clone();
+
+                Ok((sql_template, parameters))
+            }
+            ChangeType::InsertRow => {
+                let column_list = columns.join(", ");
+                let placeholders: Vec<String> = (1..=columns.len())
+                    .map(|i| format!("${}", i))
+                    .collect();
+                let placeholder_list = placeholders.join(", ");
+
+                let values = if let Some(new_value) = &self.new_value {
+                    new_value.split(", ").map(|s| s.to_string()).collect()
+                } else {
+                    vec!["NULL".to_string(); columns.len()]
+                };
+
+                let sql_template = format!(
+                    "INSERT INTO {} ({}) VALUES ({})",
+                    self.table_name, column_list, placeholder_list
+                );
+
+                self.sql_template = Some(sql_template.clone());
+                self.parameters = values.clone();
+
+                Ok((sql_template, values))
+            }
+            ChangeType::DeleteRow => {
+                let pk_column_name = if let Some(pk_col) = &self.primary_key_column {
+                    pk_col.clone()
+                } else {
+                    columns
+                        .first()
+                        .ok_or_else(|| "No primary key column".to_string())?
+                        .clone()
+                };
+
+                let pk_value = self.primary_key_value
+                    .as_ref()
+                    .ok_or_else(|| "No primary key value available".to_string())?;
+
+                let sql_template = format!(
+                    "DELETE FROM {} WHERE {} = $1",
+                    self.table_name, pk_column_name
+                );
+
+                let parameters = vec![pk_value.clone()];
+
+                self.sql_template = Some(sql_template.clone());
+                self.parameters = parameters.clone();
+
+                Ok((sql_template, parameters))
+            }
+        }
+    }
+
     pub fn to_sql(&self, columns: &[String]) -> Result<String, String> {
         match self.change_type {
             ChangeType::UpdateCell => {
@@ -647,16 +877,16 @@ impl ResultsTableDelegate {
                 // Get primary key value (assuming first column is primary key)
                 let primary_key_value = self.rows.get(row).and_then(|r| r.first()).cloned();
 
-                let change = TableChange {
-                    change_type: ChangeType::UpdateCell,
-                    table_name: table_name.clone(),
-                    row_index: row,
-                    column_index: Some(col),
-                    old_value: Some(original.clone()),
-                    new_value: Some(new_value.clone()),
+                let change = TableChange::new(
+                    ChangeType::UpdateCell,
+                    table_name.clone(),
+                    row,
+                    Some(col),
+                    Some(original.clone()),
+                    Some(new_value.clone()),
                     primary_key_value,
-                    primary_key_column: self.primary_key_column.clone(),
-                };
+                    self.primary_key_column.clone(),
+                );
 
                 self.edit_state.add_change(change);
             }
@@ -1006,16 +1236,16 @@ impl ResultsPanel {
                             });
 
                             // Add the updated INSERT change
-                            let change = TableChange {
-                                change_type: ChangeType::InsertRow,
-                                table_name: table_name.clone(),
-                                row_index: row,
-                                column_index: None,
-                                old_value: None,
-                                new_value: Some(values_str),
-                                primary_key_value: None,
-                                primary_key_column: delegate.primary_key_column.clone(),
-                            };
+                            let change = TableChange::new(
+                                ChangeType::InsertRow,
+                                table_name.clone(),
+                                row,
+                                None,
+                                None,
+                                Some(values_str),
+                                None,
+                                delegate.primary_key_column.clone(),
+                            );
                             delegate.edit_state.add_change(change);
                         }
 
@@ -1163,16 +1393,16 @@ impl ResultsPanel {
             // Track the change for SQL generation
             if let (Some(old_val), Some(tbl_name)) = (&old_value, &table_name) {
                 if old_val != &new_value {
-                    let change = TableChange {
-                        change_type: ChangeType::UpdateCell,
-                        table_name: tbl_name.clone(),
-                        row_index: row,
-                        column_index: Some(col),
-                        old_value: Some(old_val.clone()),
-                        new_value: Some(new_value.clone()),
-                        primary_key_value: None, // TODO: Get primary key value
-                        primary_key_column: None, // TODO: Get primary key column
-                    };
+                    let change = TableChange::new(
+                        ChangeType::UpdateCell,
+                        tbl_name.clone(),
+                        row,
+                        Some(col),
+                        Some(old_val.clone()),
+                        Some(new_value.clone()),
+                        None, // TODO: Get primary key value
+                        None, // TODO: Get primary key column
+                    );
                     delegate.edit_state.add_change(change);
                 }
             }
@@ -1399,23 +1629,26 @@ impl ResultsPanel {
             let mut total_affected = 0;
 
             for (i, change) in changes_clone.iter().enumerate() {
-                match change.to_sql_with_pk(&column_names_clone, &change.primary_key_column) {
-                    Ok(sql) => match db.execute_query_async(&sql).await {
+                // Create a mutable copy of the change to generate prepared statement
+                let mut mutable_change = change.clone();
+                match mutable_change.to_prepared_statement(&column_names_clone) {
+                    Ok((sql_template, parameters)) => match db.execute_prepared_query(&sql_template, &parameters).await {
                         Ok(result) => {
                             let affected = result.row_count();
                             total_affected += affected;
                         }
                         Err(e) => {
                             return Err(anyhow::anyhow!(
-                                "Failed to execute change {}: {}",
+                                "Failed to execute prepared statement change {}: {} (SQL: {})",
                                 i + 1,
-                                e
+                                e,
+                                sql_template
                             ));
                         }
                     },
                     Err(e) => {
                         return Err(anyhow::anyhow!(
-                            "Failed to generate SQL for change {}: {}",
+                            "Failed to generate prepared statement for change {}: {}",
                             i + 1,
                             e
                         ));
@@ -1551,16 +1784,16 @@ impl ResultsPanel {
                     .collect::<Vec<_>>()
                     .join(", ");
 
-                let change = TableChange {
-                    change_type: ChangeType::InsertRow,
-                    table_name: table_name.clone(),
-                    row_index: new_row_index,
-                    column_index: None,
-                    old_value: None,
-                    new_value: Some(values_str),
-                    primary_key_value: None,
-                    primary_key_column: delegate.primary_key_column.clone(),
-                };
+                let change = TableChange::new(
+                    ChangeType::InsertRow,
+                    table_name.clone(),
+                    new_row_index,
+                    None,
+                    None,
+                    Some(values_str),
+                    None,
+                    delegate.primary_key_column.clone(),
+                );
                 delegate.edit_state.add_change(change);
             }
 
@@ -1602,21 +1835,103 @@ impl ResultsPanel {
                         .collect::<Vec<_>>()
                         .join(", ");
 
-                    let change = TableChange {
-                        change_type: ChangeType::InsertRow,
-                        table_name: table_name.clone(),
-                        row_index: new_row_index,
-                        column_index: None,
-                        old_value: None,
-                        new_value: Some(values_str),
-                        primary_key_value: None,
-                        primary_key_column: delegate.primary_key_column.clone(),
-                    };
+                    let change = TableChange::new(
+                        ChangeType::InsertRow,
+                        table_name.clone(),
+                        new_row_index,
+                        None,
+                        None,
+                        Some(values_str),
+                        None,
+                        delegate.primary_key_column.clone(),
+                    );
                     delegate.edit_state.add_change(change);
                 }
 
                 table.refresh(cx);
             }
+        });
+        cx.notify();
+    }
+
+    /// Set a cell value to NULL
+    pub fn set_cell_to_null(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
+        self.table.update(cx, |table, cx| {
+            let delegate = table.delegate_mut();
+
+            // Get current value for change tracking
+            let old_value = delegate.rows.get(row)
+                .and_then(|r| r.get(col))
+                .cloned();
+
+            // Set the cell value to NULL
+            if let Some(row_data) = delegate.rows.get_mut(row) {
+                if let Some(cell) = row_data.get_mut(col) {
+                    *cell = "NULL".to_string();
+                }
+            }
+
+            // Track the change
+            if let Some(table_name) = &delegate.table_name {
+                let primary_key_value = delegate.rows.get(row)
+                    .and_then(|r| r.first())
+                    .cloned();
+
+                let change = TableChange::new(
+                    ChangeType::UpdateCell,
+                    table_name.clone(),
+                    row,
+                    Some(col),
+                    old_value,
+                    Some("NULL".to_string()),
+                    primary_key_value,
+                    delegate.primary_key_column.clone(),
+                );
+                delegate.edit_state.add_change(change);
+            }
+
+            table.refresh(cx);
+        });
+        cx.notify();
+    }
+
+    /// Clear a cell value (set to empty string)
+    pub fn clear_cell_value(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
+        self.table.update(cx, |table, cx| {
+            let delegate = table.delegate_mut();
+
+            // Get current value for change tracking
+            let old_value = delegate.rows.get(row)
+                .and_then(|r| r.get(col))
+                .cloned();
+
+            // Set the cell value to empty string
+            if let Some(row_data) = delegate.rows.get_mut(row) {
+                if let Some(cell) = row_data.get_mut(col) {
+                    *cell = "".to_string();
+                }
+            }
+
+            // Track the change
+            if let Some(table_name) = &delegate.table_name {
+                let primary_key_value = delegate.rows.get(row)
+                    .and_then(|r| r.first())
+                    .cloned();
+
+                let change = TableChange::new(
+                    ChangeType::UpdateCell,
+                    table_name.clone(),
+                    row,
+                    Some(col),
+                    old_value,
+                    Some("".to_string()),
+                    primary_key_value,
+                    delegate.primary_key_column.clone(),
+                );
+                delegate.edit_state.add_change(change);
+            }
+
+            table.refresh(cx);
         });
         cx.notify();
     }
@@ -1659,6 +1974,18 @@ impl Render for ResultsPanel {
                     "escape" => {
                         if this.is_editing(cx) {
                             this.cancel_current_edit(cx);
+                        }
+                    }
+                    "ctrl-shift-n" => {
+                        // Ctrl + Shift + N: Set current cell to NULL
+                        if let Some((row, col)) = this.get_current_editing_cell(cx) {
+                            this.set_cell_to_null(row, col, cx);
+                        }
+                    }
+                    "ctrl-shift-k" => {
+                        // Ctrl + Shift + K: Clear current cell value
+                        if let Some((row, col)) = this.get_current_editing_cell(cx) {
+                            this.clear_cell_value(row, col, cx);
                         }
                     }
                     _ => {}

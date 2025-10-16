@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::{RwLock, Mutex};
 use tracing::{debug, error, info, warn};
+use gpui::BackgroundExecutor;
 
 /// LSP manager errors
 #[derive(Debug, thiserror::Error)]
@@ -44,11 +45,12 @@ pub struct PostgresLspManager {
     process_manager: Arc<RwLock<ProcessManager>>,
     config: PostgresLspConfig,
     client: Option<Arc<Mutex<Option<PostgresLspClient>>>>,
+    executor: BackgroundExecutor,
 }
 
 impl PostgresLspManager {
     /// Create a new PostgreSQL LSP manager
-    pub async fn new(config: PostgresLspConfig) -> Result<Self, LspManagerError> {
+    pub async fn new(config: PostgresLspConfig, executor: BackgroundExecutor) -> Result<Self, LspManagerError> {
         let downloader = Arc::new(BinaryDownloader::new()?);
         let process_manager = Arc::new(RwLock::new(ProcessManager::new()));
 
@@ -57,6 +59,7 @@ impl PostgresLspManager {
             process_manager,
             config,
             client: None,
+            executor,
         })
     }
 
@@ -147,12 +150,12 @@ impl PostgresLspManager {
 
         // Start LSP process (without --config-path so it uses workspace folder detection)
         info!("🚀 Starting LSP process with working directory: {:?}", workspace_path);
-        let process = PostgresLspProcess::new(binary_path, &workspace_path).await?;
+        let process = PostgresLspProcess::new(binary_path, &workspace_path, self.executor.clone()).await?;
         // Note: LSP servers typically don't output ready messages, they just start listening
         // No need to wait_for_ready() since the server is ready immediately
 
         // Create LSP client
-        let client = Arc::new(Mutex::new(Some(PostgresLspClient::new(process, &self.config, &workspace_path).await?)));
+        let client = Arc::new(Mutex::new(Some(PostgresLspClient::new(process, &self.config, &workspace_path, self.executor.clone()).await?)));
         self.client = Some(client);
 
         info!("PostgreSQL LSP manager initialized successfully");
@@ -194,7 +197,7 @@ impl PostgresLspManager {
         info!("Created postgrestools.jsonc config at: {:?}", config_path);
 
         // Create and start the process (without --config-path so it uses workspace folder detection)
-        let process = PostgresLspProcess::new(binary_path, workspace_path).await?;
+        let process = PostgresLspProcess::new(binary_path, workspace_path, self.executor.clone()).await?;
 
         // Note: LSP servers are ready immediately, no need to wait for output
 
@@ -354,13 +357,27 @@ impl PostgresLspManager {
         if let Some(client) = &self.client {
             let mut client_guard = client.lock().await;
             if let Some(client) = client_guard.as_mut() {
+                // Convert text to lines for range calculation
+                let lines: Vec<&str> = text.lines().collect();
+                let line_count = lines.len().max(1) as u32;
+                let last_char_count = lines.last().map(|line| line.len() as u32).unwrap_or(0);
+
+                // Create a range covering the entire document to help LSP understand document structure
+                let full_range = Some(Range::new(
+                    Position::new(0, 0),
+                    Position::new(line_count - 1, last_char_count)
+                ));
+
+                info!("📝 Calculated range for didChange: {} lines, last line has {} chars", line_count, last_char_count);
+                info!("📝 Range: {:?} -> {:?}", Position::new(0, 0), Position::new(line_count - 1, last_char_count));
+
                 let params = DidChangeTextDocumentParams {
                     text_document: VersionedTextDocumentIdentifier {
                         uri,
                         version,
                     },
                     content_changes: vec![TextDocumentContentChangeEvent {
-                        range: None, // Full document sync
+                        range: full_range, // Provide range information for better LSP tracking
                         range_length: None,
                         text,
                     }],
@@ -408,6 +425,25 @@ impl PostgresLspManager {
                 client.set_diagnostic_handler(handler);
             }
         }
+    }
+
+    /// Check LSP connection health and process any pending messages
+    /// This method processes any pending notifications that have already been received.
+    pub async fn process_pending_messages(&self) -> Result<(), LspManagerError> {
+        info!("📨 Processing pending LSP messages");
+        if let Some(client) = &self.client {
+            let mut client_guard = client.lock().await;
+            if let Some(client) = client_guard.as_mut() {
+                // The LSP client now automatically processes incoming messages
+                // This method is mainly for compatibility and health checking
+                info!("📨 LSP client is processing messages automatically");
+            } else {
+                warn!("📨 LSP client not available for message processing");
+            }
+        } else {
+            warn!("📨 LSP manager has no client for message processing");
+        }
+        Ok(())
     }
 }
 

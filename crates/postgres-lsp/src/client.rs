@@ -1,22 +1,32 @@
 //! LSP client for PostgreSQL language server communication
 //!
 //! This module handles JSON-RPC communication with the PostgreSQL language server,
-//! including request/response handling and notification processing.
+//! including request/response handling and notification processing using a background
+//! message processing system inspired by Zed's LSP implementation.
 
 use crate::config::PostgresLspConfig;
 use crate::process::PostgresLspProcess;
 use anyhow::Result;
 use lsp_types::*;
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::mpsc;
-use tracing::{debug, error, info, trace, warn};
-use url::Url;
 use std::sync::Arc;
+use smol::{
+    channel::{self, Receiver, Sender},
+    io::{AsyncReadExt, AsyncWriteExt},
+};
+
+use futures::{
+    AsyncRead, AsyncWrite, Future, FutureExt,
+    channel::oneshot::{self, Canceled},
+    select,
+};
+
+use futures::lock::Mutex;
+use gpui::BackgroundExecutor;
+use tracing::{debug, error, info, trace, warn};
 
 /// LSP client errors
 #[derive(Debug, thiserror::Error)]
@@ -89,9 +99,12 @@ pub type DiagnosticHandler = Arc<dyn Fn(PublishDiagnosticsParams) + Send + Sync>
 pub struct PostgresLspClient {
     process: PostgresLspProcess,
     next_id: AtomicU64,
-    pending_requests: HashMap<Value, mpsc::Sender<Result<Value, ClientError>>>,
+    pending_requests: Arc<Mutex<HashMap<Value, futures::channel::oneshot::Sender<Result<Value, ClientError>>>>>,
     config: PostgresLspConfig,
     diagnostic_handler: Option<DiagnosticHandler>,
+    executor: BackgroundExecutor,
+    /// Buffer for accumulating partial message data
+    message_buffer: Vec<u8>,
 }
 
 impl PostgresLspClient {
@@ -105,26 +118,41 @@ impl PostgresLspClient {
     /// # Returns
     /// * `Result<Self, ClientError>` - LSP client or error
     pub async fn new(
-        process: PostgresLspProcess,
+        mut process: PostgresLspProcess,
         config: &PostgresLspConfig,
         workspace_path: &std::path::Path,
+        executor: BackgroundExecutor,
     ) -> Result<Self, ClientError> {
+        info!(
+            "🚀 Creating PostgreSQL LSP client with workspace: {:?}",
+            workspace_path
+        );
+
+        // Create the client structure first so we can use it for initialization
         let mut client = Self {
             process,
             next_id: AtomicU64::new(1),
-            pending_requests: HashMap::new(),
+            pending_requests: Arc::new(Mutex::new(HashMap::new())),
             config: config.clone(),
             diagnostic_handler: None,
+            executor,
+            message_buffer: Vec::new(),
         };
 
-        // Initialize the LSP connection
-        client.initialize(workspace_path).await?;
+        // Initialize the LSP connection using the actual client
+        info!("🔧 Initializing LSP connection");
+        client.initialize_process(config, workspace_path).await?;
 
+        info!("✅ PostgreSQL LSP client created successfully");
         Ok(client)
     }
 
-    /// Initialize the LSP connection
-    async fn initialize(&mut self, workspace_path: &std::path::Path) -> Result<(), ClientError> {
+    /// Initialize the LSP connection (separate from client construction)
+    async fn initialize_process(
+        &mut self,
+        _config: &PostgresLspConfig,
+        workspace_path: &std::path::Path,
+    ) -> Result<(), ClientError> {
         info!(
             "🚀 Initializing PostgreSQL LSP client with workspace: {:?}",
             workspace_path
@@ -153,13 +181,8 @@ impl PostgresLspClient {
 
         info!("🎯 Final LSP URI: {:?}", workspace_lsp_uri);
 
-        let capabilities = ClientCapabilities {
-            workspace: Some(WorkspaceClientCapabilities {
-                workspace_folders: Some(true),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
+        // Simplified client capabilities that match the lsp-types version
+        let capabilities = ClientCapabilities::default();
 
         // Create workspace folder
         let workspace_folder = WorkspaceFolder {
@@ -224,11 +247,218 @@ impl PostgresLspClient {
         Ok(())
     }
 
-    /// Send a request to the LSP server
+    /// Process any pending incoming messages with proper buffering
+    async fn process_pending_messages(&mut self) -> Result<()> {
+        if let Some(stdout) = self.process.stdout() {
+            // Use futures::select! for non-blocking I/O
+            let (result, data) = select! {
+                // Read data from stdout in the background
+                data = async {
+                    let mut buffer = vec![0u8; 8192];
+                    let result = stdout.read(&mut buffer).await;
+                    (result, buffer)
+                }.fuse() => {
+                    match data {
+                        (Ok(0), _buffer) => {
+                            // EOF - connection closed
+                            warn!("🔴 LSP process stdout closed");
+                            (Ok(()), Vec::new())
+                        }
+                        (Ok(n), buffer) => {
+                            // Add new data to our buffer
+                            if n > 0 {
+                                debug!("📥 Read {} bytes from LSP stdout", n);
+                                (Ok(()), buffer[..n].to_vec())
+                            } else {
+                                (Ok(()), Vec::new())
+                            }
+                        }
+                        (Err(e), _buffer) => {
+                            error!("🔴 Error reading from stdout: {}", e);
+                            (Err(anyhow::anyhow!(e)), Vec::new())
+                        }
+                    }
+                }
+                _ = smol::Timer::after(std::time::Duration::from_millis(10)).fuse() => {
+                    // Timeout - no data available, which is normal
+                    (Ok(()), Vec::new())
+                }
+            };
+
+            result?;
+
+            // Process the data outside the select context
+            if !data.is_empty() {
+                self.message_buffer.extend_from_slice(&data);
+
+                // Process all complete messages in the buffer
+                while let Some(message) = self.extract_next_message()? {
+                    if let Err(e) = self.handle_json_message(message).await {
+                        error!("🔴 Error handling message: {}", e);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Extract the next complete message from the buffer
+    fn extract_next_message(&mut self) -> Result<Option<Value>> {
+        if self.message_buffer.is_empty() {
+            return Ok(None);
+        }
+
+        // Convert buffer to string for header parsing
+        let buffer_str = std::str::from_utf8(&self.message_buffer)
+            .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in buffer: {}", e))?;
+
+        debug!("📦 Current buffer size: {} bytes", self.message_buffer.len());
+        if self.message_buffer.len() > 0 {
+            debug!("📦 Buffer preview: {}", &buffer_str[..buffer_str.len().min(200)]);
+        }
+
+        // Look for Content-Length header
+        if let Some(header_start) = buffer_str.find("Content-Length:") {
+            let header_part = &buffer_str[header_start..];
+            if let Some(header_end) = header_part.find("\r\n\r\n") {
+                let header = &header_part[..header_end];
+                if let Some(length_str) = header.split(':').nth(1) {
+                    if let Ok(content_length) = length_str.trim().parse::<usize>() {
+                        let header_total_length = header_start + header_end + 4;
+                        let message_end = header_total_length + content_length;
+
+                        if message_end <= self.message_buffer.len() {
+                            // We have a complete message
+                            let message_data = self.message_buffer[header_total_length..message_end].to_vec();
+
+                            // Parse the JSON
+                            let message = serde_json::from_slice::<Value>(&message_data)?;
+
+                            // Remove the processed message from buffer
+                            self.message_buffer.drain(0..message_end);
+
+                            debug!("📨 Extracted complete message ({} bytes)", message_data.len());
+                            return Ok(Some(message));
+                        }
+                    }
+                }
+            }
+        }
+
+        // No complete message available
+        Ok(None)
+    }
+
+    
+    /// Handle a parsed JSON message
+    async fn handle_json_message(&mut self, json_value: Value) -> Result<()> {
+        debug!("📨 Handling message: {}", serde_json::to_string_pretty(&json_value).unwrap_or_else(|_| "Invalid JSON".to_string()));
+
+        if let Some(id) = json_value.get("id") {
+            if json_value.get("method").is_some() {
+                // Server request
+                info!("📨 Server request: ID={:?}, method={:?}",
+                      id,
+                      json_value.get("method").and_then(|m| m.as_str()).unwrap_or("unknown"));
+                // TODO: Handle server requests properly
+            } else {
+                // Response to our request
+                info!("📨 Received response for request ID: {:?}", id);
+
+                let response_result = if let Some(error) = json_value.get("error") {
+                    let error_msg = error.get("message")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("Unknown error");
+                    let error_data = error.get("data");
+                    error!("🔴 LSP Server Error (ID: {:?}): {} - {:?}", id, error_msg, error_data);
+                    Err(ClientError::Server(format!("LSP error: {} - {:?}", error_msg, error_data)))
+                } else if let Some(result) = json_value.get("result") {
+                    info!("✅ LSP Success Response (ID: {:?})", id);
+                    debug!("✅ Result: {}", serde_json::to_string_pretty(result).unwrap_or_else(|_| "Cannot serialize".to_string()));
+                    Ok(result.clone())
+                } else {
+                    warn!("⚠️ Response has no result or error (ID: {:?})", id);
+                    Err(ClientError::InvalidResponse)
+                };
+
+                // Find and remove the pending request
+                let sender = {
+                    let mut pending = self.pending_requests.lock().await;
+                    pending.remove(id)
+                };
+
+                if let Some(sender) = sender {
+                    if sender.send(response_result).is_err() {
+                        warn!("📨 Failed to send response to waiting task - request may have been cancelled");
+                    }
+                } else {
+                    warn!("📨 Received response for unknown request ID: {:?}", id);
+                }
+            }
+        } else if let Some(method) = json_value.get("method").and_then(|m| m.as_str()) {
+            // Notification
+            debug!("📨 Received notification: {}", method);
+            match method {
+                "textDocument/publishDiagnostics" => {
+                    if let Some(ref handler) = self.diagnostic_handler {
+                        if let Some(params) = json_value.get("params") {
+                            match serde_json::from_value::<PublishDiagnosticsParams>(params.clone()) {
+                                Ok(diagnostic_params) => {
+                                    info!("🔍 Received {} diagnostics for {:?}",
+                                        diagnostic_params.diagnostics.len(),
+                                        diagnostic_params.uri);
+                                    handler(diagnostic_params);
+                                }
+                                Err(e) => {
+                                    error!("🔴 Failed to parse diagnostics: {}", e);
+                                    debug!("🔴 Diagnostic params: {}", serde_json::to_string_pretty(params).unwrap_or_else(|_| "Invalid".to_string()));
+                                }
+                            }
+                        }
+                    } else {
+                        debug!("📨 No diagnostic handler set, ignoring diagnostics");
+                    }
+                }
+                "window/logMessage" => {
+                    if let Some(params) = json_value.get("params") {
+                        info!("📝 LSP Log Message: {}", serde_json::to_string_pretty(params).unwrap_or_else(|_| "Invalid".to_string()));
+                    }
+                }
+                "window/showMessage" => {
+                    if let Some(params) = json_value.get("params") {
+                        info!("💬 LSP Show Message: {}", serde_json::to_string_pretty(params).unwrap_or_else(|_| "Invalid".to_string()));
+                    }
+                }
+                _ => {
+                    debug!("📄 Unhandled notification: {}", method);
+                    if let Some(params) = json_value.get("params") {
+                        trace!("📄 Notification params: {}", serde_json::to_string_pretty(params).unwrap_or_else(|_| "Invalid".to_string()));
+                    }
+                }
+            }
+        } else {
+            warn!("📨 Malformed message with no ID or method: {}", serde_json::to_string_pretty(&json_value).unwrap_or_else(|_| "Invalid".to_string()));
+        }
+
+        Ok(())
+    }
+
+    
+    /// Send a request to the LSP server with proper async response handling
     async fn request(&mut self, method: &str, params: Option<Value>) -> Result<Value, ClientError> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let id_value = Value::Number(serde_json::Number::from(id));
 
+        // Create a channel for the response
+        let (response_tx, mut response_rx) = oneshot::channel();
+
+        // Register the pending request
+        {
+            let mut pending = self.pending_requests.lock().await;
+            pending.insert(id_value.clone(), response_tx);
+        }
+
+        // Create and send the request
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: Some(id_value.clone()),
@@ -248,43 +478,133 @@ impl PostgresLspClient {
         } else {
             debug!("🔵 Request Params: <none>");
         }
-        trace!("🔵 Raw Request JSON: {}", request_json);
+        info!("🔵 Raw Request JSON: {}", request_json);
+
+        // Check if process is still running before attempting to write
+        if !self.is_process_running().await {
+            error!("🔴 Failed to send request: LSP process is not running");
+            // Clean up the pending request
+            let mut pending = self.pending_requests.lock().await;
+            pending.remove(&id_value);
+            return Err(ClientError::Io(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "LSP process is not running",
+            )));
+        }
 
         // Send request
         if let Some(stdin) = self.process.stdin() {
             let header = format!("Content-Length: {}\r\n\r\n", request_json.len());
             debug!("🔵 Sending header: {}", header.trim());
-            stdin.write_all(header.as_bytes()).await?;
-            stdin.write_all(request_json.as_bytes()).await?;
-            stdin.flush().await?;
-            debug!("🔵 Request sent successfully");
+
+            // Additional check: ensure stdin is still writable
+            match stdin.write_all(header.as_bytes()).await {
+                Ok(()) => {
+                    debug!("🔵 Header written successfully");
+                }
+                Err(e) => {
+                    error!("🔴 Failed to write header to LSP process: {}", e);
+                    let mut pending = self.pending_requests.lock().await;
+                    pending.remove(&id_value);
+                    return Err(ClientError::Io(e));
+                }
+            }
+
+            match stdin.write_all(request_json.as_bytes()).await {
+                Ok(()) => {
+                    debug!("🔵 Request body written successfully");
+                }
+                Err(e) => {
+                    error!("🔴 Failed to write request body to LSP process: {}", e);
+                    let mut pending = self.pending_requests.lock().await;
+                    pending.remove(&id_value);
+                    return Err(ClientError::Io(e));
+                }
+            }
+
+            match stdin.flush().await {
+                Ok(()) => {
+                    debug!("🔵 Request sent successfully");
+                }
+                Err(e) => {
+                    error!("🔴 Failed to flush request to LSP process: {}", e);
+                    let mut pending = self.pending_requests.lock().await;
+                    pending.remove(&id_value);
+                    return Err(ClientError::Io(e));
+                }
+            }
         } else {
             error!("🔴 Failed to send request: stdin not available");
+
+            // Clean up the pending request
+            let mut pending = self.pending_requests.lock().await;
+            pending.remove(&id_value);
+
             return Err(ClientError::Io(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
                 "Process stdin not available",
             )));
         }
 
-        // Wait for response (simplified for now - in a real implementation,
-        // we'd need to handle responses asynchronously)
-        let response = self.wait_for_response(&id_value).await;
+        // Wait for the response with timeout while processing incoming messages
+        let timeout_duration = std::time::Duration::from_secs(30);
+        let start_time = std::time::Instant::now();
 
-        // Enhanced tracing for response
-        match &response {
-            Ok(response_value) => {
-                info!("🟢 LSP Response <- {} (ID: {})", method, id);
-                debug!(
-                    "🟢 Response: {}",
-                    serde_json::to_string_pretty(response_value)?
-                );
+        // Pin the response receiver outside the loop to avoid moving it
+        use futures::FutureExt;
+        let mut response_rx = Box::pin(response_rx);
+
+        loop {
+            // Process any pending messages
+            if let Err(e) = self.process_pending_messages().await {
+                error!("🔴 Error processing pending messages: {}", e);
             }
-            Err(e) => {
-                error!("🔴 LSP Error <- {} (ID: {}): {:?}", method, id, e);
+
+            // Try to receive the response with a short timeout using GPUI executor timer
+            let mut timer = self.executor.timer(std::time::Duration::from_millis(10)).fuse();
+
+            match futures::future::select(response_rx.as_mut(), timer).await {
+                futures::future::Either::Left((response_result, _)) => {
+                    match response_result {
+                        Ok(response) => {
+                            // Enhanced tracing for response
+                            match &response {
+                                Ok(response_value) => {
+                                    info!("🟢 LSP Response <- {} (ID: {})", method, id);
+                                    debug!(
+                                        "🟢 Response: {}",
+                                        serde_json::to_string_pretty(response_value)?
+                                    );
+                                }
+                                Err(e) => {
+                                    error!("🔴 LSP Error <- {} (ID: {}): {:?}", method, id, e);
+                                }
+                            }
+                            return response;
+                        }
+                        Err(_) => {
+                            error!("🔴 Response channel was closed for request {} (ID: {})", method, id);
+                            return Err(ClientError::Timeout);
+                        }
+                    }
+                }
+                futures::future::Either::Right((_, _)) => {
+                    // Check if we've exceeded the overall timeout
+                    if start_time.elapsed() > timeout_duration {
+                        error!("🔴 Timeout waiting for response to {} (ID: {})", method, id);
+
+                        // Clean up the pending request
+                        let mut pending = self.pending_requests.lock().await;
+                        pending.remove(&id_value);
+
+                        return Err(ClientError::Timeout);
+                    }
+
+                    // Continue the loop to process more messages
+                    continue;
+                }
             }
         }
-
-        response
     }
 
     /// Send a notification to the LSP server
@@ -313,14 +633,49 @@ impl PostgresLspClient {
         }
         trace!("📤 Raw Notification JSON: {}", notification_json);
 
+        // Check if process is still running before attempting to write
+        if !self.is_process_running().await {
+            error!("🔴 Failed to send notification: LSP process is not running");
+            return Err(ClientError::Io(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "LSP process is not running",
+            )));
+        }
+
         // Send notification
         if let Some(stdin) = self.process.stdin() {
             let header = format!("Content-Length: {}\r\n\r\n", notification_json.len());
             debug!("📤 Sending notification header: {}", header.trim());
-            stdin.write_all(header.as_bytes()).await?;
-            stdin.write_all(notification_json.as_bytes()).await?;
-            stdin.flush().await?;
-            debug!("📤 Notification sent successfully");
+
+            match stdin.write_all(header.as_bytes()).await {
+                Ok(()) => {
+                    debug!("📤 Notification header written successfully");
+                }
+                Err(e) => {
+                    error!("🔴 Failed to write notification header to LSP process: {}", e);
+                    return Err(ClientError::Io(e));
+                }
+            }
+
+            match stdin.write_all(notification_json.as_bytes()).await {
+                Ok(()) => {
+                    debug!("📤 Notification body written successfully");
+                }
+                Err(e) => {
+                    error!("🔴 Failed to write notification body to LSP process: {}", e);
+                    return Err(ClientError::Io(e));
+                }
+            }
+
+            match stdin.flush().await {
+                Ok(()) => {
+                    debug!("📤 Notification sent successfully");
+                }
+                Err(e) => {
+                    error!("🔴 Failed to flush notification to LSP process: {}", e);
+                    return Err(ClientError::Io(e));
+                }
+            }
         } else {
             error!("🔴 Failed to send notification: stdin not available");
             return Err(ClientError::Io(std::io::Error::new(
@@ -332,263 +687,7 @@ impl PostgresLspClient {
         Ok(())
     }
 
-    /// Wait for a response with the given ID
-    async fn wait_for_response(&mut self, expected_id: &Value) -> Result<Value, ClientError> {
-        debug!("⏳ Waiting for LSP response (ID: {})", expected_id);
-
-        // This is a simplified implementation
-        // In a real implementation, we'd need to read responses asynchronously
-        // and match them to pending requests
-
-        if let Some(stdout) = self.process.stdout() {
-            let mut buffer = vec![0u8; 8192];
-            let mut response_data = Vec::new();
-            let mut attempts = 0;
-
-            loop {
-                attempts += 1;
-                debug!("🔍 Reading from stdout (attempt {})", attempts);
-
-                match stdout.read(&mut buffer).await {
-                    Ok(0) => {
-                        warn!(
-                            "🔴 EOF reached while waiting for response (ID: {})",
-                            expected_id
-                        );
-                        break;
-                    }
-                    Ok(n) => {
-                        debug!("📥 Read {} bytes from LSP server", n);
-                        response_data.extend_from_slice(&buffer[..n]);
-                        trace!(
-                            "📥 Raw response data: {}",
-                            String::from_utf8_lossy(&response_data)
-                        );
-
-                        // Try to parse a complete response
-                        let response_str =
-                            PostgresLspClient::extract_complete_response_static(&response_data);
-
-                        if let Some(response_str) = response_str {
-                            debug!("📨 Complete response received: {}", response_str);
-
-                            // Check if this might be a workspace/configuration request
-                            if response_str.contains("workspace/configuration") {
-                                warn!("🟡 LSP server is requesting workspace configuration!");
-                                warn!("🟡 This might indicate the server isn't detecting workspace folders properly");
-                            }
-
-                            // Check if this might be a workspace/workspaceFolders request
-                            if response_str.contains("workspace/workspaceFolders") {
-                                warn!("🟡 LSP server is requesting workspace folders!");
-                                warn!("🟡 This indicates the server doesn't have workspace folders registered");
-                            }
-
-                            // First try to parse as a notification (no ID)
-                        let is_notification = match serde_json::from_str::<JsonRpcNotification>(response_str) {
-                            Ok(_) => {
-                                info!("📨 Parsed JSON-RPC notification");
-                                true
-                            }
-                            Err(_) => {
-                                // Not a notification, try parsing as a response
-                                false
-                            }
-                        };
-
-                        if is_notification {
-                            // Handle notifications separately to avoid borrow issues
-                            let notifications_to_process = Vec::from([response_str]);
-                            for notification_str in notifications_to_process {
-                                match serde_json::from_str::<JsonRpcNotification>(notification_str) {
-                                    Ok(notification) => {
-                                        // Clone the parts we need for the handler
-                                        let handler = self.diagnostic_handler.clone();
-                                        let method = notification.method.clone();
-                                        let params = notification.params.clone();
-
-                                        // Handle the notification directly (no tokio::spawn)
-                                        info!("📨 Processing notification: {}", method);
-                                        if method == "textDocument/publishDiagnostics" {
-                                            if let Some(params) = params {
-                                                match serde_json::from_value::<PublishDiagnosticsParams>(params) {
-                                                    Ok(diagnostic_params) => {
-                                                        info!("🔍 Received {} diagnostics for {:?}",
-                                                            diagnostic_params.diagnostics.len(),
-                                                            diagnostic_params.uri);
-
-                                                        if let Some(handler) = handler {
-                                                            handler(diagnostic_params);
-                                                        } else {
-                                                            warn!("🟡 No diagnostic handler set, ignoring diagnostics");
-                                                        }
-                                                    }
-                                                    Err(e) => {
-                                                        error!("🔴 Failed to parse diagnostics: {}", e);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        error!("🔴 Failed to parse notification: {}", e);
-                                    }
-                                }
-                            }
-
-                            // Remove the processed notification from the buffer
-                            response_data.drain(0..response_str.len());
-                            continue;
-                        }
-
-                        // Try to parse as a response
-                        match serde_json::from_str::<JsonRpcResponse>(response_str) {
-                            Ok(response) => {
-                                debug!("📨 Parsed JSON-RPC response: {:?}", response);
-
-                                if let Some(response_id) = &response.id {
-                                    if response_id == expected_id {
-                                        info!(
-                                            "✅ Response ID matches expected ID: {}",
-                                            expected_id
-                                        );
-
-                                        if let Some(error) = response.error {
-                                            error!(
-                                                "🔴 LSP Server Error (ID: {}): {} - {:?}",
-                                                expected_id, error.message, error.data
-                                            );
-                                            return Err(ClientError::Server(error.message));
-                                        }
-
-                                        if let Some(result) = response.result {
-                                            info!(
-                                                "✅ LSP Success Response (ID: {})",
-                                                expected_id
-                                            );
-                                            debug!(
-                                                "✅ Result: {}",
-                                                serde_json::to_string_pretty(&result)?
-                                            );
-                                            return Ok(result);
-                                        }
-
-                                        warn!(
-                                            "⚠️ Response has no result or error (ID: {})",
-                                            expected_id
-                                        );
-                                        return Err(ClientError::InvalidResponse);
-                                    } else {
-                                        debug!(
-                                            "⏭️ Response ID {} doesn't match expected ID {}",
-                                            response_id, expected_id
-                                        );
-                                        // Continue waiting for the correct response
-                                    }
-                                } else {
-                                    warn!("⚠️ Response has no ID field - treating as notification");
-                                    // Try to parse as notification again for safety
-                                    drop(response);
-                                    match serde_json::from_str::<JsonRpcNotification>(response_str) {
-                                        Ok(notification) => {
-                                            let handler = self.diagnostic_handler.clone();
-                                            let method = notification.method.clone();
-                                            let params = notification.params.clone();
-
-                                            // Handle the notification directly (no tokio::spawn)
-                                            info!("📨 Processing notification: {}", method);
-                                            if method == "textDocument/publishDiagnostics" {
-                                                if let Some(params) = params {
-                                                    match serde_json::from_value::<PublishDiagnosticsParams>(params) {
-                                                        Ok(diagnostic_params) => {
-                                                            info!("🔍 Received {} diagnostics for {:?}",
-                                                                diagnostic_params.diagnostics.len(),
-                                                                diagnostic_params.uri);
-
-                                                            if let Some(handler) = handler {
-                                                                handler(diagnostic_params);
-                                                            } else {
-                                                                warn!("🟡 No diagnostic handler set, ignoring diagnostics");
-                                                            }
-                                                        }
-                                                        Err(e) => {
-                                                            error!("🔴 Failed to parse diagnostics: {}", e);
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        Err(e) => {
-                                            error!("🔴 Failed to parse as notification: {}", e);
-                                        }
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                error!("🔴 Failed to parse JSON-RPC response: {}", e);
-                                trace!("🔴 Invalid JSON: {}", response_str);
-                            }
-                        }
-                        } else {
-                            debug!("⏳ Incomplete response, continuing to read...");
-                        }
-                    }
-                    Err(e) => {
-                        error!("🔴 Error reading from stdout: {}", e);
-                        return Err(ClientError::Io(e));
-                    }
-                }
-
-                // Prevent infinite loop
-                if attempts > 100 {
-                    error!(
-                        "🔴 Timeout waiting for response (ID: {}) after {} attempts",
-                        expected_id, attempts
-                    );
-                    return Err(ClientError::Timeout);
-                }
-            }
-        } else {
-            error!("🔴 Process stdout not available");
-            return Err(ClientError::Io(std::io::Error::new(
-                std::io::ErrorKind::BrokenPipe,
-                "Process stdout not available",
-            )));
-        }
-
-        error!("🔴 No response received (ID: {})", expected_id);
-        Err(ClientError::Timeout)
-    }
-
-    /// Extract a complete JSON-RPC response from the buffer
-    fn extract_complete_response<'a>(&self, buffer: &'a [u8]) -> Option<&'a str> {
-        Self::extract_complete_response_static(buffer)
-    }
-
-    fn extract_complete_response_static<'a>(buffer: &'a [u8]) -> Option<&'a str> {
-        let response_str = std::str::from_utf8(buffer).ok()?;
-
-        // Look for Content-Length header
-        if let Some(header_start) = response_str.find("Content-Length:") {
-            let header_part = &response_str[header_start..];
-            if let Some(header_end) = header_part.find("\r\n\r\n") {
-                let header = &header_part[..header_end];
-                if let Some(length_str) = header.split(':').nth(1) {
-                    if let Ok(length) = length_str.trim().parse::<usize>() {
-                        let content_start = header_start + header_end + 4;
-                        let content_end = content_start + length;
-
-                        if content_end <= response_str.len() {
-                            return Some(&response_str[content_start..content_end]);
-                        }
-                    }
-                }
-            }
-        }
-
-        None
-    }
-
+    
     /// Get completion items
     pub async fn completion(
         &mut self,
@@ -760,6 +859,7 @@ impl PostgresLspClient {
         Ok(())
     }
 
+    
     /// Check if the process is still running
     pub async fn is_process_running(&mut self) -> bool {
         self.process.is_running().await

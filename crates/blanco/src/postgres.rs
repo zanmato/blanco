@@ -62,6 +62,193 @@ impl PostgresManager {
         self.connection_string = None;
     }
 
+    /// Execute a query with prepared statement parameters
+    pub async fn execute_prepared_query(
+        &self,
+        sql_template: &str,
+        parameters: &[String],
+    ) -> Result<crate::database::QueryResult, anyhow::Error> {
+        let pool = self.pool.as_ref().ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
+
+        // Create the query with parameters
+        let mut query = sqlx::query(sql_template);
+
+        // Bind parameters in order
+        for param in parameters {
+            query = query.bind(param);
+        }
+
+        // Execute the query
+        match query.fetch_all(pool).await {
+            Ok(rows) => {
+                if rows.is_empty() {
+                    return Ok(crate::database::QueryResult {
+                        columns: vec![],
+                        column_types: vec![],
+                        rows: vec![],
+                        rows_affected: 0,
+                        query_text: Some(sql_template.to_string()),
+                        execution_time_ms: None,
+                        is_error: false,
+                    });
+                }
+
+                // Extract column names and types from the first row
+                let first_row = &rows[0];
+                let columns: Vec<String> = first_row
+                    .columns()
+                    .iter()
+                    .map(|col| col.name().to_string())
+                    .collect();
+
+                let column_types: Vec<String> = first_row
+                    .columns()
+                    .iter()
+                    .map(|col| col.type_info().name().to_string())
+                    .collect();
+
+                // Extract row data
+                let data_rows: Vec<Vec<String>> = rows
+                    .iter()
+                    .map(|row| {
+                        columns
+                            .iter()
+                            .enumerate()
+                            .map(|(i, _)| {
+                                // Try different types in order of likelihood
+
+                                // String/Text types (most common)
+                                if let Ok(val) = row.try_get::<Option<String>, _>(i) {
+                                    return val.unwrap_or_else(|| "NULL".to_string());
+                                }
+
+                                // Integer types
+                                if let Ok(val) = row.try_get::<Option<i16>, _>(i) {
+                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                }
+                                if let Ok(val) = row.try_get::<Option<i32>, _>(i) {
+                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                }
+                                if let Ok(val) = row.try_get::<Option<i64>, _>(i) {
+                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                }
+
+                                // Floating point types
+                                if let Ok(val) = row.try_get::<Option<f32>, _>(i) {
+                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                }
+                                if let Ok(val) = row.try_get::<Option<f64>, _>(i) {
+                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                }
+
+                                // Boolean type
+                                if let Ok(val) = row.try_get::<Option<bool>, _>(i) {
+                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                }
+
+                                // Try to get UUID as string (PostgreSQL UUID can be converted to string)
+                                if let Ok(val) = row.try_get::<Option<String>, _>(i) {
+                                    return val.unwrap_or_else(|| "NULL".to_string());
+                                }
+
+                                // Try to get timestamp/chrono types as string
+                                if let Ok(val) = row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>(i) {
+                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                }
+                                if let Ok(val) = row.try_get::<Option<chrono::NaiveDateTime>, _>(i) {
+                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                }
+                                if let Ok(val) = row.try_get::<Option<chrono::NaiveDate>, _>(i) {
+                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                }
+                                if let Ok(val) = row.try_get::<Option<chrono::NaiveTime>, _>(i) {
+                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                }
+
+                                // UUID types
+                                if let Ok(val) = row.try_get::<Option<Uuid>, _>(i) {
+                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                }
+
+                                // Byte array types (for binary data)
+                                if let Ok(val) = row.try_get::<Option<Vec<u8>>, _>(i) {
+                                    return val.map(|v| {
+                                        // Convert to hex string for binary data
+                                        v.iter().map(|byte| format!("{:02x}", byte)).collect::<String>()
+                                    }).unwrap_or_else(|| "NULL".to_string());
+                                }
+
+                                // JSON/JSONB types - try to get as string first
+                                if let Ok(val) = row.try_get::<Option<serde_json::Value>, _>(i) {
+                                    return val.map(|v| {
+                                        // Pretty print JSON with proper formatting
+                                        match v {
+                                            serde_json::Value::String(s) => s,
+                                            _ => v.to_string(),
+                                        }
+                                    }).unwrap_or_else(|| "NULL".to_string());
+                                }
+
+                                // If we can't determine the type, try to get it as raw value
+                                // This is a fallback for any other types
+                                match row.try_get_raw(i) {
+                                    Ok(raw_value) => {
+                                        if raw_value.is_null() {
+                                            "NULL".to_string()
+                                        } else {
+                                            // For unknown types, try to get as string or show type info
+                                            match row.column(i).type_info().name() {
+                                                "timestamptz" => "<timestamptz>".to_string(),
+                                                "timestamp" => "<timestamp>".to_string(),
+                                                "json" => "<json>".to_string(),
+                                                "jsonb" => "<jsonb>".to_string(),
+                                                "numeric" => "<numeric>".to_string(),
+                                                "decimal" => "<decimal>".to_string(),
+                                        _ => format!("<{}>", row.column(i).type_info().name())
+                                            }
+                                        }
+                                    }
+                                    Err(_) => {
+                                        // If even raw access fails, indicate unknown type
+                                        "<error>".to_string()
+                                    }
+                                }
+                            })
+                            .collect()
+                    })
+                    .collect();
+
+                Ok(crate::database::QueryResult {
+                    columns,
+                    column_types,
+                    rows: data_rows,
+                    rows_affected: 0,
+                    query_text: Some(sql_template.to_string()),
+                    execution_time_ms: None,
+                    is_error: false,
+                })
+            }
+            Err(_e) => {
+                // If it's not a SELECT query, try executing it as a statement
+                let mut query = sqlx::query(sql_template);
+                for param in parameters {
+                    query = query.bind(param);
+                }
+
+                let result = query.execute(pool).await?;
+                Ok(crate::database::QueryResult {
+                    columns: vec![],
+                    column_types: vec![],
+                    rows: vec![],
+                    rows_affected: result.rows_affected(),
+                    query_text: Some(sql_template.to_string()),
+                    execution_time_ms: None,
+                    is_error: false,
+                })
+            }
+        }
+    }
+
     /// Get list of databases
     pub async fn get_databases(&self) -> Result<Vec<String>, anyhow::Error> {
         let pool = self.pool.as_ref().ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;

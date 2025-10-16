@@ -23,8 +23,25 @@ use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 use async_io::Timer;
 
-use tracing::{debug, info, error};
+use tracing::{debug, info, error, warn};
 use anyhow::Result;
+
+/// Convert byte offset to LSP position (line/column)
+fn offset_to_position_lsp(text: &str, offset: usize) -> Result<Position, anyhow::Error> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut current_offset = 0;
+
+    for (line_num, line) in lines.iter().enumerate() {
+        if current_offset + line.len() >= offset {
+            let character = offset - current_offset;
+            return Ok(Position::new(line_num as u32, character as u32));
+        }
+        current_offset += line.len() + 1; // +1 for newline
+    }
+
+    // If offset is beyond the text, return the last position
+    Ok(Position::new(lines.len().saturating_sub(1) as u32, 0))
+}
 
 /// PostgreSQL completion provider
 pub struct PostgresCompletionProvider {
@@ -89,8 +106,31 @@ impl CompletionProvider for PostgresCompletionProvider {
             if let Some(client) = client_guard.as_mut() {
                 info!("🧩 LSP client available, requesting completions");
                 // Use the correct document URI for this tab
-                // Convert offset to LSP position (simplified)
-                let position = Position::new(0, offset as u32);
+                // Convert offset to proper LSP position (line/column)
+                let position = offset_to_position_lsp(&text_str, offset).unwrap_or_else(|_| {
+                    warn!("🧩 Failed to convert offset {} to LSP position, using fallback", offset);
+                    Position::new(0, offset as u32)
+                });
+
+                // Determine trigger character and context
+                let trigger_character = if offset > 0 {
+                    text_str.chars().nth(offset - 1)
+                } else {
+                    None
+                };
+
+                let (trigger_kind, trigger_char) = if let Some(ch) = trigger_character {
+                    match ch {
+                        '.' => (lsp_types::CompletionTriggerKind::TRIGGER_CHARACTER, Some('.'.to_string())),
+                        ' ' => (lsp_types::CompletionTriggerKind::TRIGGER_CHARACTER, Some(' '.to_string())),
+                        '(' => (lsp_types::CompletionTriggerKind::TRIGGER_CHARACTER, Some('('.to_string())),
+                        ',' => (lsp_types::CompletionTriggerKind::TRIGGER_CHARACTER, Some(','.to_string())),
+                        '"' => (lsp_types::CompletionTriggerKind::TRIGGER_CHARACTER, Some('"'.to_string())),
+                        _ => (lsp_types::CompletionTriggerKind::INVOKED, None),
+                    }
+                } else {
+                    (lsp_types::CompletionTriggerKind::INVOKED, None)
+                };
 
                 let params = CompletionParams {
                     text_document_position: TextDocumentPositionParams {
@@ -98,8 +138,8 @@ impl CompletionProvider for PostgresCompletionProvider {
                         position,
                     },
                     context: Some(CompletionContext {
-                        trigger_kind: lsp_types::CompletionTriggerKind::INVOKED,
-                        trigger_character: None,
+                        trigger_kind,
+                        trigger_character: trigger_char,
                     }),
                     work_done_progress_params: Default::default(),
                     partial_result_params: Default::default(),
@@ -314,8 +354,11 @@ impl HoverProvider for PostgresHoverProvider {
                 // Document content is now read from disk, no need to sync virtual content
                 info!("🖱️ Using file-based document for hover request");
 
-                // Convert offset to LSP position (simplified)
-                let position = Position::new(0, offset as u32);
+                // Convert offset to proper LSP position (line/column)
+                let position = offset_to_position_lsp(&text_str, offset).unwrap_or_else(|_| {
+                    warn!("🖱️ Failed to convert offset {} to LSP position, using fallback", offset);
+                    Position::new(0, offset as u32)
+                });
 
                 let params = HoverParams {
                     text_document_position_params: TextDocumentPositionParams {

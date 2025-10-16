@@ -236,6 +236,107 @@ impl DatabaseManager {
         Ok(())
     }
 
+    /// Execute a query with prepared statement parameters
+    pub async fn execute_prepared_query(
+        &self,
+        sql_template: &str,
+        parameters: &[String],
+    ) -> Result<QueryResult, Box<dyn std::error::Error>> {
+        let pool = self.pool.as_ref().ok_or("Not connected to database")?;
+
+        // Create the query with parameters
+        let mut query = sqlx::query(sql_template);
+
+        // Bind parameters in order
+        for param in parameters {
+            query = query.bind(param);
+        }
+
+        // Execute the query
+        match query.fetch_all(pool).await {
+            Ok(rows) => {
+                if rows.is_empty() {
+                    return Ok(QueryResult {
+                        columns: vec![],
+                        column_types: vec![],
+                        rows: vec![],
+                        rows_affected: 0,
+                        query_text: Some(sql_template.to_string()),
+                        execution_time_ms: None,
+                        is_error: false,
+                    });
+                }
+
+                // Extract column names and types from the first row
+                let first_row = &rows[0];
+                let columns: Vec<String> = first_row
+                    .columns()
+                    .iter()
+                    .map(|col| col.name().to_string())
+                    .collect();
+
+                let column_types: Vec<String> = first_row
+                    .columns()
+                    .iter()
+                    .map(|col| col.type_info().name().to_string())
+                    .collect();
+
+                // Extract row data
+                let data_rows: Vec<Vec<String>> = rows
+                    .iter()
+                    .map(|row| {
+                        columns
+                            .iter()
+                            .enumerate()
+                            .map(|(i, _)| {
+                                // Check if the value is NULL first
+                                if let Ok(val) = row.try_get::<Option<String>, _>(i) {
+                                    val.unwrap_or_else(|| "NULL".to_string())
+                                } else if let Ok(val) = row.try_get::<Option<i64>, _>(i) {
+                                    val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
+                                } else if let Ok(val) = row.try_get::<Option<f64>, _>(i) {
+                                    val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
+                                } else if let Ok(val) = row.try_get::<Option<bool>, _>(i) {
+                                    val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
+                                } else {
+                                    "NULL".to_string()
+                                }
+                            })
+                            .collect()
+                    })
+                    .collect();
+
+                Ok(QueryResult {
+                    columns,
+                    column_types,
+                    rows: data_rows,
+                    rows_affected: 0,
+                    query_text: Some(sql_template.to_string()),
+                    execution_time_ms: None,
+                    is_error: false,
+                })
+            }
+            Err(_e) => {
+                // If it's not a SELECT query, try executing it as a statement
+                let mut query = sqlx::query(sql_template);
+                for param in parameters {
+                    query = query.bind(param);
+                }
+
+                let result = query.execute(pool).await?;
+                Ok(QueryResult {
+                    columns: vec![],
+                    column_types: vec![],
+                    rows: vec![],
+                    rows_affected: result.rows_affected(),
+                    query_text: Some(sql_template.to_string()),
+                    execution_time_ms: None,
+                    is_error: false,
+                })
+            }
+        }
+    }
+
     /// Get list of table names from the database
     pub async fn get_tables(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         let pool = self.pool.as_ref().ok_or("Not connected to database")?;

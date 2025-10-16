@@ -38,3 +38,4 @@ ropey = "1.6"
 url = { workspace = true }
 smol = { workspace = true }
 async-io = { workspace = true }
+futures = { workspace = true }

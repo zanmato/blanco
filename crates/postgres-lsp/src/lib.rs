@@ -7,6 +7,7 @@ pub mod client;
 pub mod config;
 pub mod gpui_tokio;
 pub mod manager;
+pub mod message_handler;
 pub mod process;
 pub mod providers;
 pub mod downloader;
