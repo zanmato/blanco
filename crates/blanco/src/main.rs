@@ -8,6 +8,7 @@ mod database;
 mod db_service;
 mod editor_panel;
 mod gpui_tokio;
+mod icon;
 mod postgres;
 mod query_file;
 mod results_panel;
@@ -180,7 +181,8 @@ async fn migrate_existing_tabs_to_files(
     // Find tabs that need migration (no file_uri)
     let tabs_needing_migration = {
         let db_guard = app_db_handle.read().await;
-        let app_db = db_guard.as_ref()
+        let app_db = db_guard
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("App database not initialized"))?;
         app_db.find_tabs_needing_migration().await?
     };
@@ -190,7 +192,10 @@ async fn migrate_existing_tabs_to_files(
         return Ok(());
     }
 
-    log::info!("📋 Found {} tabs that need migration", tabs_needing_migration.len());
+    log::info!(
+        "📋 Found {} tabs that need migration",
+        tabs_needing_migration.len()
+    );
 
     // Initialize query file manager
     let query_file_manager = QueryFileManager::new()?;
@@ -203,11 +208,20 @@ async fn migrate_existing_tabs_to_files(
 
         log::debug!("🔄 Migrating tab '{}' (ID: {}) to file", tab.title, tab_id);
 
+        // Determine connection name for migration
+        let connection_name = match tab.connection_type.as_deref() {
+            Some("PostgreSQL") => "PostgreSQL",
+            _ => "Test Database",
+        };
+
         // Create the query file on disk
-        match query_file_manager.create_query_file(tab_id, &tab.content).await {
+        match query_file_manager
+            .create_query_file(tab_id, connection_name, &tab.content)
+            .await
+        {
             Ok(_) => {
                 // Get the file URI
-                let file_uri = query_file_manager.query_file_uri(tab_id);
+                let file_uri = query_file_manager.query_file_uri(tab_id, connection_name);
 
                 // Update the database record with the file URI
                 {
@@ -215,11 +229,20 @@ async fn migrate_existing_tabs_to_files(
                     if let Some(app_db) = db_guard.as_ref() {
                         match app_db.update_tab_file_uri(tab_id, &file_uri).await {
                             Ok(_) => {
-                                log::info!("✅ Migrated tab '{}' (ID: {}) to file: {}", tab.title, tab_id, file_uri);
+                                log::info!(
+                                    "✅ Migrated tab '{}' (ID: {}) to file: {}",
+                                    tab.title,
+                                    tab_id,
+                                    file_uri
+                                );
                                 migrated_count += 1;
                             }
                             Err(e) => {
-                                log::error!("❌ Failed to update file URI for tab '{}': {}", tab.title, e);
+                                log::error!(
+                                    "❌ Failed to update file URI for tab '{}': {}",
+                                    tab.title,
+                                    e
+                                );
                             }
                         }
                     } else {
@@ -228,13 +251,20 @@ async fn migrate_existing_tabs_to_files(
                 }
             }
             Err(e) => {
-                log::error!("❌ Failed to create query file for tab '{}': {}", tab.title, e);
+                log::error!(
+                    "❌ Failed to create query file for tab '{}': {}",
+                    tab.title,
+                    e
+                );
             }
         }
     }
 
-    log::info!("🎉 Migration completed: {}/{} tabs migrated to file-based storage",
-              migrated_count, total_tabs);
+    log::info!(
+        "🎉 Migration completed: {}/{} tabs migrated to file-based storage",
+        migrated_count,
+        total_tabs
+    );
 
     Ok(())
 }

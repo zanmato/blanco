@@ -1,13 +1,11 @@
 use gpui::{
     actions, div, prelude::FluentBuilder, px, Action, App, AppContext, Context, Entity,
-    FocusHandle, Focusable, InteractiveElement, IntoElement, Menu, MenuItem, MouseButton,
-    ParentElement, Render, Styled, Window,
+    FocusHandle, Focusable, InteractiveElement, IntoElement, Menu, MenuItem, ParentElement, Render,
+    Styled, Window,
 };
 use gpui_component::{
-    button::{Button, ButtonVariants},
-    h_flex,
-    menu::AppMenuBar,
-    v_flex, ActiveTheme, ContextModal as _, IconName, Root, Sizable, TitleBar,
+    button::Button, h_flex, menu::AppMenuBar, v_flex, ActiveTheme, ContextModal as _, Root,
+    TitleBar,
 };
 use log::{debug, error, info};
 use serde::Deserialize;
@@ -16,6 +14,7 @@ use crate::{
     connection_modal::NewConnectionModal,
     db_service::{DbService, PgConnectionKey},
     editor_panel::EditorPanel,
+    icon::{Icon, IconName},
     sidebar::ConnectionSidebar,
 };
 
@@ -27,7 +26,10 @@ actions!(
         NewQuery,
         OpenConnection,
         OpenSettings,
-        OpenNewConnectionModal
+        OpenNewConnectionModal,
+        RunQuery,
+        CommitChanges,
+        RollbackChanges
     ]
 );
 
@@ -335,7 +337,31 @@ impl BlancoApp {
         });
 
         // Focus the first input field after the modal opens
-        content_for_focus.read(cx).first_input_focus_handle(cx).focus(window);
+        content_for_focus
+            .read(cx)
+            .first_input_focus_handle(cx)
+            .focus(window);
+    }
+
+    fn on_run_query(&mut self, _: &RunQuery, window: &mut Window, cx: &mut Context<Self>) {
+        // Delegate query execution to the editor panel
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.execute_current_query(window, cx);
+        });
+    }
+
+    fn on_commit_changes(&mut self, _: &CommitChanges, window: &mut Window, cx: &mut Context<Self>) {
+        // Delegate commit to the editor panel (which will forward to results panel)
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.commit_current_changes(window, cx);
+        });
+    }
+
+    fn on_rollback_changes(&mut self, _: &RollbackChanges, window: &mut Window, cx: &mut Context<Self>) {
+        // Delegate rollback to the editor panel (which will forward to results panel)
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.rollback_current_changes(window, cx);
+        });
     }
 }
 
@@ -351,6 +377,8 @@ impl Render for BlancoApp {
         let modal_layer = Root::render_modal_layer(window, cx);
         let notification_layer = Root::render_notification_layer(window, cx);
 
+        let blanco_icon = Icon::new(IconName::Cat);
+
         v_flex()
             .on_action(cx.listener(Self::on_quit))
             .on_action(cx.listener(Self::on_about))
@@ -362,31 +390,22 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::on_settings))
             .on_action(cx.listener(Self::on_new_connection_modal))
+            .on_action(cx.listener(Self::on_run_query))
+            .on_action(cx.listener(Self::on_commit_changes))
+            .on_action(cx.listener(Self::on_rollback_changes))
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             // Title bar
             .child(
-                TitleBar::new()
-                    .child(div().flex().items_center().child(self.app_menu_bar.clone()))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_end()
-                            .px_2()
-                            .gap_2()
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                            .child(
-                                Button::new("github")
-                                    .icon(IconName::GitHub)
-                                    .small()
-                                    .ghost()
-                                    .on_click(|_, _, cx| {
-                                        cx.open_url("https://github.com/yourusername/blanco")
-                                    }),
-                            ),
-                    ),
+                TitleBar::new().child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_4()
+                        .child(blanco_icon)
+                        .child(self.app_menu_bar.clone()),
+                ),
             )
             // Main content area
             .child(
@@ -424,18 +443,15 @@ fn init_menus(cx: &mut App) {
     cx.bind_keys([
         gpui::KeyBinding::new("cmd-,", OpenSettings, None),
         gpui::KeyBinding::new("ctrl-,", OpenSettings, None),
+        // Register keyboard shortcuts for query execution and commit operations
+        gpui::KeyBinding::new("cmd-enter", RunQuery, None),
+        gpui::KeyBinding::new("ctrl-enter", RunQuery, None),
+        gpui::KeyBinding::new("cmd-shift-c", CommitChanges, None),
+        gpui::KeyBinding::new("ctrl-shift-c", CommitChanges, None),
+        gpui::KeyBinding::new("cmd-shift-r", RollbackChanges, None),
+        gpui::KeyBinding::new("ctrl-shift-r", RollbackChanges, None),
     ]);
     cx.set_menus(vec![
-        Menu {
-            name: "Blanco".into(),
-            items: vec![
-                MenuItem::action("Preferences...", OpenSettings),
-                MenuItem::Separator,
-                MenuItem::action("About Blanco", About),
-                MenuItem::Separator,
-                MenuItem::action("Quit", Quit),
-            ],
-        },
         Menu {
             name: "File".into(),
             items: vec![
@@ -443,6 +459,11 @@ fn init_menus(cx: &mut App) {
                 MenuItem::Separator,
                 MenuItem::action("New Connection", OpenNewConnectionModal),
                 MenuItem::action("Open Connection", OpenConnection),
+                MenuItem::action("Preferences...", OpenSettings),
+                MenuItem::Separator,
+                MenuItem::action("About Blanco", About),
+                MenuItem::Separator,
+                MenuItem::action("Quit", Quit),
             ],
         },
         Menu {
@@ -456,6 +477,15 @@ fn init_menus(cx: &mut App) {
                 MenuItem::action("Paste", gpui_component::input::Paste),
                 MenuItem::separator(),
                 MenuItem::action("Select All", gpui_component::input::SelectAll),
+            ],
+        },
+        Menu {
+            name: "Query".into(),
+            items: vec![
+                MenuItem::action("Run Query", RunQuery),
+                MenuItem::separator(),
+                MenuItem::action("Commit Changes", CommitChanges),
+                MenuItem::action("Rollback Changes", RollbackChanges),
             ],
         },
         Menu {

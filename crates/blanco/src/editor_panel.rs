@@ -10,7 +10,7 @@ use gpui_component::{
     input::{InputEvent, InputState, Position, TabSize, TextInput},
     sidebar::SidebarToggleButton,
     tab::{Tab, TabBar},
-    v_flex, ActiveTheme, IconName, Kbd, Side, Sizable,
+    v_flex, ActiveTheme, ContextModal as _, IconName, Kbd, Side, Sizable,
 };
 use log::{debug, error, info, warn};
 use lsp_types::{PublishDiagnosticsParams, Uri};
@@ -917,6 +917,7 @@ impl EditorPanel {
                     query_tab.connection_id,
                     connection_type,
                     pg_connection_key,
+                    query_tab.connection_name.clone(),
                 ));
             }
         }
@@ -937,6 +938,7 @@ impl EditorPanel {
                     connection_id,
                     connection_type,
                     pg_connection_key,
+                    connection_name,
                 ) in tabs_data
                 {
                     // First save to get or create the database ID
@@ -962,13 +964,23 @@ impl EditorPanel {
                         }
                     };
 
+                    // Try to migrate the query file from legacy location if it exists
+                    // This ensures backward compatibility when switching to connection-specific directories
+                    if let Err(e) = query_file_manager
+                        .migrate_query_file(final_db_id, &connection_name)
+                        .await
+                    {
+                        debug!("Migration not needed or failed for tab '{}': {}", title, e);
+                    }
+
                     // Create/update the query file on disk
                     let file_uri = match query_file_manager
-                        .create_query_file(final_db_id, &content)
+                        .create_query_file(final_db_id, &connection_name, &content)
                         .await
                     {
                         Ok(_) => {
-                            let uri = query_file_manager.query_file_uri(final_db_id);
+                            let uri =
+                                query_file_manager.query_file_uri(final_db_id, &connection_name);
                             debug!("Created query file for tab '{}' with URI: {}", title, uri);
                             Some(uri)
                         }
@@ -1015,8 +1027,10 @@ impl EditorPanel {
                             if query_tab.db_id.is_none() {
                                 query_tab.db_id = Some(db_id);
                                 // Set the file URI on the QueryTab
-                                if let Some(file_uri) =
-                                    panel.query_file_manager.query_file_uri(db_id).into()
+                                if let Some(file_uri) = panel
+                                    .query_file_manager
+                                    .query_file_uri(db_id, &query_tab.connection_name)
+                                    .into()
                                 {
                                     let file_uri_debug = file_uri.clone();
                                     query_tab.file_uri = Some(file_uri);
@@ -1109,8 +1123,8 @@ impl EditorPanel {
         content: &str,
         db_id: Option<i64>,
         connection_id: Option<i64>,
-        connection_type: &Option<String>,
-        pg_connection_key: &Option<String>,
+        connection_type_str: &Option<String>,
+        pg_connection_key_str: &Option<String>,
         cx: &mut Context<Self>,
     ) {
         let tab_id = self.next_tab_id;
@@ -1170,13 +1184,13 @@ impl EditorPanel {
         self._subscriptions.push(subscription);
 
         // Determine connection type and create appropriate tab
-        let (connection_name, connection_type, pg_connection_key) = match connection_type {
+        let (connection_name, connection_type, pg_connection_key) = match connection_type_str {
             Some(conn_type) if conn_type == "PostgreSQL" => {
                 info!(
                     "🔍 Creating PostgreSQL tab with connection_type: {:?}",
-                    connection_type
+                    connection_type_str
                 );
-                let pg_key = pg_connection_key.as_ref().and_then(|key_str| {
+                let pg_key = pg_connection_key_str.as_ref().and_then(|key_str| {
                     crate::db_service::PgConnectionKey::from_connection_string(key_str).ok()
                 });
                 ("PostgreSQL".to_string(), ConnectionType::PostgreSQL, pg_key)
@@ -1206,7 +1220,31 @@ impl EditorPanel {
             document_version: 0,
             file_uri: db_id.and_then(|id| {
                 // Try to get the file URI for existing saved tabs
-                self.query_file_manager.query_file_uri(id).into()
+                // For backward compatibility, try to load from legacy location first
+                let connection_name_for_file = match connection_type_str {
+                    Some(ref conn_type) if conn_type == "PostgreSQL" => "PostgreSQL",
+                    _ => "Test Database",
+                };
+
+                // Check if the file exists in the new location
+                if self
+                    .query_file_manager
+                    .query_file_exists(id, connection_name_for_file)
+                {
+                    self.query_file_manager
+                        .query_file_uri(id, connection_name_for_file)
+                        .into()
+                } else if self.query_file_manager.legacy_query_file_exists(id) {
+                    // Fall back to legacy location
+                    let legacy_path = self.query_file_manager.legacy_query_file_path(id);
+                    if legacy_path.exists() {
+                        Some(format!("file://{}", legacy_path.display()))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
             }),
         };
 
@@ -1265,6 +1303,12 @@ impl EditorPanel {
                 let lsp_task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
                     use postgres_lsp::{PostgresLspConfig, PostgresLspManager};
 
+                    // Get the connection-specific queries directory for LSP workspace
+                    let query_file_manager_for_lsp = _query_file_manager.clone();
+                    let workspace_path = query_file_manager_for_lsp
+                        .queries_directory(&connection_name)
+                        .ok();
+
                     // Create LSP config from actual connection
                     let config = if let Some(conn_key) = pg_connection_key {
                         info!("🔍 Creating LSP config - conn_key.username: {}, conn_key.host: {}, conn_key.port: {}, conn_key.database: {}, conn_key.password: {}",
@@ -1316,13 +1360,19 @@ impl EditorPanel {
                     };
 
                     // Create LSP manager
-                    let mut lsp_manager = match PostgresLspManager::new(config, executor).await {
-                        Ok(manager) => manager,
-                        Err(e) => {
-                            error!("Failed to create LSP manager for tab {}: {:?}", tab_id, e);
-                            return Err(anyhow::anyhow!("Failed to create LSP manager: {:?}", e));
-                        }
-                    };
+                    let mut lsp_manager =
+                        match PostgresLspManager::with_workspace(config, executor, workspace_path)
+                            .await
+                        {
+                            Ok(manager) => manager,
+                            Err(e) => {
+                                error!("Failed to create LSP manager for tab {}: {:?}", tab_id, e);
+                                return Err(anyhow::anyhow!(
+                                    "Failed to create LSP manager: {:?}",
+                                    e
+                                ));
+                            }
+                        };
 
                     // Set up diagnostic handler using the query tab's diagnostic storage
                     let _editor_clone_for_diagnostics = editor.clone();
@@ -1649,6 +1699,7 @@ impl EditorPanel {
             let app_db = db_service.app_db_handle();
             let tab_index = self.active_tab_ix;
             let query_file_manager = self.query_file_manager.clone();
+            let connection_name = query_tab.connection_name.clone();
 
             let save_task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
                 if let Some(app_db) = app_db.read().await.as_ref() {
@@ -1664,13 +1715,23 @@ impl EditorPanel {
                         }
                     };
 
+                    // Try to migrate the query file from legacy location if it exists
+                    // This ensures backward compatibility when switching to connection-specific directories
+                    if let Err(e) = query_file_manager
+                        .migrate_query_file(final_db_id, &connection_name)
+                        .await
+                    {
+                        debug!("Migration not needed or failed for tab: {}", e);
+                    }
+
                     // Create/update the query file on disk
                     let file_uri = match query_file_manager
-                        .create_query_file(final_db_id, &content)
+                        .create_query_file(final_db_id, &connection_name, &content)
                         .await
                     {
                         Ok(_) => {
-                            let uri = query_file_manager.query_file_uri(final_db_id);
+                            let uri =
+                                query_file_manager.query_file_uri(final_db_id, &connection_name);
                             debug!("Created query file for tab with URI: {}", uri);
                             Some(uri)
                         }
@@ -1715,8 +1776,10 @@ impl EditorPanel {
                             if query_tab.db_id.is_none() {
                                 query_tab.db_id = Some(db_id);
                                 // Set the file URI on the QueryTab
-                                if let Some(file_uri) =
-                                    panel.query_file_manager.query_file_uri(db_id).into()
+                                if let Some(file_uri) = panel
+                                    .query_file_manager
+                                    .query_file_uri(db_id, &query_tab.connection_name)
+                                    .into()
                                 {
                                     let file_uri_debug = file_uri.clone();
                                     query_tab.file_uri = Some(file_uri);
@@ -1782,6 +1845,223 @@ impl EditorPanel {
         }
 
         info!("✅ LSP processes shut down successfully");
+    }
+
+    /// Execute the current query in the active tab
+    pub fn execute_current_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(tab) = self.tabs.get_mut(self.active_tab_ix) {
+            if let TabType::Query(query_tab) = tab {
+                // Get text and cursor position from editor
+                let editor = query_tab.editor.read(cx);
+                let full_text = editor.text().to_string();
+                let cursor_pos = editor.cursor();
+
+                let query = Self::extract_current_query(
+                    &full_text, cursor_pos,
+                    false, // TODO: Detect actual selection state when API is available
+                );
+
+                if query.is_empty() {
+                    window.push_notification("No query to execute", cx);
+                    return;
+                }
+
+                println!(
+                    "Executing query: {} on {}",
+                    query, query_tab.connection_name
+                );
+
+                // Get database service
+                let db_service = DbService::global(cx).clone();
+                let user_db = db_service.user_db_handle();
+                let app_db = db_service.app_db_handle();
+
+                // Track execution timing
+                let start_time = std::time::Instant::now();
+                let executed_at = chrono::Utc::now().timestamp();
+
+                // Clone connection details for the async task
+                let connection_type = query_tab.connection_type.clone();
+                let pg_connection_key = query_tab.pg_connection_key.clone();
+
+                // Execute query using Tokio::spawn_result to ensure tokio context
+                let db_task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
+                    let query_result = match connection_type {
+                        ConnectionType::SQLite => {
+                            let db = user_db.read().await;
+                            if !db.is_connected() {
+                                Err(anyhow::anyhow!("Not connected to SQLite database"))
+                            } else {
+                                db.execute_query_async(&query)
+                                    .await
+                                    .map_err(|e| anyhow::anyhow!("{}", e))
+                            }
+                        }
+                        ConnectionType::PostgreSQL => {
+                            if let Some(pg_key) = pg_connection_key {
+                                // Get or create PostgreSQL connection
+                                let connection_string =
+                                    if let Some(ref password) = pg_key.password {
+                                        format!(
+                                            "postgresql://{}:{}@{}:{}/{}",
+                                            pg_key.username,
+                                            password,
+                                            pg_key.host,
+                                            pg_key.port,
+                                            pg_key.database
+                                        )
+                                    } else {
+                                        format!(
+                                            "postgresql://{}@{}:{}/{}",
+                                            pg_key.username,
+                                            pg_key.host,
+                                            pg_key.port,
+                                            pg_key.database
+                                        )
+                                    };
+
+                                match db_service
+                                    .get_or_create_pg_connection(&connection_string)
+                                    .await
+                                {
+                                    Ok(pg_manager) => pg_manager
+                                        .execute_query_async(&query)
+                                        .await
+                                        .map_err(|e| anyhow::anyhow!("{}", e)),
+                                    Err(e) => Err(anyhow::anyhow!(
+                                        "Failed to connect to PostgreSQL: {}",
+                                        e
+                                    )),
+                                }
+                            } else {
+                                Err(anyhow::anyhow!("PostgreSQL connection key not found"))
+                            }
+                        }
+                    };
+
+                    let duration_ms = start_time.elapsed().as_millis() as i64;
+
+                    match query_result {
+                        Ok(mut result) => {
+                            println!(
+                                "Query executed successfully: {} rows",
+                                result.row_count()
+                            );
+
+                            // Add execution metadata
+                            result.query_text = Some(query.clone());
+                            result.execution_time_ms = Some(duration_ms);
+                            result.is_error = false;
+
+                            // Save to query history
+                            if let Some(app_db) = app_db.read().await.as_ref() {
+                                let history = QueryHistoryData {
+                                    id: None,
+                                    query_text: query.clone(),
+                                    executed_at,
+                                    duration_ms: Some(duration_ms),
+                                    rows_affected: Some(result.rows_affected as i64),
+                                    row_count: Some(result.row_count() as i64),
+                                    success: true,
+                                    error_message: None,
+                                };
+
+                                if let Err(e) = app_db.save_query_history(&history).await {
+                                    eprintln!("Failed to save query history: {}", e);
+                                }
+                            }
+
+                            Ok(result)
+                        }
+                        Err(e) => {
+                            let error_msg = e.to_string();
+                            eprintln!("Query execution failed: {}", error_msg);
+
+                            // Save error to query history
+                            if let Some(app_db) = app_db.read().await.as_ref() {
+                                let history = QueryHistoryData {
+                                    id: None,
+                                    query_text: query.clone(),
+                                    executed_at,
+                                    duration_ms: Some(duration_ms),
+                                    rows_affected: None,
+                                    row_count: None,
+                                    success: false,
+                                    error_message: Some(error_msg.clone()),
+                                };
+
+                                if let Err(e) = app_db.save_query_history(&history).await {
+                                    eprintln!("Failed to save query history: {}", e);
+                                }
+                            }
+
+                            // Return error as a result
+                            Ok(QueryResult {
+                                columns: vec!["Error".to_string()],
+                                column_types: vec!["TEXT".to_string()],
+                                rows: vec![vec![error_msg.clone()]],
+                                rows_affected: 0,
+                                query_text: Some(query.clone()),
+                                execution_time_ms: Some(duration_ms),
+                                is_error: true,
+                            })
+                        }
+                    }
+                });
+
+                // Get the results panel for this tab
+                let results_panel = query_tab.results_panel.clone();
+
+                // Update results panel when the task completes
+                cx.spawn(async move |_editor_panel, cx| {
+                    if let Ok(result) = db_task.await {
+                        let _ = results_panel.update(cx, |panel, cx| {
+                            panel.set_query_result(result, cx);
+                        });
+                    }
+                })
+                .detach();
+
+                // Show notification
+                window.push_notification("Query executed", cx);
+            }
+        }
+    }
+
+    /// Commit current changes in the active tab's results panel
+    pub fn commit_current_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(tab) = self.tabs.get_mut(self.active_tab_ix) {
+            if let TabType::Query(query_tab) = tab {
+                let changes = query_tab.results_panel.update(cx, |panel, cx| {
+                    panel.commit_all_edits(cx)
+                });
+
+                if changes.is_empty() {
+                    window.push_notification("No changes to commit", cx);
+                    return;
+                }
+
+                // Execute the commit in the results panel
+                query_tab.results_panel.update(cx, |panel, cx| {
+                    panel.commit_changes(window, cx);
+                });
+
+                window.push_notification(format!("Committing {} changes", changes.len()), cx);
+            }
+        }
+    }
+
+    /// Rollback current changes in the active tab's results panel
+    pub fn rollback_current_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(tab) = self.tabs.get_mut(self.active_tab_ix) {
+            if let TabType::Query(query_tab) = tab {
+                query_tab.results_panel.update(cx, |panel, cx| {
+                    panel.cancel_all_edits(cx);
+                });
+
+                window.push_notification("Changes rolled back", cx);
+            }
+        }
     }
 }
 
@@ -1897,7 +2177,6 @@ impl Render for EditorPanel {
                         this.child(
                             v_flex()
                                 .flex_1()
-                                .overflow_hidden()
                                 // Editor
                                 .child(
                                     div()
@@ -1962,55 +2241,15 @@ impl Render for EditorPanel {
                                             )
                                         })
                                         .child(div().flex_1())
-                                        // Edit controls (shown when editing)
-                                        .when(query_tab.results_panel.read(cx).is_editing(cx), |this| {
-                                            this.child(
-                                                h_flex()
-                                                    .gap_2()
-                                                    .child(
-                                                        Button::new("cancel-edits")
-                                                            .outline()
-                                                            .icon(IconName::CircleX)
-                                                            .label("Cancel")
-                                                            .on_click(cx.listener(|this, _, _window, cx| {
-                                                                if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
-                                                                    query_tab.results_panel.update(cx, |panel, cx| {
-                                                                        panel.cancel_all_edits(cx);
-                                                                    });
-                                                                }
-                                                            })),
-                                                    )
-                                                    .child(
-                                                        Button::new("commit-edits")
-                                                            .primary()
-                                                            .icon(IconName::Check)
-                                                            .label("Commit Changes")
-                                                            .on_click(cx.listener(|this, _, _window, cx| {
-                                                                if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
-                                                                    let changes = query_tab.results_panel.update(cx, |panel, cx| {
-                                                                        panel.commit_all_edits(cx)
-                                                                    });
-
-                                                                    // TODO: Generate and execute UPDATE queries for the changes
-                                                                    for (row, col, new_value) in changes {
-                                                                        println!("Committing change: row {}, col {}, value '{}'", row, col, new_value);
-                                                                    }
-                                                                }
-                                                            })),
-                                                    )
-                                            )
-                                        })
-                                        // Normal run button (shown when not editing)
-                                        .when(!query_tab.results_panel.read(cx).is_editing(cx), |this| {
-                                            this.child(
+                                        // Run button (always visible)
+                                        .child(
                                                 Button::new("run-query")
-                                                    .primary()
+                                                    .outline()
                                                     .icon(IconName::Check)
                                                     .label("Run Current")
                                                     .children(vec![Kbd::new(Keystroke::parse("shift-enter").unwrap()).into_any_element()])
                                                     .on_click(cx.listener(Self::run_query)),
                                             )
-                                        })
                                 )
                                 // Results
                                 .child(
@@ -2052,6 +2291,36 @@ impl Render for EditorPanel {
                                                     if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
                                                         query_tab.results_panel.update(cx, |results_panel, cx| {
                                                             results_panel.duplicate_row(0, cx); // Duplicate first row for now
+                                                        });
+                                                    }
+                                                })),
+                                        )
+                                        // Commit and rollback buttons (always available)
+                                        .child(
+                                            Button::new("commit-changes")
+                                                .outline()
+                                                .icon(IconName::Check)
+                                                .label("Commit Changes")
+                                                .children(vec![Kbd::new(Keystroke::parse("cmd-shift-c").unwrap()).into_any_element()])
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
+                                                        // Execute the actual commit in the results panel
+                                                        query_tab.results_panel.update(cx, |panel, cx| {
+                                                            panel.commit_changes(window, cx);
+                                                        });
+                                                    }
+                                                })),
+                                        )
+                                        .child(
+                                            Button::new("rollback-changes")
+                                                .outline()
+                                                .icon(IconName::CircleX)
+                                                .label("Rollback")
+                                                .children(vec![Kbd::new(Keystroke::parse("cmd-shift-r").unwrap()).into_any_element()])
+                                                .on_click(cx.listener(|this, _, _window, cx| {
+                                                    if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
+                                                        query_tab.results_panel.update(cx, |panel, cx| {
+                                                            panel.rollback_changes(_window, cx);
                                                         });
                                                     }
                                                 })),

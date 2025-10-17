@@ -4,51 +4,97 @@ use tokio::fs;
 
 /// Manages query files stored on disk for LSP integration
 pub struct QueryFileManager {
-    queries_dir: PathBuf,
+    base_dir: PathBuf,
 }
 
 impl QueryFileManager {
     /// Create a new query file manager
     pub fn new() -> Result<Self> {
-        let queries_dir = Self::queries_dir()?;
-        std::fs::create_dir_all(&queries_dir)?;
+        let base_dir = Self::base_dir()?;
+        std::fs::create_dir_all(&base_dir)?;
 
-        Ok(Self { queries_dir })
+        Ok(Self { base_dir })
     }
 
-    /// Get the queries directory path
-    fn queries_dir() -> Result<PathBuf> {
+    /// Get the base blanco directory path
+    fn base_dir() -> Result<PathBuf> {
         let mut path = dirs::data_dir()
             .ok_or_else(|| anyhow::anyhow!("Could not find data directory"))?;
         path.push("blanco");
+        Ok(path)
+    }
+
+    /// Sanitize connection name to create a safe directory name
+    /// Converts to lowercase, replaces spaces and special chars with hyphens
+    pub fn sanitize_connection_name(name: &str) -> String {
+        name.to_lowercase()
+            .chars()
+            .map(|c| match c {
+                'a'..='z' | '0'..='9' => c,
+                _ => '-',
+            })
+            .collect::<String>()
+            .split('-')
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<&str>>()
+            .join("-")
+    }
+
+    /// Get the queries directory path for a specific connection
+    pub fn queries_dir_for_connection(&self, connection_name: &str) -> Result<PathBuf> {
+        let sanitized_name = Self::sanitize_connection_name(connection_name);
+        let mut path = self.base_dir.clone();
+        path.push(sanitized_name);
         path.push("queries");
         Ok(path)
     }
 
+    /// Get the legacy queries directory (for backward compatibility)
+    pub fn legacy_queries_dir(&self) -> PathBuf {
+        let mut path = self.base_dir.clone();
+        path.push("queries");
+        path
+    }
+
+    /// Ensure queries directory exists for a connection
+    pub fn ensure_connection_dir(&self, connection_name: &str) -> Result<PathBuf> {
+        let queries_dir = self.queries_dir_for_connection(connection_name)?;
+        std::fs::create_dir_all(&queries_dir)?;
+        Ok(queries_dir)
+    }
+
     /// Create a new query file and return its path
-    pub async fn create_query_file(&self, tab_id: i64, content: &str) -> Result<PathBuf> {
-        let file_path = self.query_file_path(tab_id);
+    pub async fn create_query_file(&self, tab_id: i64, connection_name: &str, content: &str) -> Result<PathBuf> {
+        let file_path = self.query_file_path(tab_id, connection_name);
+        // Ensure the connection directory exists
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
         fs::write(&file_path, content).await?;
         Ok(file_path)
     }
 
     /// Read query file content
-    pub async fn read_query_file(&self, tab_id: i64) -> Result<String> {
-        let file_path = self.query_file_path(tab_id);
+    pub async fn read_query_file(&self, tab_id: i64, connection_name: &str) -> Result<String> {
+        let file_path = self.query_file_path(tab_id, connection_name);
         let content = fs::read_to_string(&file_path).await?;
         Ok(content)
     }
 
     /// Update query file content
-    pub async fn update_query_file(&self, tab_id: i64, content: &str) -> Result<()> {
-        let file_path = self.query_file_path(tab_id);
+    pub async fn update_query_file(&self, tab_id: i64, connection_name: &str, content: &str) -> Result<()> {
+        let file_path = self.query_file_path(tab_id, connection_name);
+        // Ensure the connection directory exists
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
         fs::write(&file_path, content).await?;
         Ok(())
     }
 
     /// Delete query file
-    pub async fn delete_query_file(&self, tab_id: i64) -> Result<()> {
-        let file_path = self.query_file_path(tab_id);
+    pub async fn delete_query_file(&self, tab_id: i64, connection_name: &str) -> Result<()> {
+        let file_path = self.query_file_path(tab_id, connection_name);
         if file_path.exists() {
             fs::remove_file(&file_path).await?;
         }
@@ -56,24 +102,65 @@ impl QueryFileManager {
     }
 
     /// Get the file path for a query tab
-    fn query_file_path(&self, tab_id: i64) -> PathBuf {
-        self.queries_dir.join(format!("query_{}.sql", tab_id))
+    pub fn query_file_path(&self, tab_id: i64, connection_name: &str) -> PathBuf {
+        let queries_dir = self.queries_dir_for_connection(connection_name)
+            .unwrap_or_else(|_| self.legacy_queries_dir());
+        queries_dir.join(format!("query_{}.sql", tab_id))
+    }
+
+    /// Get the legacy file path for a query tab (for backward compatibility)
+    pub fn legacy_query_file_path(&self, tab_id: i64) -> PathBuf {
+        self.legacy_queries_dir().join(format!("query_{}.sql", tab_id))
+    }
+
+    /// Migrate a query file from legacy location to connection-specific location
+    pub async fn migrate_query_file(&self, tab_id: i64, connection_name: &str) -> Result<bool> {
+        let legacy_path = self.legacy_query_file_path(tab_id);
+        let new_path = self.query_file_path(tab_id, connection_name);
+
+        if legacy_path.exists() && !new_path.exists() {
+            // Ensure the new directory exists
+            if let Some(parent) = new_path.parent() {
+                fs::create_dir_all(parent).await?;
+            }
+
+            // Copy the file to new location
+            let content = fs::read_to_string(&legacy_path).await?;
+            fs::write(&new_path, content).await?;
+
+            // Optionally remove the old file (commented out for safety)
+            // fs::remove_file(&legacy_path).await?;
+
+            return Ok(true);
+        }
+
+        Ok(false)
     }
 
     /// Get the file URI for a query tab (for LSP)
-    pub fn query_file_uri(&self, tab_id: i64) -> String {
-        let path = self.query_file_path(tab_id);
+    pub fn query_file_uri(&self, tab_id: i64, connection_name: &str) -> String {
+        let path = self.query_file_path(tab_id, connection_name);
         format!("file://{}", path.display())
     }
 
-    /// Check if a query file exists
-    pub fn query_file_exists(&self, tab_id: i64) -> bool {
-        self.query_file_path(tab_id).exists()
+    /// Check if a query file exists in the new location
+    pub fn query_file_exists(&self, tab_id: i64, connection_name: &str) -> bool {
+        self.query_file_path(tab_id, connection_name).exists()
     }
 
-    /// Get the queries directory path
-    pub fn queries_directory(&self) -> &Path {
-        &self.queries_dir
+    /// Check if a query file exists in the legacy location
+    pub fn legacy_query_file_exists(&self, tab_id: i64) -> bool {
+        self.legacy_query_file_path(tab_id).exists()
+    }
+
+    /// Get the queries directory path for a connection
+    pub fn queries_directory(&self, connection_name: &str) -> Result<PathBuf> {
+        self.queries_dir_for_connection(connection_name)
+    }
+
+    /// Get the base blanco directory path
+    pub fn base_directory(&self) -> &Path {
+        &self.base_dir
     }
 }
 
@@ -84,31 +171,73 @@ mod tests {
     #[tokio::test]
     async fn test_query_file_creation() {
         let manager = QueryFileManager::new().unwrap();
+        let connection_name = "test-connection";
         let content = "SELECT * FROM users;";
 
-        let file_path = manager.create_query_file(999, content).await.unwrap();
+        let file_path = manager.create_query_file(999, connection_name, content).await.unwrap();
         assert!(file_path.exists());
 
-        let read_content = manager.read_query_file(999).await.unwrap();
+        let read_content = manager.read_query_file(999, connection_name).await.unwrap();
         assert_eq!(read_content, content);
 
         // Cleanup
-        manager.delete_query_file(999).await.unwrap();
+        manager.delete_query_file(999, connection_name).await.unwrap();
     }
 
     #[tokio::test]
     async fn test_query_file_update() {
         let manager = QueryFileManager::new().unwrap();
+        let connection_name = "test-connection";
         let initial_content = "SELECT 1;";
         let updated_content = "SELECT 2;";
 
-        manager.create_query_file(998, initial_content).await.unwrap();
-        manager.update_query_file(998, updated_content).await.unwrap();
+        manager.create_query_file(998, connection_name, initial_content).await.unwrap();
+        manager.update_query_file(998, connection_name, updated_content).await.unwrap();
 
-        let read_content = manager.read_query_file(998).await.unwrap();
+        let read_content = manager.read_query_file(998, connection_name).await.unwrap();
         assert_eq!(read_content, updated_content);
 
         // Cleanup
-        manager.delete_query_file(998).await.unwrap();
+        manager.delete_query_file(998, connection_name).await.unwrap();
+    }
+
+    #[test]
+    fn test_connection_name_sanitization() {
+        assert_eq!(QueryFileManager::sanitize_connection_name("Local PostgreSQL"), "local-postgresql");
+        assert_eq!(QueryFileManager::sanitize_connection_name("Production DB"), "production-db");
+        assert_eq!(QueryFileManager::sanitize_connection_name("Test@Database#123"), "test-database-123");
+        assert_eq!(QueryFileManager::sanitize_connection_name("  spaces  "), "spaces");
+        assert_eq!(QueryFileManager::sanitize_connection_name("Multiple---Dashes"), "multiple-dashes");
+    }
+
+    #[tokio::test]
+    async fn test_query_file_migration() {
+        let manager = QueryFileManager::new().unwrap();
+        let connection_name = "migration-test";
+        let content = "SELECT * FROM test_table;";
+
+        // Create file in legacy location
+        let legacy_path = manager.legacy_query_file_path(1001);
+        if let Some(parent) = legacy_path.parent() {
+            tokio::fs::create_dir_all(parent).await.unwrap();
+        }
+        tokio::fs::write(&legacy_path, content).await.unwrap();
+        assert!(legacy_path.exists());
+
+        // Migrate to new location
+        let migrated = manager.migrate_query_file(1001, connection_name).await.unwrap();
+        assert!(migrated);
+
+        // Verify new file exists
+        let new_path = manager.query_file_path(1001, connection_name);
+        assert!(new_path.exists());
+
+        // Verify content is the same
+        let new_content = manager.read_query_file(1001, connection_name).await.unwrap();
+        assert_eq!(new_content, content);
+
+        // Cleanup
+        manager.delete_query_file(1001, connection_name).await.unwrap();
+        tokio::fs::remove_file(&legacy_path).await.unwrap_or(());
     }
 }

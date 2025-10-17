@@ -46,11 +46,17 @@ pub struct PostgresLspManager {
     config: PostgresLspConfig,
     client: Option<Arc<Mutex<Option<PostgresLspClient>>>>,
     executor: BackgroundExecutor,
+    workspace_path: Option<PathBuf>,
 }
 
 impl PostgresLspManager {
     /// Create a new PostgreSQL LSP manager
     pub async fn new(config: PostgresLspConfig, executor: BackgroundExecutor) -> Result<Self, LspManagerError> {
+        Self::with_workspace(config, executor, None).await
+    }
+
+    /// Create a new PostgreSQL LSP manager with a specific workspace directory
+    pub async fn with_workspace(config: PostgresLspConfig, executor: BackgroundExecutor, workspace_path: Option<PathBuf>) -> Result<Self, LspManagerError> {
         let downloader = Arc::new(BinaryDownloader::new()?);
         let process_manager = Arc::new(RwLock::new(ProcessManager::new()));
 
@@ -60,6 +66,7 @@ impl PostgresLspManager {
             config,
             client: None,
             executor,
+            workspace_path,
         })
     }
 
@@ -117,9 +124,17 @@ impl PostgresLspManager {
         let binary_path = self.downloader.ensure_binary().await?;
         info!("PostgreSQL LSP binary available at: {:?}", binary_path);
 
-        // Use the main queries directory as workspace
-        // This ensures the LSP server can access all query files
-        let workspace_path = std::path::PathBuf::from("/home/user/.local/share/blanco/queries");
+        // Use the connection-specific queries directory as workspace
+        // This ensures the LSP server can access query files for this specific connection
+        let workspace_path = if let Some(ref path) = self.workspace_path {
+            path.clone()
+        } else {
+            // Fallback to legacy directory for backward compatibility
+            dirs::data_dir()
+                .ok_or_else(|| LspManagerError::Config(crate::config::ConfigError::Invalid("Could not find data directory".to_string())))?
+                .join("blanco")
+                .join("queries")
+        };
         std::fs::create_dir_all(&workspace_path)?;
 
         info!("Using workspace directory for LSP: {:?}", workspace_path);

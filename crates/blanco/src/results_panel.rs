@@ -531,6 +531,7 @@ mod tests {
     fn test_query_result_creation() {
         let test_result = QueryResult {
             columns: vec!["id".to_string(), "name".to_string()],
+            column_types: vec![],
             rows: vec![
                 vec!["1".to_string(), "Alice".to_string()],
                 vec!["2".to_string(), "Bob".to_string()],
@@ -978,7 +979,10 @@ impl TableDelegate for ResultsTableDelegate {
         _: &mut Context<Table<Self>>,
     ) -> impl IntoElement {
         let col = &self.columns[col_ix];
-        div().font_family("Fira Code").child(col.name.clone())
+        div()
+            .font_family("Fira Code")
+            .text_sm()
+            .child(col.name.clone())
     }
 
     fn render_td(
@@ -1015,7 +1019,7 @@ impl TableDelegate for ResultsTableDelegate {
             if let Some(input) = self.edit_state.get_editing_input() {
                 div()
                     .font_family("Fira Code")
-                    .text_size(px(12.))
+                    .text_xs()
                     .size_full()
                     .p_0() // No padding since the cell already has padding
                     .when(self.is_numeric_column(col_ix), |this| {
