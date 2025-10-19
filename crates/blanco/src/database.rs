@@ -214,6 +214,19 @@ impl DatabaseManager {
         self.pool.is_some()
     }
 
+    /// Check if the database connection is healthy with a ping query
+    pub async fn is_connection_healthy(&self) -> bool {
+        if let Some(pool) = &self.pool {
+            // Execute a simple ping query to check connection health
+            match sqlx::query("SELECT 1").fetch_one(pool).await {
+                Ok(_) => true,
+                Err(_) => false,
+            }
+        } else {
+            false
+        }
+    }
+
     pub async fn disconnect(&mut self) {
         if let Some(pool) = self.pool.take() {
             pool.close().await;

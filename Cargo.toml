@@ -28,6 +28,9 @@ thiserror = "1.0"
 # Database dependencies
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "postgres", "uuid", "chrono", "json", "bigdecimal"] }
 
+# SQL parsing
+sql-parse = "0.2"
+
 # HTTP client for downloading
 reqwest = { version = "0.11", features = ["json"] }
 tempfile = "3.8"

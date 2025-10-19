@@ -14,6 +14,7 @@ mod query_file;
 mod results_panel;
 mod settings;
 mod sidebar;
+mod sql_parser;
 mod test_db;
 mod theme_loader;
 
