@@ -58,7 +58,7 @@ impl ProcessGuard {
     }
 
     /// Check if the process is still running
-    pub async fn is_running(&mut self) -> bool {
+    pub fn is_running(&mut self) -> bool {
         // smol::process::Child doesn't have try_wait, so we'll use a different approach
         // We can check the process status by trying to kill it with signal 0
         #[cfg(unix)]
@@ -347,8 +347,8 @@ impl PostgresLspProcess {
     }
 
     /// Check if the process is still running
-    pub async fn is_running(&mut self) -> bool {
-        self.process_guard.is_running().await
+    pub fn is_running(&mut self) -> bool {
+        self.process_guard.is_running()
     }
 
     /// Get the stdin handle for sending LSP messages
@@ -510,7 +510,7 @@ impl ProcessManager {
         let mut to_remove = Vec::new();
 
         for (i, process) in self.processes.iter_mut().enumerate() {
-            if !process.is_running().await {
+            if !process.is_running() {
                 warn!("Removing dead LSP process (PID: {})", process.pid());
                 to_remove.push(i);
             }
@@ -542,20 +542,17 @@ impl Default for ProcessManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use tempfile::TempDir;
 
     #[test]
     fn test_process_creation() {
         // This test requires a real binary, so we'll just test the structure
-        let temp_dir = TempDir::new().unwrap();
         let binary_path = PathBuf::from("/nonexistent/binary");
 
         // This should fail because the binary doesn't exist
         let result = std::thread::spawn(move || {
             tokio::runtime::Runtime::new()
                 .unwrap()
-                .block_on(async { PostgresLspProcess::new(binary_path, temp_dir.path()).await })
+                .block_on(async { PostgresLspProcess::new(binary_path, binary_path.parent().unwrap()).await })
         })
         .join()
         .unwrap();

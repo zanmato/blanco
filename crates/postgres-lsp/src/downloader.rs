@@ -207,9 +207,9 @@ impl BinaryDownloader {
         // Download the asset
         let response = self.client.get(&asset.browser_download_url).send().await?;
         if !response.status().is_success() {
-            return Err(DownloadError::Http(reqwest::Error::from(
+            return Err(DownloadError::Http(
                 response.error_for_status().unwrap_err(),
-            )));
+            ));
         }
 
         let bytes = response.bytes().await?;
@@ -230,9 +230,9 @@ impl BinaryDownloader {
             .await?;
 
         if !response.status().is_success() {
-            return Err(DownloadError::Http(reqwest::Error::from(
+            return Err(DownloadError::Http(
                 response.error_for_status().unwrap_err(),
-            )));
+            ));
         }
 
         let release: Release = response.json().await?;
@@ -270,16 +270,22 @@ impl BinaryDownloader {
     }
 
     /// Get the cache directory
+    #[must_use]
     pub fn cache_dir(&self) -> &PathBuf {
         &self.cache_dir
     }
 
     /// Get the current architecture
+    #[must_use]
     pub fn architecture(&self) -> &Architecture {
         &self.architecture
     }
 
     /// Clean up cached binaries
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the cache directory cannot be removed.
     pub async fn cleanup_cache(&self) -> Result<(), DownloadError> {
         if self.cache_dir.exists() {
             fs::remove_dir_all(&self.cache_dir).await?;

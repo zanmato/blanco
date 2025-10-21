@@ -1,7 +1,7 @@
 use crate::connection_sidebar::{Sidebar, SidebarGroup, SidebarMenu, SidebarMenuItem};
 use gpui::{
-    div, App, AppContext, Context, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Window,
+    div, App, AppContext, Context, FocusHandle, Focusable, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, Styled, Window,
 };
 use gpui_component::{
     button::Button, h_flex, v_flex, ActiveTheme, ContextModal as _, IconName, Side,
@@ -225,14 +225,12 @@ impl ConnectionSidebar {
         });
 
         cx.spawn(async move |handle, cx| {
-            if let Ok(result) = task.await {
-                if let Some((key, data)) = result {
-                    if let Some(sidebar) = handle.upgrade() {
-                        let _ = sidebar.update(cx, |sidebar, cx| {
-                            sidebar.pg_connections.insert(key, data);
-                            cx.notify();
-                        });
-                    }
+            if let Ok(Some((key, data))) = task.await {
+                if let Some(sidebar) = handle.upgrade() {
+                    let _ = sidebar.update(cx, |sidebar, cx| {
+                        sidebar.pg_connections.insert(key, data);
+                        cx.notify();
+                    });
                 }
             }
         })
@@ -497,7 +495,7 @@ impl Render for ConnectionSidebar {
                                 });
 
                                 // Focus the first input field after the modal opens
-                                content_for_focus.read(cx).first_input_focus_handle(cx).focus(window);
+                                content_for_focus.read(cx).focus_handle(cx).focus(window);
                             }))
                     ),
             )

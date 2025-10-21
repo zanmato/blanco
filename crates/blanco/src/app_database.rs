@@ -289,36 +289,6 @@ impl AppDatabase {
         Ok(result.last_insert_rowid())
     }
 
-    pub async fn get_query_history(&self, limit: i64) -> Result<Vec<QueryHistoryData>, sqlx::Error> {
-        let rows = sqlx::query(
-            r#"
-            SELECT id, query_text, executed_at, duration_ms, rows_affected, row_count, success, error_message
-            FROM query_history
-            ORDER BY executed_at DESC
-            LIMIT ?
-            "#,
-        )
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await?;
-
-        let history = rows
-            .into_iter()
-            .map(|row| QueryHistoryData {
-                id: Some(row.get::<i64, _>(0)),
-                query_text: row.get(1),
-                executed_at: row.get(2),
-                duration_ms: row.get(3),
-                rows_affected: row.get(4),
-                row_count: row.get(5),
-                success: row.get::<i64, _>(6) == 1,
-                error_message: row.get(7),
-            })
-            .collect();
-
-        Ok(history)
-    }
-
     // Connections
     pub async fn save_connection(&self, conn: &ConnectionData) -> Result<i64, sqlx::Error> {
         let now = chrono::Utc::now().timestamp();
@@ -369,44 +339,6 @@ impl AppDatabase {
 
             Ok(result.last_insert_rowid())
         }
-    }
-
-    pub async fn get_connections(&self) -> Result<Vec<ConnectionData>, sqlx::Error> {
-        let rows = sqlx::query(
-            r#"
-            SELECT id, name, db_type, host, port, database_name, username, password, database_path, last_used_at
-            FROM connections
-            ORDER BY last_used_at DESC NULLS LAST
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await?;
-
-        let connections = rows
-            .into_iter()
-            .map(|row| ConnectionData {
-                id: Some(row.get::<i64, _>(0)),
-                name: row.get(1),
-                db_type: row.get(2),
-                host: row.get(3),
-                port: row.get(4),
-                database_name: row.get(5),
-                username: row.get(6),
-                password: row.get(7),
-                database_path: row.get(8),
-                last_used_at: row.get(9),
-            })
-            .collect();
-
-        Ok(connections)
-    }
-
-    pub async fn delete_connection(&self, id: i64) -> Result<(), sqlx::Error> {
-        sqlx::query("DELETE FROM connections WHERE id = ?")
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
     }
 }
 

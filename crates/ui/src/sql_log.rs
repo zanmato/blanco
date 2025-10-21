@@ -1,3 +1,4 @@
+use core::str;
 use gpui::{
     div, px, Context, IntoElement, ParentElement, Render, SharedString, Styled, StyledText, Window,
 };
@@ -5,6 +6,11 @@ use gpui_component::highlighter::{HighlightTheme, SyntaxHighlighter};
 use gpui_component::ActiveTheme;
 use ropey::{LineType, Rope};
 use std::sync::Arc;
+
+pub enum SqlLogMessage {
+    SqlStatement(String),
+    Comment(String),
+}
 
 /// SQL Log entity for displaying SQL queries and logs with proper syntax highlighting
 pub struct SqlLog {
@@ -16,9 +22,8 @@ pub struct SqlLog {
 
 impl SqlLog {
     /// Create a new SQL log with the specified maximum number of lines
-    pub fn new(max_lines: usize) -> Self {
+    pub fn new(max_lines: usize, theme: Arc<HighlightTheme>) -> Self {
         let highlighter = SyntaxHighlighter::new("sql");
-        let theme = HighlightTheme::default_dark();
 
         Self {
             text: Rope::from(""),
@@ -29,12 +34,20 @@ impl SqlLog {
     }
 
     /// Append text to the log, managing line limits
-    pub fn append_text(&mut self, text: &str, cx: &mut Context<Self>) {
-        // Debug: Print what's being logged
-        println!("SqlLog: Appending text: {}", text);
+    pub fn append_text(&mut self, text: &SqlLogMessage, cx: &mut Context<Self>) {
+        // Check if this is a comment or a SQL statement, if it doesn't end with a delimiter, add it
+        let new_text = match text {
+            SqlLogMessage::SqlStatement(statement) => {
+                if !statement.trim_start().ends_with(";") {
+                    format!("{};\n", statement)
+                } else {
+                    format!("{}\n", statement)
+                }
+            }
+            SqlLogMessage::Comment(comment) => format!("-- {}\n", comment),
+        };
 
         // Append the new text
-        let new_text = format!("{}\n", text);
         self.text.insert(self.text.len(), &new_text);
 
         // Check if we need to trim old lines

@@ -19,13 +19,6 @@ enum ConnectorType {
 }
 
 impl ConnectorType {
-    fn as_str(&self) -> &str {
-        match self {
-            ConnectorType::SQLite => "SQLite",
-            ConnectorType::PostgreSQL => "PostgreSQL",
-        }
-    }
-
     fn from_str(s: &str) -> Self {
         match s {
             "PostgreSQL" => ConnectorType::PostgreSQL,
@@ -56,15 +49,6 @@ impl SqliteForm {
             .child(div().text_sm().child("File Path"))
             .child(TextInput::new(&self.file_path_input))
             .into_any_element()
-    }
-
-    fn validate(&self, cx: &App) -> Option<String> {
-        let file_path = self.file_path_input.read(cx).value();
-        if file_path.is_empty() {
-            Some("File path is required".to_string())
-        } else {
-            None
-        }
     }
 
     fn get_connection_data(&self, name: String, cx: &App) -> Option<ConnectionData> {
@@ -114,10 +98,6 @@ impl SqliteForm {
                 message: "Invalid file path".to_string(),
             }
         }
-    }
-
-    fn first_input_focus_handle(&self, cx: &App) -> FocusHandle {
-        self.file_path_input.focus_handle(cx)
     }
 }
 
@@ -337,10 +317,6 @@ impl NewConnectionModal {
         });
 
         cx.notify();
-    }
-
-    pub fn first_input_focus_handle(&self, cx: &App) -> FocusHandle {
-        self.name_input.focus_handle(cx)
     }
 
     pub fn get_connection_data(&self, cx: &App) -> Option<ConnectionData> {

@@ -1,3 +1,3 @@
 pub mod sql_log;
 
-pub use sql_log::SqlLog;
+pub use sql_log::{SqlLog, SqlLogMessage};

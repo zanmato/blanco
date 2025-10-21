@@ -943,7 +943,7 @@ impl ResultsTableDelegate {
                 let primary_key_value = self.get_primary_key_value(row);
 
                 // Validate change before creating
-                let validation_status = if primary_key_value.is_none() {
+                let _validation_status = if primary_key_value.is_none() {
                     "INVALID: No primary key value"
                 } else if self.primary_key_column.is_none() {
                     "WARNING: No primary key column detected"
@@ -1333,8 +1333,6 @@ pub struct ResultsPanel {
     current_result: Option<QueryResult>,
     editing_input: Option<Entity<InputState>>,
     editing_cell: Option<(usize, usize)>,
-    sql_log: VecDeque<SQLEntry>, // Circular buffer for SQL log entries
-    sql_log_editor: Option<Entity<InputState>>, // Read-only SQL code editor for syntax highlighting
 }
 
 impl ResultsPanel {
@@ -1342,36 +1340,13 @@ impl ResultsPanel {
         let delegate = ResultsTableDelegate::default();
         let table = cx.new(|cx| Table::new(delegate, window, cx));
 
-        // Create SQL editor for syntax highlighting
-        let initial_content = "-- SQL Output Log\n-- \n-- No queries executed yet.\n-- \n-- Commit changes to see the generated SQL queries here.";
-        let sql_log_editor = cx.new(|cx| {
-            let mut editor = InputState::new(window, cx)
-                .code_editor("sql".to_string())
-                .line_number(false) // Hide line numbers for cleaner look
-                .soft_wrap(true) // Enable text wrapping
-                .placeholder("SQL output will appear here...");
-
-            // Initialize with default content
-            editor.insert(initial_content, window, cx);
-            editor
-        });
-
-        let mut panel = Self {
+        let panel = Self {
             table,
             focus_handle: cx.focus_handle(),
             current_result: None,
             editing_input: None,
             editing_cell: None,
-            sql_log: VecDeque::new(),
-            sql_log_editor: Some(sql_log_editor),
         };
-
-        // Add a test log entry to verify the logging system works
-        panel.log_sql_query(
-            "ResultsPanel initialized - SQL logging system is working".to_string(),
-            SQLEntryStatus::Success,
-            cx,
-        );
 
         panel
     }
@@ -1485,7 +1460,7 @@ impl ResultsPanel {
                     });
                 } else {
                     // For existing rows, update the edited_values and commit as UPDATE
-                    self.table.update(cx, |table, cx| {
+                    self.table.update(cx, |table, _cx| {
                         table
                             .delegate_mut()
                             .update_cell_value(row, col, new_value.clone());
@@ -1518,12 +1493,6 @@ impl ResultsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Debug logging
-        self.log_sql_query(
-            format!("start_cell_edit() called: row={}, col={}", row, col),
-            SQLEntryStatus::Success,
-            cx,
-        );
 
         // Get the current cell value
         let current_value = self
@@ -1535,12 +1504,6 @@ impl ResultsPanel {
             .and_then(|r| r.get(col))
             .cloned()
             .unwrap_or_else(|| "".to_string());
-
-        self.log_sql_query(
-            format!("Current cell value: '{}'", current_value),
-            SQLEntryStatus::Success,
-            cx,
-        );
 
         // Check if this is a new row (pending insert) or existing row
         let is_new_row = self
@@ -1582,7 +1545,7 @@ impl ResultsPanel {
                         .insert((row_clone, col_clone), new_text.clone());
 
                     // Debug: Log the input change
-                    if let Some(table) = table_handle.upgrade() {
+                    if table_handle.upgrade().is_some() {
                         // We can't log directly from here, but we can store debug info
                         // in the edited_values for later logging in commit_cell_edit
                     }
@@ -1600,16 +1563,6 @@ impl ResultsPanel {
         // Store the editing state in the panel for commit/cancel operations
         self.editing_input = Some(input.clone());
         self.editing_cell = Some((row, col));
-
-        // Debug: Log final state
-        self.log_sql_query(
-            format!(
-                "start_cell_edit() complete: editing_cell={:?}, editing_input set",
-                self.editing_cell
-            ),
-            SQLEntryStatus::Success,
-            cx,
-        );
     }
 
     pub fn commit_cell_edit(
@@ -1619,16 +1572,6 @@ impl ResultsPanel {
         new_value: String,
         cx: &mut Context<Self>,
     ) -> Option<String> {
-        // Debug logging
-        self.log_sql_query(
-            format!(
-                "commit_cell_edit() called: row={}, col={}, new_value='{}'",
-                row, col, new_value
-            ),
-            SQLEntryStatus::Success,
-            cx,
-        );
-
         let mut committed_value = None;
         let mut old_value = None;
         let mut table_name = None;
@@ -1669,7 +1612,7 @@ impl ResultsPanel {
                     let primary_key_column = delegate.primary_key_column.clone();
 
                     // Validate change data before creating
-                    let validation_msg = if primary_key_value.is_none() {
+                    let _validation_msg = if primary_key_value.is_none() {
                         "Warning: No primary key value found - change may not be executable"
                     } else if primary_key_column.is_none() {
                         "Warning: No primary key column detected - using first column"
@@ -1702,17 +1645,6 @@ impl ResultsPanel {
         // Clear panel editing state
         self.editing_input = None;
         self.editing_cell = None;
-
-        // Debug: Log final state
-        let final_changes_count = self.get_changes(cx).len();
-        self.log_sql_query(
-            format!(
-                "After commit_cell_edit: Total changes = {}",
-                final_changes_count
-            ),
-            SQLEntryStatus::Success,
-            cx,
-        );
 
         cx.notify();
         committed_value
@@ -1766,62 +1698,11 @@ impl ResultsPanel {
             .is_some()
     }
 
-    pub fn generate_sql_changes(&self, cx: &App) -> Vec<String> {
-        let table_read = self.table.read(cx);
-        let delegate = table_read.delegate();
-
-        if let Some(table_name) = &delegate.table_name {
-            let column_names: Vec<String> = delegate
-                .columns
-                .iter()
-                .map(|col| col.name.to_string())
-                .collect();
-            let mut queries = Vec::new();
-
-            for change in &delegate.edit_state.changes {
-                if let Ok(sql) = change.to_sql_with_pk(&column_names, &delegate.primary_key_column)
-                {
-                    queries.push(sql);
-                }
-            }
-
-            queries
-        } else {
-            Vec::new()
-        }
-    }
-
     pub fn get_changes(&self, cx: &App) -> Vec<TableChange> {
         let table_read = self.table.read(cx);
         let delegate = table_read.delegate();
         let changes = delegate.edit_state.get_changes().to_vec();
         changes
-    }
-
-    // Debug method to get detailed change info for logging
-    fn get_debug_change_info(&self, cx: &App) -> String {
-        let table_read = self.table.read(cx);
-        let delegate = table_read.delegate();
-        let changes = delegate.edit_state.get_changes();
-
-        if changes.is_empty() {
-            return "No changes tracked".to_string();
-        }
-
-        let mut info = format!("{} changes tracked:\n", changes.len());
-        for (i, change) in changes.iter().enumerate() {
-            info.push_str(&format!(
-                "  {}: table='{}', row={}, col={:?}, old='{}', new='{}', pk={:?}\n",
-                i,
-                change.table_name,
-                change.row_index,
-                change.column_index,
-                change.old_value.as_ref().unwrap_or(&"None".to_string()),
-                change.new_value.as_ref().unwrap_or(&"None".to_string()),
-                change.primary_key_value
-            ));
-        }
-        info
     }
 
     pub fn clear_changes(&mut self, cx: &mut Context<Self>) {
@@ -1830,98 +1711,6 @@ impl ResultsPanel {
             table.refresh(cx);
         });
         cx.notify();
-    }
-
-    pub fn add_sql_log_entry(&mut self, entry: SQLEntry, cx: &mut Context<Self>) {
-        // Debug logging
-        log::info!(
-            "Adding SQL log entry: {} (status: {:?})",
-            if entry.query.len() > 60 {
-                format!("{}...", &entry.query[..60])
-            } else {
-                entry.query.clone()
-            },
-            entry.status
-        );
-
-        // Add entry to circular buffer
-        self.sql_log.push_back(entry);
-
-        // Debug: Log the total number of entries
-        log::info!("SQL log now has {} entries", self.sql_log.len());
-
-        // Maintain maximum size (circular buffer)
-        if self.sql_log.len() > MAX_SQL_LOG_ENTRIES {
-            self.sql_log.pop_front();
-            log::info!(
-                "Removed oldest entry, maintaining max size of {}",
-                MAX_SQL_LOG_ENTRIES
-            );
-        }
-
-        // Update the SQL editor immediately when entries are added - we'll update this in the render method instead
-        // self.update_sql_log_editor(cx);
-
-        cx.notify();
-    }
-
-    pub fn log_sql_query(&mut self, query: String, status: SQLEntryStatus, cx: &mut Context<Self>) {
-        // Disabled - using new SqlLog component instead
-        // let entry = SQLEntry::new(query, status);
-        // self.add_sql_log_entry(entry, cx);
-    }
-
-    pub fn log_sql_error(&mut self, query: String, error: String, cx: &mut Context<Self>) {
-        // Disabled - using new SqlLog component instead
-        // let entry = SQLEntry::new(query, SQLEntryStatus::Error).with_error(error);
-        // self.add_sql_log_entry(entry, cx);
-    }
-
-    pub fn clear_sql_log(&mut self, cx: &mut Context<Self>) {
-        self.sql_log.clear();
-        cx.notify();
-    }
-
-    pub fn update_sql_log_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(sql_editor) = &self.sql_log_editor {
-            let content = self.get_sql_log_content();
-            sql_editor.update(cx, |editor, cx| {
-                // Replace the entire content
-                editor.replace(&content, window, cx);
-                cx.notify();
-            });
-        } else {
-            log::warn!("update_sql_log_editor: sql_log_editor is None");
-        }
-    }
-
-    pub fn get_sql_log_content(&self) -> String {
-        self.sql_log
-            .iter()
-            .map(|entry| entry.format_for_sql_display())
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    pub fn render_table_only(&self, cx: &Context<Self>) -> impl IntoElement {
-        // Render only the table component without the SQL log
-        self.table.clone()
-    }
-
-    pub fn render_sql_log_only(&self, cx: &Context<Self>) -> impl IntoElement {
-        // Render only the SQL log component
-        div()
-            .flex_1()
-            .px_4()
-            .py_2()
-            .text_sm()
-            .text_color(cx.theme().foreground)
-            .child(self.get_sql_log_content())
-    }
-
-    pub fn has_sql_changes(&self, cx: &App) -> bool {
-        let table_read = self.table.read(cx);
-        !table_read.delegate().edit_state.get_changes().is_empty()
     }
 
     pub fn commit_all_edits(&mut self, cx: &mut Context<Self>) -> Vec<(usize, usize, String)> {
@@ -2024,61 +1813,22 @@ impl ResultsPanel {
         sql_log: Option<&Entity<blanco_ui::SqlLog>>,
         cx: &mut Context<Self>,
     ) {
-        // Debug logging
-        self.log_sql_query(
-            "commit_changes() method called".to_string(),
-            SQLEntryStatus::Success,
-            cx,
-        );
-
         // First, commit any currently editing cell
         if let Some((row, col)) = self.get_current_editing_cell(cx) {
-            self.log_sql_query(
-                format!("Auto-committing currently editing cell: ({}, {})", row, col),
-                SQLEntryStatus::Success,
-                cx,
-            );
-
             // Get the current value from the input
             if let Some(input) = &self.editing_input {
                 let current_value = input.read(cx).text().to_string();
-                self.log_sql_query(
-                    format!("Current input value: '{}'", current_value),
-                    SQLEntryStatus::Success,
-                    cx,
-                );
-
                 // Update the cell value before committing
                 self.update_editing_cell_value(row, col, current_value.clone(), cx);
 
                 // Commit the cell edit
                 self.commit_cell_edit(row, col, current_value, cx);
             } else {
-                self.log_sql_query(
-                    "No editing input found - cancelling current edit".to_string(),
-                    SQLEntryStatus::Error,
-                    cx,
-                );
                 self.cancel_current_edit(cx);
             }
         }
 
         let changes = self.get_changes(cx);
-
-        if changes.is_empty() {
-            self.log_sql_query(
-                "No changes to commit - returning early".to_string(),
-                SQLEntryStatus::Error,
-                cx,
-            );
-            return;
-        }
-
-        self.log_sql_query(
-            format!("Found {} changes to commit", changes.len()),
-            SQLEntryStatus::Success,
-            cx,
-        );
 
         let column_names: Vec<String> = self
             .table
@@ -2098,7 +1848,6 @@ impl ResultsPanel {
         let user_db_clone = user_db.clone();
         let changes_clone = changes.to_vec();
         let column_names_clone = column_names.clone();
-        let panel_handle = cx.entity().downgrade();
 
         let task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
             let db = user_db_clone.read().await;
@@ -2181,62 +1930,38 @@ impl ResultsPanel {
         });
 
         // Handle the completion of the commit task
-        let sql_log_for_result = sql_log.map(|log| log.clone());
+        let sql_log_for_result = sql_log.cloned();
         let _ = cx.spawn(async move |this, cx| {
             match task.await {
-                Ok((total_affected, executed_queries, all_successful, connection_healthy)) => {
+                Ok((total_affected, executed_queries, all_successful, _connection_healthy)) => {
                     // Log results and clear changes if all successful
                     this.update(cx, |this, cx| {
                         // Log to SQL log if available
                         if let Some(sql_log) = sql_log_for_result {
                             // Log the queries that were executed
                             for (query, affected_rows, error) in &executed_queries {
-                                let _ = sql_log.update(cx, |log, cx| {
-                                    log.append_text(&format!("-- Executing inline edit query: {}", query), cx);
+                                sql_log.update(cx, |log, cx| {
+                                    log.append_text(&blanco_ui::SqlLogMessage::SqlStatement(query.clone()), cx);
 
                                     if let Some(error) = error {
-                                        log.append_text(&format!("-- Error: {}", error), cx);
+                                        log.append_text(&blanco_ui::SqlLogMessage::Comment(format!("Error: {}", error)), cx);
                                     } else if let Some(affected) = affected_rows {
-                                        log.append_text(&format!("-- Query executed successfully, {} rows affected", affected), cx);
+                                        log.append_text(&blanco_ui::SqlLogMessage::Comment(format!("Query executed successfully, {} rows affected", affected)), cx);
                                     } else {
-                                        log.append_text("-- Query executed successfully", cx);
+                                        log.append_text(&blanco_ui::SqlLogMessage::Comment("Query executed successfully".to_owned()), cx);
                                     }
                                 });
                             }
 
                             // Log summary
                             let summary = if all_successful {
-                                format!("-- All inline edit queries completed successfully\n-- Total rows affected: {}", total_affected)
+                                format!("All inline edit queries completed successfully\n-- Total rows affected: {}", total_affected)
                             } else {
-                                "-- Some inline edit queries had errors".to_string()
+                                "Some inline edit queries had errors".to_string()
                             };
-                            let _ = sql_log.update(cx, |log, cx| {
-                                log.append_text(&summary, cx);
+                            sql_log.update(cx, |log, cx| {
+                                log.append_text(&blanco_ui::SqlLogMessage::Comment(summary.to_string()), cx);
                             });
-                        }
-                        // Log connection status
-                        let connection_status = if connection_healthy {
-                            "Database connection: Healthy"
-                        } else {
-                            "Database connection: Unhealthy (but queries may have succeeded)"
-                        };
-                        this.log_sql_query(
-                            connection_status.to_string(),
-                            SQLEntryStatus::Success,
-                            cx,
-                        );
-
-                        // Log all executed queries
-                        for (query, affected_rows, error) in executed_queries {
-                            if let Some(error) = error {
-                                this.log_sql_error(query, error, cx);
-                            } else if let Some(affected) = affected_rows {
-                                let success_msg =
-                                    format!("{} - Rows affected: {}", query, affected);
-                                this.log_sql_query(success_msg, SQLEntryStatus::Success, cx);
-                            } else {
-                                this.log_sql_query(query, SQLEntryStatus::Success, cx);
-                            }
                         }
 
                         // Only clear changes and refresh if all operations were successful
@@ -2284,23 +2009,15 @@ impl ResultsPanel {
                     })
                     .ok();
                 }
-                Err(e) => {
+                Err(_e) => {
                     // Failed to commit changes - log the error
-                    this.update(cx, |this, cx| {
-                        this.log_sql_error(
-                            "Failed to commit changes to database".to_string(),
-                            e.to_string(),
-                            cx,
-                        );
-                    })
-                    .ok();
+  
                 }
             }
         });
 
         // SQL logging will be handled in the main result handler below
-
-        }
+    }
 
     /// Rollback all pending changes
     pub fn rollback_changes(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -2317,7 +2034,7 @@ impl ResultsPanel {
                     if let Some(col) = change.column_index {
                         let row = change.row_index;
                         if let Some(old_value) = &change.old_value {
-                            self.table.update(cx, |table, cx| {
+                            self.table.update(cx, |table, _cx| {
                                 if let Some(cell) = table.delegate_mut().get_cell_mut(row, col) {
                                     *cell = old_value.clone();
                                 }
@@ -2328,7 +2045,7 @@ impl ResultsPanel {
                 ChangeType::InsertRow => {
                     // Remove inserted rows (reverse order to maintain indices)
                     let row = change.row_index;
-                    self.table.update(cx, |table, cx| {
+                    self.table.update(cx, |table, _cx| {
                         table.delegate_mut().remove_row(row);
                     });
                 }
@@ -2347,12 +2064,6 @@ impl ResultsPanel {
     }
 
     pub fn add_new_row(&mut self, cx: &mut Context<Self>) {
-        self.log_sql_query(
-            "add_new_row() called - preparing to insert new row".to_string(),
-            SQLEntryStatus::Success,
-            cx,
-        );
-
         self.table.update(cx, |table, cx| {
             let delegate = table.delegate_mut();
             let column_count = delegate.columns.len();
@@ -2414,12 +2125,6 @@ impl ResultsPanel {
     }
 
     pub fn duplicate_row(&mut self, row_index: usize, cx: &mut Context<Self>) {
-        self.log_sql_query(
-            format!("duplicate_row() called - duplicating row {}", row_index),
-            SQLEntryStatus::Success,
-            cx,
-        );
-
         self.table.update(cx, |table, cx| {
             let delegate = table.delegate_mut();
 
@@ -2482,15 +2187,6 @@ impl ResultsPanel {
 
     /// Set a cell value to NULL
     pub fn set_cell_to_null(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
-        self.log_sql_query(
-            format!(
-                "set_cell_to_null() called - setting cell ({}, {}) to NULL",
-                row, col
-            ),
-            SQLEntryStatus::Success,
-            cx,
-        );
-
         self.table.update(cx, |table, cx| {
             let delegate = table.delegate_mut();
 
@@ -2546,15 +2242,6 @@ impl ResultsPanel {
 
     /// Clear a cell value (set to empty string)
     pub fn clear_cell_value(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
-        self.log_sql_query(
-            format!(
-                "clear_cell_value() called - clearing cell ({}, {})",
-                row, col
-            ),
-            SQLEntryStatus::Success,
-            cx,
-        );
-
         self.table.update(cx, |table, cx| {
             let delegate = table.delegate_mut();
 
@@ -2620,7 +2307,7 @@ impl Render for ResultsPanel {
         // Check for pending edits
         if let Some((row, col)) = self.table.read(cx).delegate().pending_edit_cell {
             // Clear the pending edit and start editing
-            self.table.update(cx, |table, cx| {
+            self.table.update(cx, |table, _cx| {
                 table.delegate_mut().pending_edit_cell = None;
             });
             self.start_cell_edit(row, col, window, cx);
@@ -2769,33 +2456,6 @@ impl Render for ResultsPanel {
                                                 .child("Commit")
                                                 .on_click(cx.listener(
                                                     |this, _event, window, cx| {
-                                                        // Debug logging - log button click
-                                                        this.log_sql_query("Commit button clicked!".to_string(), SQLEntryStatus::Success, cx);
-
-                                                        // Debug: Check if we have changes
-                                                        let has_changes = this.has_sql_changes(cx);
-                                                        let changes_count = this.get_changes(cx).len();
-                                                        let debug_info = this.get_debug_change_info(cx);
-                                                        this.log_sql_query(format!("Has changes: {}, Count: {}\n{}", has_changes, changes_count, debug_info), SQLEntryStatus::Success, cx);
-
-                                                        // Debug: Log table info
-                                                        if let Some(table_name) = this.get_table_name(cx) {
-                                                            this.log_sql_query(format!("Table: {}, Editable: {}", table_name, this.table.read(cx).delegate().is_editable()), SQLEntryStatus::Success, cx);
-                                                        } else {
-                                                            this.log_sql_query("No table name available".to_string(), SQLEntryStatus::Error, cx);
-                                                        }
-
-                                                        // Debug: Log current editing cell
-                                                        if let Some((row, col)) = this.get_current_editing_cell(cx) {
-                                                            this.log_sql_query(format!("Currently editing cell: ({}, {})", row, col), SQLEntryStatus::Success, cx);
-                                                            if let Some(input) = &this.editing_input {
-                                                                let current_input_value = input.read(cx).text().to_string();
-                                                                this.log_sql_query(format!("Current input value: '{}'", current_input_value), SQLEntryStatus::Success, cx);
-                                                            }
-                                                        } else {
-                                                            this.log_sql_query("No cell currently being edited".to_string(), SQLEntryStatus::Success, cx);
-                                                        }
-
                                                         this.commit_changes(window, cx);
                                                     },
                                                 )),
@@ -2807,8 +2467,6 @@ impl Render for ResultsPanel {
                                                 .child("Rollback")
                                                 .on_click(cx.listener(
                                                     |this, _event, window, cx| {
-                                                        // Debug logging - log rollback button click
-                                                        this.log_sql_query("Rollback button clicked!".to_string(), SQLEntryStatus::Success, cx);
                                                         this.rollback_changes(window, cx);
                                                     },
                                                 )),
@@ -2820,64 +2478,6 @@ impl Render for ResultsPanel {
                         this.text_color(cx.theme().muted_foreground)
                             .child("No query executed")
                     }),
-            )
-            // SQL Output Log
-            .child(
-                v_flex()
-                    .flex_shrink_0()
-                    .h(px(250.0))     // Give a bit more height for the SQL log
-                    .border_t_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().background)
-                    .child(
-                        h_flex()
-                            .px_4()
-                            .py_2()
-                            .border_b_1()
-                            .border_color(cx.theme().border)
-                            .bg(cx.theme().muted)
-                            .items_center()
-                            .justify_between()
-                            .child(
-                                h_flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .text_sm()
-                                    .font_semibold()
-                                    .text_color(cx.theme().foreground)
-                                    .child(Icon::new(IconName::SquareTerminal))
-                                    .child("SQL Output Log"),
-                            )
-                            .child(
-                                Button::new("clear-sql-log")
-                                    .with_variant(ButtonVariant::Ghost)
-                                    .child("Clear")
-                                    .on_click(cx.listener(|this, _event, _window, cx| {
-                                        this.clear_sql_log(cx);
-                                    })),
-                            ),
-                    )
-                    .child(
-                        // Update and render the SQL log using InputState for syntax highlighting
-                        if let Some(sql_editor) = self.sql_log_editor.clone() {
-                            // Update the editor content in render method
-                            self.update_sql_log_editor(window, cx);
-
-                            div()
-                                .flex_1()
-                                .px_4()
-                                .py_2()
-                                .child(sql_editor)
-                        } else {
-                            div()
-                                .flex_1()
-                                .px_4()
-                                .py_2()
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .child("SQL editor not available")
-                        }
-                    ),
             )
     }
 }

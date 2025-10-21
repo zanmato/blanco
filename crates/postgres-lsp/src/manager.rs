@@ -52,11 +52,11 @@ pub struct PostgresLspManager {
 impl PostgresLspManager {
     /// Create a new PostgreSQL LSP manager
     pub async fn new(config: PostgresLspConfig, executor: BackgroundExecutor) -> Result<Self, LspManagerError> {
-        Self::with_workspace(config, executor, None).await
+        Self::with_workspace(config, executor, None)
     }
 
     /// Create a new PostgreSQL LSP manager with a specific workspace directory
-    pub async fn with_workspace(config: PostgresLspConfig, executor: BackgroundExecutor, workspace_path: Option<PathBuf>) -> Result<Self, LspManagerError> {
+    pub fn with_workspace(config: PostgresLspConfig, executor: BackgroundExecutor, workspace_path: Option<PathBuf>) -> Result<Self, LspManagerError> {
         let downloader = Arc::new(BinaryDownloader::new()?);
         let process_manager = Arc::new(RwLock::new(ProcessManager::new()));
 
@@ -293,7 +293,7 @@ impl PostgresLspManager {
     }
 
     /// Update the configuration
-    pub async fn update_config(&mut self, config: PostgresLspConfig) -> Result<(), LspManagerError> {
+    pub fn update_config(&mut self, config: PostgresLspConfig) -> Result<(), LspManagerError> {
         info!("Updating PostgreSQL LSP configuration");
         self.config = config;
 
@@ -465,8 +465,7 @@ impl PostgresLspManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
-
+    
     #[tokio::test]
     async fn test_manager_creation() {
         let config = PostgresLspConfig::default();

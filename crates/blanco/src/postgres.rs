@@ -509,7 +509,7 @@ impl SchemaNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db_service::{DbService, PgConnectionKey};
+    use crate::db_service::DbService;
 
     #[tokio::test]
     async fn test_postgres_connection() {

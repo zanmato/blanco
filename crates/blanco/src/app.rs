@@ -337,10 +337,7 @@ impl BlancoApp {
         });
 
         // Focus the first input field after the modal opens
-        content_for_focus
-            .read(cx)
-            .first_input_focus_handle(cx)
-            .focus(window);
+        content_for_focus.read(cx).focus_handle(cx).focus(window);
     }
 
     fn on_run_query(&mut self, _: &RunQuery, window: &mut Window, cx: &mut Context<Self>) {
@@ -350,14 +347,24 @@ impl BlancoApp {
         });
     }
 
-    fn on_commit_changes(&mut self, _: &CommitChanges, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_commit_changes(
+        &mut self,
+        _: &CommitChanges,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // Delegate commit to the editor panel (which will forward to results panel)
         self.editor_panel.update(cx, |panel, cx| {
             panel.commit_current_changes(window, cx);
         });
     }
 
-    fn on_rollback_changes(&mut self, _: &RollbackChanges, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_rollback_changes(
+        &mut self,
+        _: &RollbackChanges,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // Delegate rollback to the editor panel (which will forward to results panel)
         self.editor_panel.update(cx, |panel, cx| {
             panel.rollback_current_changes(window, cx);

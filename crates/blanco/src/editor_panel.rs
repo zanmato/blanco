@@ -1,6 +1,7 @@
 use gpui::{
     div, prelude::FluentBuilder, px, Action, App, AppContext, ClickEvent, Context, Entity,
-    EventEmitter, FocusHandle, Focusable, IntoElement, Keystroke, ParentElement, Point, Pixels, Render, Styled, Window,
+    EventEmitter, FocusHandle, Focusable, IntoElement, Keystroke, ParentElement, Pixels, Point,
+    Render, Styled, Window,
 };
 use gpui_component::{
     button::{Button, ButtonVariants},
@@ -20,10 +21,10 @@ use crate::database::QueryResult;
 use crate::db_service::{DbService, PgConnectionKey};
 use crate::query_file::QueryFileManager;
 use crate::settings::Settings;
+use blanco_ui::SqlLog;
 use postgres_lsp::PostgresLspManager;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use blanco_ui::SqlLog;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SplitType {
@@ -90,8 +91,8 @@ pub struct EditorPanel {
     _subscriptions: Vec<gpui::Subscription>,
     query_file_manager: Arc<QueryFileManager>,
     // Split pane state
-    editor_table_split: f32,    // Position between editor and table (0.0-1.0)
-    table_log_split: f32,       // Position between table and log (0.0-1.0)
+    editor_table_split: f32, // Position between editor and table (0.0-1.0)
+    table_log_split: f32,    // Position between table and log (0.0-1.0)
     dragging_split: Option<SplitType>, // Which handle is being dragged
     drag_start_position: Option<Point<f32>>, // Start position of drag
 }
@@ -136,7 +137,7 @@ impl EditorPanel {
             }),
             db_id: None,
             results_panel: cx.new(|cx| crate::results_panel::ResultsPanel::new(window, cx)),
-            sql_log: cx.new(|_| SqlLog::new(1000)), // Maximum 1000 lines in the log
+            sql_log: cx.new(|cx| SqlLog::new(1000, cx.theme().highlight_theme.clone())), // Maximum 1000 lines in the log
             lsp_manager: None, // No LSP for SQLite
             cached_diagnostics: Arc::new(Mutex::new(Vec::new())),
             document_version: 0,
@@ -263,7 +264,7 @@ impl EditorPanel {
             editor,
             db_id: None,
             results_panel: cx.new(|cx| crate::results_panel::ResultsPanel::new(window, cx)),
-            sql_log: cx.new(|_| SqlLog::new(1000)), // Maximum 1000 lines in the log
+            sql_log: cx.new(|cx| SqlLog::new(1000, cx.theme().highlight_theme.clone())), // Maximum 1000 lines in the log
             lsp_manager: None, // No LSP for SQLite
             cached_diagnostics: Arc::new(Mutex::new(Vec::new())),
             document_version: 0,
@@ -358,7 +359,7 @@ impl EditorPanel {
             editor,
             db_id: None,
             results_panel: cx.new(|cx| crate::results_panel::ResultsPanel::new(window, cx)),
-            sql_log: cx.new(|_| SqlLog::new(1000)), // Maximum 1000 lines in the log
+            sql_log: cx.new(|cx| SqlLog::new(1000, cx.theme().highlight_theme.clone())), // Maximum 1000 lines in the log
             lsp_manager: None, // Will be initialized later if needed
             cached_diagnostics: Arc::new(Mutex::new(Vec::new())),
             document_version: 0,
@@ -443,7 +444,7 @@ impl EditorPanel {
             editor,
             db_id: None,
             results_panel: cx.new(|cx| crate::results_panel::ResultsPanel::new(window, cx)),
-            sql_log: cx.new(|_| SqlLog::new(1000)), // Maximum 1000 lines in the log
+            sql_log: cx.new(|cx| SqlLog::new(1000, cx.theme().highlight_theme.clone())), // Maximum 1000 lines in the log
             lsp_manager: None, // Will be initialized asynchronously
             cached_diagnostics: Arc::new(Mutex::new(Vec::new())),
             document_version: 0,
@@ -682,15 +683,14 @@ impl EditorPanel {
                         return;
                     }
 
-                    println!(
-                        "Executing query: {} on {}",
-                        query, query_tab.connection_name
-                    );
-
                     // Log the query to the SQL log
-                    let log_message = format!("-- Executing query on {}\n{}", query_tab.connection_name, query);
+                    let log_message = format!("Executing query on {}", query_tab.connection_name);
                     query_tab.sql_log.update(cx, |sql_log, cx| {
-                        sql_log.append_text(&log_message, cx);
+                        sql_log.append_text(&blanco_ui::SqlLogMessage::Comment(log_message), cx);
+                        sql_log.append_text(
+                            &blanco_ui::SqlLogMessage::SqlStatement(query.clone()),
+                            cx,
+                        );
                     });
 
                     // Get database service
@@ -705,7 +705,6 @@ impl EditorPanel {
                     // Clone connection details for the async task
                     let connection_type = query_tab.connection_type.clone();
                     let pg_connection_key = query_tab.pg_connection_key.clone();
-                    let sql_log = query_tab.sql_log.clone();
 
                     // Execute query using Tokio::spawn_result to ensure tokio context
                     let db_task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
@@ -835,7 +834,6 @@ impl EditorPanel {
                     // Get the results panel for this tab
                     let results_panel = query_tab.results_panel.clone();
                     let sql_log = query_tab.sql_log.clone();
-                    let start_time = start_time.clone();
 
                     // Update results panel when the task completes
                     cx.spawn(async move |_editor_panel, cx| {
@@ -845,13 +843,13 @@ impl EditorPanel {
                             Ok(result) => {
                                 // Log successful result
                                 let result_message = format!(
-                                    "-- Query executed successfully in {}ms\n-- {} rows returned, {} rows affected",
+                                    "Query executed successfully in {}ms\n-- {} rows returned, {} rows affected",
                                     duration_ms,
                                     result.row_count(),
                                     result.rows_affected
                                 );
                                 let _ = sql_log.update(cx, |sql_log, cx| {
-                                    sql_log.append_text(&result_message, cx);
+                                    sql_log.append_text(&blanco_ui::SqlLogMessage::Comment(result_message), cx);
                                 });
 
                                 let _ = results_panel.update(cx, |panel, cx| {
@@ -863,12 +861,12 @@ impl EditorPanel {
 
                                 // Log query error
                                 let error_log_message = format!(
-                                    "-- Query execution failed in {}ms\nError: {}",
+                                    "Query execution failed in {}ms\nError: {}",
                                     duration_ms,
                                     error_msg
                                 );
                                 let _ = sql_log.update(cx, |sql_log, cx| {
-                                    sql_log.append_text(&error_log_message, cx);
+                                    sql_log.append_text(&blanco_ui::SqlLogMessage::Comment(error_log_message), cx);
                                 });
                             }
                         }
@@ -1280,7 +1278,7 @@ impl EditorPanel {
             editor,
             db_id,
             results_panel: cx.new(|cx| crate::results_panel::ResultsPanel::new(window, cx)),
-            sql_log: cx.new(|_| SqlLog::new(1000)), // Maximum 1000 lines in the log
+            sql_log: cx.new(|cx| SqlLog::new(1000, cx.theme().highlight_theme.clone())), // Maximum 1000 lines in the log
             lsp_manager,
             cached_diagnostics: Arc::new(Mutex::new(Vec::new())),
             document_version: 0,
@@ -1426,19 +1424,17 @@ impl EditorPanel {
                     };
 
                     // Create LSP manager
-                    let mut lsp_manager =
-                        match PostgresLspManager::with_workspace(config, executor, workspace_path)
-                            .await
-                        {
-                            Ok(manager) => manager,
-                            Err(e) => {
-                                error!("Failed to create LSP manager for tab {}: {:?}", tab_id, e);
-                                return Err(anyhow::anyhow!(
-                                    "Failed to create LSP manager: {:?}",
-                                    e
-                                ));
-                            }
-                        };
+                    let mut lsp_manager = match PostgresLspManager::with_workspace(
+                        config,
+                        executor,
+                        workspace_path,
+                    ) {
+                        Ok(manager) => manager,
+                        Err(e) => {
+                            error!("Failed to create LSP manager for tab {}: {:?}", tab_id, e);
+                            return Err(anyhow::anyhow!("Failed to create LSP manager: {:?}", e));
+                        }
+                    };
 
                     // Set up diagnostic handler using the query tab's diagnostic storage
                     let _editor_clone_for_diagnostics = editor.clone();
@@ -1915,194 +1911,185 @@ impl EditorPanel {
 
     /// Execute the current query in the active tab
     pub fn execute_current_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(tab) = self.tabs.get_mut(self.active_tab_ix) {
-            if let TabType::Query(query_tab) = tab {
-                // Get text and cursor position from editor
-                let editor = query_tab.editor.read(cx);
-                let full_text = editor.text().to_string();
-                let cursor_pos = editor.cursor();
+        if let Some(TabType::Query(query_tab)) = self.tabs.get_mut(self.active_tab_ix) {
+            // Get text and cursor position from editor
+            let editor = query_tab.editor.read(cx);
+            let full_text = editor.text().to_string();
+            let cursor_pos = editor.cursor();
 
-                let query = Self::extract_current_query(
-                    &full_text, cursor_pos,
-                    false, // TODO: Detect actual selection state when API is available
-                );
+            let query = Self::extract_current_query(
+                &full_text, cursor_pos,
+                false, // TODO: Detect actual selection state when API is available
+            );
 
-                if query.is_empty() {
-                    window.push_notification("No query to execute", cx);
-                    return;
-                }
+            if query.is_empty() {
+                window.push_notification("No query to execute", cx);
+                return;
+            }
 
-                println!(
-                    "Executing query: {} on {}",
-                    query, query_tab.connection_name
-                );
+            println!(
+                "Executing query: {} on {}",
+                query, query_tab.connection_name
+            );
 
-                // Log the query to the SQL log
-                let log_message = format!("-- Executing query on {}\n{}", query_tab.connection_name, query);
-                query_tab.sql_log.update(cx, |sql_log, cx| {
-                    sql_log.append_text(&log_message, cx);
-                });
+            // Log the query to the SQL log
+            let log_message = format!(
+                "Executing query on {}\n{}",
+                query_tab.connection_name, query
+            );
+            query_tab.sql_log.update(cx, |sql_log, cx| {
+                sql_log.append_text(&blanco_ui::SqlLogMessage::SqlStatement(log_message), cx);
+            });
 
-                // Get database service
-                let db_service = DbService::global(cx).clone();
-                let user_db = db_service.user_db_handle();
-                let app_db = db_service.app_db_handle();
+            // Get database service
+            let db_service = DbService::global(cx).clone();
+            let user_db = db_service.user_db_handle();
+            let app_db = db_service.app_db_handle();
 
-                // Track execution timing
-                let start_time = std::time::Instant::now();
-                let executed_at = chrono::Utc::now().timestamp();
+            // Track execution timing
+            let start_time = std::time::Instant::now();
+            let executed_at = chrono::Utc::now().timestamp();
 
-                // Clone connection details for the async task
-                let connection_type = query_tab.connection_type.clone();
-                let pg_connection_key = query_tab.pg_connection_key.clone();
+            // Clone connection details for the async task
+            let connection_type = query_tab.connection_type.clone();
+            let pg_connection_key = query_tab.pg_connection_key.clone();
 
-                // Execute query using Tokio::spawn_result to ensure tokio context
-                let db_task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
-                    let query_result = match connection_type {
-                        ConnectionType::SQLite => {
-                            let db = user_db.read().await;
-                            if !db.is_connected() {
-                                Err(anyhow::anyhow!("Not connected to SQLite database"))
-                            } else {
-                                db.execute_query_async(&query)
-                                    .await
-                                    .map_err(|e| anyhow::anyhow!("{}", e))
-                            }
-                        }
-                        ConnectionType::PostgreSQL => {
-                            if let Some(pg_key) = pg_connection_key {
-                                // Get or create PostgreSQL connection
-                                let connection_string =
-                                    if let Some(ref password) = pg_key.password {
-                                        format!(
-                                            "postgresql://{}:{}@{}:{}/{}",
-                                            pg_key.username,
-                                            password,
-                                            pg_key.host,
-                                            pg_key.port,
-                                            pg_key.database
-                                        )
-                                    } else {
-                                        format!(
-                                            "postgresql://{}@{}:{}/{}",
-                                            pg_key.username,
-                                            pg_key.host,
-                                            pg_key.port,
-                                            pg_key.database
-                                        )
-                                    };
-
-                                match db_service
-                                    .get_or_create_pg_connection(&connection_string)
-                                    .await
-                                {
-                                    Ok(pg_manager) => pg_manager
-                                        .execute_query_async(&query)
-                                        .await
-                                        .map_err(|e| anyhow::anyhow!("{}", e)),
-                                    Err(e) => Err(anyhow::anyhow!(
-                                        "Failed to connect to PostgreSQL: {}",
-                                        e
-                                    )),
-                                }
-                            } else {
-                                Err(anyhow::anyhow!("PostgreSQL connection key not found"))
-                            }
-                        }
-                    };
-
-                    let duration_ms = start_time.elapsed().as_millis() as i64;
-
-                    match query_result {
-                        Ok(mut result) => {
-                            println!(
-                                "Query executed successfully: {} rows",
-                                result.row_count()
-                            );
-
-                            
-                            // Add execution metadata
-                            result.query_text = Some(query.clone());
-                            result.execution_time_ms = Some(duration_ms);
-                            result.is_error = false;
-
-                            // Save to query history
-                            if let Some(app_db) = app_db.read().await.as_ref() {
-                                let history = QueryHistoryData {
-                                    id: None,
-                                    query_text: query.clone(),
-                                    executed_at,
-                                    duration_ms: Some(duration_ms),
-                                    rows_affected: Some(result.rows_affected as i64),
-                                    row_count: Some(result.row_count() as i64),
-                                    success: true,
-                                    error_message: None,
-                                };
-
-                                if let Err(e) = app_db.save_query_history(&history).await {
-                                    eprintln!("Failed to save query history: {}", e);
-                                }
-                            }
-
-                            Ok(result)
-                        }
-                        Err(e) => {
-                            let error_msg = e.to_string();
-                            eprintln!("Query execution failed: {}", error_msg);
-
-                            
-                            // Save error to query history
-                            if let Some(app_db) = app_db.read().await.as_ref() {
-                                let history = QueryHistoryData {
-                                    id: None,
-                                    query_text: query.clone(),
-                                    executed_at,
-                                    duration_ms: Some(duration_ms),
-                                    rows_affected: None,
-                                    row_count: None,
-                                    success: false,
-                                    error_message: Some(error_msg.clone()),
-                                };
-
-                                if let Err(e) = app_db.save_query_history(&history).await {
-                                    eprintln!("Failed to save query history: {}", e);
-                                }
-                            }
-
-                            // Return error as a result
-                            Ok(QueryResult {
-                                columns: vec!["Error".to_string()],
-                                column_types: vec!["TEXT".to_string()],
-                                rows: vec![vec![error_msg.clone()]],
-                                rows_affected: 0,
-                                query_text: Some(query.clone()),
-                                execution_time_ms: Some(duration_ms),
-                                is_error: true,
-                            })
+            // Execute query using Tokio::spawn_result to ensure tokio context
+            let db_task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
+                let query_result = match connection_type {
+                    ConnectionType::SQLite => {
+                        let db = user_db.read().await;
+                        if !db.is_connected() {
+                            Err(anyhow::anyhow!("Not connected to SQLite database"))
+                        } else {
+                            db.execute_query_async(&query)
+                                .await
+                                .map_err(|e| anyhow::anyhow!("{}", e))
                         }
                     }
-                });
+                    ConnectionType::PostgreSQL => {
+                        if let Some(pg_key) = pg_connection_key {
+                            // Get or create PostgreSQL connection
+                            let connection_string = if let Some(ref password) = pg_key.password {
+                                format!(
+                                    "postgresql://{}:{}@{}:{}/{}",
+                                    pg_key.username,
+                                    password,
+                                    pg_key.host,
+                                    pg_key.port,
+                                    pg_key.database
+                                )
+                            } else {
+                                format!(
+                                    "postgresql://{}@{}:{}/{}",
+                                    pg_key.username, pg_key.host, pg_key.port, pg_key.database
+                                )
+                            };
 
-                // Get the results panel for this tab
-                let results_panel = query_tab.results_panel.clone();
-                let sql_log = query_tab.sql_log.clone();
-                let start_time = start_time.clone();
+                            match db_service
+                                .get_or_create_pg_connection(&connection_string)
+                                .await
+                            {
+                                Ok(pg_manager) => pg_manager
+                                    .execute_query_async(&query)
+                                    .await
+                                    .map_err(|e| anyhow::anyhow!("{}", e)),
+                                Err(e) => {
+                                    Err(anyhow::anyhow!("Failed to connect to PostgreSQL: {}", e))
+                                }
+                            }
+                        } else {
+                            Err(anyhow::anyhow!("PostgreSQL connection key not found"))
+                        }
+                    }
+                };
 
-                // Update results panel when the task completes
-                cx.spawn(async move |_editor_panel, cx| {
+                let duration_ms = start_time.elapsed().as_millis() as i64;
+
+                match query_result {
+                    Ok(mut result) => {
+                        println!("Query executed successfully: {} rows", result.row_count());
+
+                        // Add execution metadata
+                        result.query_text = Some(query.clone());
+                        result.execution_time_ms = Some(duration_ms);
+                        result.is_error = false;
+
+                        // Save to query history
+                        if let Some(app_db) = app_db.read().await.as_ref() {
+                            let history = QueryHistoryData {
+                                id: None,
+                                query_text: query.clone(),
+                                executed_at,
+                                duration_ms: Some(duration_ms),
+                                rows_affected: Some(result.rows_affected as i64),
+                                row_count: Some(result.row_count() as i64),
+                                success: true,
+                                error_message: None,
+                            };
+
+                            if let Err(e) = app_db.save_query_history(&history).await {
+                                eprintln!("Failed to save query history: {}", e);
+                            }
+                        }
+
+                        Ok(result)
+                    }
+                    Err(e) => {
+                        let error_msg = e.to_string();
+                        eprintln!("Query execution failed: {}", error_msg);
+
+                        // Save error to query history
+                        if let Some(app_db) = app_db.read().await.as_ref() {
+                            let history = QueryHistoryData {
+                                id: None,
+                                query_text: query.clone(),
+                                executed_at,
+                                duration_ms: Some(duration_ms),
+                                rows_affected: None,
+                                row_count: None,
+                                success: false,
+                                error_message: Some(error_msg.clone()),
+                            };
+
+                            if let Err(e) = app_db.save_query_history(&history).await {
+                                eprintln!("Failed to save query history: {}", e);
+                            }
+                        }
+
+                        // Return error as a result
+                        Ok(QueryResult {
+                            columns: vec!["Error".to_string()],
+                            column_types: vec!["TEXT".to_string()],
+                            rows: vec![vec![error_msg.clone()]],
+                            rows_affected: 0,
+                            query_text: Some(query.clone()),
+                            execution_time_ms: Some(duration_ms),
+                            is_error: true,
+                        })
+                    }
+                }
+            });
+
+            // Get the results panel for this tab
+            let results_panel = query_tab.results_panel.clone();
+            let sql_log = query_tab.sql_log.clone();
+
+            // Update results panel when the task completes
+            cx.spawn(async move |_editor_panel, cx| {
                     let duration_ms = start_time.elapsed().as_millis() as i64;
 
                     match db_task.await {
                         Ok(result) => {
                             // Log successful result
                             let result_message = format!(
-                                "-- Query executed successfully in {}ms\n-- {} rows returned, {} rows affected",
+                                "Query executed successfully in {}ms\n-- {} rows returned, {} rows affected",
                                 duration_ms,
                                 result.row_count(),
                                 result.rows_affected
                             );
                             let _ = sql_log.update(cx, |sql_log, cx| {
-                                sql_log.append_text(&result_message, cx);
+                                sql_log.append_text(&blanco_ui::SqlLogMessage::Comment(result_message), cx);
                             });
 
                             let _ = results_panel.update(cx, |panel, cx| {
@@ -2114,57 +2101,52 @@ impl EditorPanel {
 
                             // Log query error
                             let error_log_message = format!(
-                                "-- Query execution failed in {}ms\nError: {}",
+                                "Query execution failed in {}ms\nError: {}",
                                 duration_ms,
                                 error_msg
                             );
                             let _ = sql_log.update(cx, |sql_log, cx| {
-                                sql_log.append_text(&error_log_message, cx);
+                                sql_log.append_text(&blanco_ui::SqlLogMessage::Comment(error_log_message), cx);
                             });
                         }
                     }
                 })
                 .detach();
 
-                // Show notification
-                window.push_notification("Query executed", cx);
-            }
+            // Show notification
+            window.push_notification("Query executed", cx);
         }
     }
 
     /// Commit current changes in the active tab's results panel
     pub fn commit_current_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(tab) = self.tabs.get_mut(self.active_tab_ix) {
-            if let TabType::Query(query_tab) = tab {
-                let changes = query_tab.results_panel.update(cx, |panel, cx| {
-                    panel.commit_all_edits(cx)
-                });
+        if let Some(TabType::Query(query_tab)) = self.tabs.get_mut(self.active_tab_ix) {
+            let changes = query_tab
+                .results_panel
+                .update(cx, |panel, cx| panel.commit_all_edits(cx));
 
-                if changes.is_empty() {
-                    window.push_notification("No changes to commit", cx);
-                    return;
-                }
-
-                // Execute the commit in the results panel with SQL logging
-                query_tab.results_panel.update(cx, |panel, cx| {
-                    panel.commit_changes_with_sql_log(window, &query_tab.sql_log, cx);
-                });
-
-                window.push_notification(format!("Committing {} changes", changes.len()), cx);
+            if changes.is_empty() {
+                window.push_notification("No changes to commit", cx);
+                return;
             }
+
+            // Execute the commit in the results panel with SQL logging
+            query_tab.results_panel.update(cx, |panel, cx| {
+                panel.commit_changes_with_sql_log(window, &query_tab.sql_log, cx);
+            });
+
+            window.push_notification(format!("Committing {} changes", changes.len()), cx);
         }
     }
 
     /// Rollback current changes in the active tab's results panel
     pub fn rollback_current_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(tab) = self.tabs.get_mut(self.active_tab_ix) {
-            if let TabType::Query(query_tab) = tab {
-                query_tab.results_panel.update(cx, |panel, cx| {
-                    panel.cancel_all_edits(cx);
-                });
+        if let Some(TabType::Query(query_tab)) = self.tabs.get_mut(self.active_tab_ix) {
+            query_tab.results_panel.update(cx, |panel, cx| {
+                panel.cancel_all_edits(cx);
+            });
 
-                window.push_notification("Changes rolled back", cx);
-            }
+            window.push_notification("Changes rolled back", cx);
         }
     }
 }
@@ -2179,21 +2161,32 @@ impl EventEmitter<EditorPanelEvent> for EditorPanel {}
 
 impl EditorPanel {
     // Split pane resize handling methods
-    fn start_split_drag(&mut self, split_type: SplitType, position: Point<f32>, cx: &mut Context<Self>) {
+    fn start_split_drag(
+        &mut self,
+        split_type: SplitType,
+        position: Point<f32>,
+        cx: &mut Context<Self>,
+    ) {
         self.dragging_split = Some(split_type);
         self.drag_start_position = Some(position);
         cx.notify();
     }
 
-    fn handle_split_drag(&mut self, current_position: Point<f32>, _window_bounds: gpui::Bounds<Pixels>, cx: &mut Context<Self>) {
-        if let (Some(split_type), Some(start_pos)) = (self.dragging_split, self.drag_start_position) {
+    fn handle_split_drag(
+        &mut self,
+        current_position: Point<f32>,
+        _window_bounds: gpui::Bounds<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        if let (Some(split_type), Some(start_pos)) = (self.dragging_split, self.drag_start_position)
+        {
             let delta_y = current_position.y - start_pos.y;
             let delta_ratio = delta_y / 1000.0; // Simple ratio for now
 
             match split_type {
                 SplitType::EditorTable => {
                     let new_split = (self.editor_table_split + delta_ratio).clamp(0.2, 0.7); // Min 20%, Max 70%
-                    self.table_log_split = self.table_log_split - (new_split - self.editor_table_split); // Adjust log split
+                    self.table_log_split -= new_split - self.editor_table_split; // Adjust log split
                     self.editor_table_split = new_split;
                 }
                 SplitType::TableLog => {
@@ -2215,10 +2208,7 @@ impl EditorPanel {
 
     // Helper method to create a resize handle (visual only for now)
     fn resize_handle(&self, _split_type: SplitType, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .h_1()
-            .w_full()
-            .bg(cx.theme().border)
+        div().h_1().w_full().bg(cx.theme().border)
     }
 }
 

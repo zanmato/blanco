@@ -107,7 +107,7 @@ impl LspMessageHandler {
             trace!("📨 LspMessageHandler: Raw message: {}", message_str);
 
             // Parse and route the message
-            if let Err(e) = Self::parse_and_route_message(message_str, &message_tx).await {
+            if let Err(e) = Self::parse_and_route_message(message_str, &message_tx) {
                 error!("🔴 LspMessageHandler: Failed to process message: {}", e);
             }
 
@@ -158,7 +158,7 @@ impl LspMessageHandler {
     }
 
     /// Parse a JSON-RPC message and route it to the appropriate channel
-    async fn parse_and_route_message(
+    fn parse_and_route_message(
         message_str: &str,
         message_tx: &mpsc::UnboundedSender<LspMessage>,
     ) -> Result<()> {
@@ -274,8 +274,7 @@ impl LspHealthMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::{self, AsyncWriteExt};
-
+    
     #[tokio::test]
     async fn test_parse_content_length() {
         let headers = "Content-Type: application/vscode-jsonrpc\r\nContent-Length: 1234\r\n\r\n";
@@ -305,7 +304,7 @@ mod tests {
         LspMessageHandler::parse_and_route_message(
             notification_json,
             &tx,
-        ).await.unwrap();
+        ).unwrap();
 
         let message = rx.recv().await.unwrap();
         match message {
@@ -331,7 +330,7 @@ mod tests {
         LspMessageHandler::parse_and_route_message(
             response_json,
             &tx,
-        ).await.unwrap();
+        ).unwrap();
 
         let message = rx.recv().await.unwrap();
         match message {
