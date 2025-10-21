@@ -1,7 +1,6 @@
 use gpui::{
     div, prelude::FluentBuilder, px, Action, App, AppContext, ClickEvent, Context, Entity,
-    EventEmitter, FocusHandle, Focusable, IntoElement, Keystroke, ParentElement, Render, Styled,
-    Window,
+    EventEmitter, FocusHandle, Focusable, IntoElement, Keystroke, ParentElement, Point, Pixels, Render, Styled, Window,
 };
 use gpui_component::{
     button::{Button, ButtonVariants},
@@ -10,7 +9,7 @@ use gpui_component::{
     input::{InputEvent, InputState, Position, TabSize, TextInput},
     sidebar::SidebarToggleButton,
     tab::{Tab, TabBar},
-    v_flex, ActiveTheme, ContextModal as _, IconName, Kbd, Side, Sizable,
+    v_flex, ActiveTheme, ContextModal as _, IconName, Kbd, Side, Sizable, StyledExt,
 };
 use log::{debug, error, info, warn};
 use lsp_types::{PublishDiagnosticsParams, Uri};
@@ -24,6 +23,13 @@ use crate::settings::Settings;
 use postgres_lsp::PostgresLspManager;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use blanco_ui::SqlLog;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SplitType {
+    EditorTable,
+    TableLog,
+}
 
 #[derive(Clone)]
 pub enum EditorPanelEvent {
@@ -45,6 +51,7 @@ pub struct QueryTab {
     pub editor: Entity<InputState>,
     pub db_id: Option<i64>, // Database ID for persistence
     pub results_panel: Entity<crate::results_panel::ResultsPanel>, // Each tab has its own results
+    pub sql_log: Entity<SqlLog>, // SQL log for this tab
     pub lsp_manager: Option<PostgresLspManager>, // LSP manager for PostgreSQL connections
     pub cached_diagnostics: Arc<Mutex<Vec<Diagnostic>>>, // Store diagnostics for this tab
     pub document_version: i32, // LSP document version for tracking changes
@@ -82,6 +89,11 @@ pub struct EditorPanel {
     pending_save_task: Option<gpui::Task<()>>,
     _subscriptions: Vec<gpui::Subscription>,
     query_file_manager: Arc<QueryFileManager>,
+    // Split pane state
+    editor_table_split: f32,    // Position between editor and table (0.0-1.0)
+    table_log_split: f32,       // Position between table and log (0.0-1.0)
+    dragging_split: Option<SplitType>, // Which handle is being dragged
+    drag_start_position: Option<Point<f32>>, // Start position of drag
 }
 
 impl EditorPanel {
@@ -124,6 +136,7 @@ impl EditorPanel {
             }),
             db_id: None,
             results_panel: cx.new(|cx| crate::results_panel::ResultsPanel::new(window, cx)),
+            sql_log: cx.new(|_| SqlLog::new(1000)), // Maximum 1000 lines in the log
             lsp_manager: None, // No LSP for SQLite
             cached_diagnostics: Arc::new(Mutex::new(Vec::new())),
             document_version: 0,
@@ -139,6 +152,12 @@ impl EditorPanel {
             pending_save_task: None,
             _subscriptions: Vec::new(),
             query_file_manager,
+            // Initialize split pane state with reasonable defaults
+            // 40% editor, 40% table, 20% log
+            editor_table_split: 0.4,
+            table_log_split: 0.4,
+            dragging_split: None,
+            drag_start_position: None,
         };
 
         // Subscribe to the first tab's editor changes
@@ -244,6 +263,7 @@ impl EditorPanel {
             editor,
             db_id: None,
             results_panel: cx.new(|cx| crate::results_panel::ResultsPanel::new(window, cx)),
+            sql_log: cx.new(|_| SqlLog::new(1000)), // Maximum 1000 lines in the log
             lsp_manager: None, // No LSP for SQLite
             cached_diagnostics: Arc::new(Mutex::new(Vec::new())),
             document_version: 0,
@@ -338,6 +358,7 @@ impl EditorPanel {
             editor,
             db_id: None,
             results_panel: cx.new(|cx| crate::results_panel::ResultsPanel::new(window, cx)),
+            sql_log: cx.new(|_| SqlLog::new(1000)), // Maximum 1000 lines in the log
             lsp_manager: None, // Will be initialized later if needed
             cached_diagnostics: Arc::new(Mutex::new(Vec::new())),
             document_version: 0,
@@ -422,6 +443,7 @@ impl EditorPanel {
             editor,
             db_id: None,
             results_panel: cx.new(|cx| crate::results_panel::ResultsPanel::new(window, cx)),
+            sql_log: cx.new(|_| SqlLog::new(1000)), // Maximum 1000 lines in the log
             lsp_manager: None, // Will be initialized asynchronously
             cached_diagnostics: Arc::new(Mutex::new(Vec::new())),
             document_version: 0,
@@ -665,6 +687,12 @@ impl EditorPanel {
                         query, query_tab.connection_name
                     );
 
+                    // Log the query to the SQL log
+                    let log_message = format!("-- Executing query on {}\n{}", query_tab.connection_name, query);
+                    query_tab.sql_log.update(cx, |sql_log, cx| {
+                        sql_log.append_text(&log_message, cx);
+                    });
+
                     // Get database service
                     let db_service = DbService::global(cx).clone();
                     let user_db = db_service.user_db_handle();
@@ -677,6 +705,7 @@ impl EditorPanel {
                     // Clone connection details for the async task
                     let connection_type = query_tab.connection_type.clone();
                     let pg_connection_key = query_tab.pg_connection_key.clone();
+                    let sql_log = query_tab.sql_log.clone();
 
                     // Execute query using Tokio::spawn_result to ensure tokio context
                     let db_task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
@@ -805,13 +834,43 @@ impl EditorPanel {
 
                     // Get the results panel for this tab
                     let results_panel = query_tab.results_panel.clone();
+                    let sql_log = query_tab.sql_log.clone();
+                    let start_time = start_time.clone();
 
                     // Update results panel when the task completes
                     cx.spawn(async move |_editor_panel, cx| {
-                        if let Ok(result) = db_task.await {
-                            let _ = results_panel.update(cx, |panel, cx| {
-                                panel.set_query_result(result, cx);
-                            });
+                        let duration_ms = start_time.elapsed().as_millis() as i64;
+
+                        match db_task.await {
+                            Ok(result) => {
+                                // Log successful result
+                                let result_message = format!(
+                                    "-- Query executed successfully in {}ms\n-- {} rows returned, {} rows affected",
+                                    duration_ms,
+                                    result.row_count(),
+                                    result.rows_affected
+                                );
+                                let _ = sql_log.update(cx, |sql_log, cx| {
+                                    sql_log.append_text(&result_message, cx);
+                                });
+
+                                let _ = results_panel.update(cx, |panel, cx| {
+                                    panel.set_query_result(result, cx);
+                                });
+                            }
+                            Err(e) => {
+                                let error_msg = e.to_string();
+
+                                // Log query error
+                                let error_log_message = format!(
+                                    "-- Query execution failed in {}ms\nError: {}",
+                                    duration_ms,
+                                    error_msg
+                                );
+                                let _ = sql_log.update(cx, |sql_log, cx| {
+                                    sql_log.append_text(&error_log_message, cx);
+                                });
+                            }
                         }
                     })
                     .detach();
@@ -1079,6 +1138,12 @@ impl EditorPanel {
             pending_save_task: None,
             _subscriptions: Vec::new(),
             query_file_manager,
+            // Initialize split pane state with reasonable defaults
+            // 40% editor, 40% table, 20% log
+            editor_table_split: 0.4,
+            table_log_split: 0.4,
+            dragging_split: None,
+            drag_start_position: None,
         };
 
         if saved_tabs.is_empty() {
@@ -1215,6 +1280,7 @@ impl EditorPanel {
             editor,
             db_id,
             results_panel: cx.new(|cx| crate::results_panel::ResultsPanel::new(window, cx)),
+            sql_log: cx.new(|_| SqlLog::new(1000)), // Maximum 1000 lines in the log
             lsp_manager,
             cached_diagnostics: Arc::new(Mutex::new(Vec::new())),
             document_version: 0,
@@ -1871,6 +1937,12 @@ impl EditorPanel {
                     query, query_tab.connection_name
                 );
 
+                // Log the query to the SQL log
+                let log_message = format!("-- Executing query on {}\n{}", query_tab.connection_name, query);
+                query_tab.sql_log.update(cx, |sql_log, cx| {
+                    sql_log.append_text(&log_message, cx);
+                });
+
                 // Get database service
                 let db_service = DbService::global(cx).clone();
                 let user_db = db_service.user_db_handle();
@@ -1948,6 +2020,7 @@ impl EditorPanel {
                                 result.row_count()
                             );
 
+                            
                             // Add execution metadata
                             result.query_text = Some(query.clone());
                             result.execution_time_ms = Some(duration_ms);
@@ -1977,6 +2050,7 @@ impl EditorPanel {
                             let error_msg = e.to_string();
                             eprintln!("Query execution failed: {}", error_msg);
 
+                            
                             // Save error to query history
                             if let Some(app_db) = app_db.read().await.as_ref() {
                                 let history = QueryHistoryData {
@@ -2011,13 +2085,43 @@ impl EditorPanel {
 
                 // Get the results panel for this tab
                 let results_panel = query_tab.results_panel.clone();
+                let sql_log = query_tab.sql_log.clone();
+                let start_time = start_time.clone();
 
                 // Update results panel when the task completes
                 cx.spawn(async move |_editor_panel, cx| {
-                    if let Ok(result) = db_task.await {
-                        let _ = results_panel.update(cx, |panel, cx| {
-                            panel.set_query_result(result, cx);
-                        });
+                    let duration_ms = start_time.elapsed().as_millis() as i64;
+
+                    match db_task.await {
+                        Ok(result) => {
+                            // Log successful result
+                            let result_message = format!(
+                                "-- Query executed successfully in {}ms\n-- {} rows returned, {} rows affected",
+                                duration_ms,
+                                result.row_count(),
+                                result.rows_affected
+                            );
+                            let _ = sql_log.update(cx, |sql_log, cx| {
+                                sql_log.append_text(&result_message, cx);
+                            });
+
+                            let _ = results_panel.update(cx, |panel, cx| {
+                                panel.set_query_result(result, cx);
+                            });
+                        }
+                        Err(e) => {
+                            let error_msg = e.to_string();
+
+                            // Log query error
+                            let error_log_message = format!(
+                                "-- Query execution failed in {}ms\nError: {}",
+                                duration_ms,
+                                error_msg
+                            );
+                            let _ = sql_log.update(cx, |sql_log, cx| {
+                                sql_log.append_text(&error_log_message, cx);
+                            });
+                        }
                     }
                 })
                 .detach();
@@ -2041,9 +2145,9 @@ impl EditorPanel {
                     return;
                 }
 
-                // Execute the commit in the results panel
+                // Execute the commit in the results panel with SQL logging
                 query_tab.results_panel.update(cx, |panel, cx| {
-                    panel.commit_changes(window, cx);
+                    panel.commit_changes_with_sql_log(window, &query_tab.sql_log, cx);
                 });
 
                 window.push_notification(format!("Committing {} changes", changes.len()), cx);
@@ -2072,6 +2176,51 @@ impl Focusable for EditorPanel {
 }
 
 impl EventEmitter<EditorPanelEvent> for EditorPanel {}
+
+impl EditorPanel {
+    // Split pane resize handling methods
+    fn start_split_drag(&mut self, split_type: SplitType, position: Point<f32>, cx: &mut Context<Self>) {
+        self.dragging_split = Some(split_type);
+        self.drag_start_position = Some(position);
+        cx.notify();
+    }
+
+    fn handle_split_drag(&mut self, current_position: Point<f32>, _window_bounds: gpui::Bounds<Pixels>, cx: &mut Context<Self>) {
+        if let (Some(split_type), Some(start_pos)) = (self.dragging_split, self.drag_start_position) {
+            let delta_y = current_position.y - start_pos.y;
+            let delta_ratio = delta_y / 1000.0; // Simple ratio for now
+
+            match split_type {
+                SplitType::EditorTable => {
+                    let new_split = (self.editor_table_split + delta_ratio).clamp(0.2, 0.7); // Min 20%, Max 70%
+                    self.table_log_split = self.table_log_split - (new_split - self.editor_table_split); // Adjust log split
+                    self.editor_table_split = new_split;
+                }
+                SplitType::TableLog => {
+                    let new_split = (self.table_log_split + delta_ratio).clamp(0.1, 0.5); // Min 10%, Max 50%
+                    self.table_log_split = new_split;
+                }
+            }
+
+            self.drag_start_position = Some(current_position);
+            cx.notify();
+        }
+    }
+
+    fn end_split_drag(&mut self, cx: &mut Context<Self>) {
+        self.dragging_split = None;
+        self.drag_start_position = None;
+        cx.notify();
+    }
+
+    // Helper method to create a resize handle (visual only for now)
+    fn resize_handle(&self, _split_type: SplitType, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .h_1()
+            .w_full()
+            .bg(cx.theme().border)
+    }
+}
 
 impl Render for EditorPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2251,12 +2400,68 @@ impl Render for EditorPanel {
                                                     .on_click(cx.listener(Self::run_query)),
                                             )
                                 )
-                                // Results
+                                // Results section with split view (Results on top, SQL Log below)
                                 .child(
-                                    div()
+                                    v_flex()
                                         .flex_1()
-                                        .min_h(px(100.))
-                                        .child(query_tab.results_panel.clone())
+                                        .min_h(px(200.))
+                                        // Results panel (top)
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_h_0()
+                                                .overflow_hidden()
+                                                .child(query_tab.results_panel.clone())
+                                        )
+                                        // SQL Log panel (bottom)
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_h_0()
+                                                .overflow_hidden()
+                                                .child(
+                                                    v_flex()
+                                                        .size_full()
+                                                        .child(
+                                                            div()
+                                                                .p_2()
+                                                                .border_b_1()
+                                                                .border_color(cx.theme().border)
+                                                                .bg(cx.theme().muted.opacity(0.5))
+                                                                .child(
+                                                                    h_flex()
+                                                                        .items_center()
+                                                                        .justify_between()
+                                                                        .child(
+                                                                            div()
+                                                                                .text_sm()
+                                                                                .font_semibold()
+                                                                                .text_color(cx.theme().foreground)
+                                                                                .child("SQL Log")
+                                                                        )
+                                                                        .child(
+                                                                            Button::new("clear-log")
+                                                                                .ghost()
+                                                                                .xsmall()
+                                                                                .icon(IconName::Close)
+                                                                                .label("Clear")
+                                                                                .on_click(cx.listener(|this, _, _window, cx| {
+                                                                                    if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
+                                                                                        query_tab.sql_log.update(cx, |log, cx| {
+                                                                                            log.clear(cx);
+                                                                                        });
+                                                                                    }
+                                                                                })),
+                                                                        )
+                                                                )
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .flex_1()
+                                                                .child(query_tab.sql_log.clone())
+                                                        )
+                                                )
+                                        )
                                 )
                                 // Row operation buttons
                                 .child(
@@ -2304,9 +2509,9 @@ impl Render for EditorPanel {
                                                 .children(vec![Kbd::new(Keystroke::parse("cmd-shift-c").unwrap()).into_any_element()])
                                                 .on_click(cx.listener(|this, _, window, cx| {
                                                     if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
-                                                        // Execute the actual commit in the results panel
+                                                        // Execute the actual commit in the results panel with SQL logging
                                                         query_tab.results_panel.update(cx, |panel, cx| {
-                                                            panel.commit_changes(window, cx);
+                                                            panel.commit_changes_with_sql_log(window, &query_tab.sql_log, cx);
                                                         });
                                                     }
                                                 })),

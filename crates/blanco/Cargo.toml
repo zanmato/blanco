@@ -22,6 +22,7 @@ lsp-types = { workspace = true }
 
 # Local dependencies
 postgres-lsp = { path = "../postgres-lsp" }
+blanco-ui = { path = "../ui" }
 
 # Additional dependencies
 env_logger = { workspace = true }

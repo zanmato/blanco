@@ -3,12 +3,24 @@ resolver = "2"
 members = [
     "crates/blanco",
     "crates/postgres-lsp",
+    "crates/ui",
 ]
 
 [workspace.dependencies]
 # Core GPUI dependencies
 gpui = "0.2.0"
-gpui-component = { path = "../../gpui-component/crates/ui", features = ["tree-sitter-languages"] }
+gpui-macros = "0.2.0"
+gpui-component = { path = "vendor/gpui-component/crates/ui", features = ["tree-sitter-languages"] }
+gpui-component-macros = { path = "vendor/gpui-component/crates/macros", version = "0.3.0-preview1" }
+
+# Additional dependencies for gpui-component compatibility
+notify = "7.0.0"
+raw-window-handle = "0.6.2"
+rust-i18n = "3"
+schemars = "1"
+serde_repr = "0.1"
+smallvec = "1"
+sum-tree = { version = "0.2.0", package = "zed-sum-tree" }
 
 # LSP dependencies
 lsp-types = "0.97.0"
@@ -46,3 +58,20 @@ url = "2.5"
 flate2 = "1.0"
 tar = "0.4"
 futures = "0.3"
+ropey = { version = "=2.0.0-beta.1", features = ["metric_lines_lf", "metric_utf16"] }
+
+[workspace.lints.clippy]
+almost_complete_range = "allow"
+arc_with_non_send_sync = "allow"
+borrowed_box = "allow"
+dbg_macro = "deny"
+let_underscore_future = "allow"
+manual_is_multiple_of = "allow"
+map_entry = "allow"
+module_inception = "allow"
+non_canonical_partial_ord_impl = "allow"
+reversed_empty_ranges = "allow"
+single_range_in_vec_init = "allow"
+style = { level = "allow", priority = -1 }
+todo = "deny"
+type_complexity = "allow"
