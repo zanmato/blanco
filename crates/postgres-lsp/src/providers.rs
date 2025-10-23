@@ -1,29 +1,27 @@
 //! LSP provider implementations for PostgreSQL language server
-//! 
+//!
 //! This module provides GPUI-compatible LSP providers that integrate with the PostgreSQL language server.
 
 use crate::client::PostgresLspClient;
 use crate::config::PostgresLspConfig;
-use gpui::{App, Context, Entity, Window, SharedString};
+use async_io::Timer;
+use gpui::{App, Context, Entity, SharedString, Window};
 use gpui_component::input::{
-    CompletionProvider, HoverProvider, CodeActionProvider, InputState, Rope,
+    CodeActionProvider, CompletionProvider, HoverProvider, InputState, Rope,
 };
 use lsp_types::{
-    CompletionContext, CompletionItem, CompletionResponse, CompletionItemKind,
-    InsertTextFormat, Documentation, Hover, HoverContents, MarkupContent, MarkupKind,
-    CodeAction, CodeActionKind, WorkspaceEdit, Command,
-    CompletionParams, TextDocumentIdentifier, Position,
-    HoverParams, TextDocumentPositionParams,
-    CodeActionParams, Range, Uri,
+    CodeAction, CodeActionKind, CodeActionParams, Command, CompletionContext, CompletionItem,
+    CompletionItemKind, CompletionParams, CompletionResponse, Documentation, Hover, HoverContents,
+    HoverParams, InsertTextFormat, MarkupContent, MarkupKind, Position, Range,
+    TextDocumentIdentifier, TextDocumentPositionParams, Uri, WorkspaceEdit,
 };
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-use async_io::Timer;
 
-use tracing::{debug, info, warn};
 use anyhow::Result;
+use tracing::{debug, info, warn};
 
 /// Convert byte offset to LSP position (line/column)
 fn offset_to_position_lsp(text: &str, offset: usize) -> Result<Position, anyhow::Error> {
@@ -50,8 +48,15 @@ pub struct PostgresCompletionProvider {
 
 impl PostgresCompletionProvider {
     /// Create a new PostgreSQL completion provider
-    pub fn new(client: Arc<Mutex<Option<PostgresLspClient>>>, _config: PostgresLspConfig, document_uri: Uri) -> Self {
-        Self { client, document_uri }
+    pub fn new(
+        client: Arc<Mutex<Option<PostgresLspClient>>>,
+        _config: PostgresLspConfig,
+        document_uri: Uri,
+    ) -> Self {
+        Self {
+            client,
+            document_uri,
+        }
     }
 
     /// Set the LSP client
@@ -59,10 +64,7 @@ impl PostgresCompletionProvider {
         let mut client_guard = self.client.lock().await;
         *client_guard = Some(client);
     }
-
-
-
-    }
+}
 
 impl CompletionProvider for PostgresCompletionProvider {
     fn completions(
@@ -81,7 +83,10 @@ impl CompletionProvider for PostgresCompletionProvider {
         debug!("🧩 Text context: {}", &text_str[..text_str.len().min(100)]);
 
         cx.spawn(async move |_handle, _cx| {
-            info!("🧩 Starting PostgreSQL completion request at offset {}", offset);
+            info!(
+                "🧩 Starting PostgreSQL completion request at offset {}",
+                offset
+            );
 
             // Try to get completions from LSP server
             let mut client_guard = client.lock().await;
@@ -90,7 +95,10 @@ impl CompletionProvider for PostgresCompletionProvider {
                 // Use the correct document URI for this tab
                 // Convert offset to proper LSP position (line/column)
                 let position = offset_to_position_lsp(&text_str, offset).unwrap_or_else(|_| {
-                    warn!("🧩 Failed to convert offset {} to LSP position, using fallback", offset);
+                    warn!(
+                        "🧩 Failed to convert offset {} to LSP position, using fallback",
+                        offset
+                    );
                     Position::new(0, offset as u32)
                 });
 
@@ -103,11 +111,26 @@ impl CompletionProvider for PostgresCompletionProvider {
 
                 let (trigger_kind, trigger_char) = if let Some(ch) = trigger_character {
                     match ch {
-                        '.' => (lsp_types::CompletionTriggerKind::TRIGGER_CHARACTER, Some('.'.to_string())),
-                        ' ' => (lsp_types::CompletionTriggerKind::TRIGGER_CHARACTER, Some(' '.to_string())),
-                        '(' => (lsp_types::CompletionTriggerKind::TRIGGER_CHARACTER, Some('('.to_string())),
-                        ',' => (lsp_types::CompletionTriggerKind::TRIGGER_CHARACTER, Some(','.to_string())),
-                        '"' => (lsp_types::CompletionTriggerKind::TRIGGER_CHARACTER, Some('"'.to_string())),
+                        '.' => (
+                            lsp_types::CompletionTriggerKind::TRIGGER_CHARACTER,
+                            Some('.'.to_string()),
+                        ),
+                        ' ' => (
+                            lsp_types::CompletionTriggerKind::TRIGGER_CHARACTER,
+                            Some(' '.to_string()),
+                        ),
+                        '(' => (
+                            lsp_types::CompletionTriggerKind::TRIGGER_CHARACTER,
+                            Some('('.to_string()),
+                        ),
+                        ',' => (
+                            lsp_types::CompletionTriggerKind::TRIGGER_CHARACTER,
+                            Some(','.to_string()),
+                        ),
+                        '"' => (
+                            lsp_types::CompletionTriggerKind::TRIGGER_CHARACTER,
+                            Some('"'.to_string()),
+                        ),
                         _ => (lsp_types::CompletionTriggerKind::INVOKED, None),
                     }
                 } else {
@@ -127,7 +150,10 @@ impl CompletionProvider for PostgresCompletionProvider {
                     partial_result_params: Default::default(),
                 };
 
-                info!("🧩 Sending completion request with position: {:?}", position);
+                info!(
+                    "🧩 Sending completion request with position: {:?}",
+                    position
+                );
                 match client.completion(params).await {
                     Ok(lsp_response) => {
                         info!("🧩 ✅ Got completion response from LSP");
@@ -147,7 +173,9 @@ impl CompletionProvider for PostgresCompletionProvider {
                     label: "SELECT".to_string(),
                     kind: Some(CompletionItemKind::KEYWORD),
                     detail: Some("SELECT statement".to_string()),
-                    documentation: Some(Documentation::String("Retrieve data from database".to_string())),
+                    documentation: Some(Documentation::String(
+                        "Retrieve data from database".to_string(),
+                    )),
                     insert_text: Some("SELECT ${1:*} FROM ${2:table}".to_string()),
                     insert_text_format: Some(InsertTextFormat::SNIPPET),
                     ..Default::default()
@@ -156,7 +184,9 @@ impl CompletionProvider for PostgresCompletionProvider {
                     label: "FROM".to_string(),
                     kind: Some(CompletionItemKind::KEYWORD),
                     detail: Some("FROM clause".to_string()),
-                    documentation: Some(Documentation::String("Specify table to query from".to_string())),
+                    documentation: Some(Documentation::String(
+                        "Specify table to query from".to_string(),
+                    )),
                     ..Default::default()
                 },
                 CompletionItem {
@@ -170,8 +200,12 @@ impl CompletionProvider for PostgresCompletionProvider {
                     label: "INSERT".to_string(),
                     kind: Some(CompletionItemKind::KEYWORD),
                     detail: Some("INSERT statement".to_string()),
-                    documentation: Some(Documentation::String("Insert data into table".to_string())),
-                    insert_text: Some("INSERT INTO ${1:table} (${2:columns}) VALUES (${3:values})".to_string()),
+                    documentation: Some(Documentation::String(
+                        "Insert data into table".to_string(),
+                    )),
+                    insert_text: Some(
+                        "INSERT INTO ${1:table} (${2:columns}) VALUES (${3:values})".to_string(),
+                    ),
                     insert_text_format: Some(InsertTextFormat::SNIPPET),
                     ..Default::default()
                 },
@@ -180,7 +214,10 @@ impl CompletionProvider for PostgresCompletionProvider {
                     kind: Some(CompletionItemKind::KEYWORD),
                     detail: Some("UPDATE statement".to_string()),
                     documentation: Some(Documentation::String("Update existing data".to_string())),
-                    insert_text: Some("UPDATE ${1:table} SET ${2:column} = ${3:value} WHERE ${4:condition}".to_string()),
+                    insert_text: Some(
+                        "UPDATE ${1:table} SET ${2:column} = ${3:value} WHERE ${4:condition}"
+                            .to_string(),
+                    ),
                     insert_text_format: Some(InsertTextFormat::SNIPPET),
                     ..Default::default()
                 },
@@ -188,7 +225,9 @@ impl CompletionProvider for PostgresCompletionProvider {
                     label: "DELETE".to_string(),
                     kind: Some(CompletionItemKind::KEYWORD),
                     detail: Some("DELETE statement".to_string()),
-                    documentation: Some(Documentation::String("Delete data from table".to_string())),
+                    documentation: Some(Documentation::String(
+                        "Delete data from table".to_string(),
+                    )),
                     insert_text: Some("DELETE FROM ${1:table} WHERE ${2:condition}".to_string()),
                     insert_text_format: Some(InsertTextFormat::SNIPPET),
                     ..Default::default()
@@ -198,7 +237,9 @@ impl CompletionProvider for PostgresCompletionProvider {
                     label: "NOW()".to_string(),
                     kind: Some(CompletionItemKind::FUNCTION),
                     detail: Some("PostgreSQL function".to_string()),
-                    documentation: Some(Documentation::String("Returns current timestamp".to_string())),
+                    documentation: Some(Documentation::String(
+                        "Returns current timestamp".to_string(),
+                    )),
                     insert_text: Some("NOW()".to_string()),
                     ..Default::default()
                 },
@@ -216,7 +257,12 @@ impl CompletionProvider for PostgresCompletionProvider {
         })
     }
 
-    fn is_completion_trigger(&self, offset: usize, text: &str, _cx: &mut Context<InputState>) -> bool {
+    fn is_completion_trigger(
+        &self,
+        offset: usize,
+        text: &str,
+        _cx: &mut Context<InputState>,
+    ) -> bool {
         // Check if the character at offset-1 is a trigger character
         if offset > 0 {
             if let Some(prev_char) = text.chars().nth(offset - 1) {
@@ -231,13 +277,18 @@ impl CompletionProvider for PostgresCompletionProvider {
 pub struct PostgresHoverProvider {
     client: Arc<Mutex<Option<PostgresLspClient>>>,
     document_uri: Uri,
-    pending_request: Arc<Mutex<Option<JoinHandle<Result<Option<lsp_types::Hover>, anyhow::Error>>>>>,
+    pending_request:
+        Arc<Mutex<Option<JoinHandle<Result<Option<lsp_types::Hover>, anyhow::Error>>>>>,
     last_request_time: Arc<Mutex<Instant>>,
 }
 
 impl PostgresHoverProvider {
     /// Create a new PostgreSQL hover provider
-    pub fn new(client: Arc<Mutex<Option<PostgresLspClient>>>, _config: PostgresLspConfig, document_uri: Uri) -> Self {
+    pub fn new(
+        client: Arc<Mutex<Option<PostgresLspClient>>>,
+        _config: PostgresLspConfig,
+        document_uri: Uri,
+    ) -> Self {
         Self {
             client,
             document_uri,
@@ -251,10 +302,7 @@ impl PostgresHoverProvider {
         let mut client_guard = self.client.lock().await;
         *client_guard = Some(client);
     }
-
-
-
-    }
+}
 
 impl HoverProvider for PostgresHoverProvider {
     fn hover(
@@ -435,8 +483,15 @@ pub struct PostgresCodeActionProvider {
 
 impl PostgresCodeActionProvider {
     /// Create a new PostgreSQL code action provider
-    pub fn new(client: Arc<Mutex<Option<PostgresLspClient>>>, _config: PostgresLspConfig, document_uri: Uri) -> Self {
-        Self { client, document_uri }
+    pub fn new(
+        client: Arc<Mutex<Option<PostgresLspClient>>>,
+        _config: PostgresLspConfig,
+        document_uri: Uri,
+    ) -> Self {
+        Self {
+            client,
+            document_uri,
+        }
     }
 
     /// Set the LSP client
@@ -444,8 +499,6 @@ impl PostgresCodeActionProvider {
         let mut client_guard = self.client.lock().await;
         *client_guard = Some(client);
     }
-
-
 }
 
 impl CodeActionProvider for PostgresCodeActionProvider {
@@ -466,7 +519,10 @@ impl CodeActionProvider for PostgresCodeActionProvider {
         info!("⚡ Code Action Provider called for range: {:?}", range);
 
         cx.spawn(async move |_cx| {
-            info!("⚡ Starting PostgreSQL code actions request for range: {:?}", range);
+            info!(
+                "⚡ Starting PostgreSQL code actions request for range: {:?}",
+                range
+            );
 
             // Convert byte range to LSP range (simplified)
             let lsp_range = Range::new(
@@ -486,7 +542,10 @@ impl CodeActionProvider for PostgresCodeActionProvider {
                     partial_result_params: Default::default(),
                 };
 
-                info!("⚡ Sending code actions request with range: {:?}", lsp_range);
+                info!(
+                    "⚡ Sending code actions request with range: {:?}",
+                    lsp_range
+                );
                 match client.code_actions(params).await {
                     Ok(Some(actions)) => {
                         info!("⚡ ✅ Got {} code actions from LSP", actions.len());
@@ -505,46 +564,44 @@ impl CodeActionProvider for PostgresCodeActionProvider {
 
             // Fallback to example code actions
             let actions = vec![
-
-            // Add SQL formatting action
-            CodeAction {
-                title: "Format SQL".to_string(),
-                kind: Some(CodeActionKind::SOURCE),
-                diagnostics: None,
-                edit: Some(WorkspaceEdit {
-                    document_changes: None,
-                    changes: None,
-                    change_annotations: None,
-                }),
-                is_preferred: Some(true),
-                disabled: None,
-                data: None,
-                command: Some(Command {
+                // Add SQL formatting action
+                CodeAction {
                     title: "Format SQL".to_string(),
-                    command: "sql.format".to_string(),
-                    arguments: None,
-                }),
-            },
-
-            // Add uppercase keywords action
-            CodeAction {
-                title: "Convert Keywords to Uppercase".to_string(),
-                kind: Some(CodeActionKind::QUICKFIX),
-                diagnostics: None,
-                edit: Some(WorkspaceEdit {
-                    document_changes: None,
-                    changes: None,
-                    change_annotations: None,
-                }),
-                is_preferred: Some(false),
-                disabled: None,
-                data: None,
-                command: Some(Command {
-                    title: "Uppercase Keywords".to_string(),
-                    command: "sql.uppercaseKeywords".to_string(),
-                    arguments: None,
-                }),
-            },
+                    kind: Some(CodeActionKind::SOURCE),
+                    diagnostics: None,
+                    edit: Some(WorkspaceEdit {
+                        document_changes: None,
+                        changes: None,
+                        change_annotations: None,
+                    }),
+                    is_preferred: Some(true),
+                    disabled: None,
+                    data: None,
+                    command: Some(Command {
+                        title: "Format SQL".to_string(),
+                        command: "sql.format".to_string(),
+                        arguments: None,
+                    }),
+                },
+                // Add uppercase keywords action
+                CodeAction {
+                    title: "Convert Keywords to Uppercase".to_string(),
+                    kind: Some(CodeActionKind::QUICKFIX),
+                    diagnostics: None,
+                    edit: Some(WorkspaceEdit {
+                        document_changes: None,
+                        changes: None,
+                        change_annotations: None,
+                    }),
+                    is_preferred: Some(false),
+                    disabled: None,
+                    data: None,
+                    command: Some(Command {
+                        title: "Uppercase Keywords".to_string(),
+                        command: "sql.uppercaseKeywords".to_string(),
+                        arguments: None,
+                    }),
+                },
             ];
 
             Ok(actions)
@@ -560,8 +617,11 @@ impl CodeActionProvider for PostgresCodeActionProvider {
         cx: &mut App,
     ) -> gpui::Task<Result<(), anyhow::Error>> {
         cx.spawn(async move |_cx| {
-            info!("⚡ 🎯 Performing PostgreSQL code action: {} (preview: {})", action.title, preview);
-            
+            info!(
+                "⚡ 🎯 Performing PostgreSQL code action: {} (preview: {})",
+                action.title, preview
+            );
+
             // For now, just log the action
             // In a real implementation, we would apply the edits
             info!("⚡ 🎯 Code action completed (placeholder implementation)");
@@ -577,7 +637,7 @@ mod tests {
     #[test]
     fn test_get_word_at_position() {
         let text = "SELECT * FROM table_name WHERE id = 1";
-        
+
         // Test getting "SELECT"
         let word = get_word_at_position_static(text, 3);
         assert_eq!(word, Some("SELECT".to_string()));

@@ -35,16 +35,26 @@ impl Connection {
                     Schema {
                         name: "public".into(),
                         tables: vec![
-                            Table { name: "users".into() },
-                            Table { name: "posts".into() },
-                            Table { name: "comments".into() },
+                            Table {
+                                name: "users".into(),
+                            },
+                            Table {
+                                name: "posts".into(),
+                            },
+                            Table {
+                                name: "comments".into(),
+                            },
                         ],
                     },
                     Schema {
                         name: "auth".into(),
                         tables: vec![
-                            Table { name: "sessions".into() },
-                            Table { name: "tokens".into() },
+                            Table {
+                                name: "sessions".into(),
+                            },
+                            Table {
+                                name: "tokens".into(),
+                            },
                         ],
                     },
                 ],
@@ -55,16 +65,20 @@ impl Connection {
                 host: "prod.example.com".into(),
                 port: 5432,
                 database: "production".into(),
-                schemas: vec![
-                    Schema {
-                        name: "public".into(),
-                        tables: vec![
-                            Table { name: "customers".into() },
-                            Table { name: "orders".into() },
-                            Table { name: "products".into() },
-                        ],
-                    },
-                ],
+                schemas: vec![Schema {
+                    name: "public".into(),
+                    tables: vec![
+                        Table {
+                            name: "customers".into(),
+                        },
+                        Table {
+                            name: "orders".into(),
+                        },
+                        Table {
+                            name: "products".into(),
+                        },
+                    ],
+                }],
             },
         ]
     }

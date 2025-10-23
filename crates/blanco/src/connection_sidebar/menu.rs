@@ -3,10 +3,11 @@ use gpui::{
     FocusHandle, InteractiveElement, IntoElement, ParentElement, RenderOnce, SharedString,
     StatefulInteractiveElement, Styled, Window,
 };
-use gpui_component::{h_flex, v_flex, ActiveTheme as _, Collapsible, Icon, IconName, StyledExt};
+use gpui_component::{h_flex, v_flex, ActiveTheme as _, Collapsible, StyledExt};
 use std::rc::Rc;
 
 // Import context menu components
+use crate::icon::{Icon, IconName};
 use gpui_component::{context_menu::ContextMenuExt, popup_menu::PopupMenu};
 
 #[derive(IntoElement)]

@@ -1,6 +1,6 @@
 use gpui::{
-    div, prelude::FluentBuilder, App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement,
-    ParentElement, Render, Styled, Window,
+    div, prelude::FluentBuilder, App, AppContext, Context, Entity, FocusHandle, Focusable,
+    IntoElement, ParentElement, Render, Styled, Window,
 };
 use gpui_component::{
     dropdown::{Dropdown, DropdownState},
@@ -213,12 +213,7 @@ impl PostgresForm {
         let port = port_str.parse::<i32>().ok()?;
 
         Some(ConnectionData::new_postgres(
-            name,
-            host,
-            port,
-            database,
-            username,
-            password,
+            name, host, port, database, username, password,
         ))
     }
 
@@ -275,10 +270,12 @@ impl NewConnectionModal {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let db_types = vec!["SQLite".to_string(), "PostgreSQL".to_string()];
         let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Connection Name"));
-        let db_type_dropdown = cx.new(|cx| DropdownState::new(db_types.clone(), Some(IndexPath::new(0)), window, cx));
+        let db_type_dropdown =
+            cx.new(|cx| DropdownState::new(db_types.clone(), Some(IndexPath::new(0)), window, cx));
 
         // Create entities for SQLite form
-        let sqlite_file_path = cx.new(|cx| InputState::new(window, cx).placeholder("/path/to/database.db"));
+        let sqlite_file_path =
+            cx.new(|cx| InputState::new(window, cx).placeholder("/path/to/database.db"));
         let sqlite_form = SqliteForm::new(sqlite_file_path);
 
         // Create entities for PostgreSQL form
@@ -287,7 +284,8 @@ impl NewConnectionModal {
         let pg_database = cx.new(|cx| InputState::new(window, cx).placeholder("Database Name"));
         let pg_username = cx.new(|cx| InputState::new(window, cx).placeholder("postgres"));
         let pg_password = cx.new(|cx| InputState::new(window, cx).placeholder("Password"));
-        let postgres_form = PostgresForm::new(pg_host, pg_port, pg_database, pg_username, pg_password);
+        let postgres_form =
+            PostgresForm::new(pg_host, pg_port, pg_database, pg_username, pg_password);
 
         Self {
             focus_handle: cx.focus_handle(),
@@ -300,7 +298,8 @@ impl NewConnectionModal {
     }
 
     fn get_selected_connector_type(&self, cx: &App) -> ConnectorType {
-        let selected = self.db_type_dropdown
+        let selected = self
+            .db_type_dropdown
             .read(cx)
             .selected_value()
             .unwrap_or(&"SQLite".to_string())

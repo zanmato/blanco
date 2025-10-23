@@ -1,6 +1,6 @@
-use std::future::Future;
 use anyhow::Result;
 use gpui::{AppContext, Task};
+use std::future::Future;
 
 pub struct Tokio {}
 

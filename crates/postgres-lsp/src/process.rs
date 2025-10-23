@@ -4,13 +4,13 @@
 //! including startup, communication, and shutdown.
 
 use anyhow::Result;
+use futures::io::{AsyncBufReadExt, BufReader};
+use futures::{FutureExt, StreamExt};
+use gpui::BackgroundExecutor;
+use smol::process::{Child, Command, Stdio};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use smol::process::{Child, Command, Stdio};
-use futures::io::{AsyncBufReadExt, BufReader};
-use futures::{StreamExt, FutureExt};
 use tracing::{debug, error, info, warn};
-use gpui::BackgroundExecutor;
 
 /// Process management errors
 #[derive(Debug, thiserror::Error)]
@@ -64,7 +64,11 @@ impl ProcessGuard {
         #[cfg(unix)]
         {
             use std::process::Command;
-            match Command::new("kill").arg("-0").arg(self.pid.to_string()).output() {
+            match Command::new("kill")
+                .arg("-0")
+                .arg(self.pid.to_string())
+                .output()
+            {
                 Ok(output) => output.status.success(),
                 Err(_) => false,
             }
@@ -80,14 +84,18 @@ impl ProcessGuard {
 
 impl Drop for ProcessGuard {
     fn drop(&mut self) {
-        info!("🛡️ ProcessGuard dropping - automatically cleaning up {} (PID: {})",
-              self.binary_name, self.pid);
+        info!(
+            "🛡️ ProcessGuard dropping - automatically cleaning up {} (PID: {})",
+            self.binary_name, self.pid
+        );
 
         // Check if we're in a panic situation
         let is_panicking = std::thread::panicking();
         if is_panicking {
-            warn!("🚨 ProcessGuard dropped during panic - force killing {} (PID: {})",
-                  self.binary_name, self.pid);
+            warn!(
+                "🚨 ProcessGuard dropped during panic - force killing {} (PID: {})",
+                self.binary_name, self.pid
+            );
         }
 
         // Kill the process asynchronously - we need to spawn a task since we're in Drop
@@ -96,16 +104,20 @@ impl Drop for ProcessGuard {
 
         // In Drop, we can only use synchronous operations
         // smol doesn't have runtime detection like tokio
-        warn!("Using synchronous kill during ProcessGuard::drop for {} (PID: {})",
-              binary_name, pid);
+        warn!(
+            "Using synchronous kill during ProcessGuard::drop for {} (PID: {})",
+            binary_name, pid
+        );
         Self::kill_process_sync(pid, &binary_name);
     }
 }
 
 impl ProcessGuard {
-
     fn kill_process_sync(pid: u32, binary_name: &str) {
-        info!("🔫 Killing {} process (PID: {}) synchronously", binary_name, pid);
+        info!(
+            "🔫 Killing {} process (PID: {}) synchronously",
+            binary_name, pid
+        );
 
         #[cfg(unix)]
         {
@@ -116,14 +128,23 @@ impl ProcessGuard {
             {
                 Ok(output) => {
                     if output.status.success() {
-                        info!("✅ Successfully sent SIGTERM to {} (PID: {})", binary_name, pid);
+                        info!(
+                            "✅ Successfully sent SIGTERM to {} (PID: {})",
+                            binary_name, pid
+                        );
                     } else {
-                        error!("❌ Failed to send SIGTERM to {} (PID: {}): {}",
-                               binary_name, pid, String::from_utf8_lossy(&output.stderr));
+                        error!(
+                            "❌ Failed to send SIGTERM to {} (PID: {}): {}",
+                            binary_name,
+                            pid,
+                            String::from_utf8_lossy(&output.stderr)
+                        );
                     }
                 }
-                Err(e) => error!("❌ Error executing kill command for {} (PID: {}): {}",
-                               binary_name, pid, e),
+                Err(e) => error!(
+                    "❌ Error executing kill command for {} (PID: {}): {}",
+                    binary_name, pid, e
+                ),
             }
         }
 
@@ -135,14 +156,23 @@ impl ProcessGuard {
             {
                 Ok(output) => {
                     if output.status.success() {
-                        info!("✅ Successfully killed {} process on Windows (PID: {})", binary_name, pid);
+                        info!(
+                            "✅ Successfully killed {} process on Windows (PID: {})",
+                            binary_name, pid
+                        );
                     } else {
-                        error!("❌ Failed to kill {} process on Windows (PID: {}): {}",
-                               binary_name, pid, String::from_utf8_lossy(&output.stderr));
+                        error!(
+                            "❌ Failed to kill {} process on Windows (PID: {}): {}",
+                            binary_name,
+                            pid,
+                            String::from_utf8_lossy(&output.stderr)
+                        );
                     }
                 }
-                Err(e) => error!("❌ Error executing taskkill for {} (PID: {}): {}",
-                               binary_name, pid, e),
+                Err(e) => error!(
+                    "❌ Error executing taskkill for {} (PID: {}): {}",
+                    binary_name, pid, e
+                ),
             }
         }
     }
@@ -243,7 +273,10 @@ impl PostgresLspProcess {
                     if output.status.success() {
                         info!("✅ Process {} is running after startup", pid);
                     } else {
-                        warn!("⚠️ Process {} is not running immediately after startup", pid);
+                        warn!(
+                            "⚠️ Process {} is not running immediately after startup",
+                            pid
+                        );
                         warn!("⚠️ Exit status: {}", output.status);
                         if !output.stderr.is_empty() {
                             warn!("⚠️ stderr: {}", String::from_utf8_lossy(&output.stderr));
@@ -307,7 +340,10 @@ impl PostgresLspProcess {
                         }
 
                         // Look for error indicators
-                        if line.contains("error") || line.contains("Error") || line.contains("failed") {
+                        if line.contains("error")
+                            || line.contains("Error")
+                            || line.contains("failed")
+                        {
                             warn!("LSP process reported error: {}", line);
                         }
                     } else {
@@ -384,10 +420,8 @@ impl PostgresLspProcess {
                         let status_future = self.process_guard.child().status();
                         let shutdown_timer = self.executor.timer(Duration::from_secs(5)).fuse();
 
-                        match futures::future::select(
-                            Box::pin(status_future),
-                            shutdown_timer
-                        ).await {
+                        match futures::future::select(Box::pin(status_future), shutdown_timer).await
+                        {
                             futures::future::Either::Left((Ok(status), _)) => {
                                 info!("LSP process shut down gracefully with status: {}", status);
                                 return Ok(());
@@ -439,8 +473,12 @@ impl PostgresLspProcess {
         self.kill();
 
         // Start new process without config path
-        let mut new_process =
-            Self::new(self.binary_path.clone(), &self.workspace_path, self.executor.clone()).await?;
+        let mut new_process = Self::new(
+            self.binary_path.clone(),
+            &self.workspace_path,
+            self.executor.clone(),
+        )
+        .await?;
 
         // Wait for new process to be ready
         new_process.wait_for_ready().await?;
@@ -550,9 +588,9 @@ mod tests {
 
         // This should fail because the binary doesn't exist
         let result = std::thread::spawn(move || {
-            tokio::runtime::Runtime::new()
-                .unwrap()
-                .block_on(async { PostgresLspProcess::new(binary_path, binary_path.parent().unwrap()).await })
+            tokio::runtime::Runtime::new().unwrap().block_on(async {
+                PostgresLspProcess::new(binary_path, binary_path.parent().unwrap()).await
+            })
         })
         .join()
         .unwrap();

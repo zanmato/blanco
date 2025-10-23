@@ -129,6 +129,70 @@ impl AppDatabase {
         .execute(&self.pool)
         .await?;
 
+        // Migrate existing connections table if needed (add new columns for PostgreSQL support)
+        sqlx::query(
+            r#"
+            ALTER TABLE connections ADD COLUMN db_type TEXT NOT NULL DEFAULT 'SQLite'
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .ok(); // Ignore error if column already exists
+
+        sqlx::query(
+            r#"
+            ALTER TABLE connections ADD COLUMN host TEXT
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .ok(); // Ignore error if column already exists
+
+        sqlx::query(
+            r#"
+            ALTER TABLE connections ADD COLUMN port INTEGER
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .ok(); // Ignore error if column already exists
+
+        sqlx::query(
+            r#"
+            ALTER TABLE connections ADD COLUMN database_name TEXT
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .ok(); // Ignore error if column already exists
+
+        sqlx::query(
+            r#"
+            ALTER TABLE connections ADD COLUMN username TEXT
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .ok(); // Ignore error if column already exists
+
+        sqlx::query(
+            r#"
+            ALTER TABLE connections ADD COLUMN password TEXT
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .ok(); // Ignore error if column already exists
+
+        sqlx::query(
+            r#"
+            ALTER TABLE connections ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .ok(); // Ignore error if column already exists
+
         Ok(())
     }
 
@@ -339,6 +403,37 @@ impl AppDatabase {
 
             Ok(result.last_insert_rowid())
         }
+    }
+
+    /// Load all connections from the database
+    pub async fn load_connections(&self) -> Result<Vec<ConnectionData>, sqlx::Error> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, name, db_type, host, port, database_name, username, password, database_path, last_used_at
+            FROM connections
+            ORDER BY name
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let connections = rows
+            .iter()
+            .map(|row| ConnectionData {
+                id: Some(row.get("id")),
+                name: row.get("name"),
+                db_type: row.get("db_type"),
+                host: row.get("host"),
+                port: row.get("port"),
+                database_name: row.get("database_name"),
+                username: row.get("username"),
+                password: row.get("password"),
+                database_path: row.get("database_path"),
+                last_used_at: row.get("last_used_at"),
+            })
+            .collect();
+
+        Ok(connections)
     }
 }
 

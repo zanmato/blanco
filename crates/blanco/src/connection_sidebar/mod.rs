@@ -1,12 +1,12 @@
+use gpui::{
+    div, prelude::FluentBuilder, px, AnyElement, App, ClickEvent, DefiniteLength,
+    InteractiveElement as _, IntoElement, ParentElement, Pixels, RenderOnce, Styled, Window,
+};
 use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
     scroll::ScrollbarAxis,
     v_flex, ActiveTheme, Collapsible, Icon, IconName, Side, Sizable, StyledExt,
-};
-use gpui::{
-    div, prelude::FluentBuilder, px, AnyElement, App, ClickEvent, DefiniteLength,
-    InteractiveElement as _, IntoElement, ParentElement, Pixels, RenderOnce, Styled, Window,
 };
 use std::rc::Rc;
 

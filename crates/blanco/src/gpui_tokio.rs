@@ -41,14 +41,22 @@ impl Tokio {
             let join_handle = tokio.runtime.spawn(f);
             let abort_handle = join_handle.abort_handle();
             let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            
+
             let cancel_clone = cancel.clone();
             let cancel_task = defer(move || {
-                if cancel_clone.compare_exchange(false, true, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst).is_ok() {
+                if cancel_clone
+                    .compare_exchange(
+                        false,
+                        true,
+                        std::sync::atomic::Ordering::SeqCst,
+                        std::sync::atomic::Ordering::SeqCst,
+                    )
+                    .is_ok()
+                {
                     abort_handle.abort();
                 }
             });
-            
+
             cx.background_spawn(async move {
                 let result = join_handle.await;
                 drop(cancel_task);
@@ -69,14 +77,22 @@ impl Tokio {
             let join_handle = tokio.runtime.spawn(f);
             let abort_handle = join_handle.abort_handle();
             let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            
+
             let cancel_clone = cancel.clone();
             let cancel_task = defer(move || {
-                if cancel_clone.compare_exchange(false, true, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst).is_ok() {
+                if cancel_clone
+                    .compare_exchange(
+                        false,
+                        true,
+                        std::sync::atomic::Ordering::SeqCst,
+                        std::sync::atomic::Ordering::SeqCst,
+                    )
+                    .is_ok()
+                {
                     abort_handle.abort();
                 }
             });
-            
+
             cx.background_spawn(async move {
                 let result = join_handle.await?;
                 drop(cancel_task);

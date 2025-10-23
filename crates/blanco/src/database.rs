@@ -79,11 +79,14 @@ impl DatabaseManager {
                                 if let Ok(val) = row.try_get::<Option<String>, _>(i) {
                                     val.unwrap_or_else(|| "NULL".to_string())
                                 } else if let Ok(val) = row.try_get::<Option<i64>, _>(i) {
-                                    val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
+                                    val.map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string())
                                 } else if let Ok(val) = row.try_get::<Option<f64>, _>(i) {
-                                    val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
+                                    val.map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string())
                                 } else if let Ok(val) = row.try_get::<Option<bool>, _>(i) {
-                                    val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
+                                    val.map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string())
                                 } else {
                                     "NULL".to_string()
                                 }
@@ -119,8 +122,9 @@ impl DatabaseManager {
     }
 
     pub fn execute_query<C: AppContext>(
-        &self,
+        &mut self,
         query: String,
+        database_path: Option<&str>,
         cx: &C,
     ) -> C::Result<Task<anyhow::Result<QueryResult>>> {
         let query_clone = query.clone();
@@ -170,11 +174,14 @@ impl DatabaseManager {
                                     if let Ok(val) = row.try_get::<Option<String>, _>(i) {
                                         val.unwrap_or_else(|| "NULL".to_string())
                                     } else if let Ok(val) = row.try_get::<Option<i64>, _>(i) {
-                                        val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
+                                        val.map(|v| v.to_string())
+                                            .unwrap_or_else(|| "NULL".to_string())
                                     } else if let Ok(val) = row.try_get::<Option<f64>, _>(i) {
-                                        val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
+                                        val.map(|v| v.to_string())
+                                            .unwrap_or_else(|| "NULL".to_string())
                                     } else if let Ok(val) = row.try_get::<Option<bool>, _>(i) {
-                                        val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
+                                        val.map(|v| v.to_string())
+                                            .unwrap_or_else(|| "NULL".to_string())
                                     } else {
                                         "NULL".to_string()
                                     }
@@ -246,6 +253,79 @@ impl DatabaseManager {
         Ok(())
     }
 
+    /// Ensure database connection is established, auto-connecting if needed
+    pub async fn ensure_connected(
+        &mut self,
+        database_path: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // If already connected, verify the connection is healthy
+        if let Some(_pool) = &self.pool {
+            if self.is_connection_healthy().await {
+                return Ok(());
+            } else {
+                log::info!("Existing SQLite connection is unhealthy, reconnecting...");
+                self.disconnect().await;
+            }
+        }
+
+        // Attempt to connect with retry logic
+        let mut retry_count = 0;
+        let max_retries = 3;
+
+        while retry_count < max_retries {
+            match self.connect_async(database_path).await {
+                Ok(()) => {
+                    log::info!(
+                        "Successfully connected to SQLite database: {}",
+                        database_path
+                    );
+
+                    // Verify the connection works with a simple query
+                    if self.is_connection_healthy().await {
+                        return Ok(());
+                    } else {
+                        log::warn!("Connected to SQLite but connection test failed, retrying...");
+                        self.disconnect().await;
+                    }
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Failed to connect to SQLite database (attempt {}/{}): {}",
+                        retry_count + 1,
+                        max_retries,
+                        e
+                    );
+                }
+            }
+
+            retry_count += 1;
+            if retry_count < max_retries {
+                // Exponential backoff: 100ms, 400ms, 900ms
+                let delay_ms = 100 * (retry_count as u64 * retry_count as u64);
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            }
+        }
+
+        Err(format!(
+            "Failed to connect to SQLite database after {} attempts",
+            max_retries
+        )
+        .into())
+    }
+
+    /// Execute a query with automatic connection management
+    pub async fn execute_query_with_auto_connect(
+        &mut self,
+        query: &str,
+        database_path: &str,
+    ) -> Result<QueryResult, Box<dyn std::error::Error>> {
+        // Ensure connection is established
+        self.ensure_connected(database_path).await?;
+
+        // Execute the query
+        self.execute_query_async(query).await
+    }
+
     /// Execute a query with prepared statement parameters
     pub async fn execute_prepared_query(
         &self,
@@ -303,11 +383,14 @@ impl DatabaseManager {
                                 if let Ok(val) = row.try_get::<Option<String>, _>(i) {
                                     val.unwrap_or_else(|| "NULL".to_string())
                                 } else if let Ok(val) = row.try_get::<Option<i64>, _>(i) {
-                                    val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
+                                    val.map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string())
                                 } else if let Ok(val) = row.try_get::<Option<f64>, _>(i) {
-                                    val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
+                                    val.map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string())
                                 } else if let Ok(val) = row.try_get::<Option<bool>, _>(i) {
-                                    val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
+                                    val.map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string())
                                 } else {
                                     "NULL".to_string()
                                 }

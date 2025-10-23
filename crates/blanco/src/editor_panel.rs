@@ -710,14 +710,11 @@ impl EditorPanel {
                     let db_task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
                         let query_result = match connection_type {
                             ConnectionType::SQLite => {
-                                let db = user_db.read().await;
-                                if !db.is_connected() {
-                                    Err(anyhow::anyhow!("Not connected to SQLite database"))
-                                } else {
-                                    db.execute_query_async(&query)
-                                        .await
-                                        .map_err(|e| anyhow::anyhow!("{}", e))
-                                }
+                                // Use auto-connect functionality - no manual connection check needed
+                                let mut db = user_db.write().await;
+                                db.execute_query_with_auto_connect(&query, "blanco.db") // Default SQLite path
+                                    .await
+                                    .map_err(|e| anyhow::anyhow!("{}", e))
                             }
                             ConnectionType::PostgreSQL => {
                                 if let Some(pg_key) = pg_connection_key {
@@ -742,9 +739,8 @@ impl EditorPanel {
                                             )
                                         };
 
-                                    match db_service
-                                        .get_or_create_pg_connection(&connection_string)
-                                        .await
+                                    // Use enhanced auto-connect functionality
+                                    match db_service.ensure_pg_connection(&connection_string).await
                                     {
                                         Ok(pg_manager) => pg_manager
                                             .execute_query_async(&query)
@@ -1958,14 +1954,11 @@ impl EditorPanel {
             let db_task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
                 let query_result = match connection_type {
                     ConnectionType::SQLite => {
-                        let db = user_db.read().await;
-                        if !db.is_connected() {
-                            Err(anyhow::anyhow!("Not connected to SQLite database"))
-                        } else {
-                            db.execute_query_async(&query)
-                                .await
-                                .map_err(|e| anyhow::anyhow!("{}", e))
-                        }
+                        // Use auto-connect functionality - no manual connection check needed
+                        let mut db = user_db.write().await;
+                        db.execute_query_with_auto_connect(&query, "blanco.db") // Default SQLite path
+                            .await
+                            .map_err(|e| anyhow::anyhow!("{}", e))
                     }
                     ConnectionType::PostgreSQL => {
                         if let Some(pg_key) = pg_connection_key {
@@ -1986,10 +1979,8 @@ impl EditorPanel {
                                 )
                             };
 
-                            match db_service
-                                .get_or_create_pg_connection(&connection_string)
-                                .await
-                            {
+                            // Use enhanced auto-connect functionality
+                            match db_service.ensure_pg_connection(&connection_string).await {
                                 Ok(pg_manager) => pg_manager
                                     .execute_query_async(&query)
                                     .await

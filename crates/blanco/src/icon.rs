@@ -89,6 +89,8 @@ pub enum IconName {
     WindowMaximize,
     WindowMinimize,
     WindowRestore,
+    Postgresql,
+    Sqlite,
 }
 
 impl IconName {
@@ -176,6 +178,8 @@ impl IconName {
             Self::WindowMaximize => "icons/window-maximize.svg",
             Self::WindowMinimize => "icons/window-minimize.svg",
             Self::WindowRestore => "icons/window-restore.svg",
+            Self::Postgresql => "icons/postgres.svg",
+            Self::Sqlite => "icons/sqlite.svg",
         }
         .into()
     }

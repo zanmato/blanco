@@ -1,10 +1,9 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::fs;
 use std::io::Write;
+use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
     pub general: GeneralSettings,
     pub editor: EditorSettings,
@@ -84,7 +83,6 @@ pub struct LspFormattingSettings {
     pub format_on_type: bool,
     pub sql_dialect: String,
 }
-
 
 impl Default for GeneralSettings {
     fn default() -> Self {
@@ -189,12 +187,12 @@ pub fn get_settings_path() -> PathBuf {
 
 pub fn load_settings() -> Result<Settings, Box<dyn std::error::Error>> {
     let settings_path = get_settings_path();
-    
+
     if !settings_path.exists() {
         create_default_settings()?;
         return Ok(Settings::default());
     }
-    
+
     let content = fs::read_to_string(&settings_path)?;
     let settings: Settings = serde_json::from_str(&content)?;
     Ok(settings)
@@ -202,16 +200,16 @@ pub fn load_settings() -> Result<Settings, Box<dyn std::error::Error>> {
 
 pub fn save_settings(settings: &Settings) -> Result<(), Box<dyn std::error::Error>> {
     let settings_path = get_settings_path();
-    
+
     // Create directory if it doesn't exist
     if let Some(parent) = settings_path.parent() {
         fs::create_dir_all(parent)?;
     }
-    
+
     let json_content = serde_json::to_string_pretty(settings)?;
     let mut file = fs::File::create(&settings_path)?;
     file.write_all(json_content.as_bytes())?;
-    
+
     Ok(())
 }
 

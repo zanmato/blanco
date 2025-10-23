@@ -1,7 +1,5 @@
 use anyhow::{anyhow, Result};
-use sql_parse::{
-    parse_statement, parse_statements, ParseOptions, SQLDialect, Statement, TableReference,
-};
+use sql_parse::{parse_statement, ParseOptions, SQLDialect, Statement, TableReference};
 
 /// Extract table names from SQL queries using proper SQL parsing
 pub struct SqlTableExtractor {

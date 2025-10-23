@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::ops::Range;
 
 // Maximum number of SQL log entries to keep (circular buffer)
@@ -14,7 +14,7 @@ use gpui_component::{
     h_flex,
     input::{InputEvent, InputState, TextInput},
     table::{Column, ColumnSort, Table, TableDelegate},
-    v_flex, ActiveTheme, Icon, IconName, StyledExt,
+    v_flex, ActiveTheme, Icon, IconName,
 };
 
 use crate::database::QueryResult;
@@ -926,15 +926,29 @@ impl ResultsTableDelegate {
     }
 
     pub fn commit_cell_edit(&mut self, row: usize, col: usize) -> Option<String> {
+        log::info!("delegate.commit_cell_edit called for ({}, {})", row, col);
+        log::info!(
+            "edited_values contains: {:?}",
+            self.edit_state.edited_values
+        );
+
         if let Some(new_value) = self.edit_state.edited_values.get(&(row, col)).cloned() {
+            log::info!("Found edited value: '{}' for ({}, {})", new_value, row, col);
+
             // Get the original value
             let original_value = self.edit_state.original_values.get(&(row, col)).cloned();
 
             // Update the actual row data
             if let Some(row_data) = self.rows.get_mut(row) {
                 if let Some(cell) = row_data.get_mut(col) {
+                    log::info!("Updating cell from '{}' to '{}'", cell, new_value);
                     *cell = new_value.clone();
+                    log::info!("Cell updated successfully");
+                } else {
+                    log::info!("No cell found at column {}", col);
                 }
+            } else {
+                log::info!("No row data found at row {}", row);
             }
 
             // Track the change for SQL generation
@@ -1076,12 +1090,15 @@ impl TableDelegate for ResultsTableDelegate {
         let is_editable = self.is_editable();
 
         let current_value = if is_edited {
-            self.edit_state.get_edited_value(row_ix, col_ix).cloned()
+            let edited_val = self.edit_state.get_edited_value(row_ix, col_ix).cloned();
+            edited_val
         } else {
-            self.rows
+            let original_val = self
+                .rows
                 .get(row_ix)
                 .and_then(|row| row.get(col_ix))
-                .cloned()
+                .cloned();
+            original_val
         }
         .unwrap_or_else(|| "--".to_string());
 
@@ -1340,15 +1357,13 @@ impl ResultsPanel {
         let delegate = ResultsTableDelegate::default();
         let table = cx.new(|cx| Table::new(delegate, window, cx));
 
-        let panel = Self {
+        Self {
             table,
             focus_handle: cx.focus_handle(),
             current_result: None,
             editing_input: None,
             editing_cell: None,
-        };
-
-        panel
+        }
     }
 
     /// Helper function to quote SQL identifiers properly
@@ -1493,7 +1508,6 @@ impl ResultsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-
         // Get the current cell value
         let current_value = self
             .table
@@ -1534,23 +1548,57 @@ impl ResultsPanel {
             // Subscribe to input changes to update edited_values
             let row_clone = row;
             let col_clone = col;
-            let table_handle = self.table.downgrade();
             cx.subscribe(&input, move |table, input, event, cx| {
                 if let InputEvent::Change = event {
                     let new_text = input.read(cx).text().to_string();
+                    log::info!(
+                        "Input change: '{}' at ({}, {})",
+                        new_text,
+                        row_clone,
+                        col_clone
+                    );
                     table
                         .delegate_mut()
                         .edit_state
                         .edited_values
                         .insert((row_clone, col_clone), new_text.clone());
 
-                    // Debug: Log the input change
-                    if table_handle.upgrade().is_some() {
-                        // We can't log directly from here, but we can store debug info
-                        // in the edited_values for later logging in commit_cell_edit
-                    }
-
+                    // Debug: Input change handled in edited_values for commit_cell_edit
                     table.refresh(cx);
+                } else if let InputEvent::Blur = event {
+                    // Handle blur - save current edit to edited_values when input loses focus
+                    // Get the current editing cell and value
+                    let editing_cell = table.delegate_mut().edit_state.editing_cell;
+                    log::info!("Blur event triggered for editing_cell: {:?}", editing_cell);
+
+                    if let Some((row, col)) = editing_cell {
+                        let new_value = input.read(cx).text().to_string();
+                        log::info!("Blur: saving value '{}' at ({}, {})", new_value, row, col);
+
+                        // Save to edited_values for later commit (don't actually commit now)
+                        table
+                            .delegate_mut()
+                            .edit_state
+                            .edited_values
+                            .insert((row, col), new_value.clone());
+                        log::info!("Blur: value saved to edited_values");
+
+                        // Clear editing state but preserve edited_values
+                        table.delegate_mut().edit_state.stop_editing();
+                        table.refresh(cx);
+
+                        log::info!(
+                            "Blur: edit state cleared, edited_values preserved for later commit"
+                        );
+
+                        // Clear editing state
+                        table.delegate_mut().edit_state.stop_editing();
+                        table.refresh(cx);
+
+                        log::info!("Blur: edit state cleared and table refreshed");
+                    } else {
+                        log::info!("Blur: no editing cell found");
+                    }
                 }
             })
             .detach();
@@ -1558,7 +1606,8 @@ impl ResultsPanel {
             table.refresh(cx);
         });
 
-        // Focus the input will be handled automatically when rendered
+        // Focus the input automatically when editing starts
+        input.focus_handle(cx).focus(window);
 
         // Store the editing state in the panel for commit/cancel operations
         self.editing_input = Some(input.clone());
@@ -1701,7 +1750,27 @@ impl ResultsPanel {
     pub fn get_changes(&self, cx: &App) -> Vec<TableChange> {
         let table_read = self.table.read(cx);
         let delegate = table_read.delegate();
-        let changes = delegate.edit_state.get_changes().to_vec();
+        // Get changes directly from edited values in delegate
+        let mut changes = Vec::new();
+        let table_read = self.table.read(cx);
+        let delegate = table_read.delegate();
+
+        for ((row, col), new_value) in &delegate.edit_state.edited_values {
+            if let Some(original_value) = delegate.edit_state.original_values.get(&(*row, *col)) {
+                changes.push(TableChange::new(
+                    ChangeType::UpdateCell,
+                    delegate.table_name.clone().unwrap_or_default(),
+                    *row,
+                    Some(*col),
+                    Some(original_value.clone()),
+                    Some(new_value.clone()),
+                    None, // primary_key_value
+                    None, // primary_key_column
+                ));
+            }
+        }
+
+        log::info!("Commit Changes: Got {} changes from edited_values", changes.len());
         changes
     }
 
@@ -1844,21 +1913,29 @@ impl ResultsPanel {
         let user_db = db_service.user_db_handle();
         let _panel_handle = cx.entity().downgrade();
 
+        log::info!("Commit Changes: Starting commit process");
+        log::info!("Commit Changes: Number of changes to process: {}", changes.len());
+
         // Execute all changes in sequence
         let user_db_clone = user_db.clone();
-        let changes_clone = changes.to_vec();
+        let changes_clone = self.get_changes(cx);
+        log::info!("Commit Changes: Got {} changes from delegate", changes_clone.len());
         let column_names_clone = column_names.clone();
 
         let task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
             let db = user_db_clone.read().await;
+            log::info!("Commit Changes: Database connection status: connected={}", db.is_connected());
 
             if !db.is_connected() {
+                log::info!("Commit Changes: ERROR - Not connected to a database");
                 return Err(anyhow::anyhow!("Not connected to a database"));
             }
 
             // Additional connection health check
             let connection_healthy = db.is_connection_healthy().await;
+            log::info!("Commit Changes: Database health check: healthy={}", connection_healthy);
             if !connection_healthy {
+                log::info!("Commit Changes: ERROR - Database connection is not healthy");
                 return Err(anyhow::anyhow!("Database connection is not healthy"));
             }
 
@@ -2011,7 +2088,6 @@ impl ResultsPanel {
                 }
                 Err(_e) => {
                     // Failed to commit changes - log the error
-  
                 }
             }
         });
@@ -2355,9 +2431,9 @@ impl Render for ResultsPanel {
             // The table component (table should have built-in scrolling)
             .child(
                 div()
-                    .flex_1()        // Allow table to fill available space
+                    .flex_1() // Allow table to fill available space
                     .min_h(px(200.0)) // Minimum height for table
-                    .child(self.table.clone())
+                    .child(self.table.clone()),
             )
             .child(
                 h_flex()
@@ -2442,38 +2518,7 @@ impl Render for ResultsPanel {
                                     .child(Icon::new(IconName::ChevronsUpDown).size(px(14.)))
                                     .child(format!("{} rows", row_count)),
                             )
-                            // Action buttons for unsaved changes
-                            .when(has_unsaved_changes, |this| {
-                                this.child(
-                                    h_flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .ml_4()
-                                        // Commit button
-                                        .child(
-                                            Button::new("commit-changes")
-                                                .with_variant(ButtonVariant::default())
-                                                .child("Commit")
-                                                .on_click(cx.listener(
-                                                    |this, _event, window, cx| {
-                                                        this.commit_changes(window, cx);
-                                                    },
-                                                )),
-                                        )
-                                        // Rollback button
-                                        .child(
-                                            Button::new("rollback-changes")
-                                                .with_variant(ButtonVariant::Secondary)
-                                                .child("Rollback")
-                                                .on_click(cx.listener(
-                                                    |this, _event, window, cx| {
-                                                        this.rollback_changes(window, cx);
-                                                    },
-                                                )),
-                                        ),
-                                )
-                            })
-                    })
+                                                })
                     .when(self.current_result.is_none(), |this| {
                         this.text_color(cx.theme().muted_foreground)
                             .child("No query executed")

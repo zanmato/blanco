@@ -1,6 +1,6 @@
 use log::info;
 use sqlx::postgres::{PgConnectOptions, PgPool};
-use sqlx::{Column, ConnectOptions, Row, ValueRef, TypeInfo};
+use sqlx::{Column, ConnectOptions, Row, TypeInfo, ValueRef};
 use std::str::FromStr;
 use uuid::Uuid;
 
@@ -20,10 +20,12 @@ impl PostgresManager {
 
     /// Connect to PostgreSQL database
     pub async fn connect_async(&mut self, connection_string: &str) -> Result<(), sqlx::Error> {
-        info!("Connecting to PostgreSQL: {}", Self::sanitize_connection_string(connection_string));
+        info!(
+            "Connecting to PostgreSQL: {}",
+            Self::sanitize_connection_string(connection_string)
+        );
 
-        let options = PgConnectOptions::from_str(connection_string)?
-            .disable_statement_logging();
+        let options = PgConnectOptions::from_str(connection_string)?.disable_statement_logging();
 
         let pool = PgPool::connect_with(options).await?;
         self.pool = Some(pool);
@@ -67,7 +69,10 @@ impl PostgresManager {
         sql_template: &str,
         parameters: &[String],
     ) -> Result<crate::database::QueryResult, anyhow::Error> {
-        let pool = self.pool.as_ref().ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
+        let pool = self
+            .pool
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
 
         // Create the query with parameters
         let mut query = sqlx::query(sql_template);
@@ -123,26 +128,38 @@ impl PostgresManager {
 
                                 // Integer types
                                 if let Ok(val) = row.try_get::<Option<i16>, _>(i) {
-                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                    return val
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string());
                                 }
                                 if let Ok(val) = row.try_get::<Option<i32>, _>(i) {
-                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                    return val
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string());
                                 }
                                 if let Ok(val) = row.try_get::<Option<i64>, _>(i) {
-                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                    return val
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string());
                                 }
 
                                 // Floating point types
                                 if let Ok(val) = row.try_get::<Option<f32>, _>(i) {
-                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                    return val
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string());
                                 }
                                 if let Ok(val) = row.try_get::<Option<f64>, _>(i) {
-                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                    return val
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string());
                                 }
 
                                 // Boolean type
                                 if let Ok(val) = row.try_get::<Option<bool>, _>(i) {
-                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                    return val
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string());
                                 }
 
                                 // Try to get UUID as string (PostgreSQL UUID can be converted to string)
@@ -151,41 +168,60 @@ impl PostgresManager {
                                 }
 
                                 // Try to get timestamp/chrono types as string
-                                if let Ok(val) = row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>(i) {
-                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                if let Ok(val) =
+                                    row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>(i)
+                                {
+                                    return val
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string());
                                 }
-                                if let Ok(val) = row.try_get::<Option<chrono::NaiveDateTime>, _>(i) {
-                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                if let Ok(val) = row.try_get::<Option<chrono::NaiveDateTime>, _>(i)
+                                {
+                                    return val
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string());
                                 }
                                 if let Ok(val) = row.try_get::<Option<chrono::NaiveDate>, _>(i) {
-                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                    return val
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string());
                                 }
                                 if let Ok(val) = row.try_get::<Option<chrono::NaiveTime>, _>(i) {
-                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                    return val
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string());
                                 }
 
                                 // UUID types
                                 if let Ok(val) = row.try_get::<Option<Uuid>, _>(i) {
-                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                    return val
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string());
                                 }
 
                                 // Byte array types (for binary data)
                                 if let Ok(val) = row.try_get::<Option<Vec<u8>>, _>(i) {
-                                    return val.map(|v| {
-                                        // Convert to hex string for binary data
-                                        v.iter().map(|byte| format!("{:02x}", byte)).collect::<String>()
-                                    }).unwrap_or_else(|| "NULL".to_string());
+                                    return val
+                                        .map(|v| {
+                                            // Convert to hex string for binary data
+                                            v.iter()
+                                                .map(|byte| format!("{:02x}", byte))
+                                                .collect::<String>()
+                                        })
+                                        .unwrap_or_else(|| "NULL".to_string());
                                 }
 
                                 // JSON/JSONB types - try to get as string first
                                 if let Ok(val) = row.try_get::<Option<serde_json::Value>, _>(i) {
-                                    return val.map(|v| {
-                                        // Pretty print JSON with proper formatting
-                                        match v {
-                                            serde_json::Value::String(s) => s,
-                                            _ => v.to_string(),
-                                        }
-                                    }).unwrap_or_else(|| "NULL".to_string());
+                                    return val
+                                        .map(|v| {
+                                            // Pretty print JSON with proper formatting
+                                            match v {
+                                                serde_json::Value::String(s) => s,
+                                                _ => v.to_string(),
+                                            }
+                                        })
+                                        .unwrap_or_else(|| "NULL".to_string());
                                 }
 
                                 // If we can't determine the type, try to get it as raw value
@@ -203,7 +239,10 @@ impl PostgresManager {
                                                 "jsonb" => "<jsonb>".to_string(),
                                                 "numeric" => "<numeric>".to_string(),
                                                 "decimal" => "<decimal>".to_string(),
-                                        _ => format!("<{}>", row.column(i).type_info().name())
+                                                _ => format!(
+                                                    "<{}>",
+                                                    row.column(i).type_info().name()
+                                                ),
                                             }
                                         }
                                     }
@@ -250,10 +289,13 @@ impl PostgresManager {
 
     /// Get list of databases
     pub async fn get_databases(&self) -> Result<Vec<String>, anyhow::Error> {
-        let pool = self.pool.as_ref().ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
+        let pool = self
+            .pool
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
 
         let rows = sqlx::query(
-            "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname"
+            "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname",
         )
         .fetch_all(pool)
         .await?;
@@ -268,12 +310,15 @@ impl PostgresManager {
 
     /// Get list of schemas for current database
     pub async fn get_schemas(&self) -> Result<Vec<String>, anyhow::Error> {
-        let pool = self.pool.as_ref().ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
+        let pool = self
+            .pool
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
 
         let rows = sqlx::query(
             "SELECT schema_name FROM information_schema.schemata
              WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-             ORDER BY schema_name"
+             ORDER BY schema_name",
         )
         .fetch_all(pool)
         .await?;
@@ -288,16 +333,17 @@ impl PostgresManager {
 
     /// Get list of tables for a specific schema
     pub async fn get_tables(&self, schema: &str) -> Result<Vec<String>, anyhow::Error> {
-        let pool = self.pool.as_ref().ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
+        let pool = self
+            .pool
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
 
         let query = format!(
             "SELECT tablename FROM pg_tables WHERE schemaname = '{}' ORDER BY tablename",
             schema
         );
 
-        let rows = sqlx::query(&query)
-            .fetch_all(pool)
-            .await?;
+        let rows = sqlx::query(&query).fetch_all(pool).await?;
 
         let tables: Vec<String> = rows
             .iter()
@@ -312,7 +358,10 @@ impl PostgresManager {
         &self,
         query: &str,
     ) -> Result<crate::database::QueryResult, anyhow::Error> {
-        let pool = self.pool.as_ref().ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
+        let pool = self
+            .pool
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
 
         // Try to execute as a query that returns rows
         match sqlx::query(query).fetch_all(pool).await {
@@ -352,79 +401,110 @@ impl PostgresManager {
                             .enumerate()
                             .map(|(i, _)| {
                                 // Try different types in order of likelihood
-                                
+
                                 // String/Text types (most common)
                                 if let Ok(val) = row.try_get::<Option<String>, _>(i) {
                                     return val.unwrap_or_else(|| "NULL".to_string());
                                 }
-                                
+
                                 // Integer types
                                 if let Ok(val) = row.try_get::<Option<i16>, _>(i) {
-                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                    return val
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string());
                                 }
                                 if let Ok(val) = row.try_get::<Option<i32>, _>(i) {
-                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                    return val
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string());
                                 }
                                 if let Ok(val) = row.try_get::<Option<i64>, _>(i) {
-                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                    return val
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string());
                                 }
-                                
+
                                 // Floating point types
                                 if let Ok(val) = row.try_get::<Option<f32>, _>(i) {
-                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                    return val
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string());
                                 }
                                 if let Ok(val) = row.try_get::<Option<f64>, _>(i) {
-                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                    return val
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string());
                                 }
-                                
+
                                 // Boolean type
                                 if let Ok(val) = row.try_get::<Option<bool>, _>(i) {
-                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                    return val
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string());
                                 }
-                                
+
                                 // Try to get UUID as string (PostgreSQL UUID can be converted to string)
                                 if let Ok(val) = row.try_get::<Option<String>, _>(i) {
                                     return val.unwrap_or_else(|| "NULL".to_string());
                                 }
-                                
+
                                 // Try to get timestamp/chrono types as string
-                                if let Ok(val) = row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>(i) {
-                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                if let Ok(val) =
+                                    row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>(i)
+                                {
+                                    return val
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string());
                                 }
-                                if let Ok(val) = row.try_get::<Option<chrono::NaiveDateTime>, _>(i) {
-                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                if let Ok(val) = row.try_get::<Option<chrono::NaiveDateTime>, _>(i)
+                                {
+                                    return val
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string());
                                 }
                                 if let Ok(val) = row.try_get::<Option<chrono::NaiveDate>, _>(i) {
-                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                    return val
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string());
                                 }
                                 if let Ok(val) = row.try_get::<Option<chrono::NaiveTime>, _>(i) {
-                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                    return val
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string());
                                 }
-                                
+
                                 // UUID types
                                 if let Ok(val) = row.try_get::<Option<Uuid>, _>(i) {
-                                    return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                                    return val
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| "NULL".to_string());
                                 }
-                                
+
                                 // Byte array types (for binary data)
                                 if let Ok(val) = row.try_get::<Option<Vec<u8>>, _>(i) {
-                                    return val.map(|v| {
-                                        // Convert to hex string for binary data
-                                        v.iter().map(|byte| format!("{:02x}", byte)).collect::<String>()
-                                    }).unwrap_or_else(|| "NULL".to_string());
+                                    return val
+                                        .map(|v| {
+                                            // Convert to hex string for binary data
+                                            v.iter()
+                                                .map(|byte| format!("{:02x}", byte))
+                                                .collect::<String>()
+                                        })
+                                        .unwrap_or_else(|| "NULL".to_string());
                                 }
-                                
+
                                 // JSON/JSONB types - try to get as string first
                                 if let Ok(val) = row.try_get::<Option<serde_json::Value>, _>(i) {
-                                    return val.map(|v| {
-                                        // Pretty print JSON with proper formatting
-                                        match v {
-                                            serde_json::Value::String(s) => s,
-                                            _ => v.to_string(),
-                                        }
-                                    }).unwrap_or_else(|| "NULL".to_string());
+                                    return val
+                                        .map(|v| {
+                                            // Pretty print JSON with proper formatting
+                                            match v {
+                                                serde_json::Value::String(s) => s,
+                                                _ => v.to_string(),
+                                            }
+                                        })
+                                        .unwrap_or_else(|| "NULL".to_string());
                                 }
-                                
+
                                 // If we can't determine the type, try to get it as raw value
                                 // This is a fallback for any other types
                                 match row.try_get_raw(i) {
@@ -440,7 +520,10 @@ impl PostgresManager {
                                                 "jsonb" => "<jsonb>".to_string(),
                                                 "numeric" => "<numeric>".to_string(),
                                                 "decimal" => "<decimal>".to_string(),
-                                        _ => format!("<{}>", row.column(i).type_info().name())
+                                                _ => format!(
+                                                    "<{}>",
+                                                    row.column(i).type_info().name()
+                                                ),
                                             }
                                         }
                                     }
@@ -519,7 +602,7 @@ mod tests {
             .unwrap_or_else(|_| "postgres://postgres:Bongotrumma24!@localhost:5432/bylyngamanager?sslmode=disable&timezone=Europe/Stockholm".to_string());
 
         let mut pg_manager = PostgresManager::new();
-        
+
         // Test connection
         match pg_manager.connect_async(&connection_string).await {
             Ok(_) => println!("✅ PostgreSQL connection successful"),
@@ -559,17 +642,24 @@ mod tests {
                 assert_eq!(result.columns.len(), 6, "Should have 6 columns");
                 assert!(!result.rows.is_empty(), "Should have rows");
                 println!("✅ Type handling successful");
-                
+
                 // Check that UUID and other types are handled (not null)
                 let row = &result.rows[0];
                 for (i, value) in row.iter().enumerate() {
                     println!("   Column {}: {}", result.columns[i], value);
                     // Values should not be null representations
-                    assert_ne!(value, "<null>", "Column {} should not be null", result.columns[i]);
+                    assert_ne!(
+                        value, "<null>",
+                        "Column {} should not be null",
+                        result.columns[i]
+                    );
                 }
             }
             Err(e) => {
-                println!("⚠️  Type query failed (might be due to missing extensions): {}", e);
+                println!(
+                    "⚠️  Type query failed (might be due to missing extensions): {}",
+                    e
+                );
             }
         }
     }
@@ -581,12 +671,20 @@ mod tests {
 
         let db_service = DbService::new();
 
-        match db_service.get_or_create_pg_connection(&connection_string).await {
+        match db_service
+            .get_or_create_pg_connection(&connection_string)
+            .await
+        {
             Ok(pg_manager) => {
                 println!("✅ DbService integration successful");
-                
+
                 // Test query through DbService
-                match pg_manager.execute_query_async("SELECT COUNT(*) as count FROM pg_tables WHERE schemaname = 'public'").await {
+                match pg_manager
+                    .execute_query_async(
+                        "SELECT COUNT(*) as count FROM pg_tables WHERE schemaname = 'public'",
+                    )
+                    .await
+                {
                     Ok(result) => {
                         assert!(!result.rows.is_empty(), "Should have result rows");
                         println!("✅ DbService query successful");
@@ -597,7 +695,10 @@ mod tests {
                 }
             }
             Err(e) => {
-                println!("⚠️  DbService integration failed (expected if no PostgreSQL server): {}", e);
+                println!(
+                    "⚠️  DbService integration failed (expected if no PostgreSQL server): {}",
+                    e
+                );
             }
         }
     }

@@ -1,27 +1,26 @@
 //! PostgreSQL Language Server Integration
-//! 
+//!
 //! This crate provides PostgreSQL language server integration for GPUI applications,
 //! including binary downloading, process management, and LSP provider implementations.
 
 pub mod client;
 pub mod config;
+pub mod downloader;
 pub mod gpui_tokio;
 pub mod manager;
 pub mod message_handler;
 pub mod process;
 pub mod providers;
-pub mod downloader;
 
 // Re-export main types for convenience
 pub use client::PostgresLspClient;
-pub use config::{PostgresLspConfig, CompletionConfig, DiagnosticsConfig, FormattingConfig};
-pub use manager::{PostgresLspManager, LspManagerError};
+pub use config::{CompletionConfig, DiagnosticsConfig, FormattingConfig, PostgresLspConfig};
+pub use downloader::{Architecture, BinaryDownloader, DownloadError};
+pub use manager::{LspManagerError, PostgresLspManager};
 pub use process::PostgresLspProcess;
 pub use providers::{
-    PostgresCompletionProvider, PostgresHoverProvider, 
-    PostgresCodeActionProvider
+    PostgresCodeActionProvider, PostgresCompletionProvider, PostgresHoverProvider,
 };
-pub use downloader::{BinaryDownloader, Architecture, DownloadError};
 
 /// LSP status enumeration for backward compatibility
 #[derive(Debug, Clone, PartialEq)]

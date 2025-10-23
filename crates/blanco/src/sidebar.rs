@@ -4,13 +4,14 @@ use gpui::{
     ParentElement, Render, SharedString, Styled, Window,
 };
 use gpui_component::{
-    button::Button, h_flex, v_flex, ActiveTheme, ContextModal as _, IconName, Side,
+    button::Button, h_flex, v_flex, ActiveTheme, ContextModal as _, IconName as GCIconName, Side,
 };
 use std::collections::HashMap;
 
 use crate::connection::Connection;
 use crate::connection_modal::NewConnectionModal;
 use crate::db_service::{DbService, PgConnectionKey};
+use crate::icon::IconName;
 use crate::postgres::SchemaNode;
 use log::{debug, error, info};
 
@@ -22,40 +23,149 @@ pub struct ConnectionSidebar {
     test_db_expanded: bool,
     // PostgreSQL connections - now supports multiple connections
     pg_connections: HashMap<PgConnectionKey, (String, Vec<SchemaNode>, bool)>, // key -> (display_name, schemas, expanded)
+    // SQLite connections from database
+    sqlite_connections: Vec<(String, String, bool)>, // (name, database_path, expanded)
 }
 
 impl ConnectionSidebar {
     pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let sidebar = Self {
+        let mut sidebar = Self {
             focus_handle: cx.focus_handle(),
             connections: Connection::new_mock(),
             test_db_tables: Vec::new(),
             collapsed: false,
-            test_db_expanded: true, // Start expanded
+            test_db_expanded: false, // Start collapsed - lazy load on expansion
             pg_connections: HashMap::new(),
+            sqlite_connections: Vec::new(),
         };
 
-        // Load test database tables asynchronously
+        // Load real connections from database first
+        sidebar.load_database_connections(cx);
+
+        // Debug: Log initial state
+        log::info!(
+            "Sidebar initialized with {} SQLite connections",
+            sidebar.sqlite_connections.len()
+        );
+
+        // Note: We no longer add mock connections automatically
+        // Mock connections can still be added manually for testing if needed
+
+        sidebar
+    }
+
+    /// Load real connections from the app database
+    fn load_database_connections(&mut self, cx: &mut Context<Self>) {
+        let db_service = DbService::global(cx).clone();
+        let app_db = db_service.app_db_handle();
+
+        // Load connections asynchronously and update UI
+        log::info!("Starting to load database connections...");
+        let task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
+            match *app_db.read().await {
+                Some(ref app_db) => match app_db.load_connections().await {
+                    Ok(connections) => {
+                        log::info!("Loaded {} connections from database", connections.len());
+                        for conn in &connections {
+                            log::info!("Processing connection: {} ({})", conn.name, conn.db_type);
+                            log::info!("Connection details - name: '{}', db_type: '{}', db_path: {:?}, host: {:?}, port: {:?}, database: {:?}, username: {:?}",
+                                         conn.name,
+                                         conn.db_type,
+                                         conn.database_path,
+                                         conn.host,
+                                         conn.port,
+                                         conn.database_name,
+                                         conn.username);
+                        }
+                        Ok(connections)
+                    }
+                    Err(e) => {
+                        log::error!("Failed to load connections from database: {}", e);
+                        Err(anyhow::anyhow!("Failed to load connections: {}", e))
+                    }
+                },
+                None => {
+                    log::warn!("App database not initialized");
+                    Err(anyhow::anyhow!("App database not initialized"))
+                }
+            }
+        });
+
+        cx.spawn(async move |handle, cx| {
+            if let Ok(connections) = task.await {
+                if let Some(sidebar) = handle.upgrade() {
+                    let _ = sidebar.update(cx, |sidebar, cx| {
+                        // Process loaded connections and add them to sidebar
+                        for conn in &connections {
+                            if conn.db_type == "PostgreSQL" {
+                                if let (Some(host), Some(port), Some(database), Some(username)) =
+                                    (&conn.host, conn.port, &conn.database_name, &conn.username) {
+
+                                    let pg_key = PgConnectionKey {
+                                        host: host.clone(),
+                                        port: port as u16,
+                                        database: database.clone(),
+                                        username: username.clone(),
+                                        password: conn.password.clone(),
+                                    };
+
+                                    // Add connection to sidebar (start collapsed, will load schemas on expand)
+                                    sidebar.pg_connections.insert(
+                                        pg_key.clone(),
+                                        (conn.name.clone(), Vec::new(), false)
+                                    );
+
+                                    log::info!("Added PostgreSQL connection to sidebar: {} ({}:{}/{})",
+                                             conn.name, host, port, database);
+                                }
+                            } else if conn.db_type == "SQLite" {
+                                log::info!("Found SQLite connection: {} -> {} (db_type: {}, db_path: {:?})",
+                                         conn.name,
+                                         conn.database_path.as_ref().unwrap_or(&"None".to_string()),
+                                         conn.db_type,
+                                         conn.database_path);
+                                if let Some(database_path) = &conn.database_path {
+                                    log::info!("Adding SQLite connection to sidebar: {} -> {}", conn.name, database_path);
+                                    // Add SQLite connection to sidebar (start collapsed, will load tables on expand)
+                                    sidebar.sqlite_connections.push((conn.name.clone(), database_path.clone(), false));
+                                    log::info!("Sidebar now has {} SQLite connections after adding", sidebar.sqlite_connections.len());
+                                } else {
+                                    log::warn!("SQLite connection has no database_path: {}", conn.name);
+                                }
+                            }
+                        }
+                        cx.notify();
+                    });
+                }
+            }
+        }).detach();
+    }
+
+    pub fn set_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
+        self.collapsed = collapsed;
+        cx.notify();
+    }
+
+    /// Load SQLite tables lazily
+    fn load_sqlite_tables(&mut self, cx: &mut Context<Self>) {
+        log::info!("Sidebar: Loading SQLite tables lazily");
         let db_service = DbService::global(cx).clone();
         let user_db = db_service.user_db_handle();
 
         let task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
-            // Give the database a moment to initialize
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
             let db = user_db.read().await;
-            info!(
+            log::info!(
                 "Sidebar: Loading SQLite tables, connected: {}",
                 db.is_connected()
             );
 
             match db.get_tables().await {
                 Ok(tables) => {
-                    info!("Sidebar: Loaded {} SQLite tables", tables.len());
+                    log::info!("Sidebar: Loaded {} SQLite tables", tables.len());
                     Ok(tables)
                 }
                 Err(e) => {
-                    error!("Sidebar: Failed to load SQLite tables: {}", e);
+                    log::error!("Sidebar: Failed to load SQLite tables: {}", e);
                     Err(anyhow::anyhow!("{}", e))
                 }
             }
@@ -72,87 +182,112 @@ impl ConnectionSidebar {
             }
         })
         .detach();
+    }
 
-        // Load existing PostgreSQL connections asynchronously
-        let db_service_clone = db_service.clone();
-        let pg_task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
-            // Wait for connections to initialize
-            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+    /// Load PostgreSQL schemas and tables lazily
+    fn load_postgres_schemas(
+        &mut self,
+        key: PgConnectionKey,
+        display_name: String,
+        cx: &mut Context<Self>,
+    ) {
+        log::info!(
+            "Sidebar: Loading PostgreSQL schemas lazily for: {}",
+            display_name
+        );
+        let db_service = DbService::global(cx).clone();
+        let key_clone = key.clone();
 
-            let connections = db_service_clone.get_all_pg_connections().await;
-            let mut connection_data = Vec::new();
+        let task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
+            // Clone the connection details we need for the connection string
+            let username = key_clone.username.clone();
+            let password = key_clone.password.clone();
+            let host = key_clone.host.clone();
+            let port = key_clone.port;
+            let database = key_clone.database.clone();
 
-            for (key, manager) in connections {
-                let display_name = format!(
-                    "{}@{}:{}/{}",
-                    key.username, key.host, key.port, key.database
-                );
+            // Get or create connection
+            let connection_string = if let Some(ref password) = password {
+                format!(
+                    "postgresql://{}:{}@{}:{}/{}",
+                    username, password, host, port, database
+                )
+            } else {
+                format!("postgresql://{}@{}:{}/{}", username, host, port, database)
+            };
 
-                info!(
-                    "Sidebar: Loading schemas for PostgreSQL connection: {}",
-                    display_name
-                );
-                match manager.get_schemas().await {
-                    Ok(schemas) => {
-                        info!(
-                            "Sidebar: Found {} schemas for connection: {}",
-                            schemas.len(),
-                            display_name
-                        );
-                        let mut schema_nodes = Vec::new();
+            match db_service
+                .get_or_create_pg_connection(&connection_string)
+                .await
+            {
+                Ok(manager) => {
+                    log::info!(
+                        "Loading schemas for PostgreSQL connection: {}",
+                        display_name
+                    );
+                    match manager.get_schemas().await {
+                        Ok(schemas) => {
+                            log::info!(
+                                "Found {} schemas for connection: {}",
+                                schemas.len(),
+                                display_name
+                            );
+                            let mut schema_nodes = Vec::new();
 
-                        for schema_name in schemas {
-                            debug!("Loading tables for schema: {}", schema_name);
-                            match manager.get_tables(&schema_name).await {
-                                Ok(tables) => {
-                                    debug!("Schema '{}' has {} tables", schema_name, tables.len());
-                                    let mut node = SchemaNode::new(schema_name.clone());
-                                    node.tables = tables;
-                                    node.expanded = schema_name == "public"; // Expand public by default
-                                    schema_nodes.push(node);
-                                }
-                                Err(e) => {
-                                    error!(
-                                        "Failed to load tables for schema '{}': {}",
-                                        schema_name, e
-                                    );
+                            for schema_name in schemas {
+                                log::debug!("Loading tables for schema: {}", schema_name);
+                                match manager.get_tables(&schema_name).await {
+                                    Ok(tables) => {
+                                        log::debug!(
+                                            "Schema '{}' has {} tables",
+                                            schema_name,
+                                            tables.len()
+                                        );
+                                        let mut node = SchemaNode::new(schema_name.clone());
+                                        node.tables = tables;
+                                        node.expanded = schema_name == "public"; // Expand public by default
+                                        schema_nodes.push(node);
+                                    }
+                                    Err(e) => {
+                                        log::error!(
+                                            "Failed to load tables for schema '{}': {}",
+                                            schema_name,
+                                            e
+                                        );
+                                    }
                                 }
                             }
+
+                            Ok((display_name, schema_nodes, false)) // Start collapsed
                         }
-                        connection_data.push((key, (display_name, schema_nodes, true)));
-                    }
-                    Err(e) => {
-                        error!(
-                            "Sidebar: Failed to load schemas for connection {}: {}",
-                            display_name, e
-                        );
+                        Err(e) => {
+                            log::error!(
+                                "Failed to load schemas for connection '{}': {}",
+                                display_name,
+                                e
+                            );
+                            Err(anyhow::anyhow!("Failed to load schemas: {}", e))
+                        }
                     }
                 }
+                Err(e) => {
+                    log::error!("Failed to connect to PostgreSQL: {}", e);
+                    Err(anyhow::anyhow!("Failed to connect: {}", e))
+                }
             }
-
-            Ok(connection_data)
         });
 
         cx.spawn(async move |handle, cx| {
-            if let Ok(connection_data) = pg_task.await {
+            if let Ok(schema_data) = task.await {
                 if let Some(sidebar) = handle.upgrade() {
                     let _ = sidebar.update(cx, |sidebar, cx| {
-                        for (key, data) in connection_data {
-                            sidebar.pg_connections.insert(key, data);
-                        }
+                        sidebar.pg_connections.insert(key, schema_data);
                         cx.notify();
                     });
                 }
             }
         })
         .detach();
-
-        sidebar
-    }
-
-    pub fn set_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
-        self.collapsed = collapsed;
-        cx.notify();
     }
 
     /// Add a new PostgreSQL connection and load its schemas
@@ -259,37 +394,63 @@ impl Render for ConnectionSidebar {
                             SidebarGroup::new("Databases").child(
                                 SidebarMenu::new()
                                     // Test Database (actual connection)
-                                    .child(
-                                        SidebarMenuItem::new(SharedString::from("Test Database"))
-                                            .icon(IconName::Building2)
-                                            .active(self.test_db_expanded)
-                                            .id("test-database")  // Unique ID for Test Database
-                                            .context_menu({
-                                                let table_count = self.test_db_tables.len();
-                                                move |menu, _window, _cx| {
-                                                    log::info!("BUILDING context menu for Test Database with {} tables", table_count);
-                                                    let result = menu.menu("New Query", Box::new(crate::app::NewQueryForConnection {
-                                                        connection_name: "Test Database".to_string(),
-                                                        connection_type: crate::app::ConnectionType::SQLite,
-                                                    }));
-                                                    log::info!("Context menu for Test Database BUILT");
-                                                    result
-                                                }
-                                            })
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                log::info!("Test Database clicked");
-                                                this.test_db_expanded = !this.test_db_expanded;
-                                                cx.notify();
-                                            }))
-                                            .children(self.test_db_tables.iter().enumerate().map(|(ix, table)| {
-                                                SidebarMenuItem::new(SharedString::from(table.clone()))
-                                                    .icon(IconName::SquareTerminal)
-                                                    .id(("test-db-table", ix))  // Unique ID for each table
-                                            })),
-                                    )
-                                    // PostgreSQL Connections
                                     .children({
                                         let mut items = Vec::new();
+                                        for (conn_ix, (name, database_path, expanded)) in self.sqlite_connections.iter().enumerate() {
+                                            let name_for_click = name.clone();
+                                            let name_for_menu = name.clone();
+                                            let database_path_for_click = database_path.clone();
+                                            let expanded_for_children = *expanded;
+
+                                            let mut table_items = Vec::new();
+                                            if expanded_for_children {
+                                                // Load tables lazily when expanded
+                                                if !self.test_db_tables.iter().any(|t| t.contains(&format!("sqlite_conn_{}", conn_ix))) {
+                                                    // This is a placeholder - we'd need proper SQLite table loading logic
+                                                    // For now, add a placeholder table
+                                                    table_items.push(
+                                                        SidebarMenuItem::new(SharedString::from("Loading..."))
+                                                            .icon(IconName::SquareTerminal)
+                                                            .id(("sqlite-table", conn_ix))
+                                                    );
+                                                }
+                                            }
+
+                                            items.push(
+                                                SidebarMenuItem::new(SharedString::from(name_for_click.clone()))
+                                                    .icon(IconName::Sqlite)
+                                                    .active(*expanded)
+                                                    .id(("sqlite-connection", conn_ix))
+                                                    .context_menu({
+                                                        let name = name_for_menu.clone();
+                                                        let database_path = database_path.clone();
+                                                        move |menu, _window, _cx| {
+                                                            log::info!("Creating context menu for SQLite connection: {}", name);
+                                                            menu.menu("New Query", Box::new(crate::app::NewQueryForConnection {
+                                                                connection_name: name.clone(),
+                                                                connection_type: crate::app::ConnectionType::SQLite,
+                                                            }))
+                                                        }
+                                                    })
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        log::info!("Clicked on SQLite connection: {}", name_for_click);
+                                                        // Toggle expansion for this connection
+                                                        if let Some((_, _, expanded)) = this.sqlite_connections.get_mut(conn_ix) {
+                                                            *expanded = !*expanded;
+
+                                                            // Load tables when expanding
+                                                            if *expanded {
+                                                                // TODO: Load actual SQLite tables for this connection
+                                                                log::info!("Would load tables for SQLite connection: {}", name_for_click);
+                                                            }
+                                                        }
+                                                        cx.notify();
+                                                    }))
+                                                    .children(table_items)
+                                            );
+                                        }
+
+                                        // PostgreSQL Connections
                                         for (conn_ix, (key, (display_name, schemas, expanded))) in self.pg_connections.iter().enumerate() {
                                             let schemas_clone = schemas.clone();
                                             let key_for_click = key.clone();
@@ -351,7 +512,7 @@ impl Render for ConnectionSidebar {
 
                                             items.push(
                                                 SidebarMenuItem::new(SharedString::from(display_name_for_click.clone()))
-                                                    .icon(IconName::Globe)
+                                                    .icon(IconName::Postgresql)
                                                     .active(*expanded)
                                                     .id(("pg-connection", conn_ix))
                                                     .context_menu({
@@ -368,8 +529,14 @@ impl Render for ConnectionSidebar {
                                                     .on_click(cx.listener(move |this, _, _, cx| {
                                                         log::info!("Clicked on PostgreSQL connection: {}", display_name_for_click);
                                                         // Toggle expansion for this connection
-                                                        if let Some((_, _, ref mut expanded)) = this.pg_connections.get_mut(&key_for_click) {
+                                                        if let Some((_display_name, schemas, expanded)) = this.pg_connections.get_mut(&key_for_click) {
+                                                            let was_expanded = *expanded;
                                                             *expanded = !*expanded;
+
+                                                            // Load schemas lazily when expanding for the first time
+                                                            if !was_expanded && *expanded && schemas.is_empty() {
+                                                                this.load_postgres_schemas(key_for_click.clone(), display_name_for_click.clone(), cx);
+                                                            }
                                                         }
                                                         cx.notify();
                                                     }))
@@ -377,7 +544,7 @@ impl Render for ConnectionSidebar {
                                             );
                                         }
                                         items
-                                    })
+                                    }),
                             ),
                         ),
                     ),
@@ -391,7 +558,7 @@ impl Render for ConnectionSidebar {
                         Button::new("new-connection")
                             .w_full()
                             .outline()
-                            .icon(IconName::Plus)
+                            .icon(GCIconName::Plus)
                             .label("New Connection")
                             .on_click(cx.listener(move |_this, _event, window, cx| {
                                 log::info!("New Connection button clicked");

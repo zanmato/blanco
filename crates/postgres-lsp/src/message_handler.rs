@@ -7,7 +7,7 @@
 use anyhow::{Context as _, Result};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
-use tokio::io::{BufReader, AsyncReadExt};
+use tokio::io::{AsyncReadExt, BufReader};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
 
@@ -86,8 +86,7 @@ impl LspMessageHandler {
             Self::read_headers(&mut stdout_reader, &mut buffer).await?;
 
             // Parse Content-Length
-            let headers_str = std::str::from_utf8(&buffer)
-                .context("Invalid UTF-8 in headers")?;
+            let headers_str = std::str::from_utf8(&buffer).context("Invalid UTF-8 in headers")?;
 
             let content_length = Self::parse_content_length(headers_str)
                 .context("Failed to parse Content-Length header")?;
@@ -101,8 +100,8 @@ impl LspMessageHandler {
                 .await
                 .context("Failed to read message content")?;
 
-            let message_str = std::str::from_utf8(&buffer)
-                .context("Invalid UTF-8 in message content")?;
+            let message_str =
+                std::str::from_utf8(&buffer).context("Invalid UTF-8 in message content")?;
 
             trace!("📨 LspMessageHandler: Raw message: {}", message_str);
 
@@ -117,10 +116,7 @@ impl LspMessageHandler {
     }
 
     /// Read HTTP-style headers from the stream
-    async fn read_headers<T>(
-        reader: &mut BufReader<T>,
-        buffer: &mut Vec<u8>,
-    ) -> Result<()>
+    async fn read_headers<T>(reader: &mut BufReader<T>, buffer: &mut Vec<u8>) -> Result<()>
     where
         T: tokio::io::AsyncRead + Unpin,
     {
@@ -150,7 +146,9 @@ impl LspMessageHandler {
     fn parse_content_length(headers: &str) -> Result<usize> {
         for line in headers.lines() {
             if let Some(length_str) = line.strip_prefix(CONTENT_LENGTH_HEADER) {
-                return length_str.trim().parse::<usize>()
+                return length_str
+                    .trim()
+                    .parse::<usize>()
                     .context("Invalid Content-Length value");
             }
         }
@@ -162,8 +160,8 @@ impl LspMessageHandler {
         message_str: &str,
         message_tx: &mpsc::UnboundedSender<LspMessage>,
     ) -> Result<()> {
-        let json_value: Value = serde_json::from_str(message_str)
-            .context("Invalid JSON in message")?;
+        let json_value: Value =
+            serde_json::from_str(message_str).context("Invalid JSON in message")?;
 
         // Check if it's a notification (no 'id' field) or request/response (has 'id')
         if json_value.get("id").is_some() {
@@ -171,31 +169,41 @@ impl LspMessageHandler {
             if let Some(method) = json_value.get("method").and_then(|m| m.as_str()) {
                 // It's a request from the server
                 let message = LspMessage::Request {
-                    id: json_value.get("id").cloned()
+                    id: json_value
+                        .get("id")
+                        .cloned()
                         .context("Request missing id")?,
                     method: method.to_string(),
                     params: json_value.get("params").cloned(),
                 };
 
                 debug!("📨 LspMessageHandler: Server request: {}", method);
-                message_tx.send(message)
+                message_tx
+                    .send(message)
                     .context("Failed to send request message")?;
             } else {
                 // It's a response from the server
                 let message = LspMessage::Response {
-                    id: json_value.get("id").cloned()
+                    id: json_value
+                        .get("id")
+                        .cloned()
                         .context("Response missing id")?,
                     result: json_value.get("result").cloned(),
                     error: json_value.get("error").cloned(),
                 };
 
-                debug!("📨 LspMessageHandler: Server response for ID: {:?}", json_value.get("id"));
-                message_tx.send(message)
+                debug!(
+                    "📨 LspMessageHandler: Server response for ID: {:?}",
+                    json_value.get("id")
+                );
+                message_tx
+                    .send(message)
                     .context("Failed to send response message")?;
             }
         } else {
             // It's a notification
-            let method = json_value.get("method")
+            let method = json_value
+                .get("method")
                 .and_then(|m| m.as_str())
                 .context("Notification missing method")?;
 
@@ -205,7 +213,8 @@ impl LspMessageHandler {
             };
 
             debug!("📨 LspMessageHandler: Server notification: {}", method);
-            message_tx.send(message)
+            message_tx
+                .send(message)
                 .context("Failed to send notification message")?;
         }
 
@@ -244,7 +253,9 @@ impl LspHealthMonitor {
     }
 
     /// Start the health monitoring task
-    pub async fn start_monitoring(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn start_monitoring(
+        &mut self,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("🏥 LspHealthMonitor: Starting health monitoring");
 
         loop {
@@ -274,7 +285,7 @@ impl LspHealthMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[tokio::test]
     async fn test_parse_content_length() {
         let headers = "Content-Type: application/vscode-jsonrpc\r\nContent-Length: 1234\r\n\r\n";
@@ -301,10 +312,7 @@ mod tests {
         "#;
 
         let (tx, mut rx) = mpsc::unbounded_channel();
-        LspMessageHandler::parse_and_route_message(
-            notification_json,
-            &tx,
-        ).unwrap();
+        LspMessageHandler::parse_and_route_message(notification_json, &tx).unwrap();
 
         let message = rx.recv().await.unwrap();
         match message {
@@ -327,10 +335,7 @@ mod tests {
         }
         "#;
 
-        LspMessageHandler::parse_and_route_message(
-            response_json,
-            &tx,
-        ).unwrap();
+        LspMessageHandler::parse_and_route_message(response_json, &tx).unwrap();
 
         let message = rx.recv().await.unwrap();
         match message {

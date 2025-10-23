@@ -1,5 +1,5 @@
 //! LSP manager for PostgreSQL language server
-//! 
+//!
 //! This module provides the main interface for managing PostgreSQL LSP instances,
 //! coordinating between the downloader, process manager, and providers.
 
@@ -7,15 +7,17 @@ use crate::client::PostgresLspClient;
 use crate::config::PostgresLspConfig;
 use crate::downloader::{BinaryDownloader, DownloadError};
 use crate::process::{PostgresLspProcess, ProcessError, ProcessManager};
-use crate::providers::{PostgresCompletionProvider, PostgresHoverProvider, PostgresCodeActionProvider};
+use crate::providers::{
+    PostgresCodeActionProvider, PostgresCompletionProvider, PostgresHoverProvider,
+};
 use anyhow::Result;
+use gpui::BackgroundExecutor;
 use lsp_types::Uri;
 use serde_json;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::sync::{RwLock, Mutex};
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info, warn};
-use gpui::BackgroundExecutor;
 
 /// LSP manager errors
 #[derive(Debug, thiserror::Error)]
@@ -51,12 +53,19 @@ pub struct PostgresLspManager {
 
 impl PostgresLspManager {
     /// Create a new PostgreSQL LSP manager
-    pub async fn new(config: PostgresLspConfig, executor: BackgroundExecutor) -> Result<Self, LspManagerError> {
+    pub async fn new(
+        config: PostgresLspConfig,
+        executor: BackgroundExecutor,
+    ) -> Result<Self, LspManagerError> {
         Self::with_workspace(config, executor, None)
     }
 
     /// Create a new PostgreSQL LSP manager with a specific workspace directory
-    pub fn with_workspace(config: PostgresLspConfig, executor: BackgroundExecutor, workspace_path: Option<PathBuf>) -> Result<Self, LspManagerError> {
+    pub fn with_workspace(
+        config: PostgresLspConfig,
+        executor: BackgroundExecutor,
+        workspace_path: Option<PathBuf>,
+    ) -> Result<Self, LspManagerError> {
         let downloader = Arc::new(BinaryDownloader::new()?);
         let process_manager = Arc::new(RwLock::new(ProcessManager::new()));
 
@@ -73,14 +82,25 @@ impl PostgresLspManager {
     /// Extract password from connection string
     /// Supports formats: postgresql://username[:password]@host:port/database
     fn extract_password_from_connection_string(connection_string: &str) -> String {
-        info!("🔍 Extracting password from connection string: {}", connection_string);
+        info!(
+            "🔍 Extracting password from connection string: {}",
+            connection_string
+        );
 
         // Parse the connection string as a URL to properly extract components
         if let Ok(url) = url::Url::parse(connection_string) {
             // The password is available through the password() method if it exists
             // The password() method returns percent-decoded values automatically
             let password = url.password().unwrap_or("").to_string();
-            info!("🔍 Parsed password from URL: '{}' (length: {})", if password.is_empty() { "<empty>" } else { "<hidden>" }, password.len());
+            info!(
+                "🔍 Parsed password from URL: '{}' (length: {})",
+                if password.is_empty() {
+                    "<empty>"
+                } else {
+                    "<hidden>"
+                },
+                password.len()
+            );
             password
         } else {
             // Fallback to manual parsing if URL parsing fails
@@ -93,7 +113,15 @@ impl PostgresLspManager {
                         let auth_part = &connection_string[authority_start..at_pos];
                         if let Some(colon_pos) = auth_part.find(':') {
                             let password = auth_part[colon_pos + 1..].to_string();
-                            info!("🔍 Manual parsing found password: '{}' (length: {})", if password.is_empty() { "<empty>" } else { "<hidden>" }, password.len());
+                            info!(
+                                "🔍 Manual parsing found password: '{}' (length: {})",
+                                if password.is_empty() {
+                                    "<empty>"
+                                } else {
+                                    "<hidden>"
+                                },
+                                password.len()
+                            );
                             password
                         } else {
                             info!("🔍 Manual parsing: no colon found in auth part, no password");
@@ -115,7 +143,7 @@ impl PostgresLspManager {
     }
 
     /// Initialize the LSP manager
-    /// 
+    ///
     /// This method ensures the binary is available and sets up the LSP infrastructure.
     pub async fn initialize(&mut self) -> Result<(), LspManagerError> {
         info!("Initializing PostgreSQL LSP manager");
@@ -131,7 +159,11 @@ impl PostgresLspManager {
         } else {
             // Fallback to legacy directory for backward compatibility
             dirs::data_dir()
-                .ok_or_else(|| LspManagerError::Config(crate::config::ConfigError::Invalid("Could not find data directory".to_string())))?
+                .ok_or_else(|| {
+                    LspManagerError::Config(crate::config::ConfigError::Invalid(
+                        "Could not find data directory".to_string(),
+                    ))
+                })?
                 .join("blanco")
                 .join("queries")
         };
@@ -140,7 +172,9 @@ impl PostgresLspManager {
         info!("Using workspace directory for LSP: {:?}", workspace_path);
 
         // Create postgrestools.jsonc config file with database connection
-        let password = Self::extract_password_from_connection_string(&self.config.connection.connection_string);
+        let password = Self::extract_password_from_connection_string(
+            &self.config.connection.connection_string,
+        );
         let config_content = serde_json::json!({
             "$schema": "https://pgtools.dev/latest/schema.json",
             "db": {
@@ -159,18 +193,33 @@ impl PostgresLspManager {
 
         let config_path = workspace_path.join("postgrestools.jsonc");
         let config_json = serde_json::to_string_pretty(&config_content)?;
-        let full_content = format!("// PostgreSQL Tools Configuration\n// Generated automatically by Blanco\n\n{}\n", config_json);
+        let full_content = format!(
+            "// PostgreSQL Tools Configuration\n// Generated automatically by Blanco\n\n{}\n",
+            config_json
+        );
         std::fs::write(&config_path, full_content)?;
         info!("Created postgrestools.jsonc config at: {:?}", config_path);
 
         // Start LSP process (without --config-path so it uses workspace folder detection)
-        info!("🚀 Starting LSP process with working directory: {:?}", workspace_path);
-        let process = PostgresLspProcess::new(binary_path, &workspace_path, self.executor.clone()).await?;
+        info!(
+            "🚀 Starting LSP process with working directory: {:?}",
+            workspace_path
+        );
+        let process =
+            PostgresLspProcess::new(binary_path, &workspace_path, self.executor.clone()).await?;
         // Note: LSP servers typically don't output ready messages, they just start listening
         // No need to wait_for_ready() since the server is ready immediately
 
         // Create LSP client
-        let client = Arc::new(Mutex::new(Some(PostgresLspClient::new(process, &self.config, &workspace_path, self.executor.clone()).await?)));
+        let client = Arc::new(Mutex::new(Some(
+            PostgresLspClient::new(
+                process,
+                &self.config,
+                &workspace_path,
+                self.executor.clone(),
+            )
+            .await?,
+        )));
         self.client = Some(client);
 
         info!("PostgreSQL LSP manager initialized successfully");
@@ -182,13 +231,18 @@ impl PostgresLspManager {
         &self,
         workspace_path: &Path,
     ) -> Result<u32, LspManagerError> {
-        info!("Starting PostgreSQL LSP for workspace: {:?}", workspace_path);
+        info!(
+            "Starting PostgreSQL LSP for workspace: {:?}",
+            workspace_path
+        );
 
         // Get the binary path
         let binary_path = self.downloader.ensure_binary().await?;
 
         // Create postgrestools.jsonc config file with database connection
-        let password = Self::extract_password_from_connection_string(&self.config.connection.connection_string);
+        let password = Self::extract_password_from_connection_string(
+            &self.config.connection.connection_string,
+        );
         let config_content = serde_json::json!({
             "$schema": "https://pgtools.dev/latest/schema.json",
             "db": {
@@ -207,12 +261,16 @@ impl PostgresLspManager {
 
         let config_path = workspace_path.join("postgrestools.jsonc");
         let config_json = serde_json::to_string_pretty(&config_content)?;
-        let full_content = format!("// PostgreSQL Tools Configuration\n// Generated automatically by Blanco\n\n{}\n", config_json);
+        let full_content = format!(
+            "// PostgreSQL Tools Configuration\n// Generated automatically by Blanco\n\n{}\n",
+            config_json
+        );
         std::fs::write(&config_path, full_content)?;
         info!("Created postgrestools.jsonc config at: {:?}", config_path);
 
         // Create and start the process (without --config-path so it uses workspace folder detection)
-        let process = PostgresLspProcess::new(binary_path, workspace_path, self.executor.clone()).await?;
+        let process =
+            PostgresLspProcess::new(binary_path, workspace_path, self.executor.clone()).await?;
 
         // Note: LSP servers are ready immediately, no need to wait for output
 
@@ -262,7 +320,10 @@ impl PostgresLspManager {
     }
 
     /// Create a completion provider
-    pub fn create_completion_provider(&self, document_uri: Uri) -> Option<PostgresCompletionProvider> {
+    pub fn create_completion_provider(
+        &self,
+        document_uri: Uri,
+    ) -> Option<PostgresCompletionProvider> {
         self.client.as_ref().map(|client| {
             PostgresCompletionProvider::new(client.clone(), self.config.clone(), document_uri)
         })
@@ -276,7 +337,10 @@ impl PostgresLspManager {
     }
 
     /// Create a code action provider
-    pub fn create_code_action_provider(&self, document_uri: Uri) -> Option<PostgresCodeActionProvider> {
+    pub fn create_code_action_provider(
+        &self,
+        document_uri: Uri,
+    ) -> Option<PostgresCodeActionProvider> {
         self.client.as_ref().map(|client| {
             PostgresCodeActionProvider::new(client.clone(), self.config.clone(), document_uri)
         })
@@ -316,7 +380,7 @@ impl PostgresLspManager {
             // Get all PIDs and shut them down individually
             let pids: Vec<u32> = manager.processes().iter().map(|p| p.pid()).collect();
             drop(manager);
-            
+
             for pid in pids {
                 if let Err(e) = self.stop_lsp(pid).await {
                     error!("Error shutting down LSP process {}: {}", pid, e);
@@ -345,7 +409,13 @@ impl PostgresLspManager {
     }
 
     /// Notify LSP that a document was opened
-    pub async fn did_open(&self, uri: Uri, language_id: String, version: i32, text: String) -> Result<(), LspManagerError> {
+    pub async fn did_open(
+        &self,
+        uri: Uri,
+        language_id: String,
+        version: i32,
+        text: String,
+    ) -> Result<(), LspManagerError> {
         use lsp_types::*;
 
         if let Some(client) = &self.client {
@@ -366,7 +436,12 @@ impl PostgresLspManager {
     }
 
     /// Notify LSP that a document changed
-    pub async fn did_change(&self, uri: Uri, version: i32, text: String) -> Result<(), LspManagerError> {
+    pub async fn did_change(
+        &self,
+        uri: Uri,
+        version: i32,
+        text: String,
+    ) -> Result<(), LspManagerError> {
         use lsp_types::*;
 
         if let Some(client) = &self.client {
@@ -380,17 +455,21 @@ impl PostgresLspManager {
                 // Create a range covering the entire document to help LSP understand document structure
                 let full_range = Some(Range::new(
                     Position::new(0, 0),
-                    Position::new(line_count - 1, last_char_count)
+                    Position::new(line_count - 1, last_char_count),
                 ));
 
-                info!("📝 Calculated range for didChange: {} lines, last line has {} chars", line_count, last_char_count);
-                info!("📝 Range: {:?} -> {:?}", Position::new(0, 0), Position::new(line_count - 1, last_char_count));
+                info!(
+                    "📝 Calculated range for didChange: {} lines, last line has {} chars",
+                    line_count, last_char_count
+                );
+                info!(
+                    "📝 Range: {:?} -> {:?}",
+                    Position::new(0, 0),
+                    Position::new(line_count - 1, last_char_count)
+                );
 
                 let params = DidChangeTextDocumentParams {
-                    text_document: VersionedTextDocumentIdentifier {
-                        uri,
-                        version,
-                    },
+                    text_document: VersionedTextDocumentIdentifier { uri, version },
                     content_changes: vec![TextDocumentContentChangeEvent {
                         range: full_range, // Provide range information for better LSP tracking
                         range_length: None,
@@ -411,9 +490,7 @@ impl PostgresLspManager {
             let mut client_guard = client.lock().await;
             if let Some(client) = client_guard.as_mut() {
                 let params = DidCloseTextDocumentParams {
-                    text_document: TextDocumentIdentifier {
-                        uri,
-                    },
+                    text_document: TextDocumentIdentifier { uri },
                 };
                 client.did_close(params).await?;
             }
@@ -422,7 +499,10 @@ impl PostgresLspManager {
     }
 
     /// Set workspace configuration
-    pub async fn set_configuration(&self, settings: serde_json::Value) -> Result<(), LspManagerError> {
+    pub async fn set_configuration(
+        &self,
+        settings: serde_json::Value,
+    ) -> Result<(), LspManagerError> {
         if let Some(client) = &self.client {
             let mut client_guard = client.lock().await;
             if let Some(client) = client_guard.as_mut() {
@@ -465,7 +545,7 @@ impl PostgresLspManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[tokio::test]
     async fn test_manager_creation() {
         let config = PostgresLspConfig::default();
