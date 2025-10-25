@@ -252,6 +252,7 @@ impl PostgresForm {
         }
     }
 
+    #[allow(dead_code)]
     fn first_input_focus_handle(&self, cx: &App) -> FocusHandle {
         self.host_input.focus_handle(cx)
     }

@@ -1,73 +1,23 @@
 use std::collections::HashMap;
 use std::ops::Range;
 
-// Maximum number of SQL log entries to keep (circular buffer)
-const MAX_SQL_LOG_ENTRIES: usize = 1000;
-
 use gpui::prelude::FluentBuilder;
 use gpui::{
     div, px, App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement,
     IntoElement, MouseButton, ParentElement, Render, Styled, Window,
 };
 use gpui_component::{
-    button::{Button, ButtonVariant, ButtonVariants},
     h_flex,
     input::{InputEvent, InputState, TextInput},
     table::{Column, ColumnSort, Table, TableDelegate},
     v_flex, ActiveTheme, Icon, IconName,
 };
 
-use crate::database::QueryResult;
-use crate::db_service::DbService;
+use crate::async_pipeline::{AsyncEvent, TaskPriority};
+use crate::connection_trait::QueryResult;
+use crate::events::{emit_event, AppEvent};
 use crate::sql_parser::SqlTableExtractor;
-
-/// Represents different types of cell values for proper NULL handling
-#[derive(Clone, Debug, PartialEq)]
-pub enum CellValue {
-    /// A string value (can be empty string)
-    Value(String),
-    /// Explicit NULL value
-    Null,
-    /// Empty string (distinct from NULL)
-    Empty,
-}
-
-impl CellValue {
-    pub fn is_null(&self) -> bool {
-        matches!(self, CellValue::Null)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        matches!(self, CellValue::Empty)
-            || if let CellValue::Value(s) = self {
-                s.is_empty()
-            } else {
-                false
-            }
-    }
-
-    pub fn display_text(&self) -> String {
-        match self {
-            CellValue::Value(s) => s.clone(),
-            CellValue::Null => "NULL".to_string(),
-            CellValue::Empty => "".to_string(),
-        }
-    }
-
-    pub fn from_string(s: String, treat_empty_as_null: bool) -> Self {
-        if s.is_empty() {
-            if treat_empty_as_null {
-                CellValue::Null
-            } else {
-                CellValue::Empty
-            }
-        } else if s.eq_ignore_ascii_case("null") {
-            CellValue::Null
-        } else {
-            CellValue::Value(s)
-        }
-    }
-}
+use crate::table_operations::ColumnChange;
 
 #[derive(Clone, Debug)]
 pub struct TableChange {
@@ -89,6 +39,118 @@ pub enum ChangeType {
     UpdateCell,
     InsertRow,
     DeleteRow,
+}
+
+// Test helper structures
+#[derive(Clone, Debug)]
+pub struct ResultRow {
+    pub id: usize,
+    pub name: String,
+    pub email: String,
+    pub age: i32,
+    pub city: String,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct CellEditState {
+    pub editing_cell: Option<(usize, usize)>, // (row, col)
+    pub original_values: HashMap<(usize, usize), String>,
+    pub edited_values: HashMap<(usize, usize), String>,
+    pub pending_new_rows: Vec<usize>, // Track rows that are newly added
+    pub editing_input: Option<Entity<InputState>>, // Store input state per delegate
+    pub changes: Vec<TableChange>,    // Track all changes for SQL generation
+}
+
+impl CellEditState {
+    pub fn is_editing(&self, row: usize, col: usize) -> bool {
+        self.editing_cell == Some((row, col))
+    }
+
+    pub fn is_edited(&self, row: usize, col: usize) -> bool {
+        self.edited_values.contains_key(&(row, col))
+    }
+
+    pub fn get_edited_value(&self, row: usize, col: usize) -> Option<&String> {
+        self.edited_values.get(&(row, col))
+    }
+
+    pub fn get_original_value(&self, row: usize, col: usize) -> Option<&String> {
+        self.original_values.get(&(row, col))
+    }
+
+    pub fn start_editing(&mut self, row: usize, col: usize, input: Entity<InputState>) {
+        self.editing_cell = Some((row, col));
+        self.editing_input = Some(input);
+    }
+
+    pub fn stop_editing(&mut self) {
+        self.editing_cell = None;
+        self.editing_input = None;
+    }
+
+    pub fn get_editing_input(&self) -> Option<Entity<InputState>> {
+        self.editing_input.clone()
+    }
+
+    pub fn has_unsaved_changes(&self) -> bool {
+        !self.edited_values.is_empty()
+            || !self.pending_new_rows.is_empty()
+            || !self.changes.is_empty()
+    }
+
+    pub fn clear_edits(&mut self) {
+        self.edited_values.clear();
+        self.original_values.clear();
+        self.pending_new_rows.clear();
+        self.editing_cell = None;
+        self.editing_input = None;
+    }
+
+    pub fn clear_all(&mut self) {
+        self.editing_cell = None;
+        self.original_values.clear();
+        self.edited_values.clear();
+        self.pending_new_rows.clear();
+        self.editing_input = None;
+        self.changes.clear();
+    }
+
+    pub fn add_change(&mut self, change: TableChange) {
+        self.changes.push(change);
+    }
+
+    pub fn get_changes(&self) -> &[TableChange] {
+        &self.changes
+    }
+
+    pub fn clear_changes(&mut self) {
+        self.changes.clear();
+        self.edited_values.clear();
+        self.original_values.clear();
+        self.pending_new_rows.clear();
+    }
+
+    pub fn update_editing_value(&mut self, row: usize, col: usize, new_value: String) {
+        if self.is_editing(row, col) {
+            self.edited_values.insert((row, col), new_value);
+        }
+    }
+
+    pub fn commit_edit(&mut self, row: usize, col: usize) -> Option<String> {
+        if self.is_editing(row, col) {
+            self.editing_cell = None;
+            self.edited_values.get(&(row, col)).cloned()
+        } else {
+            None
+        }
+    }
+
+    pub fn cancel_edit(&mut self, row: usize, col: usize) {
+        if self.is_editing(row, col) {
+            self.editing_cell = None;
+            self.edited_values.remove(&(row, col));
+        }
+    }
 }
 
 impl TableChange {
@@ -280,433 +342,6 @@ impl TableChange {
             }
         }
     }
-
-    pub fn to_sql(&self, columns: &[String]) -> Result<String, String> {
-        match self.change_type {
-            ChangeType::UpdateCell => {
-                let column_name = columns
-                    .get(self.column_index.unwrap_or(0))
-                    .ok_or_else(|| "Invalid column index".to_string())?;
-
-                // For UPDATE, we need the primary key column name and value
-                let pk_column = columns
-                    .first()
-                    .ok_or_else(|| "No columns available".to_string())?;
-                let pk_value = self
-                    .primary_key_value
-                    .as_ref()
-                    .ok_or_else(|| "No primary key value available".to_string())?;
-
-                let empty_string = "".to_string();
-                let new_value = self.new_value.as_ref().unwrap_or(&empty_string);
-
-                // Properly quote values, handling NULL
-                // Remove existing quotes before adding new ones
-                let clean_new_value = new_value.trim_matches('\'');
-                let clean_pk_value = pk_value.trim_matches('\'');
-
-                let quoted_new_value = if clean_new_value.is_empty() {
-                    "NULL".to_string()
-                } else {
-                    format!("'{}'", clean_new_value.replace("'", "''"))
-                };
-                let quoted_pk_value = if clean_pk_value.is_empty() {
-                    "NULL".to_string()
-                } else {
-                    format!("'{}'", clean_pk_value.replace("'", "''"))
-                };
-
-                Ok(format!(
-                    "UPDATE {} SET {} = {} WHERE {} = {};",
-                    self.table_name, column_name, quoted_new_value, pk_column, quoted_pk_value
-                ))
-            }
-            ChangeType::InsertRow => {
-                // For INSERT, new_value contains comma-separated values for all columns
-                let values = if let Some(new_value) = &self.new_value {
-                    // Split the comma-separated values
-                    new_value.split(", ").map(|s| s.to_string()).collect()
-                } else {
-                    // Default to NULL for all columns
-                    vec!["NULL".to_string(); columns.len()]
-                };
-
-                let value_list = values
-                    .iter()
-                    .map(|v| {
-                        if v == "NULL" {
-                            "NULL".to_string()
-                        } else {
-                            // Remove existing quotes before adding new ones
-                            let clean_value = v.trim_matches('\'');
-                            format!("'{}'", clean_value.replace("'", "''"))
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-
-                Ok(format!(
-                    "INSERT INTO {} ({}) VALUES ({});",
-                    self.table_name,
-                    columns.join(", "),
-                    value_list
-                ))
-            }
-            ChangeType::DeleteRow => {
-                let pk_column = columns
-                    .first()
-                    .ok_or_else(|| "No primary key column".to_string())?;
-                let empty_string = "".to_string();
-                let pk_value = self.primary_key_value.as_ref().unwrap_or(&empty_string);
-
-                // Remove existing quotes before adding new ones
-                let clean_pk_value = pk_value.trim_matches('\'');
-                let quoted_pk_value = if clean_pk_value.is_empty() {
-                    "NULL".to_string()
-                } else {
-                    format!("'{}'", clean_pk_value.replace("'", "''"))
-                };
-
-                Ok(format!(
-                    "DELETE FROM {} WHERE {} = {};",
-                    self.table_name, pk_column, quoted_pk_value
-                ))
-            }
-        }
-    }
-
-    pub fn to_sql_with_pk(
-        &self,
-        columns: &[String],
-        _primary_key_column: &Option<String>,
-    ) -> Result<String, String> {
-        match self.change_type {
-            ChangeType::UpdateCell => {
-                let column_name = columns
-                    .get(self.column_index.unwrap_or(0))
-                    .ok_or_else(|| "Invalid column index".to_string())?;
-
-                // Use the primary key column stored in the change, or fall back to first column
-                let pk_column_name = if let Some(pk_col) = &self.primary_key_column {
-                    pk_col.clone()
-                } else {
-                    columns
-                        .first()
-                        .ok_or_else(|| "No columns available".to_string())?
-                        .clone()
-                };
-
-                let pk_value = self
-                    .primary_key_value
-                    .as_ref()
-                    .ok_or_else(|| "No primary key value available".to_string())?;
-
-                let empty_string = "".to_string();
-                let new_value = self.new_value.as_ref().unwrap_or(&empty_string);
-
-                // Properly quote values, handling NULL
-                // Remove existing quotes before adding new ones
-                let clean_new_value = new_value.trim_matches('\'');
-                let clean_pk_value = pk_value.trim_matches('\'');
-
-                let quoted_new_value = if clean_new_value.is_empty() {
-                    "NULL".to_string()
-                } else {
-                    format!("'{}'", clean_new_value.replace("'", "''"))
-                };
-                let quoted_pk_value = if clean_pk_value.is_empty() {
-                    "NULL".to_string()
-                } else {
-                    format!("'{}'", clean_pk_value.replace("'", "''"))
-                };
-
-                Ok(format!(
-                    "UPDATE {} SET {} = {} WHERE {} = {};",
-                    self.table_name, column_name, quoted_new_value, pk_column_name, quoted_pk_value
-                ))
-            }
-            ChangeType::InsertRow => {
-                // For INSERT, new_value contains comma-separated values for all columns
-                let values = if let Some(new_value) = &self.new_value {
-                    // Split the comma-separated values
-                    new_value.split(", ").map(|s| s.to_string()).collect()
-                } else {
-                    // Default to NULL for all columns
-                    vec!["NULL".to_string(); columns.len()]
-                };
-
-                let value_list = values
-                    .iter()
-                    .map(|v| {
-                        if v == "NULL" {
-                            "NULL".to_string()
-                        } else {
-                            // Remove existing quotes before adding new ones
-                            let clean_value = v.trim_matches('\'');
-                            format!("'{}'", clean_value.replace("'", "''"))
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-
-                Ok(format!(
-                    "INSERT INTO {} ({}) VALUES ({});",
-                    self.table_name,
-                    columns.join(", "),
-                    value_list
-                ))
-            }
-            ChangeType::DeleteRow => {
-                // Use the primary key column stored in the change, or fall back to first column
-                let pk_column_name = if let Some(pk_col) = &self.primary_key_column {
-                    pk_col.clone()
-                } else {
-                    columns
-                        .first()
-                        .ok_or_else(|| "No primary key column".to_string())?
-                        .clone()
-                };
-
-                let empty_string = "".to_string();
-                let pk_value = self.primary_key_value.as_ref().unwrap_or(&empty_string);
-
-                // Remove existing quotes before adding new ones
-                let clean_pk_value = pk_value.trim_matches('\'');
-                let quoted_pk_value = if clean_pk_value.is_empty() {
-                    "NULL".to_string()
-                } else {
-                    format!("'{}'", clean_pk_value.replace("'", "''"))
-                };
-
-                Ok(format!(
-                    "DELETE FROM {} WHERE {} = {};",
-                    self.table_name, pk_column_name, quoted_pk_value
-                ))
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_cell_edit_state() {
-        let mut edit_state = CellEditState::default();
-
-        // Test initial state
-        assert!(!edit_state.is_editing(0, 0));
-        assert!(!edit_state.is_edited(0, 0));
-        assert!(!edit_state.has_unsaved_changes());
-
-        // Test starting editing with string value
-        edit_state.editing_cell = Some((0, 0));
-        edit_state
-            .original_values
-            .insert((0, 0), "original".to_string());
-
-        assert!(edit_state.is_editing(0, 0));
-        assert!(!edit_state.is_edited(0, 0));
-
-        // Test updating value
-        edit_state
-            .edited_values
-            .insert((0, 0), "modified".to_string());
-        assert!(edit_state.is_edited(0, 0));
-        assert_eq!(
-            edit_state.get_edited_value(0, 0),
-            Some(&"modified".to_string())
-        );
-        assert_eq!(
-            edit_state.get_original_value(0, 0),
-            Some(&"original".to_string())
-        );
-
-        // Test clearing editing state
-        edit_state.editing_cell = None;
-        assert!(!edit_state.is_editing(0, 0));
-        assert!(edit_state.has_unsaved_changes());
-    }
-
-    #[test]
-    fn test_query_result_creation() {
-        let test_result = QueryResult {
-            columns: vec!["id".to_string(), "name".to_string()],
-            column_types: vec![],
-            rows: vec![
-                vec!["1".to_string(), "Alice".to_string()],
-                vec!["2".to_string(), "Bob".to_string()],
-            ],
-            query_text: Some("SELECT * FROM users".to_string()),
-            execution_time_ms: Some(50),
-            is_error: false,
-            rows_affected: 2,
-        };
-
-        assert_eq!(test_result.columns.len(), 2);
-        assert_eq!(test_result.rows.len(), 2);
-        assert_eq!(test_result.rows[0][1], "Alice");
-        assert_eq!(test_result.rows_affected, 2);
-        assert!(!test_result.is_error);
-    }
-
-    #[test]
-    fn test_results_table_delegate_default() {
-        let delegate = ResultsTableDelegate::default();
-
-        // Test basic properties without requiring App context
-        assert!(delegate.table_name.is_none());
-        assert!(delegate.primary_key_column.is_none());
-        assert!(delegate.columns.is_empty());
-        assert!(delegate.rows.is_empty());
-    }
-
-    #[test]
-    fn test_cell_edit_state_clear_all() {
-        let mut edit_state = CellEditState::default();
-
-        // Add some data
-        edit_state.editing_cell = Some((0, 0));
-        edit_state
-            .original_values
-            .insert((0, 0), "original".to_string());
-        edit_state
-            .edited_values
-            .insert((0, 0), "modified".to_string());
-        edit_state.pending_new_rows.push(0);
-
-        // Clear all
-        edit_state.clear_all();
-
-        assert!(!edit_state.is_editing(0, 0));
-        assert!(!edit_state.is_edited(0, 0));
-        assert!(!edit_state.has_unsaved_changes());
-        assert!(edit_state.pending_new_rows.is_empty());
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct ResultRow {
-    pub id: usize,
-    pub name: String,
-    pub email: String,
-    pub age: i32,
-    pub city: String,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct CellEditState {
-    pub editing_cell: Option<(usize, usize)>, // (row, col)
-    pub original_values: HashMap<(usize, usize), String>,
-    pub edited_values: HashMap<(usize, usize), String>,
-    pub pending_new_rows: Vec<usize>, // Track rows that are newly added
-    pub editing_input: Option<Entity<InputState>>, // Store input state per delegate
-    pub changes: Vec<TableChange>,    // Track all changes for SQL generation
-}
-
-impl CellEditState {
-    pub fn is_editing(&self, row: usize, col: usize) -> bool {
-        self.editing_cell == Some((row, col))
-    }
-
-    pub fn is_edited(&self, row: usize, col: usize) -> bool {
-        self.edited_values.contains_key(&(row, col))
-    }
-
-    pub fn get_edited_value(&self, row: usize, col: usize) -> Option<&String> {
-        self.edited_values.get(&(row, col))
-    }
-
-    pub fn get_original_value(&self, row: usize, col: usize) -> Option<&String> {
-        self.original_values.get(&(row, col))
-    }
-
-    pub fn start_editing(&mut self, row: usize, col: usize, input: Entity<InputState>) {
-        self.editing_cell = Some((row, col));
-        self.editing_input = Some(input);
-    }
-
-    pub fn stop_editing(&mut self) {
-        self.editing_cell = None;
-        self.editing_input = None;
-    }
-
-    pub fn get_editing_input(&self) -> Option<Entity<InputState>> {
-        self.editing_input.clone()
-    }
-
-    pub fn has_unsaved_changes(&self) -> bool {
-        !self.edited_values.is_empty()
-            || !self.pending_new_rows.is_empty()
-            || !self.changes.is_empty()
-    }
-
-    pub fn clear_edits(&mut self) {
-        self.edited_values.clear();
-        self.original_values.clear();
-        self.pending_new_rows.clear();
-        self.editing_cell = None;
-        self.editing_input = None;
-    }
-
-    pub fn clear_all(&mut self) {
-        self.editing_cell = None;
-        self.original_values.clear();
-        self.edited_values.clear();
-        self.pending_new_rows.clear();
-        self.editing_input = None;
-        self.changes.clear();
-    }
-
-    pub fn add_change(&mut self, change: TableChange) {
-        self.changes.push(change);
-    }
-
-    pub fn get_changes(&self) -> &[TableChange] {
-        &self.changes
-    }
-
-    pub fn clear_changes(&mut self) {
-        self.changes.clear();
-        self.edited_values.clear();
-        self.original_values.clear();
-        self.pending_new_rows.clear();
-    }
-
-    pub fn generate_sql_queries(&self, columns: &[String], _table_name: &str) -> Vec<String> {
-        let mut queries = Vec::new();
-
-        for change in &self.changes {
-            if let Ok(sql) = change.to_sql(columns) {
-                queries.push(sql);
-            }
-        }
-
-        queries
-    }
-
-    pub fn update_editing_value(&mut self, row: usize, col: usize, new_value: String) {
-        if self.is_editing(row, col) {
-            self.edited_values.insert((row, col), new_value);
-        }
-    }
-
-    pub fn commit_edit(&mut self, row: usize, col: usize) -> Option<String> {
-        if self.is_editing(row, col) {
-            self.editing_cell = None;
-            self.edited_values.get(&(row, col)).cloned()
-        } else {
-            None
-        }
-    }
-
-    pub fn cancel_edit(&mut self, row: usize, col: usize) {
-        if self.is_editing(row, col) {
-            self.editing_cell = None;
-            self.edited_values.remove(&(row, col));
-        }
-    }
 }
 
 #[derive(Default)]
@@ -718,6 +353,7 @@ pub struct ResultsTableDelegate {
     table_name: Option<String>,
     primary_key_column: Option<String>,
     pending_edit_cell: Option<(usize, usize)>,
+    connection_string: Option<String>,
 }
 
 impl ResultsTableDelegate {
@@ -730,6 +366,7 @@ impl ResultsTableDelegate {
             table_name: None,
             primary_key_column: None,
             pending_edit_cell: None,
+            connection_string: None,
         }
     }
 
@@ -749,6 +386,107 @@ impl ResultsTableDelegate {
         self.rows
             .get_mut(row)
             .and_then(|row_data| row_data.get_mut(col))
+    }
+
+    /// Set the connection string for database operations
+    pub fn set_connection_string(&mut self, connection_string: String) {
+        self.connection_string = Some(connection_string);
+    }
+
+    /// Convert table changes to database-agnostic TableChangeOperations
+    pub fn create_change_operations(&self) -> Vec<crate::table_operations::TableChangeOperation> {
+        let mut operations = Vec::new();
+
+        for change in &self.edit_state.changes {
+            let operation = match change.change_type {
+                ChangeType::UpdateCell => {
+                    // Get column name from index
+                    let column_name = self
+                        .columns
+                        .get(change.column_index.unwrap_or(0))
+                        .map(|col| col.name.to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+
+                    // Use the primary key information stored in the change
+                    if let (Some(pk_column), Some(pk_value)) =
+                        (&change.primary_key_column, &change.primary_key_value)
+                    {
+                        crate::table_operations::TableChangeOperation::update_cell(
+                            change.table_name.clone(),
+                            pk_column.clone(),
+                            pk_value.clone(),
+                            column_name,
+                            change.old_value.clone(),
+                            change.new_value.clone(),
+                        )
+                    } else {
+                        // Fallback: try to get primary key from delegate
+                        if let Some(ref pk_column) = self.primary_key_column {
+                            if let Some(pk_value) =
+                                self.rows.get(change.row_index).and_then(|row| row.get(0))
+                            {
+                                // Assume PK is first column as fallback
+                                crate::table_operations::TableChangeOperation::update_cell(
+                                    change.table_name.clone(),
+                                    pk_column.clone(),
+                                    pk_value.clone(),
+                                    column_name,
+                                    change.old_value.clone(),
+                                    change.new_value.clone(),
+                                )
+                            } else {
+                                continue; // Skip this change if we can't determine PK
+                            }
+                        } else {
+                            continue; // Skip this change if we can't determine PK
+                        }
+                    }
+                }
+                ChangeType::InsertRow => {
+                    // Convert the new_value (comma-separated) into column changes
+                    if let Some(ref values_str) = change.new_value {
+                        let values: Vec<String> =
+                            values_str.split(", ").map(|s| s.to_string()).collect();
+
+                        let column_changes: Vec<ColumnChange> = self
+                            .columns
+                            .iter()
+                            .zip(values.iter())
+                            .map(|(col, value)| ColumnChange {
+                                column_name: col.name.to_string(),
+                                old_value: None,
+                                new_value: Some(value.clone()),
+                            })
+                            .collect();
+
+                        crate::table_operations::TableChangeOperation::insert_row(
+                            change.table_name.clone(),
+                            column_changes,
+                        )
+                    } else {
+                        continue; // Skip if no values
+                    }
+                }
+                ChangeType::DeleteRow => {
+                    // Use primary key information for deletion
+                    if let (Some(pk_column), Some(pk_value)) =
+                        (&change.primary_key_column, &change.primary_key_value)
+                    {
+                        crate::table_operations::TableChangeOperation::delete_row(
+                            change.table_name.clone(),
+                            pk_column.clone(),
+                            pk_value.clone(),
+                        )
+                    } else {
+                        continue; // Skip if no PK information
+                    }
+                }
+            };
+
+            operations.push(operation);
+        }
+
+        operations
     }
 
     pub fn set_query_result(&mut self, result: QueryResult) {
@@ -861,6 +599,57 @@ impl ResultsTableDelegate {
         self.primary_key_column = primary_key_column;
     }
 
+    /// Set table metadata and detect primary key using connection (async version)
+    pub async fn set_table_metadata_with_connection(
+        &mut self,
+        table_name: String,
+        connection_string: &str,
+    ) -> Result<(), anyhow::Error> {
+        self.table_name = Some(table_name.clone());
+        self.connection_string = Some(connection_string.to_string());
+
+        // Create a temporary connection to detect primary key
+        let db_service = crate::db_service::DbService::new();
+        if let Ok(connection) = db_service
+            .get_or_create_unified_connection(connection_string)
+            .await
+        {
+            match connection.get_primary_key_for_table(&table_name).await {
+                Ok(pk_column) => {
+                    self.primary_key_column = pk_column;
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Failed to detect primary key for table {}: {}",
+                        table_name,
+                        e
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Simple heuristic method to detect primary key column (fallback)
+    fn detect_primary_key_simple(&self, _table_name: &str) -> Option<String> {
+        // Simple heuristic: look for common primary key column names
+        for (_i, column) in self.columns.iter().enumerate() {
+            let column_name_lower = column.name.to_lowercase();
+            if column_name_lower.contains("id")
+                || column_name_lower == "uuid"
+                || column_name_lower.ends_with("_id")
+                || column_name_lower == "pk"
+                || column_name_lower.ends_with("_pk")
+            {
+                return Some(column.name.to_string());
+            }
+        }
+
+        // Fallback: return the first column name
+        self.columns.first().map(|col| col.name.to_string())
+    }
+
     fn extract_table_name_from_query(&self, query: &str) -> Option<String> {
         // Use the robust SQL parser
         let extractor = SqlTableExtractor::new();
@@ -884,30 +673,6 @@ impl ResultsTableDelegate {
                 None
             }
         }
-    }
-
-    fn detect_primary_key_simple(&self, _table_name: &str) -> Option<String> {
-        // Simple heuristic: look for common primary key column names
-        let common_pk_names = ["id", "uuid", "pk", "primary_key", "rowid"];
-
-        for column in &self.columns {
-            let column_name = column.name.to_lowercase();
-            for pk_name in &common_pk_names {
-                if column_name == *pk_name {
-                    return Some(column.name.to_string());
-                }
-            }
-        }
-
-        // If no obvious primary key found, assume first column named "id" or use first column
-        if let Some(first_col) = self.columns.first() {
-            let first_col_name = first_col.name.to_lowercase();
-            if first_col_name == "id" {
-                return Some(first_col.name.to_string());
-            }
-        }
-
-        None
     }
 
     pub fn start_editing_cell(&mut self, row: usize, col: usize) {
@@ -1075,7 +840,7 @@ impl TableDelegate for ResultsTableDelegate {
         div()
             .font_family("Fira Code")
             .text_sm()
-            .child(col.name.clone())
+            .child(col.name.to_string())
     }
 
     fn render_td(
@@ -1239,111 +1004,6 @@ impl TableDelegate for ResultsTableDelegate {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct SQLEntry {
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-    pub query: String,
-    pub status: SQLEntryStatus,
-    pub error_message: Option<String>,
-    pub execution_time_ms: Option<u64>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum SQLEntryStatus {
-    Success,
-    Error,
-    Pending,
-}
-
-impl SQLEntry {
-    pub fn new(query: String, status: SQLEntryStatus) -> Self {
-        Self {
-            timestamp: chrono::Utc::now(),
-            query,
-            status,
-            error_message: None,
-            execution_time_ms: None,
-        }
-    }
-
-    pub fn with_error(mut self, error: String) -> Self {
-        self.error_message = Some(error);
-        self
-    }
-
-    pub fn with_execution_time(mut self, time_ms: u64) -> Self {
-        self.execution_time_ms = Some(time_ms);
-        self
-    }
-
-    pub fn format_for_display(&self) -> String {
-        let status_symbol = match self.status {
-            SQLEntryStatus::Success => "✓",
-            SQLEntryStatus::Error => "✗",
-            SQLEntryStatus::Pending => "⏳",
-        };
-
-        let mut result = format!("[{}] {} {}", self.timestamp, status_symbol, self.query);
-
-        if let Some(time) = self.execution_time_ms {
-            result.push_str(&format!(" ({}ms)", time));
-        }
-
-        if let Some(error) = &self.error_message {
-            result.push_str(&format!("\n  Error: {}", error));
-        }
-
-        result
-    }
-
-    pub fn format_for_sql_display(&self) -> String {
-        // Format for SQL syntax highlighting - prepend log messages with --
-        let status_symbol = match self.status {
-            SQLEntryStatus::Success => "✓",
-            SQLEntryStatus::Error => "✗",
-            SQLEntryStatus::Pending => "⏳",
-        };
-
-        // Check if this looks like a SQL query (contains SQL keywords)
-        let is_sql_query = self.query.to_uppercase().contains("SELECT")
-            || self.query.to_uppercase().contains("INSERT")
-            || self.query.to_uppercase().contains("UPDATE")
-            || self.query.to_uppercase().contains("DELETE")
-            || self.query.to_uppercase().contains("CREATE")
-            || self.query.to_uppercase().contains("ALTER")
-            || self.query.to_uppercase().contains("DROP");
-
-        if is_sql_query {
-            // This is a SQL query, display it without comment prefix for syntax highlighting
-            let mut result = self.query.clone();
-
-            if let Some(time) = self.execution_time_ms {
-                result = format!("-- Executed in {}ms\n{}", time, result);
-            }
-
-            if let Some(error) = &self.error_message {
-                result.push_str(&format!("\n-- Error: {}", error));
-            }
-
-            result
-        } else {
-            // This is a log message, prepend with -- for SQL comment
-            let timestamp_str = self.timestamp.format("%H:%M:%S").to_string();
-            let mut result = format!("-- [{}] {} {}", timestamp_str, status_symbol, self.query);
-
-            if let Some(time) = self.execution_time_ms {
-                result.push_str(&format!(" ({}ms)", time));
-            }
-
-            if let Some(error) = &self.error_message {
-                result.push_str(&format!("\n--   Error: {}", error));
-            }
-
-            result
-        }
-    }
-}
-
 pub struct ResultsPanel {
     focus_handle: FocusHandle,
     table: Entity<Table<ResultsTableDelegate>>,
@@ -1354,7 +1014,21 @@ pub struct ResultsPanel {
 
 impl ResultsPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let delegate = ResultsTableDelegate::default();
+        Self::with_connection_string(None, window, cx)
+    }
+
+    pub fn with_connection_string(
+        connection_string: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut delegate = ResultsTableDelegate::default();
+
+        // Set connection string on delegate if provided
+        if let Some(conn_str) = connection_string {
+            delegate.set_connection_string(conn_str);
+        }
+
         let table = cx.new(|cx| Table::new(delegate, window, cx));
 
         Self {
@@ -1377,11 +1051,27 @@ impl ResultsPanel {
             table.delegate_mut().set_query_result(result.clone());
             table.refresh(cx);
         });
-        self.current_result = Some(result);
+        self.current_result = Some(result.clone());
 
         // Clear any panel-level editing state
         self.editing_input = None;
         self.editing_cell = None;
+
+        // If we have results and the delegate has a connection string, detect primary key
+        if !result.rows.is_empty() {
+            let connection_string = self.table.read(cx).delegate().connection_string.clone();
+            if let Some(_conn_str) = connection_string {
+                let table_name = self.table.read(cx).delegate().table_name.clone();
+                if let Some(table_name) = table_name {
+                    // Async primary key detection temporarily disabled due to borrowing issues
+                    // The fallback heuristic method will be used instead
+                    log::info!(
+                        "Using heuristic primary key detection for table: {}",
+                        table_name
+                    );
+                }
+            }
+        }
 
         cx.notify();
     }
@@ -1749,7 +1439,7 @@ impl ResultsPanel {
 
     pub fn get_changes(&self, cx: &App) -> Vec<TableChange> {
         let table_read = self.table.read(cx);
-        let delegate = table_read.delegate();
+        let _delegate = table_read.delegate();
         // Get changes directly from edited values in delegate
         let mut changes = Vec::new();
         let table_read = self.table.read(cx);
@@ -1770,7 +1460,10 @@ impl ResultsPanel {
             }
         }
 
-        log::info!("Commit Changes: Got {} changes from edited_values", changes.len());
+        log::info!(
+            "Commit Changes: Got {} changes from edited_values",
+            changes.len()
+        );
         changes
     }
 
@@ -1897,202 +1590,226 @@ impl ResultsPanel {
             }
         }
 
-        let changes = self.get_changes(cx);
+        // Get changes and convert to database-agnostic operations
+        let change_operations = self.table.read(cx).delegate().create_change_operations();
 
-        let column_names: Vec<String> = self
+        if change_operations.is_empty() {
+            log::info!("Commit Changes: No changes to commit");
+            return;
+        }
+
+        log::info!(
+            "Commit Changes: Sending {} operations to async pipeline",
+            change_operations.len()
+        );
+
+        // Get connection string from delegate (use fallback if not available)
+        let connection_string = self
             .table
             .read(cx)
             .delegate()
-            .columns
-            .iter()
-            .map(|col| col.name.to_string())
-            .collect();
+            .connection_string
+            .clone()
+            .unwrap_or_else(|| "sqlite::memory:".to_string());
 
-        // Get the database manager
-        let db_service = DbService::global(cx);
-        let user_db = db_service.user_db_handle();
-        let _panel_handle = cx.entity().downgrade();
+        // Get table name for logging
+        let table_name = self
+            .table
+            .read(cx)
+            .delegate()
+            .table_name
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
 
-        log::info!("Commit Changes: Starting commit process");
-        log::info!("Commit Changes: Number of changes to process: {}", changes.len());
+        // Create a response channel for the async operation
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
 
-        // Execute all changes in sequence
-        let user_db_clone = user_db.clone();
-        let changes_clone = self.get_changes(cx);
-        log::info!("Commit Changes: Got {} changes from delegate", changes_clone.len());
-        let column_names_clone = column_names.clone();
+        // Create clones for different uses
+        let change_operations_for_pipeline = change_operations.clone();
+        let change_operations_for_logging = change_operations.clone();
+        let change_operations_for_response = change_operations.clone();
+        let table_name_for_logging = table_name.clone();
+        let _table_name_for_event = table_name.clone();
+        let table_name_for_response = table_name.clone();
+        let connection_string_for_pipeline = connection_string.clone();
+        let connection_string_for_event = connection_string.clone();
+        let connection_string_for_response = connection_string.clone();
 
-        let task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
-            let db = user_db_clone.read().await;
-            log::info!("Commit Changes: Database connection status: connected={}", db.is_connected());
+        // Send the table operations to the async pipeline
+        let async_event_sender = cx.global::<crate::async_pipeline::AsyncEventSender>();
+        match async_event_sender.try_send(AsyncEvent::ExecuteTableOperations {
+            connection_string: connection_string_for_pipeline.clone(),
+            operations: change_operations_for_pipeline.clone(),
+            response_tx,
+            priority: TaskPriority::High,
+        }) {
+            Ok(_) => {
+                log::info!("Commit Changes: Operations sent to async pipeline");
 
-            if !db.is_connected() {
-                log::info!("Commit Changes: ERROR - Not connected to a database");
-                return Err(anyhow::anyhow!("Not connected to a database"));
-            }
+                // Emit a query execution started event
+                emit_event!(AppEvent::QueryExecutionStarted {
+                    connection_id: connection_string_for_event.clone(),
+                    query: format!(
+                        "Table operations on {} ({} operations)",
+                        table_name_for_logging,
+                        change_operations_for_logging.len()
+                    ),
+                });
 
-            // Additional connection health check
-            let connection_healthy = db.is_connection_healthy().await;
-            log::info!("Commit Changes: Database health check: healthy={}", connection_healthy);
-            if !connection_healthy {
-                log::info!("Commit Changes: ERROR - Database connection is not healthy");
-                return Err(anyhow::anyhow!("Database connection is not healthy"));
-            }
+                // Handle the response asynchronously
+                let sql_log_for_response = sql_log.cloned();
+                let connection_id_for_event = connection_string_for_response.clone();
+                let table_name_for_async = table_name_for_response.clone();
+                let _change_operations_for_async = change_operations_for_response.clone();
+                let panel_handle = cx.entity().downgrade();
 
-            let mut total_affected = 0;
-            let mut executed_queries = Vec::new();
+                cx.spawn(async move |_this, cx| {
+                    match response_rx.await {
+                        Ok(Ok(operation_result)) => {
+                            log::info!(
+                                "Commit Changes: Async operations completed successfully - {} rows affected",
+                                operation_result.rows_affected
+                            );
 
-            // Log summary of changes to be processed
-            let changes_summary = format!("Processing {} database changes", changes_clone.len());
-            executed_queries.push((changes_summary, None, None));
+                            // Update UI on main thread
+                            if let Some(panel) = panel_handle.upgrade() {
+                                panel.update(cx, |panel, cx| {
+                                    // Log to SQL log if available
+                                    if let Some(sql_log) = sql_log_for_response {
+                                        for operation in &change_operations_for_response {
+                                            let operation_desc = format!(
+                                                "{} on {}",
+                                                operation.operation_type.to_string(),
+                                                operation.table_name
+                                            );
+                                            sql_log.update(cx, |log, cx| {
+                                                log.append_text(&blanco_ui::SqlLogMessage::SqlStatement(operation_desc), cx);
+                                                log.append_text(&blanco_ui::SqlLogMessage::Comment(
+                                                    format!("Query executed successfully, {} rows affected", operation_result.rows_affected)
+                                                ), cx);
+                                            });
+                                        }
 
-            for (i, change) in changes_clone.iter().enumerate() {
-                // Create a mutable copy of the change to generate prepared statement
-                let mut mutable_change = change.clone();
-                match mutable_change.to_prepared_statement(&column_names_clone) {
-                    Ok((sql_template, parameters)) => {
-                        let query_with_params = if parameters.is_empty() {
-                            sql_template.clone()
-                        } else {
-                            format!("{} [Parameters: {:?}]", sql_template, parameters)
-                        };
-
-                        // Query will be logged to SQL log from result handler
-
-                        match db.execute_prepared_query(&sql_template, &parameters).await {
-                            Ok(result) => {
-                                let affected = result.row_count();
-                                total_affected += affected;
-                                executed_queries.push((query_with_params, Some(affected), None));
-
-                                // Success will be logged after async operation completes
-
-                                log::info!("SQL executed successfully, {} rows affected", affected);
-                            }
-                            Err(e) => {
-                                let error_msg = e.to_string();
-                                executed_queries.push((
-                                    query_with_params,
-                                    None,
-                                    Some(error_msg.clone()),
-                                ));
-
-                                // Error will be logged after async operation completes
-
-                                log::error!("SQL execution failed: {}", error_msg);
-                                // Continue with remaining queries even if one fails
-                                // Don't return error immediately, continue logging other queries
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        executed_queries.push((
-                            format!("Failed to generate SQL for change {}: {}", i + 1, e),
-                            None,
-                            Some(format!("Change: {:?}", change)),
-                        ));
-                        // Continue with remaining changes even if one fails
-                    }
-                }
-            }
-
-            // Check if there were any errors
-            let had_errors = executed_queries.iter().any(|(_, _, error)| error.is_some());
-
-            if had_errors {
-                Ok((total_affected, executed_queries, false, connection_healthy))
-            } else {
-                Ok((total_affected, executed_queries, true, connection_healthy))
-            }
-        });
-
-        // Handle the completion of the commit task
-        let sql_log_for_result = sql_log.cloned();
-        let _ = cx.spawn(async move |this, cx| {
-            match task.await {
-                Ok((total_affected, executed_queries, all_successful, _connection_healthy)) => {
-                    // Log results and clear changes if all successful
-                    this.update(cx, |this, cx| {
-                        // Log to SQL log if available
-                        if let Some(sql_log) = sql_log_for_result {
-                            // Log the queries that were executed
-                            for (query, affected_rows, error) in &executed_queries {
-                                sql_log.update(cx, |log, cx| {
-                                    log.append_text(&blanco_ui::SqlLogMessage::SqlStatement(query.clone()), cx);
-
-                                    if let Some(error) = error {
-                                        log.append_text(&blanco_ui::SqlLogMessage::Comment(format!("Error: {}", error)), cx);
-                                    } else if let Some(affected) = affected_rows {
-                                        log.append_text(&blanco_ui::SqlLogMessage::Comment(format!("Query executed successfully, {} rows affected", affected)), cx);
-                                    } else {
-                                        log.append_text(&blanco_ui::SqlLogMessage::Comment("Query executed successfully".to_owned()), cx);
-                                    }
-                                });
-                            }
-
-                            // Log summary
-                            let summary = if all_successful {
-                                format!("All inline edit queries completed successfully\n-- Total rows affected: {}", total_affected)
-                            } else {
-                                "Some inline edit queries had errors".to_string()
-                            };
-                            sql_log.update(cx, |log, cx| {
-                                log.append_text(&blanco_ui::SqlLogMessage::Comment(summary.to_string()), cx);
-                            });
-                        }
-
-                        // Only clear changes and refresh if all operations were successful
-                        if all_successful {
-                            this.clear_changes(cx);
-
-                            // Refresh the current query to show the changes
-                            if let Some(current_result) = &this.current_result.clone() {
-                                if let Some(query_text) = &current_result.query_text {
-                                    let db_service = DbService::global(cx);
-                                    let user_db = db_service.user_db_handle();
-                                    let query_text = query_text.clone();
-
-                                    let refresh_task =
-                                        crate::gpui_tokio::Tokio::spawn_result(cx, async move {
-                                            let db = user_db.read().await;
-
-                                            if !db.is_connected() {
-                                                Err(anyhow::anyhow!("Not connected to a database"))
-                                            } else {
-                                                db.execute_query_async(&query_text)
-                                                    .await
-                                                    .map_err(|e| anyhow::anyhow!("{}", e))
-                                            }
+                                        // Log summary
+                                        let summary = format!(
+                                            "All inline edit queries completed successfully\n-- Total rows affected: {}",
+                                            operation_result.rows_affected
+                                        );
+                                        sql_log.update(cx, |log, cx| {
+                                            log.append_text(&blanco_ui::SqlLogMessage::Comment(summary), cx);
                                         });
+                                    }
 
-                                    // Handle refresh completion
-                                    cx.spawn(async move |this, cx| {
-                                        match refresh_task.await {
-                                            Ok(result) => {
-                                                this.update(cx, |this, cx| {
-                                                    this.set_query_result(result, cx);
-                                                })
-                                                .ok();
-                                            }
-                                            Err(_e) => {
-                                                // Failed to refresh query, but that's not critical
+                                    // Clear changes and refresh query results
+                                    panel.clear_changes(cx);
+
+                                    // Refresh the current query to show the changes
+                                    if let Some(current_result) = &panel.current_result.clone() {
+                                        if let Some(query_text) = &current_result.query_text {
+                                            // Emit query execution to refresh data
+                                            let (refresh_tx, refresh_rx) = tokio::sync::oneshot::channel();
+                                            let refresh_sender = cx.global::<crate::async_pipeline::AsyncEventSender>();
+
+                                            if let Ok(_) = refresh_sender.try_send(AsyncEvent::ExecuteQuery {
+                                                connection_string: connection_id_for_event.clone(),
+                                                sql: query_text.clone(),
+                                                response_tx: refresh_tx,
+                                                priority: TaskPriority::Normal,
+                                            }) {
+                                                // Handle refresh response
+                                                cx.spawn(async move |_this, cx| {
+                                                    match refresh_rx.await {
+                                                        Ok(Ok(result)) => {
+                                                            if let Some(panel) = panel_handle.upgrade() {
+                                                                panel.update(cx, |panel, cx| {
+                                                                    panel.set_query_result(result, cx);
+                                                                }).ok();
+                                                            }
+                                                        }
+                                                        Ok(Err(e)) => {
+                                                            log::error!("Failed to refresh query after commit: {}", e);
+                                                        }
+                                                        Err(_) => {
+                                                            log::error!("Refresh response channel closed");
+                                                        }
+                                                    }
+                                                }).detach();
                                             }
                                         }
-                                    })
-                                    .detach();
-                                }
-                            } // Close the if all_successful block
-                        } // Close the this.update block
-                    })
-                    .ok();
-                }
-                Err(_e) => {
-                    // Failed to commit changes - log the error
+                                    }
+                                }).ok();
+                            }
+
+                            // Emit success event
+                            emit_event!(AppEvent::TableChangesCommitted {
+                                table_name: table_name_for_async,
+                                connection_id: connection_id_for_event,
+                                changes_count: operation_result.operations_executed,
+                                rows_affected: operation_result.rows_affected,
+                                success: true,
+                            });
+                        }
+                        Ok(Err(e)) => {
+                            log::error!("Commit Changes: Async operations failed: {}", e);
+
+                            // Log error to SQL log if available
+                            if let Some(panel) = panel_handle.upgrade() {
+                                panel.update(cx, |_panel, cx| {
+                                    if let Some(sql_log) = sql_log_for_response {
+                                        for operation in &change_operations_for_response {
+                                            let operation_desc = format!(
+                                                "{} on {} - FAILED",
+                                                operation.operation_type.to_string(),
+                                                operation.table_name
+                                            );
+                                            sql_log.update(cx, |log, cx| {
+                                                log.append_text(&blanco_ui::SqlLogMessage::SqlStatement(operation_desc), cx);
+                                                log.append_text(&blanco_ui::SqlLogMessage::Comment(format!("Error: {}", e)), cx);
+                                            });
+                                        }
+
+                                        sql_log.update(cx, |log, cx| {
+                                            log.append_text(&blanco_ui::SqlLogMessage::Comment(
+                                                "Some inline edit queries had errors".to_string()
+                                            ), cx);
+                                        });
+                                    }
+                                }).ok();
+                            }
+
+                            // Emit error event
+                            emit_event!(AppEvent::ErrorOccurred {
+                                context: format!("Table operations on {}", table_name_for_async),
+                                error: e.to_string(),
+                                severity: crate::events::ErrorSeverity::Error,
+                            });
+                        }
+                        Err(e) => {
+                            log::error!("Commit Changes: Failed to receive async response: {}", e);
+                        }
+                    }
+                }).detach();
+            }
+            Err(e) => {
+                log::error!(
+                    "Commit Changes: Failed to send operations to async pipeline: {}",
+                    e
+                );
+
+                // Fallback to logging error
+                if let Some(sql_log) = sql_log {
+                    sql_log.update(cx, |log, cx| {
+                        log.append_text(
+                            &blanco_ui::SqlLogMessage::Comment(format!(
+                                "Error: Failed to process operations - {}",
+                                e
+                            )),
+                            cx,
+                        );
+                    });
                 }
             }
-        });
-
-        // SQL logging will be handled in the main result handler below
+        }
     }
 
     /// Rollback all pending changes
@@ -2102,6 +1819,28 @@ impl ResultsPanel {
         if changes.is_empty() {
             return;
         }
+
+        // Get table name and connection for events
+        let table_name = self
+            .table
+            .read(cx)
+            .delegate()
+            .table_name
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        let connection_string = self
+            .table
+            .read(cx)
+            .delegate()
+            .connection_string
+            .clone()
+            .unwrap_or_else(|| "sqlite::memory:".to_string());
+
+        log::info!(
+            "Rollback Changes: Rolling back {} changes on table {}",
+            changes.len(),
+            table_name
+        );
 
         // Restore all original values from changes
         for change in &changes {
@@ -2136,6 +1875,18 @@ impl ResultsPanel {
         // Clear all changes
         self.clear_changes(cx);
 
+        // Emit rollback event
+        let changes_count = changes.len();
+        emit_event!(AppEvent::TableChangesRolledBack {
+            table_name: table_name.clone(),
+            connection_id: connection_string,
+            changes_count,
+        });
+
+        log::info!(
+            "Rollback Changes: Successfully rolled back {} changes",
+            changes_count
+        );
         cx.notify();
     }
 
@@ -2154,7 +1905,7 @@ impl ResultsPanel {
 
             // Track the INSERT change with NULL values
             if let Some(table_name) = &delegate.table_name {
-                let column_names: Vec<String> = delegate
+                let _column_names: Vec<String> = delegate
                     .columns
                     .iter()
                     .map(|col| col.name.to_string())
@@ -2175,24 +1926,6 @@ impl ResultsPanel {
                     delegate.primary_key_column.clone(),
                 );
                 delegate.edit_state.add_change(change);
-
-                // Log the duplicate INSERT operation that will be executed
-                let insert_sql = format!(
-                    "INSERT INTO {} ({}) VALUES ({})",
-                    Self::quote_identifier(table_name),
-                    column_names.join(", "),
-                    values_str
-                );
-                log::info!("Prepared INSERT for duplicated row: {}", insert_sql);
-
-                // Log the INSERT operation that will be executed
-                let insert_sql = format!(
-                    "INSERT INTO {} ({}) VALUES ({})",
-                    Self::quote_identifier(table_name),
-                    column_names.join(", "),
-                    values_str
-                );
-                log::info!("Prepared INSERT for new row: {}", insert_sql);
             }
 
             table.refresh(cx);
@@ -2216,7 +1949,7 @@ impl ResultsPanel {
                 // Track the INSERT change with proper column values
                 if let Some(table_name) = &delegate.table_name {
                     // Create a proper representation of the row data for SQL
-                    let column_names: Vec<String> = delegate
+                    let _column_names: Vec<String> = delegate
                         .columns
                         .iter()
                         .map(|col| col.name.to_string())
@@ -2244,15 +1977,6 @@ impl ResultsPanel {
                         delegate.primary_key_column.clone(),
                     );
                     delegate.edit_state.add_change(change);
-
-                    // Log the duplicate INSERT operation that will be executed
-                    let insert_sql = format!(
-                        "INSERT INTO {} ({}) VALUES ({})",
-                        Self::quote_identifier(table_name),
-                        column_names.join(", "),
-                        values_str
-                    );
-                    log::info!("Prepared INSERT for duplicated row: {}", insert_sql);
                 }
 
                 table.refresh(cx);
@@ -2291,24 +2015,6 @@ impl ResultsPanel {
                     delegate.primary_key_column.clone(),
                 );
                 delegate.edit_state.add_change(change);
-
-                // Log the NULL operation that will be executed
-                if let Some(column_name) = delegate.columns.get(col).map(|col| col.name.as_str()) {
-                    let update_sql = format!(
-                        "UPDATE {} SET {} = NULL WHERE {} = {}",
-                        Self::quote_identifier(table_name),
-                        Self::quote_identifier(column_name),
-                        Self::quote_identifier(
-                            delegate.primary_key_column.as_deref().unwrap_or("id")
-                        ),
-                        if let Some(pk_val) = &primary_key_value {
-                            format!("'{}'", pk_val)
-                        } else {
-                            "NULL".to_string()
-                        }
-                    );
-                    log::info!("Prepared UPDATE to set cell to NULL: {}", update_sql);
-                }
             }
 
             table.refresh(cx);
@@ -2346,24 +2052,6 @@ impl ResultsPanel {
                     delegate.primary_key_column.clone(),
                 );
                 delegate.edit_state.add_change(change);
-
-                // Log the clear operation that will be executed
-                if let Some(column_name) = delegate.columns.get(col).map(|col| col.name.as_str()) {
-                    let update_sql = format!(
-                        "UPDATE {} SET {} = '' WHERE {} = {}",
-                        Self::quote_identifier(table_name),
-                        Self::quote_identifier(column_name),
-                        Self::quote_identifier(
-                            delegate.primary_key_column.as_deref().unwrap_or("id")
-                        ),
-                        if let Some(pk_val) = &primary_key_value {
-                            format!("'{}'", pk_val)
-                        } else {
-                            "NULL".to_string()
-                        }
-                    );
-                    log::info!("Prepared UPDATE to clear cell value: {}", update_sql);
-                }
             }
 
             table.refresh(cx);
@@ -2518,11 +2206,110 @@ impl Render for ResultsPanel {
                                     .child(Icon::new(IconName::ChevronsUpDown).size(px(14.)))
                                     .child(format!("{} rows", row_count)),
                             )
-                                                })
+                    })
                     .when(self.current_result.is_none(), |this| {
                         this.text_color(cx.theme().muted_foreground)
                             .child("No query executed")
                     }),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cell_edit_state() {
+        let mut edit_state = CellEditState::default();
+
+        // Test initial state
+        assert!(!edit_state.is_editing(0, 0));
+        assert!(!edit_state.is_edited(0, 0));
+        assert!(!edit_state.has_unsaved_changes());
+
+        // Test starting editing with string value
+        edit_state.editing_cell = Some((0, 0));
+        edit_state
+            .original_values
+            .insert((0, 0), "original".to_string());
+
+        assert!(edit_state.is_editing(0, 0));
+        assert!(!edit_state.is_edited(0, 0));
+
+        // Test updating value
+        edit_state
+            .edited_values
+            .insert((0, 0), "modified".to_string());
+        assert!(edit_state.is_edited(0, 0));
+        assert_eq!(
+            edit_state.get_edited_value(0, 0),
+            Some(&"modified".to_string())
+        );
+        assert_eq!(
+            edit_state.get_original_value(0, 0),
+            Some(&"original".to_string())
+        );
+
+        // Test clearing editing state
+        edit_state.editing_cell = None;
+        assert!(!edit_state.is_editing(0, 0));
+        assert!(edit_state.has_unsaved_changes());
+    }
+
+    #[test]
+    fn test_query_result_creation() {
+        let test_result = QueryResult {
+            columns: vec!["id".to_string(), "name".to_string()],
+            column_types: vec![],
+            rows: vec![
+                vec!["1".to_string(), "Alice".to_string()],
+                vec!["2".to_string(), "Bob".to_string()],
+            ],
+            query_text: Some("SELECT * FROM users".to_string()),
+            execution_time_ms: Some(50),
+            is_error: false,
+            rows_affected: 2,
+        };
+
+        assert_eq!(test_result.columns.len(), 2);
+        assert_eq!(test_result.rows.len(), 2);
+        assert_eq!(test_result.rows[0][1], "Alice");
+        assert_eq!(test_result.rows_affected, 2);
+        assert!(!test_result.is_error);
+    }
+
+    #[test]
+    fn test_results_table_delegate_default() {
+        let delegate = ResultsTableDelegate::default();
+
+        // Test basic properties without requiring App context
+        assert!(delegate.table_name.is_none());
+        assert!(delegate.primary_key_column.is_none());
+        assert!(delegate.columns.is_empty());
+        assert!(delegate.rows.is_empty());
+    }
+
+    #[test]
+    fn test_cell_edit_state_clear_all() {
+        let mut edit_state = CellEditState::default();
+
+        // Add some data
+        edit_state.editing_cell = Some((0, 0));
+        edit_state
+            .original_values
+            .insert((0, 0), "original".to_string());
+        edit_state
+            .edited_values
+            .insert((0, 0), "modified".to_string());
+        edit_state.pending_new_rows.push(0);
+
+        // Clear all
+        edit_state.clear_all();
+
+        assert!(!edit_state.is_editing(0, 0));
+        assert!(!edit_state.is_edited(0, 0));
+        assert!(!edit_state.has_unsaved_changes());
+        assert!(edit_state.pending_new_rows.is_empty());
     }
 }

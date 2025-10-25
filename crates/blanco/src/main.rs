@@ -1,22 +1,39 @@
 mod app;
 mod app_database;
 mod assets;
+mod async_pipeline;
 mod connection;
 mod connection_modal;
 mod connection_sidebar;
-mod database;
+mod connection_trait;
 mod db_service;
 mod editor_panel;
+mod events;
 mod gpui_tokio;
 mod icon;
 mod postgres;
+mod postgres_connection;
 mod query_file;
 mod results_panel;
 mod settings;
 mod sidebar;
+mod sqlite_connection;
 mod sql_parser;
+mod table_operations;
 mod test_db;
 mod theme_loader;
+mod unified_connection_manager;
+
+#[cfg(test)]
+mod connection_tests;
+
+pub use sidebar::ConnectionSidebar;
+
+// Integration test modules for unified connection interface
+pub mod integration_test;
+pub mod integration_simple;
+mod lsp_manager;
+mod lsp_postgres;
 
 use assets::Assets;
 use db_service::DbService;
@@ -61,6 +78,9 @@ fn main() {
         }
         cx.text_system().add_fonts(embedded_fonts).unwrap();
 
+        // Initialize event system
+        let event_bus = events::global_event_bus();
+
         // Initialize database service
         let db_service = DbService::new();
 
@@ -92,10 +112,8 @@ fn main() {
         .detach();
 
         // Initialize test database using the global tokio runtime
-        let user_db_handle = db_service.user_db_handle();
         gpui_tokio::Tokio::spawn_result(cx, async move {
-            let mut user_db = user_db_handle.write().await;
-            match test_db::init_test_database(&mut user_db).await {
+            match test_db::init_test_database().await {
                 Ok(_) => {
                     log::info!("Connected to test database");
                     Ok(())
@@ -117,9 +135,11 @@ fn main() {
                 if !dsn.is_empty() {
                     let db_service_clone = db_service.clone();
                     gpui_tokio::Tokio::spawn_result(cx, async move {
-                        match db_service_clone.get_or_create_pg_connection(&dsn).await {
+                        let unified_manager = db_service_clone.unified_manager().await;
+                        let result = unified_manager.read().await.get_or_create_connection(&dsn).await;
+                        match result {
                             Ok(_) => {
-                                log::info!("Connected to PostgreSQL database using new connection management");
+                                log::info!("Connected to PostgreSQL database using unified connection management");
                                 Ok(())
                             }
                             Err(e) => {
@@ -133,7 +153,23 @@ fn main() {
             }
         }
 
+        // Initialize async event processor
+        let (mut async_processor, async_event_tx) = async_pipeline::AsyncEventProcessor::new(
+            db_service.clone(),
+            event_bus.clone(),
+        );
+
+        // Start the async processor
+        gpui_tokio::Tokio::spawn_result(cx, async move {
+            if let Err(e) = async_processor.start().await {
+                log::error!("Failed to start async event processor: {}", e);
+            }
+            Ok(())
+        }).detach();
+
+        // Store the async event sender globally for components to use
         cx.set_global(db_service);
+        cx.set_global(async_event_tx);
         cx.activate(true);
 
         let window_bounds = gpui::Bounds::centered(None, size(px(1400.), px(900.)), cx);

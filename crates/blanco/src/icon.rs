@@ -242,6 +242,7 @@ impl Clone for Icon {
     }
 }
 
+#[allow(dead_code)]
 pub trait IconNamed {
     fn path(&self) -> SharedString;
 }

@@ -30,6 +30,7 @@ pub struct Sidebar<E: Collapsible + IntoElement + 'static> {
     footer: Option<AnyElement>,
     /// The side of the sidebar
     side: Side,
+    #[allow(dead_code)]
     collapsible: bool,
     width: DefiniteLength,
     border_width: Pixels,
@@ -109,6 +110,7 @@ impl<E: Collapsible + IntoElement> Sidebar<E> {
 
 /// Sidebar collapse button with Icon.
 #[derive(IntoElement)]
+#[allow(dead_code)]
 pub struct SidebarToggleButton {
     btn: Button,
     collapsed: bool,

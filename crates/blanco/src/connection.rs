@@ -2,6 +2,7 @@ use gpui::SharedString;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct Connection {
     pub id: usize,
     pub name: SharedString,
@@ -12,17 +13,20 @@ pub struct Connection {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct Schema {
     pub name: SharedString,
     pub tables: Vec<Table>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct Table {
     pub name: SharedString,
 }
 
 impl Connection {
+    #[allow(dead_code)]
     pub fn new_mock() -> Vec<Self> {
         vec![
             Connection {

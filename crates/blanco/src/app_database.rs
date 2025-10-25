@@ -23,6 +23,20 @@ impl AppDatabase {
         Ok(db)
     }
 
+    /// Create a new AppDatabase with a custom connection string (for testing)
+    #[allow(dead_code)]
+    pub async fn new_with_path(connection_string: &str) -> Result<Self, sqlx::Error> {
+        let options = SqliteConnectOptions::from_str(connection_string)?
+            .create_if_missing(true)
+            .disable_statement_logging();
+
+        let pool = SqlitePool::connect_with(options).await?;
+
+        let mut db = Self { pool };
+        db.init_schema().await?;
+        Ok(db)
+    }
+
     fn app_db_path() -> PathBuf {
         let mut path = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
         path.push("blanco");
@@ -122,7 +136,10 @@ impl AppDatabase {
                 password TEXT,
                 database_path TEXT,
                 last_used_at INTEGER,
-                created_at INTEGER NOT NULL
+                created_at INTEGER NOT NULL,
+                connection_string TEXT,
+                is_active INTEGER DEFAULT 1,
+                connection_params TEXT
             )
             "#,
         )
@@ -187,6 +204,34 @@ impl AppDatabase {
         sqlx::query(
             r#"
             ALTER TABLE connections ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .ok(); // Ignore error if column already exists
+
+        // Add new columns for unified connection management
+        sqlx::query(
+            r#"
+            ALTER TABLE connections ADD COLUMN connection_string TEXT
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .ok(); // Ignore error if column already exists
+
+        sqlx::query(
+            r#"
+            ALTER TABLE connections ADD COLUMN is_active INTEGER DEFAULT 1
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .ok(); // Ignore error if column already exists
+
+        sqlx::query(
+            r#"
+            ALTER TABLE connections ADD COLUMN connection_params TEXT
             "#,
         )
         .execute(&self.pool)
@@ -363,7 +408,8 @@ impl AppDatabase {
                 r#"
                 UPDATE connections
                 SET name = ?, db_type = ?, host = ?, port = ?, database_name = ?,
-                    username = ?, password = ?, database_path = ?, last_used_at = ?
+                    username = ?, password = ?, database_path = ?, last_used_at = ?,
+                    connection_string = ?, is_active = ?, connection_params = ?
                 WHERE id = ?
                 "#,
             )
@@ -376,6 +422,9 @@ impl AppDatabase {
             .bind(&conn.password)
             .bind(&conn.database_path)
             .bind(now)
+            .bind(&conn.connection_string)
+            .bind(conn.is_active.map(|b| if b { 1 } else { 0 }))
+            .bind(&conn.connection_params.as_ref().map(|v| v.to_string()))
             .bind(id)
             .execute(&self.pool)
             .await?;
@@ -384,8 +433,8 @@ impl AppDatabase {
             // Insert new connection
             let result = sqlx::query(
                 r#"
-                INSERT INTO connections (name, db_type, host, port, database_name, username, password, database_path, last_used_at, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO connections (name, db_type, host, port, database_name, username, password, database_path, last_used_at, created_at, connection_string, is_active, connection_params)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(&conn.name)
@@ -398,6 +447,9 @@ impl AppDatabase {
             .bind(&conn.database_path)
             .bind(now)
             .bind(now)
+            .bind(&conn.connection_string)
+            .bind(conn.is_active.map(|b| if b { 1 } else { 0 }))
+            .bind(&conn.connection_params.as_ref().map(|v| v.to_string()))
             .execute(&self.pool)
             .await?;
 
@@ -409,7 +461,7 @@ impl AppDatabase {
     pub async fn load_connections(&self) -> Result<Vec<ConnectionData>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
-            SELECT id, name, db_type, host, port, database_name, username, password, database_path, last_used_at
+            SELECT id, name, db_type, host, port, database_name, username, password, database_path, last_used_at, connection_string, is_active, connection_params
             FROM connections
             ORDER BY name
             "#,
@@ -419,17 +471,26 @@ impl AppDatabase {
 
         let connections = rows
             .iter()
-            .map(|row| ConnectionData {
-                id: Some(row.get("id")),
-                name: row.get("name"),
-                db_type: row.get("db_type"),
-                host: row.get("host"),
-                port: row.get("port"),
-                database_name: row.get("database_name"),
-                username: row.get("username"),
-                password: row.get("password"),
-                database_path: row.get("database_path"),
-                last_used_at: row.get("last_used_at"),
+            .map(|row| {
+                // Parse connection_params if present
+                let connection_params: Option<serde_json::Value> = row.get::<Option<String>, _>("connection_params")
+                    .and_then(|s| serde_json::from_str(&s).ok());
+
+                ConnectionData {
+                    id: Some(row.get("id")),
+                    name: row.get("name"),
+                    db_type: row.get("db_type"),
+                    host: row.get("host"),
+                    port: row.get("port"),
+                    database_name: row.get("database_name"),
+                    username: row.get("username"),
+                    password: row.get("password"),
+                    database_path: row.get("database_path"),
+                    last_used_at: row.get("last_used_at"),
+                    connection_string: row.get("connection_string"),
+                    is_active: row.get::<Option<i32>, _>("is_active").map(|i| i == 1),
+                    connection_params,
+                }
             })
             .collect();
 
@@ -451,6 +512,7 @@ pub struct QueryTabData {
 
 #[derive(Debug, Clone)]
 pub struct QueryHistoryData {
+    #[allow(dead_code)]
     pub id: Option<i64>,
     pub query_text: String,
     pub executed_at: i64,
@@ -472,11 +534,17 @@ pub struct ConnectionData {
     pub username: Option<String>,
     pub password: Option<String>,
     pub database_path: Option<String>,
+    #[allow(dead_code)]
     pub last_used_at: Option<i64>,
+    // Additional fields for unified connection management
+    pub connection_string: Option<String>,
+    pub is_active: Option<bool>,
+    pub connection_params: Option<serde_json::Value>, // For extensible parameters
 }
 
 impl ConnectionData {
     pub fn new_sqlite(name: String, database_path: String) -> Self {
+        let connection_string = format!("sqlite://{}", database_path);
         Self {
             id: None,
             name,
@@ -486,7 +554,12 @@ impl ConnectionData {
             database_name: None,
             username: None,
             password: None,
-            database_path: Some(database_path),
+            database_path: Some(database_path.clone()),
+            connection_string: Some(connection_string),
+            is_active: Some(true),
+            connection_params: Some(serde_json::json!({
+                "database_path": database_path
+            })),
             last_used_at: None,
         }
     }
@@ -499,17 +572,89 @@ impl ConnectionData {
         username: String,
         password: String,
     ) -> Self {
+        let connection_string = if password.is_empty() {
+            format!("postgresql://{}@{}:{}/{}", username, host, port, database)
+        } else {
+            format!("postgresql://{}:{}@{}:{}/{}", username, password, host, port, database)
+        };
+
         Self {
             id: None,
             name,
             db_type: "PostgreSQL".to_string(),
-            host: Some(host),
+            host: Some(host.clone()),
             port: Some(port),
-            database_name: Some(database),
-            username: Some(username),
+            database_name: Some(database.clone()),
+            username: Some(username.clone()),
             password: Some(password),
             database_path: None,
+            connection_string: Some(connection_string),
+            is_active: Some(true),
+            connection_params: Some(serde_json::json!({
+                "host": host,
+                "port": port,
+                "database": database,
+                "username": username
+            })),
             last_used_at: None,
         }
+    }
+
+    /// Create a ConnectionData from a unified connection string
+    pub fn from_connection_string(name: String, connection_string: &str) -> Result<Self, anyhow::Error> {
+        if connection_string.starts_with("sqlite://") || connection_string.starts_with("sqlite:") {
+            let db_path = connection_string
+                .trim_start_matches("sqlite://")
+                .trim_start_matches("sqlite:");
+            Ok(Self::new_sqlite(name, db_path.to_string()))
+        } else if connection_string.starts_with("postgres://") || connection_string.starts_with("postgresql://") {
+            match crate::db_service::PgConnectionKey::from_connection_string(connection_string) {
+                Ok(key) => Ok(Self::new_postgres(
+                    name,
+                    key.host,
+                    key.port as i32,
+                    key.database,
+                    key.username,
+                    key.password.unwrap_or_default(),
+                )),
+                Err(e) => Err(anyhow::anyhow!("Failed to parse PostgreSQL connection string: {}", e))
+            }
+        } else {
+            Err(anyhow::anyhow!("Unsupported connection string format: {}", connection_string))
+        }
+    }
+
+    /// Get the connection string for this connection
+    pub fn get_connection_string(&self) -> Option<String> {
+        self.connection_string.clone()
+            .or_else(|| {
+                // Generate connection string from individual components
+                match self.db_type.as_str() {
+                    "SQLite" => self.database_path.as_ref().map(|path| format!("sqlite://{}", path)),
+                    "PostgreSQL" => {
+                        if let (Some(host), Some(port), Some(database), Some(username)) =
+                            (&self.host, self.port, &self.database_name, &self.username) {
+                            if let Some(ref password) = self.password {
+                                Some(format!("postgresql://{}:{}@{}:{}/{}", username, password, host, port, database))
+                            } else {
+                                Some(format!("postgresql://{}@{}:{}/{}", username, host, port, database))
+                            }
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            })
+    }
+
+    /// Check if this connection is marked as active
+    pub fn is_active(&self) -> bool {
+        self.is_active.unwrap_or(true)
+    }
+
+    /// Mark this connection as active/inactive
+    pub fn set_active(&mut self, active: bool) {
+        self.is_active = Some(active);
     }
 }

@@ -1,9 +1,7 @@
 use crate::app_database::AppDatabase;
-use crate::database::DatabaseManager;
-use crate::postgres::PostgresManager;
+use crate::unified_connection_manager::UnifiedConnectionManager;
 use gpui::{App, Global};
 use sqlx::postgres::PgConnectOptions;
-use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -47,10 +45,6 @@ impl PgConnectionKey {
             None
         };
 
-        log::info!("🔍 PgConnectionKey extracted via SQLX - host: {}, port: {}, database: {}, username: {}, password: {}",
-            host, port, database, username,
-            if password.as_ref().is_some_and(|p| !p.is_empty()) { "<present>" } else { "<none>" });
-
         Ok(PgConnectionKey {
             host,
             port,
@@ -59,14 +53,28 @@ impl PgConnectionKey {
             password,
         })
     }
+
+    #[allow(dead_code)]
+    pub fn to_connection_string(&self) -> String {
+        let _url_str = format!(
+            "postgresql://{}:{}@{}:{}/{}",
+            self.username,
+            self.password.as_deref().unwrap_or(""),
+            self.host,
+            self.port,
+            self.database
+        );
+
+        // Add query parameters if needed
+        _url_str
+    }
 }
 
-/// Global database service that holds app database, user database, and postgres connections
+/// Global database service that holds app database and unified connection manager
 #[derive(Clone)]
 pub struct DbService {
     pub app_db: Arc<RwLock<Option<AppDatabase>>>,
-    pub user_db: Arc<RwLock<DatabaseManager>>,
-    pub pg_connections: Arc<RwLock<HashMap<PgConnectionKey, Arc<PostgresManager>>>>,
+    pub unified_manager: Arc<RwLock<UnifiedConnectionManager>>,
 }
 
 impl Global for DbService {}
@@ -75,8 +83,7 @@ impl DbService {
     pub fn new() -> Self {
         Self {
             app_db: Arc::new(RwLock::new(None)),
-            user_db: Arc::new(RwLock::new(DatabaseManager::new())),
-            pg_connections: Arc::new(RwLock::new(HashMap::new())),
+            unified_manager: Arc::new(RwLock::new(UnifiedConnectionManager::new())),
         }
     }
 
@@ -89,197 +96,59 @@ impl DbService {
         self.app_db.clone()
     }
 
-    /// Get a clone of the user database lock
-    pub fn user_db_handle(&self) -> Arc<RwLock<DatabaseManager>> {
-        self.user_db.clone()
+    /// Get a clone of the unified connection manager
+    #[allow(dead_code)]
+    pub fn unified_manager_handle(&self) -> Arc<RwLock<UnifiedConnectionManager>> {
+        self.unified_manager.clone()
     }
 
-    /// Get or create a PostgreSQL connection for the given connection string
-    pub async fn get_or_create_pg_connection(
-        &self,
-        connection_string: &str,
-    ) -> Result<Arc<PostgresManager>, anyhow::Error> {
-        log::info!(
-            "🔍 DbService.get_or_create_pg_connection called with: {}",
-            connection_string
-        );
-        let key = PgConnectionKey::from_connection_string(connection_string)?;
-
-        let mut connections = self.pg_connections.write().await;
-
-        // Check if connection already exists
-        if let Some(manager) = connections.get(&key) {
-            // Test if the connection is still alive
-            if manager.is_connected() {
-                log::info!("Using existing PostgreSQL connection");
-                return Ok(Arc::clone(manager));
-            } else {
-                log::info!(
-                    "Existing PostgreSQL connection is disconnected, removing and creating new one"
-                );
-                connections.remove(&key);
-            }
-        }
-
-        // Create new connection with retry logic
-        let mut retry_count = 0;
-        let max_retries = 3;
-
-        while retry_count < max_retries {
-            match self
-                .create_pg_connection(connection_string.to_string())
-                .await
-            {
-                Ok(arc_manager) => {
-                    log::info!(
-                        "Successfully created PostgreSQL connection (attempt {})",
-                        retry_count + 1
-                    );
-
-                    // Store the connection
-                    connections.insert(key, Arc::clone(&arc_manager));
-                    return Ok(arc_manager);
-                }
-                Err(e) => {
-                    log::warn!(
-                        "Failed to create PostgreSQL connection (attempt {}/{}): {}",
-                        retry_count + 1,
-                        max_retries,
-                        e
-                    );
-                }
-            }
-
-            retry_count += 1;
-            if retry_count < max_retries {
-                // Exponential backoff: 200ms, 800ms, 1800ms
-                let delay_ms = 200 * (retry_count as u64 * retry_count as u64);
-                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-            }
-        }
-
-        Err(anyhow::anyhow!(
-            "Failed to create PostgreSQL connection after {} attempts",
-            max_retries
-        ))
+    /// Get access to the unified connection manager
+    pub async fn unified_manager(&self) -> std::sync::Arc<RwLock<UnifiedConnectionManager>> {
+        self.unified_manager.clone()
     }
 
-    /// Create a new PostgreSQL connection
-    async fn create_pg_connection(
-        &self,
-        connection_string: String,
-    ) -> Result<Arc<PostgresManager>, anyhow::Error> {
-        let mut manager = PostgresManager::new();
-
-        // Connect to the database
-        manager.connect_async(&connection_string).await?;
-
-        // Test the connection with a simple query to verify it's working
-        if manager.is_connected() {
-            let arc_manager = Arc::new(manager);
-            log::info!("Successfully created and validated PostgreSQL connection");
-            Ok(arc_manager)
-        } else {
-            Err(anyhow::anyhow!(
-                "PostgreSQL connection established but validation failed"
-            ))
-        }
+    /// Convenience method to get or create a connection
+    pub async fn get_or_create_unified_connection(&self, connection_string: &str) -> Result<std::sync::Arc<dyn crate::connection_trait::Connection>, anyhow::Error> {
+        let unified_manager = self.unified_manager().await;
+        let result = unified_manager.read().await.get_or_create_connection(connection_string).await;
+        result
     }
 
-    /// Ensure a PostgreSQL connection is available, auto-connecting if needed
-    pub async fn ensure_pg_connection(
-        &self,
-        connection_string: &str,
-    ) -> Result<Arc<PostgresManager>, anyhow::Error> {
-        log::info!(
-            "🔧 Ensuring PostgreSQL connection for: {}",
-            connection_string.split('@').nth(1).unwrap_or("unknown")
-        );
-
-        match self.get_or_create_pg_connection(connection_string).await {
-            Ok(manager) => {
-                log::info!("✅ PostgreSQL connection ensured successfully");
-                Ok(manager)
-            }
-            Err(e) => {
-                log::error!("❌ Failed to ensure PostgreSQL connection: {}", e);
-                Err(e)
-            }
-        }
+    /// Convenience method to execute a query
+    pub async fn execute_query_unified(&self, connection_string: &str, sql: &str) -> Result<crate::connection_trait::QueryResult, anyhow::Error> {
+        let unified_manager = self.unified_manager().await;
+        let connection = unified_manager.read().await.get_connection(connection_string).await
+            .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_string))?;
+        connection.execute_query(sql).await
     }
 
-    /// Get all PostgreSQL connections
-    pub async fn get_all_pg_connections(&self) -> HashMap<PgConnectionKey, Arc<PostgresManager>> {
-        self.pg_connections.read().await.clone()
+    /// Convenience method to execute a prepared query
+    pub async fn execute_prepared_query_unified(&self, connection_string: &str, sql_template: &str, parameters: &[String]) -> Result<crate::connection_trait::QueryResult, anyhow::Error> {
+        let unified_manager = self.unified_manager().await;
+        let connection = unified_manager.read().await.get_connection(connection_string).await
+            .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_string))?;
+        connection.execute_prepared_query(sql_template, parameters).await
     }
 
-    /// Remove a PostgreSQL connection
-    pub async fn remove_pg_connection(
-        &self,
-        key: &PgConnectionKey,
-    ) -> Option<Arc<PostgresManager>> {
-        let mut connections = self.pg_connections.write().await;
-        if let Some(manager) = connections.remove(key) {
-            log::info!(
-                "Removed PostgreSQL connection for {}:{}/{}",
-                key.host,
-                key.port,
-                key.database
-            );
-            Some(manager)
-        } else {
-            None
-        }
+    /// Convenience method to get schemas
+    pub async fn get_schemas_unified(&self, connection_string: &str) -> Result<Vec<String>, anyhow::Error> {
+        let unified_manager = self.unified_manager().await;
+        let connection = unified_manager.read().await.get_connection(connection_string).await
+            .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_string))?;
+        connection.get_schemas().await
     }
 
-    /// Validate and clean up unhealthy PostgreSQL connections
-    pub async fn validate_and_cleanup_connections(&self) -> Result<usize, anyhow::Error> {
-        let mut connections = self.pg_connections.write().await;
-        let initial_count = connections.len();
-        let mut removed_count = 0;
-
-        // Collect unhealthy keys first to avoid borrowing issues
-        let mut unhealthy_keys = Vec::new();
-        for (key, manager) in connections.iter() {
-            if !manager.is_connected() {
-                log::warn!(
-                    "Found disconnected PostgreSQL connection for {}:{}/{}",
-                    key.host,
-                    key.port,
-                    key.database
-                );
-                unhealthy_keys.push(key.clone());
-            }
-        }
-
-        // Remove unhealthy connections
-        for key in unhealthy_keys {
-            connections.remove(&key);
-            removed_count += 1;
-        }
-
-        if removed_count > 0 {
-            log::info!(
-                "Cleaned up {} unhealthy PostgreSQL connections",
-                removed_count
-            );
-        }
-
-        Ok(removed_count)
+    /// Convenience method to get tables
+    pub async fn get_tables_unified(&self, connection_string: &str, schema: Option<&str>) -> Result<Vec<String>, anyhow::Error> {
+        let unified_manager = self.unified_manager().await;
+        let connection = unified_manager.read().await.get_connection(connection_string).await
+            .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_string))?;
+        connection.get_tables(schema).await
     }
 
-    /// Get connection statistics
-    pub async fn get_connection_stats(&self) -> (usize, usize) {
-        let connections = self.pg_connections.read().await;
-        let total = connections.len();
-        let mut healthy = 0;
-
-        for manager in connections.values() {
-            if manager.is_connected() {
-                healthy += 1;
-            }
-        }
-
-        (total, healthy)
+    /// Convenience method to get tables for a specific schema
+    #[allow(dead_code)]
+    pub async fn get_schema_tables_unified(&self, connection_string: &str, schema_name: &str) -> Result<Vec<String>, anyhow::Error> {
+        self.get_tables_unified(connection_string, Some(schema_name)).await
     }
 }

@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use crate::{
     connection_modal::NewConnectionModal,
-    db_service::{DbService, PgConnectionKey},
+    db_service::DbService,
     editor_panel::EditorPanel,
     icon::{Icon, IconName},
     sidebar::ConnectionSidebar,
@@ -37,24 +37,18 @@ actions!(
 #[action(namespace = blanco_app, no_json)]
 pub struct ToggleSidebar;
 
-#[derive(Action, Clone, PartialEq, Eq)]
-#[action(namespace = blanco_app, no_json)]
-pub struct NewQueryForConnection {
-    pub connection_name: String,
-    pub connection_type: ConnectionType,
-}
 
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
-pub struct NewQueryForPostgresConnection {
-    pub connection_key: PgConnectionKey,
+pub struct NewQueryForUnifiedConnection {
+    pub connection_key: String,
     pub display_name: String,
 }
 
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
-pub struct NewQueryForPostgresSchema {
-    pub connection_key: PgConnectionKey,
+pub struct NewQueryForUnifiedSchema {
+    pub connection_key: String,
     pub schema_name: String,
 }
 
@@ -163,12 +157,12 @@ impl BlancoApp {
     }
 
     fn on_new_query(&mut self, _: &NewQuery, window: &mut Window, cx: &mut Context<Self>) {
-        // Create a new query tab with default connection
+        // Create a new query tab with default in-memory SQLite connection
         self.editor_panel.update(cx, |panel, cx| {
-            panel.add_new_tab_with_connection(
+            panel.add_new_tab_with_unified_connection(
                 window,
                 "Test Database".to_string(),
-                ConnectionType::SQLite,
+                "sqlite::memory:".to_string(),
                 None,
                 cx,
             );
@@ -176,75 +170,8 @@ impl BlancoApp {
         cx.notify();
     }
 
-    fn on_new_query_for_connection(
-        &mut self,
-        action: &NewQueryForConnection,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        log::info!(
-            "on_new_query_for_connection called: {}",
-            action.connection_name
-        );
-        // Create a new query tab for the specified connection
-        self.editor_panel.update(cx, |panel, cx| {
-            panel.add_new_tab_with_connection(
-                window,
-                action.connection_name.clone(),
-                action.connection_type.clone(),
-                None,
-                cx,
-            );
-        });
-        cx.notify();
-    }
-
-    fn on_new_query_for_postgres_connection(
-        &mut self,
-        action: &NewQueryForPostgresConnection,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        log::info!(
-            "on_new_query_for_postgres_connection called: {}",
-            action.display_name
-        );
-        // Create a new query tab for the specified PostgreSQL connection
-        self.editor_panel.update(cx, |panel, cx| {
-            panel.add_new_tab_with_postgres_connection(
-                window,
-                action.display_name.clone(),
-                action.connection_key.clone(),
-                None,
-                cx,
-            );
-        });
-        cx.notify();
-    }
-
-    fn on_new_query_for_postgres_schema(
-        &mut self,
-        action: &NewQueryForPostgresSchema,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        log::info!(
-            "on_new_query_for_postgres_schema called: {}",
-            action.schema_name
-        );
-        // Create a new query tab for the specified PostgreSQL schema
-        self.editor_panel.update(cx, |panel, cx| {
-            panel.add_new_tab_with_postgres_connection(
-                window,
-                format!("PostgreSQL ({})", action.schema_name),
-                action.connection_key.clone(),
-                Some(action.schema_name.clone()),
-                cx,
-            );
-        });
-        cx.notify();
-    }
-
+    
+    
     fn on_open_connection(&mut self, _: &OpenConnection, _: &mut Window, cx: &mut Context<Self>) {
         // TODO: Open connection dialog
         cx.notify();
@@ -370,6 +297,52 @@ impl BlancoApp {
             panel.rollback_current_changes(window, cx);
         });
     }
+
+    fn on_new_query_for_unified_connection(
+        &mut self,
+        action: &NewQueryForUnifiedConnection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        log::info!(
+            "on_new_query_for_unified_connection called: {}",
+            action.display_name
+        );
+        // Create a new query tab for the specified unified connection
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.add_new_tab_with_unified_connection(
+                window,
+                action.display_name.clone(),
+                action.connection_key.clone(),
+                None,
+                cx,
+            );
+        });
+        cx.notify();
+    }
+
+    fn on_new_query_for_unified_schema(
+        &mut self,
+        action: &NewQueryForUnifiedSchema,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        log::info!(
+            "on_new_query_for_unified_schema called: {}",
+            action.schema_name
+        );
+        // Create a new query tab for the specified unified schema
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.add_new_tab_with_unified_connection(
+                window,
+                format!("Unified ({})", action.schema_name),
+                action.connection_key.clone(),
+                Some(action.schema_name.clone()),
+                cx,
+            );
+        });
+        cx.notify();
+    }
 }
 
 impl Focusable for BlancoApp {
@@ -390,9 +363,8 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_quit))
             .on_action(cx.listener(Self::on_about))
             .on_action(cx.listener(Self::on_new_query))
-            .on_action(cx.listener(Self::on_new_query_for_connection))
-            .on_action(cx.listener(Self::on_new_query_for_postgres_connection))
-            .on_action(cx.listener(Self::on_new_query_for_postgres_schema))
+            .on_action(cx.listener(Self::on_new_query_for_unified_connection))
+            .on_action(cx.listener(Self::on_new_query_for_unified_schema))
             .on_action(cx.listener(Self::on_open_connection))
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::on_settings))

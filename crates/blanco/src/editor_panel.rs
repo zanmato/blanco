@@ -17,9 +17,12 @@ use lsp_types::{PublishDiagnosticsParams, Uri};
 
 use crate::app::{ConnectionType, ToggleSidebar};
 use crate::app_database::{QueryHistoryData, QueryTabData};
-use crate::database::QueryResult;
-use crate::db_service::{DbService, PgConnectionKey};
+use crate::connection_trait::QueryResult;
+use crate::db_service::DbService;
+use crate::events::{AppEvent, emit_event};
+use crate::async_pipeline::{AsyncEvent, TaskPriority};
 use crate::query_file::QueryFileManager;
+use crate::results_panel::ResultsPanel;
 use crate::settings::Settings;
 use blanco_ui::SqlLog;
 use postgres_lsp::PostgresLspManager;
@@ -27,6 +30,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)]
 pub enum SplitType {
     EditorTable,
     TableLog,
@@ -45,15 +49,13 @@ pub enum TabType {
 pub struct QueryTab {
     pub id: usize,
     pub title: String,
-    pub connection_name: String,
-    pub connection_type: ConnectionType,
-    pub pg_connection_key: Option<PgConnectionKey>, // For PostgreSQL connections
-    pub connection_id: Option<i64>,                 // Connection ID to tie this tab to a connection
+    pub connection_string: String, // Unified connection string
     pub editor: Entity<InputState>,
     pub db_id: Option<i64>, // Database ID for persistence
     pub results_panel: Entity<crate::results_panel::ResultsPanel>, // Each tab has its own results
     pub sql_log: Entity<SqlLog>, // SQL log for this tab
-    pub lsp_manager: Option<PostgresLspManager>, // LSP manager for PostgreSQL connections
+    pub lsp_manager: Option<Box<dyn crate::lsp_manager::LspManager>>, // Database-agnostic LSP manager
+    #[allow(dead_code)]
     pub cached_diagnostics: Arc<Mutex<Vec<Diagnostic>>>, // Store diagnostics for this tab
     pub document_version: i32, // LSP document version for tracking changes
     pub file_uri: Option<String>, // File URI for LSP integration
@@ -69,9 +71,80 @@ impl QueryTab {
             format!("inmemory://blanco/query_{}.sql", self.id)
         }
     }
+
+    /// Get connection instance from unified connection manager
+    #[allow(dead_code)]
+    pub async fn get_connection(
+        &self,
+        cx: &gpui::App,
+    ) -> Option<std::sync::Arc<dyn crate::connection_trait::Connection>> {
+        let db_service = crate::db_service::DbService::global(cx);
+        let unified_manager = db_service.unified_manager().await;
+        let unified_manager_guard = unified_manager.read().await;
+        unified_manager_guard
+            .get_connection_by_string(&self.connection_string)
+            .await
+    }
+
+    /// Get connection metadata without accessing fields directly
+    #[allow(dead_code)]
+    pub async fn get_ui_metadata(
+        &self,
+        cx: &gpui::App,
+    ) -> Option<crate::connection_trait::ConnectionUIMetadata> {
+        self.get_connection(cx).await.map(|conn| conn.get_ui_metadata())
+    }
+
+    /// Check if this tab supports LSP
+    #[allow(dead_code)]
+    pub async fn supports_lsp(&self, cx: &gpui::App) -> bool {
+        if let Some(conn) = self.get_connection(cx).await {
+            conn.supports_lsp()
+        } else {
+            false
+        }
+    }
+
+    /// Get display name from connection
+    #[allow(dead_code)]
+    pub async fn get_display_name(&self, cx: &gpui::App) -> String {
+        self.get_ui_metadata(cx)
+            .await
+            .map(|metadata| metadata.display_name)
+            .unwrap_or_else(|| "Unknown Connection".to_string())
+    }
+
+    /// Get file-safe name from connection
+    #[allow(dead_code)]
+    pub async fn get_file_safe_name(&self, cx: &gpui::App) -> String {
+        self.get_ui_metadata(cx)
+            .await
+            .map(|metadata| metadata.file_safe_name)
+            .unwrap_or_else(|| format!("query_{}", self.id))
+    }
+
+    /// Get icon name from connection
+    #[allow(dead_code)]
+    pub async fn get_icon_name(&self, cx: &gpui::App) -> crate::icon::IconName {
+        self.get_ui_metadata(cx)
+            .await
+            .map(|metadata| metadata.icon_name)
+            .unwrap_or(crate::icon::IconName::SquareTerminal)
+    }
+
+    /// Check if connection supports schemas
+    #[allow(dead_code)]
+    pub async fn supports_schemas(&self, cx: &gpui::App) -> bool {
+        if let Some(conn) = self.get_connection(cx).await {
+            conn.supports_schemas()
+        } else {
+            false
+        }
+    }
 }
 
 pub struct SettingsTab {
+    #[allow(dead_code)]
     pub id: usize,
     pub title: String,
     pub editor: Entity<InputState>,
@@ -91,19 +164,26 @@ pub struct EditorPanel {
     _subscriptions: Vec<gpui::Subscription>,
     query_file_manager: Arc<QueryFileManager>,
     // Split pane state
+    #[allow(dead_code)]
     editor_table_split: f32, // Position between editor and table (0.0-1.0)
+    #[allow(dead_code)]
     table_log_split: f32,    // Position between table and log (0.0-1.0)
+    #[allow(dead_code)]
     dragging_split: Option<SplitType>, // Which handle is being dragged
+    #[allow(dead_code)]
     drag_start_position: Option<Point<f32>>, // Start position of drag
 }
 
 impl EditorPanel {
+    #[allow(dead_code)]
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self::new_with_sidebar_state(window, cx, false)
     }
 
+    /// Create a new editor panel with optional sidebar state
+    #[allow(dead_code)]
     pub fn new_with_sidebar_state(
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
         sidebar_collapsed: bool,
     ) -> Self {
@@ -117,36 +197,9 @@ impl EditorPanel {
                 .expect("Failed to create QueryFileManager"),
         );
 
-        let first_tab = QueryTab {
-            id: 0,
-            title: "Query 1".to_string(),
-            connection_name: "Test Database".to_string(),
-            connection_type: ConnectionType::SQLite,
-            pg_connection_key: None,
-            connection_id: None,
-            editor: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .code_editor("sql".to_string())
-                    .line_number(true)
-                    .tab_size(TabSize {
-                        tab_size: 4,
-                        hard_tabs: false,
-                    })
-                    .soft_wrap(false)
-                    .placeholder("Enter your SQL query here...")
-            }),
-            db_id: None,
-            results_panel: cx.new(|cx| crate::results_panel::ResultsPanel::new(window, cx)),
-            sql_log: cx.new(|cx| SqlLog::new(1000, cx.theme().highlight_theme.clone())), // Maximum 1000 lines in the log
-            lsp_manager: None, // No LSP for SQLite
-            cached_diagnostics: Arc::new(Mutex::new(Vec::new())),
-            document_version: 0,
-            file_uri: None,
-        };
-
-        let mut panel = Self {
+        Self {
             focus_handle: cx.focus_handle(),
-            tabs: vec![],
+            tabs: vec![], // Start with no tabs - tabs are created on demand
             active_tab_ix: 0,
             next_tab_id: 1,
             sidebar_collapsed,
@@ -159,45 +212,7 @@ impl EditorPanel {
             table_log_split: 0.4,
             dragging_split: None,
             drag_start_position: None,
-        };
-
-        // Subscribe to the first tab's editor changes
-        let subscription = cx.subscribe(&first_tab.editor, |this, editor_entity, event, cx| {
-            if let InputEvent::Change = event {
-                this.trigger_auto_save(cx);
-
-                // Send didChange to LSP if this is a PostgreSQL tab and the first tab is active
-                if !this.tabs.is_empty() {
-                    if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(0) {
-                        if let Some(ref lsp_manager) = query_tab.lsp_manager {
-                            query_tab.document_version += 1;
-                            let version = query_tab.document_version;
-                            let uri_str = query_tab.uri();
-                            let content = editor_entity.read(cx).text().to_string();
-                            let lsp_clone = lsp_manager.clone();
-                            let tab_title = query_tab.title.clone();
-
-                            crate::gpui_tokio::Tokio::spawn_result(cx, async move {
-                                if let Ok(uri) = uri_str.parse::<Uri>() {
-                                    info!("📤 Sending didChange notification for tab '{}' version {}", tab_title, version);
-                                    lsp_clone.did_change(uri, version, content).await
-                                        .map_err(|e| anyhow::anyhow!("didChange failed: {:?}", e))?;
-                                    info!("✅ didChange notification sent successfully for tab '{}' version {}", tab_title, version);
-                                    Ok(())
-                                } else {
-                                    error!("Failed to parse URI for didChange: {}", uri_str);
-                                    Err(anyhow::anyhow!("URI parse failed"))
-                                }
-                            }).detach();
-                        }
-                    }
-                }
-            }
-        });
-
-        panel._subscriptions.push(subscription);
-        panel.tabs.push(TabType::Query(first_tab));
-        panel
+        }
     }
 
     pub fn set_sidebar_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
@@ -206,177 +221,22 @@ impl EditorPanel {
     }
 
     fn add_new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let tab_id = self.next_tab_id;
-        self.next_tab_id += 1;
-
-        let editor = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("sql".to_string())
-                .line_number(true)
-                .tab_size(TabSize {
-                    tab_size: 4,
-                    hard_tabs: false,
-                })
-                .soft_wrap(false)
-                .placeholder("Enter your SQL query here...")
-        });
-
-        // Subscribe to editor changes
-        let subscription = cx.subscribe(&editor, |this, editor_entity, event, cx| {
-            if let InputEvent::Change = event {
-                this.trigger_auto_save(cx);
-
-                // Send didChange to LSP if this is a PostgreSQL tab
-                if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
-                    if let Some(ref lsp_manager) = query_tab.lsp_manager {
-                        query_tab.document_version += 1;
-                        let version = query_tab.document_version;
-                        let uri_str = query_tab.uri();
-                        let content = editor_entity.read(cx).text().to_string();
-                        let lsp_clone = lsp_manager.clone();
-                        let tab_title = query_tab.title.clone();
-
-                        crate::gpui_tokio::Tokio::spawn_result(cx, async move {
-                            if let Ok(uri) = uri_str.parse::<Uri>() {
-                                info!("📤 Sending didChange notification for tab '{}' version {}", tab_title, version);
-                                lsp_clone.did_change(uri, version, content).await
-                                    .map_err(|e| anyhow::anyhow!("didChange failed: {:?}", e))?;
-                                info!("✅ didChange notification sent successfully for tab '{}' version {}", tab_title, version);
-                                Ok(())
-                            } else {
-                                error!("Failed to parse URI for didChange: {}", uri_str);
-                                Err(anyhow::anyhow!("URI parse failed"))
-                            }
-                        }).detach();
-                    }
-                }
-            }
-        });
-        self._subscriptions.push(subscription);
-
-        let new_tab = QueryTab {
-            id: tab_id,
-            title: format!("Query {}", tab_id + 1),
-            connection_name: "Test Database".to_string(),
-            connection_type: ConnectionType::SQLite,
-            pg_connection_key: None,
-            connection_id: None,
-            editor,
-            db_id: None,
-            results_panel: cx.new(|cx| crate::results_panel::ResultsPanel::new(window, cx)),
-            sql_log: cx.new(|cx| SqlLog::new(1000, cx.theme().highlight_theme.clone())), // Maximum 1000 lines in the log
-            lsp_manager: None, // No LSP for SQLite
-            cached_diagnostics: Arc::new(Mutex::new(Vec::new())),
-            document_version: 0,
-            file_uri: None,
-        };
-
-        self.tabs.push(TabType::Query(new_tab));
-        self.active_tab_ix = self.tabs.len() - 1;
-        cx.notify();
+        // Create a new tab with default SQLite in-memory connection
+        self.add_new_tab_with_unified_connection(
+            window,
+            "Query".to_string(),
+            "sqlite::memory:".to_string(),
+            None,
+            cx,
+        );
     }
 
-    pub fn add_new_tab_with_connection(
-        &mut self,
-        window: &mut Window,
-        connection_name: String,
-        connection_type: crate::app::ConnectionType,
-        schema_name: Option<String>,
-        cx: &mut Context<Self>,
-    ) {
-        let tab_id = self.next_tab_id;
-        self.next_tab_id += 1;
-
-        let editor = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("sql".to_string())
-                .line_number(true)
-                .tab_size(TabSize {
-                    tab_size: 4,
-                    hard_tabs: false,
-                })
-                .soft_wrap(false)
-                .placeholder("Enter your SQL query here...")
-        });
-
-        // Subscribe to editor changes
-        let subscription = cx.subscribe(&editor, |this, editor_entity, event, cx| {
-            if let InputEvent::Change = event {
-                this.trigger_auto_save(cx);
-
-                // Send didChange to LSP if this is a PostgreSQL tab
-                if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
-                    if let Some(ref lsp_manager) = query_tab.lsp_manager {
-                        query_tab.document_version += 1;
-                        let version = query_tab.document_version;
-                        let uri_str = query_tab.uri();
-                        let content = editor_entity.read(cx).text().to_string();
-                        let lsp_clone = lsp_manager.clone();
-                        let tab_title = query_tab.title.clone();
-
-                        crate::gpui_tokio::Tokio::spawn_result(cx, async move {
-                            if let Ok(uri) = uri_str.parse::<Uri>() {
-                                info!("📤 Sending didChange notification for tab '{}' version {}", tab_title, version);
-                                lsp_clone.did_change(uri, version, content).await
-                                    .map_err(|e| anyhow::anyhow!("didChange failed: {:?}", e))?;
-                                info!("✅ didChange notification sent successfully for tab '{}' version {}", tab_title, version);
-                                Ok(())
-                            } else {
-                                error!("Failed to parse URI for didChange: {}", uri_str);
-                                Err(anyhow::anyhow!("URI parse failed"))
-                            }
-                        }).detach();
-                    }
-                }
-            }
-        });
-        self._subscriptions.push(subscription);
-
-        let title = match (&connection_type, &schema_name) {
-            (crate::app::ConnectionType::PostgreSQL, Some(schema)) => {
-                format!("PostgreSQL - {}", schema)
-            }
-            (crate::app::ConnectionType::PostgreSQL, None) => "PostgreSQL".to_string(),
-            (crate::app::ConnectionType::SQLite, _) => connection_name.clone(),
-        };
-
-        // Extract PostgreSQL connection key from connection name if it's a PostgreSQL connection
-        let pg_connection_key = if connection_type == crate::app::ConnectionType::PostgreSQL {
-            // Try to parse the connection name as a display name to extract the key
-            // This is a workaround - ideally we should pass the key directly
-            Self::extract_pg_key_from_display_name(&connection_name)
-        } else {
-            None
-        };
-
-        let new_tab = QueryTab {
-            id: tab_id,
-            title,
-            connection_name: connection_name.clone(),
-            connection_type,
-            pg_connection_key,
-            connection_id: None,
-            editor,
-            db_id: None,
-            results_panel: cx.new(|cx| crate::results_panel::ResultsPanel::new(window, cx)),
-            sql_log: cx.new(|cx| SqlLog::new(1000, cx.theme().highlight_theme.clone())), // Maximum 1000 lines in the log
-            lsp_manager: None, // Will be initialized later if needed
-            cached_diagnostics: Arc::new(Mutex::new(Vec::new())),
-            document_version: 0,
-            file_uri: None,
-        };
-
-        self.tabs.push(TabType::Query(new_tab));
-        self.active_tab_ix = self.tabs.len() - 1;
-        cx.notify();
-    }
-
-    /// Add a new query tab specifically for PostgreSQL connections
-    pub fn add_new_tab_with_postgres_connection(
+    /// Add a new query tab using the unified connection interface
+    pub fn add_new_tab_with_unified_connection(
         &mut self,
         window: &mut Window,
         display_name: String,
-        pg_connection_key: PgConnectionKey,
+        connection_string: String,
         schema_name: Option<String>,
         cx: &mut Context<Self>,
     ) {
@@ -391,105 +251,32 @@ impl EditorPanel {
                     tab_size: 4,
                     hard_tabs: false,
                 })
-                .soft_wrap(false)
-                .placeholder("Enter your SQL query here...")
+                .soft_wrap(true)
+                .placeholder("-- Enter your SQL query here...")
         });
 
-        // Subscribe to editor changes
-        let subscription = cx.subscribe(&editor, |this, editor_entity, event, cx| {
-            if let InputEvent::Change = event {
-                this.trigger_auto_save(cx);
-
-                // Send didChange to LSP if this is a PostgreSQL tab
-                if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
-                    if let Some(ref lsp_manager) = query_tab.lsp_manager {
-                        query_tab.document_version += 1;
-                        let version = query_tab.document_version;
-                        let uri_str = query_tab.uri();
-                        let content = editor_entity.read(cx).text().to_string();
-                        let lsp_clone = lsp_manager.clone();
-                        let tab_title = query_tab.title.clone();
-
-                        crate::gpui_tokio::Tokio::spawn_result(cx, async move {
-                            if let Ok(uri) = uri_str.parse::<Uri>() {
-                                info!("📤 Sending didChange notification for tab '{}' version {}", tab_title, version);
-                                lsp_clone.did_change(uri, version, content).await
-                                    .map_err(|e| anyhow::anyhow!("didChange failed: {:?}", e))?;
-                                info!("✅ didChange notification sent successfully for tab '{}' version {}", tab_title, version);
-                                Ok(())
-                            } else {
-                                error!("Failed to parse URI for didChange: {}", uri_str);
-                                Err(anyhow::anyhow!("URI parse failed"))
-                            }
-                        }).detach();
-                    }
-                }
-            }
-        });
-        self._subscriptions.push(subscription);
-
-        let title = match &schema_name {
-            Some(schema) => format!("PostgreSQL - {}", schema),
-            None => display_name.clone(),
-        };
-
-        // Create the new PostgreSQL tab
-        let new_tab = QueryTab {
+        // Create unified query tab with connection string
+        let query_tab = QueryTab {
             id: tab_id,
-            title: title.clone(),
-            connection_name: display_name.clone(),
-            connection_type: ConnectionType::PostgreSQL,
-            pg_connection_key: Some(pg_connection_key),
-            connection_id: None,
+            title: if let Some(ref schema) = schema_name {
+                format!("{} - {}", display_name, schema)
+            } else {
+                display_name.clone()
+            },
+            connection_string: connection_string.clone(),
             editor,
             db_id: None,
-            results_panel: cx.new(|cx| crate::results_panel::ResultsPanel::new(window, cx)),
+            results_panel: cx.new(|cx| ResultsPanel::with_connection_string(Some(connection_string.clone()), window, cx)),
             sql_log: cx.new(|cx| SqlLog::new(1000, cx.theme().highlight_theme.clone())), // Maximum 1000 lines in the log
-            lsp_manager: None, // Will be initialized asynchronously
+            lsp_manager: None,
             cached_diagnostics: Arc::new(Mutex::new(Vec::new())),
-            document_version: 0,
-            file_uri: None, // Will be updated after file creation
+            document_version: 1,
+            file_uri: None, // Will be set when file is created
         };
 
-        self.tabs.push(TabType::Query(new_tab));
+        self.tabs.push(TabType::Query(query_tab));
         self.active_tab_ix = self.tabs.len() - 1;
         cx.notify();
-
-        // Initialize LSP for the new PostgreSQL tab
-        info!("🚀 Initializing LSP for new PostgreSQL tab: {}", title);
-        let new_tab_index = self.tabs.len() - 1; // Index of the just-added tab
-        self.initialize_lsp_for_tab_at_index(new_tab_index, window, cx);
-    }
-
-    /// Extract PostgreSQL connection key from display name
-    /// This is a workaround - ideally we should pass the key directly from the sidebar
-    fn extract_pg_key_from_display_name(display_name: &str) -> Option<PgConnectionKey> {
-        // Parse display name format: "username@host:port/database"
-        if let Some(at_pos) = display_name.find('@') {
-            let username = display_name[..at_pos].to_string();
-            let remaining = &display_name[at_pos + 1..];
-
-            if let Some(colon_pos) = remaining.find(':') {
-                let host = remaining[..colon_pos].to_string();
-                let remaining = &remaining[colon_pos + 1..];
-
-                if let Some(slash_pos) = remaining.find('/') {
-                    let port_str = &remaining[..slash_pos];
-                    let database = remaining[slash_pos + 1..].to_string();
-
-                    if let Ok(port) = port_str.parse::<u16>() {
-                        return Some(PgConnectionKey {
-                            host,
-                            port,
-                            database,
-                            username,
-                            password: None, // No password in display name format
-                        });
-                    }
-                }
-            }
-        }
-        None
     }
 
     fn close_tab(&mut self, tab_index: usize, cx: &mut Context<Self>) {
@@ -664,10 +451,19 @@ impl EditorPanel {
             .to_string()
     }
 
-    fn run_query(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    /// Run query using the unified connection interface
+    fn run_query_unified(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        self.run_query_unified_internal(_window, cx)
+    }
+
+    /// Internal method for unified query execution (without ClickEvent requirement)
+    fn run_query_unified_internal(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(tab) = self.tabs.get(self.active_tab_ix) {
             match tab {
                 TabType::Query(query_tab) => {
+                    // Use the unified connection string
+                    let connection_string = &query_tab.connection_string;
+
                     // Get text and cursor position from editor
                     let editor = query_tab.editor.read(cx);
                     let full_text = editor.text().to_string();
@@ -683,199 +479,231 @@ impl EditorPanel {
                         return;
                     }
 
+                    log::info!("Executing query via async pipeline: {}", query);
+
                     // Log the query to the SQL log
-                    let log_message = format!("Executing query on {}", query_tab.connection_name);
+                    let log_message = "Executing query via async pipeline".to_string();
                     query_tab.sql_log.update(cx, |sql_log, cx| {
-                        sql_log.append_text(&blanco_ui::SqlLogMessage::Comment(log_message), cx);
+                        sql_log
+                            .append_text(&blanco_ui::SqlLogMessage::Comment(log_message), cx);
                         sql_log.append_text(
                             &blanco_ui::SqlLogMessage::SqlStatement(query.clone()),
                             cx,
                         );
                     });
 
-                    // Get database service
-                    let db_service = DbService::global(cx).clone();
-                    let user_db = db_service.user_db_handle();
-                    let app_db = db_service.app_db_handle();
+                    // Create a response channel for the async operation
+                    let (response_tx, response_rx) = tokio::sync::oneshot::channel();
 
-                    // Track execution timing
-                    let start_time = std::time::Instant::now();
-                    let executed_at = chrono::Utc::now().timestamp();
+                    // Send the query execution to the async pipeline
+                    let async_event_sender = cx.global::<crate::async_pipeline::AsyncEventSender>();
+                    match async_event_sender.try_send(AsyncEvent::ExecuteQuery {
+                        connection_string: connection_string.clone(),
+                        sql: query.clone(),
+                        response_tx,
+                        priority: TaskPriority::Normal,
+                    }) {
+                        Ok(_) => {
+                            log::info!("Query sent to async pipeline successfully");
 
-                    // Clone connection details for the async task
-                    let connection_type = query_tab.connection_type.clone();
-                    let pg_connection_key = query_tab.pg_connection_key.clone();
+                            // Emit query execution started event
+                            emit_event!(AppEvent::QueryExecutionStarted {
+                                connection_id: connection_string.clone(),
+                                query: query.clone(),
+                            });
 
-                    // Execute query using Tokio::spawn_result to ensure tokio context
-                    let db_task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
-                        let query_result = match connection_type {
-                            ConnectionType::SQLite => {
-                                // Use auto-connect functionality - no manual connection check needed
-                                let mut db = user_db.write().await;
-                                db.execute_query_with_auto_connect(&query, "blanco.db") // Default SQLite path
-                                    .await
-                                    .map_err(|e| anyhow::anyhow!("{}", e))
-                            }
-                            ConnectionType::PostgreSQL => {
-                                if let Some(pg_key) = pg_connection_key {
-                                    // Get or create PostgreSQL connection
-                                    let connection_string =
-                                        if let Some(ref password) = pg_key.password {
-                                            format!(
-                                                "postgresql://{}:{}@{}:{}/{}",
-                                                pg_key.username,
-                                                password,
-                                                pg_key.host,
-                                                pg_key.port,
-                                                pg_key.database
-                                            )
-                                        } else {
-                                            format!(
-                                                "postgresql://{}@{}:{}/{}",
-                                                pg_key.username,
-                                                pg_key.host,
-                                                pg_key.port,
-                                                pg_key.database
-                                            )
+                            // Get references for async response handling
+                            let results_panel = query_tab.results_panel.clone();
+                            let sql_log = query_tab.sql_log.clone();
+                            let query_for_history = query.clone();
+                            let connection_id_for_event = connection_string.clone();
+
+                            // Track execution timing for history
+                            let start_time = std::time::Instant::now();
+                            let executed_at = chrono::Utc::now().timestamp();
+                            let db_service = DbService::global(cx).clone();
+                            let app_db = db_service.app_db_handle();
+
+                            // Handle the response asynchronously
+                            cx.spawn(async move |_editor_panel, cx| {
+                                match response_rx.await {
+                                    Ok(Ok(mut result)) => {
+                                        let duration_ms = start_time.elapsed().as_millis() as i64;
+
+                                        log::info!(
+                                            "Query executed successfully via async pipeline: {} rows in {}ms",
+                                            result.row_count(),
+                                            duration_ms
+                                        );
+
+                                        // Add execution metadata
+                                        result.query_text = Some(query.clone());
+                                        result.execution_time_ms = Some(duration_ms);
+                                        result.is_error = false;
+
+                                        // Clone result for event emission
+                                        let result_for_event = result.clone();
+
+                                        // Save to query history
+                                        if let Some(app_db) = app_db.read().await.as_ref() {
+                                            let history = QueryHistoryData {
+                                                id: None,
+                                                query_text: query_for_history.clone(),
+                                                executed_at,
+                                                duration_ms: Some(duration_ms),
+                                                rows_affected: Some(result.rows_affected as i64),
+                                                row_count: Some(result.row_count() as i64),
+                                                success: true,
+                                                error_message: None,
+                                            };
+
+                                            if let Err(e) = app_db.save_query_history(&history).await {
+                                                log::error!("Failed to save query history: {}", e);
+                                            }
+                                        }
+
+                                        // Log successful result
+                                        let result_message = format!(
+                                            "Query executed successfully (async pipeline) in {}ms\n-- {} rows returned, {} rows affected",
+                                            duration_ms,
+                                            result.row_count(),
+                                            result.rows_affected
+                                        );
+                                        let _ = sql_log.update(cx, |sql_log, cx| {
+                                            sql_log.append_text(&blanco_ui::SqlLogMessage::Comment(result_message), cx);
+                                        });
+
+                                        // Update results panel
+                                        let _ = results_panel.update(cx, |panel, cx| {
+                                            panel.set_query_result(result, cx);
+                                        });
+
+                                        // Emit query execution completed event
+                                        emit_event!(AppEvent::QueryExecuted {
+                                            connection_id: connection_id_for_event,
+                                            query: query.clone(),
+                                            duration: start_time.elapsed(),
+                                            rows_affected: Some(result_for_event.rows_affected),
+                                            success: true,
+                                        });
+                                    }
+                                    Ok(Err(e)) => {
+                                        let duration_ms = start_time.elapsed().as_millis() as i64;
+                                        let error_msg = e.to_string();
+
+                                        log::error!("Query execution failed via async pipeline: {}", error_msg);
+
+                                        // Save error to query history
+                                        if let Some(app_db) = app_db.read().await.as_ref() {
+                                            let history = QueryHistoryData {
+                                                id: None,
+                                                query_text: query_for_history.clone(),
+                                                executed_at,
+                                                duration_ms: Some(duration_ms),
+                                                rows_affected: None,
+                                                row_count: None,
+                                                success: false,
+                                                error_message: Some(error_msg.clone()),
+                                            };
+
+                                            if let Err(e) = app_db.save_query_history(&history).await {
+                                                log::error!("Failed to save query history: {}", e);
+                                            }
+                                        }
+
+                                        // Log query error
+                                        let error_log_message = format!(
+                                            "Query execution failed (async pipeline): {}",
+                                            error_msg
+                                        );
+                                        let _ = sql_log.update(cx, |sql_log, cx| {
+                                            sql_log.append_text(
+                                                &blanco_ui::SqlLogMessage::Comment(error_log_message),
+                                                cx,
+                                            );
+                                        });
+
+                                        // Set error result
+                                        let error_result = QueryResult {
+                                            columns: vec!["Error".to_string()],
+                                            column_types: vec!["TEXT".to_string()],
+                                            rows: vec![vec![error_msg.clone()]],
+                                            rows_affected: 0,
+                                            query_text: Some(query.clone()),
+                                            execution_time_ms: Some(duration_ms),
+                                            is_error: true,
                                         };
 
-                                    // Use enhanced auto-connect functionality
-                                    match db_service.ensure_pg_connection(&connection_string).await
-                                    {
-                                        Ok(pg_manager) => pg_manager
-                                            .execute_query_async(&query)
-                                            .await
-                                            .map_err(|e| anyhow::anyhow!("{}", e)),
-                                        Err(e) => Err(anyhow::anyhow!(
-                                            "Failed to connect to PostgreSQL: {}",
-                                            e
-                                        )),
+                                        let _ = results_panel.update(cx, |panel, cx| {
+                                            panel.set_query_result(error_result, cx);
+                                        });
+
+                                        // Clone connection_id for second event
+                                        let connection_id_for_error = connection_id_for_event.clone();
+
+                                        // Emit query execution completed event with failure
+                                        emit_event!(AppEvent::QueryExecuted {
+                                            connection_id: connection_id_for_event,
+                                            query: query.clone(),
+                                            duration: start_time.elapsed(),
+                                            rows_affected: None,
+                                            success: false,
+                                        });
+
+                                        // Emit error event
+                                        emit_event!(AppEvent::ErrorOccurred {
+                                            context: format!("Query execution on {}", connection_id_for_error),
+                                            error: error_msg,
+                                            severity: crate::events::ErrorSeverity::Error,
+                                        });
                                     }
-                                } else {
-                                    Err(anyhow::anyhow!("PostgreSQL connection key not found"))
-                                }
-                            }
-                        };
+                                    Err(e) => {
+                                        log::error!("Failed to receive query execution response: {}", e);
 
-                        let duration_ms = start_time.elapsed().as_millis() as i64;
-
-                        match query_result {
-                            Ok(mut result) => {
-                                println!(
-                                    "Query executed successfully: {} rows",
-                                    result.row_count()
-                                );
-
-                                // Add execution metadata
-                                result.query_text = Some(query.clone());
-                                result.execution_time_ms = Some(duration_ms);
-                                result.is_error = false;
-
-                                // Save to query history
-                                if let Some(app_db) = app_db.read().await.as_ref() {
-                                    let history = QueryHistoryData {
-                                        id: None,
-                                        query_text: query.clone(),
-                                        executed_at,
-                                        duration_ms: Some(duration_ms),
-                                        rows_affected: Some(result.rows_affected as i64),
-                                        row_count: Some(result.row_count() as i64),
-                                        success: true,
-                                        error_message: None,
-                                    };
-
-                                    if let Err(e) = app_db.save_query_history(&history).await {
-                                        eprintln!("Failed to save query history: {}", e);
+                                        // Log response error
+                                        let error_log_message = format!("Query execution response failed: {}", e);
+                                        let _ = sql_log.update(cx, |sql_log, cx| {
+                                            sql_log.append_text(
+                                                &blanco_ui::SqlLogMessage::Comment(error_log_message),
+                                                cx,
+                                            );
+                                        });
                                     }
                                 }
-
-                                Ok(result)
-                            }
-                            Err(e) => {
-                                let error_msg = e.to_string();
-                                eprintln!("Query execution failed: {}", error_msg);
-
-                                // Save error to query history
-                                if let Some(app_db) = app_db.read().await.as_ref() {
-                                    let history = QueryHistoryData {
-                                        id: None,
-                                        query_text: query.clone(),
-                                        executed_at,
-                                        duration_ms: Some(duration_ms),
-                                        rows_affected: None,
-                                        row_count: None,
-                                        success: false,
-                                        error_message: Some(error_msg.clone()),
-                                    };
-
-                                    if let Err(e) = app_db.save_query_history(&history).await {
-                                        eprintln!("Failed to save query history: {}", e);
-                                    }
-                                }
-
-                                // Return error as a result
-                                Ok(QueryResult {
-                                    columns: vec!["Error".to_string()],
-                                    column_types: vec!["TEXT".to_string()],
-                                    rows: vec![vec![error_msg.clone()]],
-                                    rows_affected: 0,
-                                    query_text: Some(query.clone()),
-                                    execution_time_ms: Some(duration_ms),
-                                    is_error: true,
-                                })
-                            }
+                            }).detach();
                         }
-                    });
+                        Err(e) => {
+                            log::error!("Failed to send query to async pipeline: {}", e);
 
-                    // Get the results panel for this tab
-                    let results_panel = query_tab.results_panel.clone();
-                    let sql_log = query_tab.sql_log.clone();
-
-                    // Update results panel when the task completes
-                    cx.spawn(async move |_editor_panel, cx| {
-                        let duration_ms = start_time.elapsed().as_millis() as i64;
-
-                        match db_task.await {
-                            Ok(result) => {
-                                // Log successful result
-                                let result_message = format!(
-                                    "Query executed successfully in {}ms\n-- {} rows returned, {} rows affected",
-                                    duration_ms,
-                                    result.row_count(),
-                                    result.rows_affected
+                            // Log the error to SQL log
+                            let error_log_message = format!("Failed to send query to async pipeline: {}", e);
+                            query_tab.sql_log.update(cx, |sql_log, cx| {
+                                sql_log.append_text(
+                                    &blanco_ui::SqlLogMessage::Comment(error_log_message),
+                                    cx,
                                 );
-                                let _ = sql_log.update(cx, |sql_log, cx| {
-                                    sql_log.append_text(&blanco_ui::SqlLogMessage::Comment(result_message), cx);
-                                });
-
-                                let _ = results_panel.update(cx, |panel, cx| {
-                                    panel.set_query_result(result, cx);
-                                });
-                            }
-                            Err(e) => {
-                                let error_msg = e.to_string();
-
-                                // Log query error
-                                let error_log_message = format!(
-                                    "Query execution failed in {}ms\nError: {}",
-                                    duration_ms,
-                                    error_msg
-                                );
-                                let _ = sql_log.update(cx, |sql_log, cx| {
-                                    sql_log.append_text(&blanco_ui::SqlLogMessage::Comment(error_log_message), cx);
-                                });
-                            }
+                            });
                         }
-                    })
-                    .detach();
+                    }
                 }
-                TabType::Settings(_) => {
-                    // Settings tabs don't support query execution
+                TabType::Settings(_settings_tab) => {
+                    // Settings tabs don't have queries to run
                 }
             }
         }
     }
 
+    #[allow(dead_code)]
+    fn run_query(&mut self, event: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // For backward compatibility, call the unified method
+        self.run_query_unified(event, window, cx)
+    }
+
+    /// Run query without requiring a ClickEvent (for action handlers)
+    fn run_query_no_event(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Call unified method without ClickEvent
+        self.run_query_unified_internal(window, cx)
+    }
     fn save_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(TabType::Settings(settings_tab)) = self.tabs.get_mut(self.active_tab_ix) {
             let json_text = settings_tab.editor.read(cx).text().to_string();
@@ -923,6 +751,7 @@ impl EditorPanel {
         println!("Applied settings: {:?}", settings);
     }
 
+    #[allow(dead_code)]
     fn current_editor(&self) -> Option<&Entity<InputState>> {
         self.tabs.get(self.active_tab_ix).map(|tab| match tab {
             TabType::Query(query_tab) => &query_tab.editor,
@@ -930,6 +759,7 @@ impl EditorPanel {
         })
     }
 
+    #[allow(dead_code)]
     fn is_settings_tab(&self, tab: &TabType) -> bool {
         matches!(tab, TabType::Settings(_))
     }
@@ -944,33 +774,33 @@ impl EditorPanel {
         for (pos, tab) in self.tabs.iter().enumerate() {
             if let TabType::Query(query_tab) = tab {
                 let content = query_tab.editor.read(cx).text().to_string();
-                let connection_type = match query_tab.connection_type {
-                    ConnectionType::SQLite => Some("SQLite".to_string()),
-                    ConnectionType::PostgreSQL => Some("PostgreSQL".to_string()),
+                let connection_type = if query_tab.connection_string.starts_with("sqlite:") {
+                    Some("SQLite".to_string())
+                } else if query_tab.connection_string.starts_with("postgresql:")
+                    || query_tab.connection_string.starts_with("postgres:")
+                {
+                    Some("PostgreSQL".to_string())
+                } else {
+                    None
                 };
-                let pg_connection_key = query_tab.pg_connection_key.as_ref().map(|key| {
-                    if let Some(ref password) = key.password {
-                        format!(
-                            "postgres://{}:{}@{}:{}/{}",
-                            key.username, password, key.host, key.port, key.database
-                        )
-                    } else {
-                        format!(
-                            "postgres://{}@{}:{}/{}",
-                            key.username, key.host, key.port, key.database
-                        )
-                    }
-                });
+                let pg_connection_key = if connection_type
+                    .as_ref()
+                    .is_some_and(|t| t == "PostgreSQL")
+                {
+                    Some(query_tab.connection_string.clone())
+                } else {
+                    None
+                };
                 tabs_data.push((
                     pos,
                     query_tab.db_id,
                     query_tab.title.clone(),
                     content,
                     pos as i32,
-                    query_tab.connection_id,
+                    None, // connection_id removed in unified structure
                     connection_type,
                     pg_connection_key,
-                    query_tab.connection_name.clone(),
+                    query_tab.title.clone(),
                 ));
             }
         }
@@ -1082,7 +912,7 @@ impl EditorPanel {
                                 // Set the file URI on the QueryTab
                                 if let Some(file_uri) = panel
                                     .query_file_manager
-                                    .query_file_uri(db_id, &query_tab.connection_name)
+                                    .query_file_uri(db_id, &query_tab.title)
                                     .into()
                                 {
                                     let file_uri_debug = file_uri.clone();
@@ -1175,13 +1005,14 @@ impl EditorPanel {
     }
 
     /// Helper to create and add a query tab with subscription
+    #[allow(clippy::too_many_arguments)]
     fn create_and_add_tab(
         &mut self,
         window: &mut Window,
         title: &str,
         content: &str,
         db_id: Option<i64>,
-        connection_id: Option<i64>,
+        _connection_id: Option<i64>,
         connection_type_str: &Option<String>,
         pg_connection_key_str: &Option<String>,
         cx: &mut Context<Self>,
@@ -1215,21 +1046,21 @@ impl EditorPanel {
                 this.trigger_auto_save(cx);
 
                 // Send didChange to LSP if this is a PostgreSQL tab
-                if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
-                    if let Some(ref lsp_manager) = query_tab.lsp_manager {
-                        query_tab.document_version += 1;
-                        let version = query_tab.document_version;
+                let active_tab_ix = this.active_tab_ix;
+                if let Some(TabType::Query(ref query_tab)) = this.tabs.get(active_tab_ix) {
+                    if query_tab.connection_string.starts_with("postgresql:") || query_tab.connection_string.starts_with("postgres:") {
+                        let version = query_tab.document_version + 1;
                         let uri_str = query_tab.uri();
                         let content = editor_entity.read(cx).text().to_string();
-                        let lsp_clone = lsp_manager.clone();
                         let tab_title = query_tab.title.clone();
 
                         crate::gpui_tokio::Tokio::spawn_result(cx, async move {
-                            if let Ok(uri) = uri_str.parse::<Uri>() {
+                            if let Ok(_uri) = uri_str.parse::<Uri>() {
                                 info!("📤 Sending didChange notification for tab '{}' version {}", tab_title, version);
-                                lsp_clone.did_change(uri, version, content).await
-                                    .map_err(|e| anyhow::anyhow!("didChange failed: {:?}", e))?;
-                                info!("✅ didChange notification sent successfully for tab '{}' version {}", tab_title, version);
+                                // TODO: Implement proper LSP did_change after refactoring
+                                // For now, we'll just log the notification
+                                info!("📝 LSP did_change temporarily disabled during refactoring");
+                                info!("✅ would send didChange for tab '{}' version {} with {} chars", tab_title, version, content.len());
                                 Ok(())
                             } else {
                                 error!("Failed to parse URI for didChange: {}", uri_str);
@@ -1243,7 +1074,7 @@ impl EditorPanel {
         self._subscriptions.push(subscription);
 
         // Determine connection type and create appropriate tab
-        let (connection_name, connection_type, pg_connection_key) = match connection_type_str {
+        let (_connection_name, connection_type, pg_connection_key) = match connection_type_str {
             Some(conn_type) if conn_type == "PostgreSQL" => {
                 info!(
                     "🔍 Creating PostgreSQL tab with connection_type: {:?}",
@@ -1264,16 +1095,38 @@ impl EditorPanel {
         // For now, we'll set this to None and initialize it asynchronously
         let lsp_manager = None;
 
+        // Build connection string for loading saved tabs
+        let connection_string = match connection_type {
+            ConnectionType::SQLite => Some("sqlite::memory:".to_string()),
+            ConnectionType::PostgreSQL => {
+                pg_connection_key.as_ref().map(|pg_key| {
+                    format!(
+                        "postgresql://{}{}@{}:{}/{}",
+                        pg_key
+                            .password
+                            .as_ref()
+                            .map(|p| format!(":{}", p))
+                            .unwrap_or_default(),
+                        pg_key.username,
+                        pg_key.host,
+                        pg_key.port,
+                        pg_key.database
+                    )
+                })
+            }
+        };
+
         let query_tab = QueryTab {
             id: tab_id,
             title: title.to_string(),
-            connection_name,
-            connection_type,
-            pg_connection_key,
-            connection_id,
+            connection_string: connection_string.clone().unwrap_or_else(|| "sqlite::memory:".to_string()),
             editor,
             db_id,
-            results_panel: cx.new(|cx| crate::results_panel::ResultsPanel::new(window, cx)),
+            results_panel: cx.new(|cx| crate::results_panel::ResultsPanel::with_connection_string(
+                connection_string.clone(),
+                window,
+                cx
+            )),
             sql_log: cx.new(|cx| SqlLog::new(1000, cx.theme().highlight_theme.clone())), // Maximum 1000 lines in the log
             lsp_manager,
             cached_diagnostics: Arc::new(Mutex::new(Vec::new())),
@@ -1312,11 +1165,12 @@ impl EditorPanel {
 
         // Initialize LSP providers for PostgreSQL tabs
         if let TabType::Query(ref query_tab) = self.tabs.last().unwrap() {
+            let is_postgresql = query_tab.connection_string.starts_with("postgresql:") || query_tab.connection_string.starts_with("postgres:");
             info!(
-                "🔍 Checking LSP initialization for tab with connection_type: {:?}",
-                query_tab.connection_type
+                "🔍 Checking LSP initialization for tab with connection string: {}",
+                query_tab.connection_string
             );
-            if query_tab.connection_type == ConnectionType::PostgreSQL {
+            if is_postgresql {
                 info!(
                     "🚀 Initializing LSP for PostgreSQL tab: {}",
                     query_tab.title
@@ -1341,16 +1195,17 @@ impl EditorPanel {
             tab_index
         );
         if let Some(TabType::Query(query_tab)) = self.tabs.get_mut(tab_index) {
+            let is_postgresql = query_tab.connection_string.starts_with("postgresql:") || query_tab.connection_string.starts_with("postgres:");
             info!(
-                "🔧 Found tab: {}, connection_type: {:?}",
-                query_tab.title, query_tab.connection_type
+                "🔧 Found tab: {}, connection_string: {}",
+                query_tab.title, query_tab.connection_string
             );
-            if query_tab.connection_type == ConnectionType::PostgreSQL {
+            if is_postgresql {
                 info!("🔧 Tab is PostgreSQL, proceeding with LSP initialization");
                 let editor = query_tab.editor.clone();
                 let tab_id = query_tab.id;
-                let pg_connection_key = query_tab.pg_connection_key.clone();
-                let connection_name = query_tab.connection_name.clone();
+                let connection_string = query_tab.connection_string.clone();
+                let connection_name = query_tab.title.clone();
 
                 // Get the file manager reference and tab db_id for the async task
                 let _query_file_manager = self.query_file_manager.clone();
@@ -1361,7 +1216,7 @@ impl EditorPanel {
 
                 // Initialize LSP providers asynchronously using Tokio runtime
                 let lsp_task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
-                    use postgres_lsp::{PostgresLspConfig, PostgresLspManager};
+                    use postgres_lsp::PostgresLspConfig;
 
                     // Get the connection-specific queries directory for LSP workspace
                     let query_file_manager_for_lsp = _query_file_manager.clone();
@@ -1369,54 +1224,32 @@ impl EditorPanel {
                         .queries_directory(&connection_name)
                         .ok();
 
-                    // Create LSP config from actual connection
-                    let config = if let Some(conn_key) = pg_connection_key {
-                        info!("🔍 Creating LSP config - conn_key.username: {}, conn_key.host: {}, conn_key.port: {}, conn_key.database: {}, conn_key.password: {}",
-                            conn_key.username, conn_key.host, conn_key.port, conn_key.database,
-                            if conn_key.password.is_some() { "<present>" } else { "<none>" });
-
-                        let connection_string = if let Some(ref password) = conn_key.password {
-                            let conn_str = format!(
-                                "postgresql://{}:{}@{}:{}/{}",
-                                conn_key.username,
-                                password,
-                                conn_key.host,
-                                conn_key.port,
-                                conn_key.database
-                            );
-                            info!(
-                                "🔍 LSP connection string with password: {}",
-                                conn_str.replace(password, "<hidden>")
-                            );
-                            conn_str
-                        } else {
-                            let conn_str = format!(
-                                "postgresql://{}@{}:{}/{}",
-                                conn_key.username, conn_key.host, conn_key.port, conn_key.database
-                            );
-                            info!("🔍 LSP connection string without password: {}", conn_str);
-                            conn_str
-                        };
-
-                        info!(
-                            "Creating LSP config for connection: {} ({})",
-                            connection_name, connection_string
+                    // Create LSP config from connection string
+                    let config = {
+                        info!("🔍 Creating LSP config from connection string: {}",
+                            if connection_string.contains('@') {
+                                // Mask password in connection string for logging
+                                let parts: Vec<&str> = connection_string.split('@').collect();
+                                if parts.len() >= 2 {
+                                    format!("{}@<hidden>", parts[0])
+                                } else {
+                                    "<invalid format>".to_string()
+                                }
+                            } else {
+                                "<no auth>".to_string()
+                            }
                         );
 
+                        // Create LSP config using connection string
+                        // TODO: Parse connection string to extract individual components
                         PostgresLspConfig::new(
-                            connection_string,
-                            conn_key.host.clone(),
-                            conn_key.port,
-                            conn_key.database.clone(),
-                            conn_key.username.clone(),
+                            connection_string.clone(),
+                            "localhost".to_string(), // TODO: Extract from connection string
+                            5432,                    // TODO: Extract from connection string
+                            "postgres".to_string(),   // TODO: Extract from connection string
+                            "postgres".to_string(),   // TODO: Extract from connection string
                             Some("public".to_string()), // Default schema
                         )
-                    } else {
-                        warn!(
-                            "No connection key available for tab {}, using default config",
-                            tab_id
-                        );
-                        PostgresLspConfig::default()
                     };
 
                     // Create LSP manager
@@ -1494,6 +1327,8 @@ impl EditorPanel {
                               diagnostics.len(), tab_id_for_diagnostics);
                     })).await;
 
+                    // Note: This is temporarily returning the raw PostgresLspManager since the wrapper needs async initialization
+                    // We'll fix this in a future refactoring step
                     Ok::<PostgresLspManager, anyhow::Error>(lsp_manager)
                 });
 
@@ -1505,7 +1340,7 @@ impl EditorPanel {
                             // Store the LSP manager in the query tab and set up LSP providers
                             let _ = editor_panel.update(cx, |panel, cx| {
                                 if let Some(TabType::Query(query_tab)) = panel.tabs.get_mut(tab_index_for_async) {
-                                    query_tab.lsp_manager = Some(lsp_manager.clone());
+                                    query_tab.lsp_manager = Some(Box::new(lsp_manager.clone()) as Box<dyn crate::lsp_manager::LspManager>);
 
                                     // Create and set up LSP providers for the editor
                                     let uri_str = query_tab.uri();
@@ -1548,9 +1383,9 @@ impl EditorPanel {
                                         error!("❌ Failed to parse URI for LSP providers: {}", uri_str);
                                     }
 
-                                    // Send workspace configuration before didOpen
-                                    let pg_connection_key = query_tab.pg_connection_key.clone();
-                                    if let Some(conn_key) = pg_connection_key {
+                                    // Send workspace configuration before didOpen for PostgreSQL
+                                    // Since this is a PostgreSQL tab, we can use the connection string directly
+                                    {
                                         let _lsp_clone = lsp_manager.clone();
                                         let tab_title = query_tab.title.clone();
                                         let uri_str = query_tab.uri();
@@ -1560,26 +1395,17 @@ impl EditorPanel {
                                         let uri_str_for_task = uri_str.clone();
                                         let lsp_for_task = lsp_manager.clone();
                                         let content_for_task = editor_for_content.read(cx).text().to_string();
+                                        let connection_string_for_task = query_tab.connection_string.clone();
 
                                         crate::gpui_tokio::Tokio::spawn_result(cx, async move {
                                             // Create workspace configuration for this tab's connection
-                                            let connection_string = if let Some(ref password) = conn_key.password {
-                                                format!(
-                                                    "postgresql://{}:{}@{}:{}/{}",
-                                                    conn_key.username, password, conn_key.host, conn_key.port, conn_key.database
-                                                )
-                                            } else {
-                                                format!(
-                                                    "postgresql://{}@{}:{}/{}",
-                                                    conn_key.username, conn_key.host, conn_key.port, conn_key.database
-                                                )
-                                            };
+                                            let connection_string = connection_string_for_task.clone(); // Use the connection string directly
 
                                             let workspace_settings = serde_json::json!({
                                                 "postgreslsp": {
                                                     "database": {
                                                         "connectionString": connection_string,
-                                                        "database": conn_key.database,
+                                                        "database": "default", // TODO: Extract from connection string
                                                         "schema": "public"
                                                     },
                                                     "sql": {
@@ -1639,10 +1465,8 @@ impl EditorPanel {
                                                 Err(anyhow::anyhow!("URI parse failed"))
                                             }
                                         }).detach();
-                                    } else {
-                                        error!("No connection key available for workspace configuration");
-                                    }
                                 }
+                            }  // Close the if let Some(TabType::Query(query_tab)) block
                             });
 
                             // Note: Test diagnostics temporarily removed to fix compilation
@@ -1694,6 +1518,7 @@ impl EditorPanel {
     }
 
     /// Initialize LSP providers for a PostgreSQL tab (legacy method for backward compatibility)
+    #[allow(dead_code)]
     fn initialize_lsp_for_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.initialize_lsp_for_tab_at_index(self.active_tab_ix, window, cx);
     }
@@ -1701,7 +1526,8 @@ impl EditorPanel {
     /// Get LSP status for the current tab
     fn get_lsp_status(&self, _cx: &Context<Self>) -> Option<&'static str> {
         if let Some(TabType::Query(query_tab)) = self.tabs.get(self.active_tab_ix) {
-            if query_tab.connection_type == ConnectionType::PostgreSQL {
+            let is_postgresql = query_tab.connection_string.starts_with("postgresql:") || query_tab.connection_string.starts_with("postgres:");
+            if is_postgresql {
                 // For now, return a placeholder status
                 // In the future, this will check the actual LSP manager status
                 Some("LSP Ready")
@@ -1717,29 +1543,24 @@ impl EditorPanel {
     fn save_current_tab_immediate(&mut self, cx: &mut Context<Self>) {
         if let Some(TabType::Query(query_tab)) = self.tabs.get(self.active_tab_ix) {
             let content = query_tab.editor.read(cx).text().to_string();
-            let connection_type = match query_tab.connection_type {
-                ConnectionType::SQLite => Some("SQLite".to_string()),
-                ConnectionType::PostgreSQL => Some("PostgreSQL".to_string()),
+            let connection_type = if query_tab.connection_string.starts_with("sqlite:") {
+                Some("SQLite".to_string())
+            } else if query_tab.connection_string.starts_with("postgresql:") || query_tab.connection_string.starts_with("postgres:") {
+                Some("PostgreSQL".to_string())
+            } else {
+                None
             };
-            let pg_connection_key = query_tab.pg_connection_key.as_ref().map(|key| {
-                if let Some(ref password) = key.password {
-                    format!(
-                        "postgres://{}:{}@{}:{}/{}",
-                        key.username, password, key.host, key.port, key.database
-                    )
-                } else {
-                    format!(
-                        "postgres://{}@{}:{}/{}",
-                        key.username, key.host, key.port, key.database
-                    )
-                }
-            });
+            let pg_connection_key = if connection_type.as_ref().is_some_and(|t| t == "PostgreSQL") {
+                Some(query_tab.connection_string.clone())
+            } else {
+                None
+            };
             let tab_data = QueryTabData {
                 id: query_tab.db_id,
                 title: query_tab.title.clone(),
                 content: content.clone(),
                 position: self.active_tab_ix as i32,
-                connection_id: query_tab.connection_id,
+                connection_id: None, // connection_id removed in unified structure
                 connection_type,
                 pg_connection_key,
                 file_uri: None, // Will be updated after file creation
@@ -1757,7 +1578,7 @@ impl EditorPanel {
             let app_db = db_service.app_db_handle();
             let tab_index = self.active_tab_ix;
             let query_file_manager = self.query_file_manager.clone();
-            let connection_name = query_tab.connection_name.clone();
+            let connection_name = query_tab.title.clone();
 
             let save_task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
                 if let Some(app_db) = app_db.read().await.as_ref() {
@@ -1836,7 +1657,7 @@ impl EditorPanel {
                                 // Set the file URI on the QueryTab
                                 if let Some(file_uri) = panel
                                     .query_file_manager
-                                    .query_file_uri(db_id, &query_tab.connection_name)
+                                    .query_file_uri(db_id, &query_tab.title)
                                     .into()
                                 {
                                     let file_uri_debug = file_uri.clone();
@@ -1880,233 +1701,29 @@ impl EditorPanel {
     pub fn shutdown_lsp_processes(&mut self, cx: &mut Context<Self>) {
         info!("🧹 Shutting down LSP processes...");
 
-        // Collect all LSP managers from PostgreSQL tabs
-        let mut lsp_managers: Vec<PostgresLspManager> = Vec::new();
+        // Shutdown all LSP processes in place
         for tab in &mut self.tabs.iter_mut() {
             if let TabType::Query(query_tab) = tab {
-                if let Some(ref lsp_manager) = query_tab.lsp_manager {
-                    lsp_managers.push(lsp_manager.clone());
+                if let Some(mut lsp_manager) = query_tab.lsp_manager.take() {
+                    crate::gpui_tokio::Tokio::spawn_result(cx, async move {
+                        info!("🔹 Shutting down LSP manager...");
+                        lsp_manager.shutdown().await.map_err(|e| {
+                            error!("Failed to shutdown LSP manager: {}", e);
+                            anyhow::anyhow!("Failed to shutdown LSP manager: {}", e)
+                        })
+                    })
+                    .detach();
                 }
             }
-        }
-
-        // Shutdown all LSP processes
-        for lsp_manager in lsp_managers {
-            crate::gpui_tokio::Tokio::spawn_result(cx, async move {
-                info!("🔹 Shutting down LSP manager...");
-                lsp_manager.shutdown().await.map_err(|e| {
-                    error!("Failed to shutdown LSP manager: {}", e);
-                    anyhow::anyhow!("Failed to shutdown LSP manager: {}", e)
-                })
-            })
-            .detach();
         }
 
         info!("✅ LSP processes shut down successfully");
     }
 
-    /// Execute the current query in the active tab
+    /// Execute the current query in the active tab using unified connection system
     pub fn execute_current_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(TabType::Query(query_tab)) = self.tabs.get_mut(self.active_tab_ix) {
-            // Get text and cursor position from editor
-            let editor = query_tab.editor.read(cx);
-            let full_text = editor.text().to_string();
-            let cursor_pos = editor.cursor();
-
-            let query = Self::extract_current_query(
-                &full_text, cursor_pos,
-                false, // TODO: Detect actual selection state when API is available
-            );
-
-            if query.is_empty() {
-                window.push_notification("No query to execute", cx);
-                return;
-            }
-
-            println!(
-                "Executing query: {} on {}",
-                query, query_tab.connection_name
-            );
-
-            // Log the query to the SQL log
-            let log_message = format!(
-                "Executing query on {}\n{}",
-                query_tab.connection_name, query
-            );
-            query_tab.sql_log.update(cx, |sql_log, cx| {
-                sql_log.append_text(&blanco_ui::SqlLogMessage::SqlStatement(log_message), cx);
-            });
-
-            // Get database service
-            let db_service = DbService::global(cx).clone();
-            let user_db = db_service.user_db_handle();
-            let app_db = db_service.app_db_handle();
-
-            // Track execution timing
-            let start_time = std::time::Instant::now();
-            let executed_at = chrono::Utc::now().timestamp();
-
-            // Clone connection details for the async task
-            let connection_type = query_tab.connection_type.clone();
-            let pg_connection_key = query_tab.pg_connection_key.clone();
-
-            // Execute query using Tokio::spawn_result to ensure tokio context
-            let db_task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
-                let query_result = match connection_type {
-                    ConnectionType::SQLite => {
-                        // Use auto-connect functionality - no manual connection check needed
-                        let mut db = user_db.write().await;
-                        db.execute_query_with_auto_connect(&query, "blanco.db") // Default SQLite path
-                            .await
-                            .map_err(|e| anyhow::anyhow!("{}", e))
-                    }
-                    ConnectionType::PostgreSQL => {
-                        if let Some(pg_key) = pg_connection_key {
-                            // Get or create PostgreSQL connection
-                            let connection_string = if let Some(ref password) = pg_key.password {
-                                format!(
-                                    "postgresql://{}:{}@{}:{}/{}",
-                                    pg_key.username,
-                                    password,
-                                    pg_key.host,
-                                    pg_key.port,
-                                    pg_key.database
-                                )
-                            } else {
-                                format!(
-                                    "postgresql://{}@{}:{}/{}",
-                                    pg_key.username, pg_key.host, pg_key.port, pg_key.database
-                                )
-                            };
-
-                            // Use enhanced auto-connect functionality
-                            match db_service.ensure_pg_connection(&connection_string).await {
-                                Ok(pg_manager) => pg_manager
-                                    .execute_query_async(&query)
-                                    .await
-                                    .map_err(|e| anyhow::anyhow!("{}", e)),
-                                Err(e) => {
-                                    Err(anyhow::anyhow!("Failed to connect to PostgreSQL: {}", e))
-                                }
-                            }
-                        } else {
-                            Err(anyhow::anyhow!("PostgreSQL connection key not found"))
-                        }
-                    }
-                };
-
-                let duration_ms = start_time.elapsed().as_millis() as i64;
-
-                match query_result {
-                    Ok(mut result) => {
-                        println!("Query executed successfully: {} rows", result.row_count());
-
-                        // Add execution metadata
-                        result.query_text = Some(query.clone());
-                        result.execution_time_ms = Some(duration_ms);
-                        result.is_error = false;
-
-                        // Save to query history
-                        if let Some(app_db) = app_db.read().await.as_ref() {
-                            let history = QueryHistoryData {
-                                id: None,
-                                query_text: query.clone(),
-                                executed_at,
-                                duration_ms: Some(duration_ms),
-                                rows_affected: Some(result.rows_affected as i64),
-                                row_count: Some(result.row_count() as i64),
-                                success: true,
-                                error_message: None,
-                            };
-
-                            if let Err(e) = app_db.save_query_history(&history).await {
-                                eprintln!("Failed to save query history: {}", e);
-                            }
-                        }
-
-                        Ok(result)
-                    }
-                    Err(e) => {
-                        let error_msg = e.to_string();
-                        eprintln!("Query execution failed: {}", error_msg);
-
-                        // Save error to query history
-                        if let Some(app_db) = app_db.read().await.as_ref() {
-                            let history = QueryHistoryData {
-                                id: None,
-                                query_text: query.clone(),
-                                executed_at,
-                                duration_ms: Some(duration_ms),
-                                rows_affected: None,
-                                row_count: None,
-                                success: false,
-                                error_message: Some(error_msg.clone()),
-                            };
-
-                            if let Err(e) = app_db.save_query_history(&history).await {
-                                eprintln!("Failed to save query history: {}", e);
-                            }
-                        }
-
-                        // Return error as a result
-                        Ok(QueryResult {
-                            columns: vec!["Error".to_string()],
-                            column_types: vec!["TEXT".to_string()],
-                            rows: vec![vec![error_msg.clone()]],
-                            rows_affected: 0,
-                            query_text: Some(query.clone()),
-                            execution_time_ms: Some(duration_ms),
-                            is_error: true,
-                        })
-                    }
-                }
-            });
-
-            // Get the results panel for this tab
-            let results_panel = query_tab.results_panel.clone();
-            let sql_log = query_tab.sql_log.clone();
-
-            // Update results panel when the task completes
-            cx.spawn(async move |_editor_panel, cx| {
-                    let duration_ms = start_time.elapsed().as_millis() as i64;
-
-                    match db_task.await {
-                        Ok(result) => {
-                            // Log successful result
-                            let result_message = format!(
-                                "Query executed successfully in {}ms\n-- {} rows returned, {} rows affected",
-                                duration_ms,
-                                result.row_count(),
-                                result.rows_affected
-                            );
-                            let _ = sql_log.update(cx, |sql_log, cx| {
-                                sql_log.append_text(&blanco_ui::SqlLogMessage::Comment(result_message), cx);
-                            });
-
-                            let _ = results_panel.update(cx, |panel, cx| {
-                                panel.set_query_result(result, cx);
-                            });
-                        }
-                        Err(e) => {
-                            let error_msg = e.to_string();
-
-                            // Log query error
-                            let error_log_message = format!(
-                                "Query execution failed in {}ms\nError: {}",
-                                duration_ms,
-                                error_msg
-                            );
-                            let _ = sql_log.update(cx, |sql_log, cx| {
-                                sql_log.append_text(&blanco_ui::SqlLogMessage::Comment(error_log_message), cx);
-                            });
-                        }
-                    }
-                })
-                .detach();
-
-            // Show notification
-            window.push_notification("Query executed", cx);
-        }
+        // Use the unified query execution method without requiring ClickEvent
+        self.run_query_no_event(window, cx);
     }
 
     /// Commit current changes in the active tab's results panel
@@ -2152,6 +1769,7 @@ impl EventEmitter<EditorPanelEvent> for EditorPanel {}
 
 impl EditorPanel {
     // Split pane resize handling methods
+    #[allow(dead_code)]
     fn start_split_drag(
         &mut self,
         split_type: SplitType,
@@ -2163,6 +1781,7 @@ impl EditorPanel {
         cx.notify();
     }
 
+    #[allow(dead_code)]
     fn handle_split_drag(
         &mut self,
         current_position: Point<f32>,
@@ -2191,6 +1810,7 @@ impl EditorPanel {
         }
     }
 
+    #[allow(dead_code)]
     fn end_split_drag(&mut self, cx: &mut Context<Self>) {
         self.dragging_split = None;
         self.drag_start_position = None;
@@ -2198,6 +1818,7 @@ impl EditorPanel {
     }
 
     // Helper method to create a resize handle (visual only for now)
+    #[allow(dead_code)]
     fn resize_handle(&self, _split_type: SplitType, cx: &mut Context<Self>) -> impl IntoElement {
         div().h_1().w_full().bg(cx.theme().border)
     }
@@ -2251,7 +1872,7 @@ impl Render for EditorPanel {
                                                 div()
                                                     .text_xs()
                                                     .text_color(cx.theme().muted_foreground)
-                                                    .child(query_tab.connection_name.clone())
+                                                    .child(query_tab.title.clone())
                                             )
                                             .when(show_close_button, |this| {
                                                 this.child(
@@ -2378,7 +1999,7 @@ impl Render for EditorPanel {
                                                     .icon(IconName::Check)
                                                     .label("Run Current")
                                                     .children(vec![Kbd::new(Keystroke::parse("shift-enter").unwrap()).into_any_element()])
-                                                    .on_click(cx.listener(Self::run_query)),
+                                                    .on_click(cx.listener(Self::run_query_unified)),
                                             )
                                 )
                                 // Results section with split view (Results on top, SQL Log below)

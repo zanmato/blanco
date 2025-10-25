@@ -68,7 +68,7 @@ impl PostgresManager {
         &self,
         sql_template: &str,
         parameters: &[String],
-    ) -> Result<crate::database::QueryResult, anyhow::Error> {
+    ) -> Result<crate::connection_trait::QueryResult, anyhow::Error> {
         let pool = self
             .pool
             .as_ref()
@@ -86,7 +86,7 @@ impl PostgresManager {
         match query.fetch_all(pool).await {
             Ok(rows) => {
                 if rows.is_empty() {
-                    return Ok(crate::database::QueryResult {
+                    return Ok(crate::connection_trait::QueryResult {
                         columns: vec![],
                         column_types: vec![],
                         rows: vec![],
@@ -256,7 +256,7 @@ impl PostgresManager {
                     })
                     .collect();
 
-                Ok(crate::database::QueryResult {
+                Ok(crate::connection_trait::QueryResult {
                     columns,
                     column_types,
                     rows: data_rows,
@@ -274,7 +274,7 @@ impl PostgresManager {
                 }
 
                 let result = query.execute(pool).await?;
-                Ok(crate::database::QueryResult {
+                Ok(crate::connection_trait::QueryResult {
                     columns: vec![],
                     column_types: vec![],
                     rows: vec![],
@@ -357,7 +357,7 @@ impl PostgresManager {
     pub async fn execute_query_async(
         &self,
         query: &str,
-    ) -> Result<crate::database::QueryResult, anyhow::Error> {
+    ) -> Result<crate::connection_trait::QueryResult, anyhow::Error> {
         let pool = self
             .pool
             .as_ref()
@@ -367,7 +367,7 @@ impl PostgresManager {
         match sqlx::query(query).fetch_all(pool).await {
             Ok(rows) => {
                 if rows.is_empty() {
-                    return Ok(crate::database::QueryResult {
+                    return Ok(crate::connection_trait::QueryResult {
                         columns: vec![],
                         column_types: vec![],
                         rows: vec![],
@@ -537,7 +537,7 @@ impl PostgresManager {
                     })
                     .collect();
 
-                Ok(crate::database::QueryResult {
+                Ok(crate::connection_trait::QueryResult {
                     columns,
                     column_types,
                     rows: data_rows,
@@ -550,7 +550,7 @@ impl PostgresManager {
             Err(_e) => {
                 // If it's not a SELECT query, try executing it as a statement
                 let result = sqlx::query(query).execute(pool).await?;
-                Ok(crate::database::QueryResult {
+                Ok(crate::connection_trait::QueryResult {
                     columns: vec![],
                     column_types: vec![],
                     rows: vec![],
@@ -593,6 +593,7 @@ impl SchemaNode {
 mod tests {
     use super::*;
     use crate::db_service::DbService;
+    use anyhow;
 
     #[tokio::test]
     async fn test_postgres_connection() {
@@ -671,26 +672,25 @@ mod tests {
 
         let db_service = DbService::new();
 
-        match db_service
-            .get_or_create_pg_connection(&connection_string)
-            .await
+        let unified_manager = db_service.unified_manager().await;
+        match unified_manager.read().await.get_or_create_connection(&connection_string).await
         {
-            Ok(pg_manager) => {
+            Ok(_) => {
                 println!("✅ DbService integration successful");
 
-                // Test query through DbService
-                match pg_manager
-                    .execute_query_async(
-                        "SELECT COUNT(*) as count FROM pg_tables WHERE schemaname = 'public'",
-                    )
-                    .await
+                // Test query through unified connection manager
+                let connection = unified_manager.read().await.get_connection(&connection_string)
+                    .ok_or_else(|| anyhow::anyhow!("Connection not found"))?;
+                match connection.execute_query(
+                    "SELECT COUNT(*) as count FROM pg_tables WHERE schemaname = 'public'",
+                ).await
                 {
                     Ok(result) => {
                         assert!(!result.rows.is_empty(), "Should have result rows");
-                        println!("✅ DbService query successful");
+                        println!("✅ Unified connection manager query successful");
                     }
                     Err(e) => {
-                        println!("❌ DbService query failed: {}", e);
+                        println!("❌ Unified connection manager query failed: {}", e);
                     }
                 }
             }

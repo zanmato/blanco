@@ -25,8 +25,7 @@ impl SqlTableExtractor {
             }
         }
 
-        // Fallback to simple regex-based parsing for edge cases
-        self.extract_with_regex(sql)
+        Err(anyhow!("Could not extract table name from query"))
     }
 
     /// Extract table name from parsed statement
@@ -98,80 +97,6 @@ impl SqlTableExtractor {
                     .or_else(|| self.extract_from_table_reference(right))
             }
         }
-    }
-
-    /// Fallback regex-based parser for edge cases
-    fn extract_with_regex(&self, sql: &str) -> Result<String> {
-        let query_lower = sql.to_lowercase();
-        let query_lower = query_lower.trim();
-
-        // Handle SELECT queries
-        if query_lower.starts_with("select") {
-            if let Some(from_pos) = query_lower.find("from") {
-                let after_from = &sql[from_pos + 4..];
-                let table_part = after_from
-                    .split_whitespace()
-                    .next()
-                    .ok_or_else(|| anyhow!("No table name found in query"))?;
-
-                // Clean up table name
-                let mut table_name = table_part
-                    .trim_matches(|c| c == '"' || c == '\'' || c == '`' || c == ';')
-                    .to_string();
-
-                // Handle database.schema.table format
-                if let Some(dot_pos) = table_name.rfind('.') {
-                    table_name = table_name[dot_pos + 1..].to_string();
-                }
-
-                return Ok(table_name);
-            }
-        }
-
-        // Handle INSERT queries
-        if query_lower.starts_with("insert") {
-            if let Some(into_pos) = query_lower.find("into") {
-                let after_into = &sql[into_pos + 4..];
-                let table_part = after_into
-                    .split_whitespace()
-                    .next()
-                    .ok_or_else(|| anyhow!("No table name found after INTO"))?;
-                let table_name = table_part
-                    .trim_matches(|c| c == '"' || c == '\'' || c == '`' || c == ';')
-                    .to_string();
-                return Ok(table_name);
-            }
-        }
-
-        // Handle UPDATE queries
-        if query_lower.starts_with("update") {
-            let after_update = &sql[6..];
-            let table_part = after_update
-                .split_whitespace()
-                .next()
-                .ok_or_else(|| anyhow!("No table name found after UPDATE"))?;
-            let table_name = table_part
-                .trim_matches(|c| c == '"' || c == '\'' || c == '`' || c == ';')
-                .to_string();
-            return Ok(table_name);
-        }
-
-        // Handle DELETE queries
-        if query_lower.starts_with("delete") {
-            if let Some(from_pos) = query_lower.find("from") {
-                let after_from = &sql[from_pos + 4..];
-                let table_part = after_from
-                    .split_whitespace()
-                    .next()
-                    .ok_or_else(|| anyhow!("No table name found in query"))?;
-                let table_name = table_part
-                    .trim_matches(|c| c == '"' || c == '\'' || c == '`' || c == ';')
-                    .to_string();
-                return Ok(table_name);
-            }
-        }
-
-        Err(anyhow!("Could not extract table name from query"))
     }
 }
 

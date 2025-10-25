@@ -1,5 +1,5 @@
 use gpui::{TestAppContext, Window, WindowOptions};
-use crate::database::QueryResult;
+use crate::connection_trait::QueryResult;
 use crate::results_panel::{ResultsPanel, CellEditState, ResultsTableDelegate};
 use crate::sql_parser::SqlTableExtractor;
 
