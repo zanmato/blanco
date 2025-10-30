@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::ops::Range;
 
+use async_std::channel;
+
 use gpui::prelude::FluentBuilder;
 use gpui::{
     div, px, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
@@ -15,10 +17,12 @@ use gpui_component::{
 };
 
 use crate::app_events::AppEvent;
-use crate::async_pipeline::{AsyncEvent, TaskPriority};
+use crate::async_pipeline::{AsyncEvent, TaskPriority, TableOperationResponse};
 use blanco_core::table_operations::{OperationType, RowIdentifier, TableChangeOperation};
 use blanco_core::ColumnChange;
 use blanco_core::QueryResult;
+use blanco_core::Connection;
+use crate::db_service::DbService;
 
 #[derive(Clone, Debug)]
 pub struct TableChange {
@@ -394,6 +398,13 @@ impl ResultsTableDelegate {
         self.connection_string = Some(connection_string);
     }
 
+    /// Set the table name for the current query result
+    pub fn set_table_name(&mut self, table_name: String) {
+        log::info!("Setting table name to: {}", table_name);
+        self.table_name = Some(table_name);
+    }
+
+    
     /// Convert table changes to database-agnostic TableChangeOperations
     pub fn create_change_operations(
         &self,
@@ -540,40 +551,41 @@ impl ResultsTableDelegate {
 
         self.rows = result.rows;
 
-        // Try to extract table name from query text using robust SQL parser
-        if let Some(query) = &result.query_text {
-            let old_table_name = self.table_name.clone();
-            self.table_name = self.extract_table_name_from_query(query);
+        // Use table metadata from QueryResult if available
+        let old_table_name = self.table_name.clone();
+        self.table_name = result.table_name.clone();
 
-            // Debug logging for table name extraction
-            match (&old_table_name, &self.table_name) {
-                (Some(old), Some(new)) => {
-                    if old != new {
-                        log::info!("Table name changed from '{}' to '{}'", old, new);
-                    } else {
-                        log::debug!("Table name unchanged: '{}'", new);
-                    }
+        // Debug logging for table name extraction
+        match (&old_table_name, &self.table_name) {
+            (Some(old), Some(new)) => {
+                if old != new {
+                    log::info!("Table name changed from '{}' to '{}'", old, new);
+                } else {
+                    log::debug!("Table name unchanged: '{}'", new);
                 }
-                (None, Some(new)) => {
-                    log::info!("Table name extracted: '{}' (was None before)", new);
-                }
-                (Some(old), None) => {
-                    log::warn!(
-                        "Table name lost: '{}' (was extracted before, now None)",
-                        old
-                    );
-                }
-                (None, None) => {
-                    log::warn!("Failed to extract table name from query: {}", query);
+            }
+            (None, Some(new)) => {
+                log::info!("Table name extracted from metadata: '{}'", new);
+            }
+            (Some(old), None) => {
+                log::warn!("Table name lost: '{}' (was extracted before, now None)", old);
+            }
+            (None, None) => {
+                if result.query_text.is_some() {
+                    log::warn!("Failed to extract table name from query metadata");
                 }
             }
         }
 
-        // Detect primary key using simple heuristic
-        if let Some(table_name) = &self.table_name {
-            self.primary_key_column = self.detect_primary_key_simple(table_name);
+        // Use primary key from QueryResult if available, otherwise fall back to heuristic
+        let old_pk = self.primary_key_column.clone();
+        self.primary_key_column = result.primary_key_column.clone()
+            .or_else(|| {
+                self.table_name.as_ref().and_then(|table_name| self.detect_primary_key_simple(table_name))
+            });
 
-            // Debug: Log table setup details
+        // Debug: Log table setup details
+        if let Some(table_name) = &self.table_name {
             log::info!(
                 "Table setup complete - name: '{}', pk_column: {:?}, columns: {}, rows: {}",
                 table_name,
@@ -582,13 +594,39 @@ impl ResultsTableDelegate {
                 self.rows.len()
             );
 
-            // Additional debug: Log column names for primary key detection
+            // Log primary key detection results
+            match (&old_pk, &self.primary_key_column) {
+                (Some(old), Some(new)) => {
+                    if old != new {
+                        log::info!("Primary key changed from '{}' to '{}'", old, new);
+                    } else {
+                        log::debug!("Primary key unchanged: '{}'", new);
+                    }
+                }
+                (None, Some(new)) => {
+                    if result.primary_key_column.is_some() {
+                        log::info!("Primary key from metadata: '{}'", new);
+                    } else {
+                        log::info!("Primary key detected by heuristic: '{}'", new);
+                    }
+                }
+                (Some(old), None) => {
+                    log::info!("Primary key cleared: '{}' (was Some before)", old);
+                }
+                (None, None) => {
+                    log::debug!("Primary key remains None");
+                }
+            }
+        }
+
+        // Additional debug: Log column names for primary key detection
+        if let Some(table_name) = &self.table_name {
             let column_names: Vec<String> = self
                 .columns
                 .iter()
                 .map(|col| col.name.to_string())
                 .collect();
-            log::debug!("Available columns: {:?}", column_names);
+            log::debug!("Available columns for table '{}': {:?}", table_name, column_names);
         } else {
             log::warn!("No table name could be extracted - table will not be editable");
         }
@@ -604,12 +642,13 @@ impl ResultsTableDelegate {
         &mut self,
         table_name: String,
         connection_string: &str,
+        cx: &App,
     ) -> Result<(), anyhow::Error> {
         self.table_name = Some(table_name.clone());
         self.connection_string = Some(connection_string.to_string());
 
         // Create a temporary connection to detect primary key
-        let db_service = crate::db_service::DbService::new();
+        let db_service = DbService::global(cx).clone();
         if let Ok(connection) = db_service
             .get_or_create_unified_connection(connection_string)
             .await
@@ -651,10 +690,16 @@ impl ResultsTableDelegate {
     }
 
     fn extract_table_name_from_query(&self, query: &str) -> Option<String> {
-        // TODO: Use the connection trait to parse SQL and extract table name
-        // This method should be called with access to a connection to use its SQL parser
-        log::warn!("Table name extraction not yet implemented - needs connection access");
-        None
+        // Use the connection string to get a connection for SQL parsing
+        if let Some(connection_string) = &self.connection_string {
+            // This is a synchronous method, so we can't await the connection
+            // For now, fall back to a warning until we can make this async
+            log::warn!("Table name extraction requires async connection access - connection string available: {}", connection_string);
+            None
+        } else {
+            log::warn!("No connection string available for table name extraction");
+            None
+        }
     }
 
     pub fn start_editing_cell(&mut self, row: usize, col: usize) {
@@ -1028,7 +1073,14 @@ impl ResultsPanel {
         format!("\"{}\"", identifier.replace('"', "\"\""))
     }
 
-    pub fn set_query_result(&mut self, result: QueryResult, cx: &mut Context<Self>) {
+    pub fn set_query_result(&mut self, result: QueryResult, connection_string: Option<String>, cx: &mut Context<Self>) {
+        // Set connection string on the delegate for table extraction
+        if let Some(conn_str) = connection_string {
+            self.table.update(cx, |table, _cx| {
+                table.delegate_mut().set_connection_string(conn_str);
+            });
+        }
+
         self.table.update(cx, |table, cx| {
             table.delegate_mut().set_query_result(result.clone());
             table.refresh(cx);
@@ -1039,22 +1091,7 @@ impl ResultsPanel {
         self.editing_input = None;
         self.editing_cell = None;
 
-        // If we have results and the delegate has a connection string, detect primary key
-        if !result.rows.is_empty() {
-            let connection_string = self.table.read(cx).delegate().connection_string.clone();
-            if let Some(_conn_str) = connection_string {
-                let table_name = self.table.read(cx).delegate().table_name.clone();
-                if let Some(table_name) = table_name {
-                    // Async primary key detection temporarily disabled due to borrowing issues
-                    // The fallback heuristic method will be used instead
-                    log::info!(
-                        "Using heuristic primary key detection for table: {}",
-                        table_name
-                    );
-                }
-            }
-        }
-
+        
         cx.notify();
     }
 
@@ -1596,11 +1633,15 @@ impl ResultsPanel {
         let connection_string_for_pipeline = connection_string.clone();
         let connection_string_for_event = connection_string.clone();
 
+        // Create response channel for table operations
+        let (response_tx, response_rx) = async_std::channel::bounded(1);
+
         // Send the table operations to the async pipeline
         let async_event_sender = cx.global::<crate::async_pipeline::AsyncEventSender>();
         match async_event_sender.try_send(AsyncEvent::ExecuteTableOperations {
             connection_string: connection_string_for_pipeline.clone(),
             operations: change_operations_for_pipeline.clone(),
+            response_tx,
             priority: TaskPriority::High,
         }) {
             Ok(_) => {
@@ -1635,13 +1676,89 @@ impl ResultsPanel {
 
                     // Log summary
                     let summary = format!(
-                        "Sent {} table operations to async pipeline\n-- Response handling will be implemented",
+                        "Sent {} table operations to async pipeline",
                         change_operations_for_logging.len()
                     );
                     sql_log.update(cx, |log, cx| {
                         log.append_text(&blanco_ui::SqlLogMessage::Comment(summary), cx);
                     });
-                }
+
+                // Spawn async task to handle the response
+                let table_entity = self.table.clone();
+                let sql_log_entity: Entity<blanco_ui::SqlLog> = sql_log.clone();
+                cx.spawn(async move |entity, cx| {
+                    match response_rx.recv().await {
+                        Ok(response) => {
+                            log::info!("Received table operation response: success={}, rows_affected={:?}",
+                                response.success, response.rows_affected);
+
+                            // Handle successful operations
+                            if response.success {
+                                // Clear edits and refresh the table
+                                let _ = entity.update(cx, |panel, cx| {
+                                    panel.table.update(cx, |table, cx| {
+                                        table.delegate_mut().edit_state.clear_edits();
+                                        table.refresh(cx);
+                                    });
+
+                                    // Update SQL log with success message
+                                    sql_log_entity.update(cx, |log, cx| {
+                                        let success_msg = format!(
+                                            "✓ Table operations completed successfully\n-- {} operations executed, {} rows affected",
+                                            response.operations_executed,
+                                            response.rows_affected.unwrap_or(0)
+                                        );
+                                        log.append_text(&blanco_ui::SqlLogMessage::Comment(success_msg), cx);
+                                    });
+                                });
+
+                                // Emit table operation completed event
+                                let _ = entity.update(cx, |_, cx| {
+                                    cx.emit(AppEvent::TableOperationCompleted {
+                                        table_name: response.table_name,
+                                        connection_id: response.connection_string,
+                                        success: true,
+                                        rows_affected: response.rows_affected,
+                                        error_message: None,
+                                        operations_executed: response.operations_executed,
+                                    });
+                                });
+                            } else {
+                                // Handle failed operations - show error but keep edits for retry
+                                let error_message_clone = response.error_message.clone();
+                                sql_log_entity.update(cx, |log, cx| {
+                                    let error_msg = format!(
+                                        "✗ Table operations failed: {}",
+                                        error_message_clone.unwrap_or_else(|| "Unknown error".to_string())
+                                    );
+                                    log.append_text(&blanco_ui::SqlLogMessage::Comment(error_msg), cx);
+                                });
+
+                                // Emit table operation completed event with failure
+                                let _ = entity.update(cx, |_, cx| {
+                                    cx.emit(AppEvent::TableOperationCompleted {
+                                        table_name: response.table_name,
+                                        connection_id: response.connection_string,
+                                        success: false,
+                                        rows_affected: None,
+                                        error_message: response.error_message,
+                                        operations_executed: response.operations_executed,
+                                    });
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("Failed to receive table operation response: {}", e);
+
+                            // Update SQL log with error
+                            sql_log_entity.update(cx, |log, cx| {
+                                let error_msg = format!("✗ Failed to get operation response: {}", e);
+                                log.append_text(&blanco_ui::SqlLogMessage::Comment(error_msg), cx);
+                            });
+                        }
+                    }
+                }).detach();
+                } // Close the if let Some(sql_log) block
             }
             Err(e) => {
                 log::error!(
@@ -2057,19 +2174,6 @@ impl Render for ResultsPanel {
                                     ),
                                 ))
                             })
-                            // Query text (truncated)
-                            .when_some(result.query_text.as_ref(), |this, query| {
-                                let truncated = if query.len() > 60 {
-                                    format!("{}...", &query[..60].trim())
-                                } else {
-                                    query.clone()
-                                };
-                                this.child(
-                                    div()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(truncated.replace("\n", " ")),
-                                )
-                            })
                             // Spacer
                             .child(div().flex_1())
                             // Unsaved changes indicator
@@ -2164,6 +2268,9 @@ mod tests {
             execution_time_ms: Some(50),
             is_error: false,
             rows_affected: 2,
+            table_name: Some("users".to_string()),
+            primary_key_column: Some("id".to_string()),
+            connection_string: Some("sqlite://test.db".to_string()),
         };
 
         assert_eq!(test_result.columns.len(), 2);

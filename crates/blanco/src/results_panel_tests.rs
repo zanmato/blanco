@@ -60,7 +60,7 @@ fn test_results_panel_set_query_result(cx: &mut TestAppContext) {
     
     // Set the query result
     panel.update(cx, |panel, cx| {
-        panel.set_query_result(test_result.clone(), cx);
+        panel.set_query_result(test_result.clone(), None, cx);
     });
     
     // Verify the result was set
@@ -85,7 +85,7 @@ fn test_results_panel_add_row(cx: &mut TestAppContext) {
     };
     
     panel.update(cx, |panel, cx| {
-        panel.set_query_result(test_result, cx);
+        panel.set_query_result(test_result, None, cx);
     });
     
     // Add a new row
@@ -119,7 +119,7 @@ fn test_results_panel_duplicate_row(cx: &mut TestAppContext) {
     };
     
     panel.update(cx, |panel, cx| {
-        panel.set_query_result(test_result, cx);
+        panel.set_query_result(test_result, None, cx);
     });
     
     // Duplicate the first row
@@ -157,7 +157,7 @@ fn test_results_panel_cell_editing(cx: &mut TestAppContext) {
     };
     
     panel.update(cx, |panel, cx| {
-        panel.set_query_result(test_result, cx);
+        panel.set_query_result(test_result, None, cx);
     });
     
     // Start editing a cell

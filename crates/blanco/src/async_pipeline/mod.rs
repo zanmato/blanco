@@ -46,6 +46,7 @@ pub enum AsyncEvent {
     ExecuteTableOperations {
         connection_string: String,
         operations: Vec<TableChangeOperation>,
+        response_tx: async_std::channel::Sender<TableOperationResponse>,
         priority: TaskPriority,
     },
 
@@ -89,6 +90,17 @@ pub struct TableOperationResult {
     pub operations_executed: usize,
     pub execution_time: Duration,
     pub errors: Vec<String>,
+}
+
+/// Response for table operations that includes all necessary information for UI handling
+#[derive(Debug, Clone)]
+pub struct TableOperationResponse {
+    pub table_name: String,
+    pub connection_string: String,
+    pub success: bool,
+    pub rows_affected: Option<u64>,
+    pub error_message: Option<String>,
+    pub operations_executed: usize,
 }
 
 /// Connection health information
@@ -373,12 +385,14 @@ impl AsyncEventProcessor {
                 Self::update_performance_metrics(&connection_string, execution_time, performance_metrics).await;
             }
 
-            AsyncEvent::ExecuteTableOperations { connection_string, operations, .. } => {
+            AsyncEvent::ExecuteTableOperations { connection_string, operations, response_tx, .. } => {
                 let result = Self::execute_table_operations(&connection_string, operations.clone(), db_service).await;
-                let _execution_time = start_time.elapsed();
+                let execution_time = start_time.elapsed();
 
-                // Use generic table name since TableChangeOperation doesn't include table info
-                let table_name = "table".to_string();
+                // Extract table name from operations (all operations should be for the same table)
+                let table_name = operations.first()
+                    .map(|op| op.table_name.clone())
+                    .unwrap_or_else(|| "table".to_string());
 
                 let (success, rows_affected, error_message, operations_executed) = match &result {
                     Ok(operation_result) => (
@@ -395,7 +409,20 @@ impl AsyncEventProcessor {
                     )
                 };
 
-                // TODO: Re-enable table operation events when we have a proper global event system
+                // Send response back to caller
+                let response = TableOperationResponse {
+                    table_name: table_name.clone(),
+                    connection_string: connection_string.clone(),
+                    success,
+                    rows_affected,
+                    error_message,
+                    operations_executed,
+                };
+
+                if let Err(e) = response_tx.send(response).await {
+                    log::error!("Failed to send table operation response: {}", e);
+                }
+
                 log::info!("Table operations completed: success={}, operations_executed={}", success, operations_executed);
             }
 

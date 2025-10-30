@@ -7,6 +7,7 @@ use blanco_core::{
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use sqlx::{Column, ConnectOptions, Row, TypeInfo};
 use std::str::FromStr;
+use crate::sql_parser::SqliteTableExtractor;
 
 /// SQLite connection implementation of the Connection trait
 /// This uses SQLX directly to provide a unified interface
@@ -143,6 +144,9 @@ impl SqliteConnection {
                         query_text: None,
                         execution_time_ms: None,
                         is_error: false,
+                        table_name: None,
+                        primary_key_column: None,
+                        connection_string: None,
                     });
                 }
 
@@ -196,6 +200,9 @@ impl SqliteConnection {
                     query_text: None,
                     execution_time_ms: None,
                     is_error: false,
+                    table_name: None,
+                    primary_key_column: None,
+                    connection_string: None,
                 })
             }
             Err(_e) => {
@@ -209,6 +216,9 @@ impl SqliteConnection {
                     query_text: None,
                     execution_time_ms: None,
                     is_error: false,
+                    table_name: None,
+                    primary_key_column: None,
+                    connection_string: None,
                 })
             }
         }
@@ -406,6 +416,9 @@ impl Connection for SqliteConnection {
                         query_text: Some(sql_template.to_string()),
                         execution_time_ms: None,
                         is_error: false,
+                        table_name: None,
+                        primary_key_column: None,
+                        connection_string: None,
                     });
                 }
 
@@ -459,6 +472,9 @@ impl Connection for SqliteConnection {
                     query_text: Some(sql_template.to_string()),
                     execution_time_ms: None,
                     is_error: false,
+                    table_name: None,
+                    primary_key_column: None,
+                    connection_string: None,
                 })
             }
             Err(_e) => {
@@ -477,6 +493,9 @@ impl Connection for SqliteConnection {
                     query_text: Some(sql_template.to_string()),
                     execution_time_ms: None,
                     is_error: false,
+                    table_name: None,
+                    primary_key_column: None,
+                    connection_string: None,
                 })
             }
         }
@@ -665,6 +684,22 @@ impl Connection for SqliteConnection {
             file_safe_name: self.get_file_safe_name(),
             supports_schemas: self.supports_schemas(),
             icon_name: self.get_icon_name(),
+        }
+    }
+
+    fn extract_table_name_from_query(&self, query: &str) -> Result<Option<String>> {
+        log::debug!("Extracting table name from SQLite query: {}", query);
+
+        let extractor = SqliteTableExtractor::new();
+        match extractor.extract_primary_table(query) {
+            Ok(table_name) => {
+                log::debug!("Successfully extracted table name: {}", table_name);
+                Ok(Some(table_name))
+            }
+            Err(e) => {
+                log::debug!("Could not extract table name from query: {}", e);
+                Ok(None)
+            }
         }
     }
 }

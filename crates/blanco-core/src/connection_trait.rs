@@ -42,6 +42,12 @@ pub struct QueryResult {
     pub query_text: Option<String>,
     pub execution_time_ms: Option<i64>,
     pub is_error: bool,
+    /// Table metadata extracted from the query (if applicable)
+    pub table_name: Option<String>,
+    /// Primary key column detected for the table (if applicable)
+    pub primary_key_column: Option<String>,
+    /// Connection string used for this query (for subsequent operations)
+    pub connection_string: Option<String>,
 }
 
 /// Information about a database column
@@ -193,6 +199,10 @@ pub trait Connection: Send + Sync + fmt::Debug {
         table_name: &str,
         schema: Option<&str>,
     ) -> Result<TableMetadata, anyhow::Error>;
+
+    /// Extract the primary table name from a SQL query
+    /// Returns None if no table can be extracted (e.g., for complex queries or parsing errors)
+    fn extract_table_name_from_query(&self, query: &str) -> Result<Option<String>, anyhow::Error>;
 
     /// Execute table change operations in a database-agnostic way
     /// Takes a list of change operations and executes them with proper SQL generation

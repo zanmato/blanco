@@ -168,6 +168,19 @@ impl BlancoApp {
                     // Could update status or refresh data
                     log::info!("Query execution completed");
                 }
+                AppEvent::TableOperationCompleted { table_name, success, rows_affected, operations_executed, .. } => {
+                    if *success {
+                        log::info!(
+                            "Table operations completed successfully on '{}': {} operations, {} rows affected",
+                            table_name, operations_executed, rows_affected.unwrap_or(0)
+                        );
+                    } else {
+                        log::info!(
+                            "Table operations failed on '{}': {} operations attempted",
+                            table_name, operations_executed
+                        );
+                    }
+                }
                 _ => {}
             }
         });

@@ -53,17 +53,9 @@ pub struct QueryTab {
     pub sql_log: Entity<SqlLog>, // SQL log for this tab
     #[allow(dead_code)]
     pub cached_diagnostics: Arc<Mutex<Vec<Diagnostic>>>, // Store diagnostics for this tab
-    pub document_version: i32, // Document version for tracking changes
     pub file_uri: Option<String>, // File URI for integration
-    // SQL completion state
-    pub completion_engine: Option<crate::sql_completion::SqlCompletionEngine>,
-    pub completion_popup_manager: crate::sql_completion_popup::CompletionPopupManager,
-    pub last_completion_position: Option<crate::sql_completion::Position>,
-    pub completion_popup_visible: bool,
-    pub last_hover_position: Option<crate::sql_completion::Position>,
     pub current_completions: Option<crate::sql_completion::CompletionResult>,
     pub selected_completion_index: usize,
-    pub is_initialized: bool, // Flag to prevent completion during content restoration
 }
 
 impl QueryTab {
@@ -144,226 +136,6 @@ impl QueryTab {
         } else {
             false
         }
-    }
-
-    /// Initialize SQL completion engine if connection is available
-    pub async fn initialize_completion_engine(&mut self, cx: &mut gpui::App) -> bool {
-        // If completion engine is already initialized, don't reinitialize
-        if self.completion_engine.is_some() {
-            return true;
-        }
-
-        // Try to get a connection for this tab
-        if let Some(connection) = self.get_connection(cx).await {
-            log::info!("Initializing completion engine for tab: {}", self.title);
-
-            // Create completion engine with connection
-            let completion_engine = crate::sql_completion::SqlCompletionEngine::new(connection);
-            self.completion_engine = Some(completion_engine);
-
-            log::info!(
-                "Completion engine initialized successfully for tab: {}",
-                self.title
-            );
-            true
-        } else {
-            log::warn!(
-                "No connection available for tab: {}, completion engine not initialized",
-                self.title
-            );
-            false
-        }
-    }
-
-    /// Get the completion engine, initializing it if necessary
-    pub async fn get_completion_engine(
-        &mut self,
-        cx: &mut gpui::App,
-    ) -> Option<&mut crate::sql_completion::SqlCompletionEngine> {
-        if self.completion_engine.is_none() {
-            self.initialize_completion_engine(cx).await;
-        }
-        self.completion_engine.as_mut()
-    }
-
-    /// Hide completion popup
-    pub fn hide_completion_popup(&mut self, _cx: &mut gpui::Context<Self>) {
-        self.completion_popup_visible = false;
-        self.last_completion_position = None;
-        // TODO: Properly hide popup when we have the context infrastructure
-        log::info!("Hiding completion popup for tab {}", self.id);
-    }
-
-    /// Show completion popup at specified position
-    pub fn show_completion_popup(
-        &mut self,
-        position: crate::sql_completion::Position,
-        _window: &mut gpui::Window,
-        _cx: &mut gpui::Context<Self>,
-    ) {
-        self.last_completion_position = Some(position);
-        self.completion_popup_visible = true;
-        // TODO: Properly show popup when we have the context infrastructure
-        log::info!(
-            "Showing completion popup for tab {} at position {:?}",
-            self.id,
-            position
-        );
-    }
-
-    /// Trigger completion based on current text
-    pub async fn trigger_completion(
-        &mut self,
-        _window: &mut gpui::Window,
-        cx: &mut gpui::App,
-    ) -> bool {
-        // Get current editor text (as string for now)
-        let editor_text = self.editor.read(cx).text().to_string();
-
-        log::info!("Triggering completion for tab {}", self.id);
-
-        // Check if we have a completion engine
-        if let Some(_completion_engine) = self.get_completion_engine(cx).await {
-            // For now, just create some basic completions
-            let suggestions = vec![
-                crate::sql_completion::CompletionItem::table(
-                    "users".to_string(),
-                    Some("User accounts".to_string()),
-                ),
-                crate::sql_completion::CompletionItem::table(
-                    "orders".to_string(),
-                    Some("Customer orders".to_string()),
-                ),
-                crate::sql_completion::CompletionItem::column(
-                    "id".to_string(),
-                    Some("users".to_string()),
-                    Some("Primary key".to_string()),
-                ),
-                crate::sql_completion::CompletionItem::column(
-                    "name".to_string(),
-                    Some("users".to_string()),
-                    Some("User name".to_string()),
-                ),
-                crate::sql_completion::CompletionItem::keyword("SELECT".to_string()),
-                crate::sql_completion::CompletionItem::keyword("FROM".to_string()),
-                crate::sql_completion::CompletionItem::keyword("WHERE".to_string()),
-            ];
-
-            if !suggestions.is_empty() {
-                log::info!("Got {} completion suggestions", suggestions.len());
-
-                // Create a simple completion result
-                let result = crate::sql_completion::CompletionResult {
-                    items: suggestions,
-                    is_incomplete: false,
-                };
-
-                // Log the suggestions for now
-                for item in &result.items {
-                    log::info!("  - {} ({})", item.label, format!("{:?}", item.kind));
-                }
-
-                true
-            } else {
-                log::info!("No completion suggestions available");
-                false
-            }
-        } else {
-            log::warn!("No completion engine available");
-            false
-        }
-    }
-
-    /// Get the current word at cursor position
-    fn get_current_word(&self, text: &str, cursor_pos: usize) -> Option<String> {
-        if cursor_pos > text.len() {
-            return None;
-        }
-
-        // Find word boundaries around cursor
-        let start = text[..cursor_pos]
-            .rfind(|c: char| !c.is_alphanumeric() && c != '_' && c != '.')
-            .map(|i| i + 1)
-            .unwrap_or(0);
-
-        let end = text[cursor_pos..]
-            .find(|c: char| !c.is_alphanumeric() && c != '_' && c != '.')
-            .map(|i| cursor_pos + i)
-            .unwrap_or(text.len());
-
-        if start < end {
-            Some(text[start..end].to_string())
-        } else {
-            None
-        }
-    }
-
-    /// Check if a character should trigger completion
-    pub fn should_trigger_completion(
-        &self,
-        char_pressed: char,
-        text: &str,
-        cursor_pos: usize,
-    ) -> bool {
-        match char_pressed {
-            // Trigger after space for keywords and table names
-            ' ' => {
-                if cursor_pos > 0 {
-                    // Check if the previous word was a keyword like SELECT, FROM, etc.
-                    let prev_word = self.get_previous_word(text, cursor_pos);
-                    matches!(
-                        prev_word.as_ref().map(|s| s.to_uppercase()).as_deref(),
-                        Some("SELECT")
-                            | Some("FROM")
-                            | Some("JOIN")
-                            | Some("INSERT")
-                            | Some("UPDATE")
-                            | Some("DELETE")
-                            | Some("CREATE")
-                            | Some("ALTER")
-                            | Some("DROP")
-                            | Some("WHERE")
-                            | Some("GROUP")
-                            | Some("ORDER")
-                            | Some("HAVING")
-                            | Some("INTO")
-                            | Some("VALUES")
-                            | Some("SET")
-                    )
-                } else {
-                    false
-                }
-            }
-            // Trigger after dot for column completion
-            '.' => true,
-            // Trigger after comma for additional columns
-            ',' => true,
-            // Trigger after parenthesis for function completion
-            '(' | ')' => true,
-            _ => false,
-        }
-    }
-
-    /// Get the word before the current position
-    fn get_previous_word(&self, text: &str, cursor_pos: usize) -> Option<String> {
-        if cursor_pos == 0 {
-            return None;
-        }
-
-        let before_cursor = &text[..cursor_pos];
-        let word_start = before_cursor
-            .rfind(|c: char| c.is_whitespace())
-            .map(|i| i + 1)
-            .unwrap_or(0);
-
-        if word_start < cursor_pos {
-            let word = &before_cursor[word_start..cursor_pos];
-            if !word.is_empty() {
-                return Some(word.to_string());
-            }
-        }
-
-        None
     }
 }
 
@@ -498,17 +270,9 @@ impl EditorPanel {
             }),
             sql_log: cx.new(|cx| SqlLog::new(1000, cx.theme().highlight_theme.clone())), // Maximum 1000 lines in the log
             cached_diagnostics: Arc::new(Mutex::new(Vec::new())),
-            document_version: 1,
             file_uri: None, // Will be set when file is created
-            // SQL completion state
-            completion_engine: None, // Will be initialized when connection is available
-            completion_popup_manager: crate::sql_completion_popup::CompletionPopupManager::new(),
-            last_completion_position: None,
-            completion_popup_visible: false,
-            last_hover_position: None,
             current_completions: None,
             selected_completion_index: 0,
-            is_initialized: false, // Will be set to true after initial content is loaded
         };
 
         self.tabs.push(TabType::Query(query_tab));
@@ -762,13 +526,44 @@ impl EditorPanel {
                                         result.query_text = Some(query_clone.clone());
                                         result.execution_time_ms = Some(duration_ms);
                                         result.is_error = false;
+                                        result.connection_string =
+                                            Some(connection_string_clone.clone());
+
+                                        // Extract table metadata from the query
+                                        let table_name = connection
+                                            .extract_table_name_from_query(&query_clone)
+                                            .ok()
+                                            .flatten();
+                                        result.table_name = table_name.clone();
+
+                                        // Extract primary key if we have a table name and results
+                                        if let (Some(ref table_name), false) =
+                                            (&table_name, result.rows.is_empty())
+                                        {
+                                            // Try to get primary key information for the table
+                                            if let Ok(Some(pk_column)) = connection
+                                                .get_primary_key_for_table(table_name)
+                                                .await
+                                            {
+                                                result.primary_key_column = Some(pk_column);
+                                                log::info!(
+                                                    "Detected primary key '{}' for table '{}'",
+                                                    result.primary_key_column.as_ref().unwrap(),
+                                                    table_name
+                                                );
+                                            }
+                                        }
 
                                         // Store rows_affected before moving result
                                         let rows_affected = result.rows_affected;
 
                                         // Update results panel
                                         let _ = results_panel_clone.update(cx, |panel, cx| {
-                                            panel.set_query_result(result, cx);
+                                            panel.set_query_result(
+                                                result,
+                                                Some(connection_string_clone.clone()),
+                                                cx,
+                                            );
                                         });
 
                                         // Emit success event
@@ -1276,16 +1071,9 @@ impl EditorPanel {
             results_panel: cx.new(|cx| ResultsPanel::new(window, cx)),
             sql_log: cx.new(|cx| SqlLog::new(1000, cx.theme().highlight_theme.clone())),
             cached_diagnostics: Arc::new(Mutex::new(Vec::new())),
-            document_version: 0,
             file_uri: None,
-            completion_engine: None,
-            completion_popup_manager: crate::sql_completion_popup::CompletionPopupManager::new(),
-            last_completion_position: None,
-            completion_popup_visible: false,
-            last_hover_position: None,
             current_completions: None,
             selected_completion_index: 0,
-            is_initialized: false,
         };
 
         self.tabs.push(TabType::Query(query_tab));
@@ -1616,6 +1404,7 @@ impl Render for EditorPanel {
                                             .items_center()
                                             .child(
                                                 div()
+                                                    .pr_2()
                                                     .text_xs()
                                                     .text_color(cx.theme().muted_foreground)
                                                     .child(query_tab.title.clone())
@@ -1764,13 +1553,6 @@ impl Render for EditorPanel {
                                         .border_t_1()
                                         .border_color(cx.theme().border)
                                         .bg(cx.theme().muted.opacity(0.5))
-                                        .child(
-                                            Button::new("format-query")
-                                                .outline()
-                                                .icon(IconName::Asterisk)
-                                                .label("Format")
-                                                .children(vec![Kbd::new(Keystroke::parse("shift-f").unwrap()).into_any_element()]),
-                                        )
                                         .child(div().flex_1())
                                         // Run button (always visible)
                                         .child(
@@ -1792,39 +1574,6 @@ impl Render for EditorPanel {
                                             div()
                                                 .flex_1()
                                                 .child(query_tab.results_panel.clone())
-                                        )
-                                        .child(
-                                            div()
-                                                .p_2()
-                                                .border_b_1()
-                                                .border_color(cx.theme().border)
-                                                .bg(cx.theme().muted.opacity(0.5))
-                                                .child(
-                                                    h_flex()
-                                                        .items_center()
-                                                        .justify_between()
-                                                        .child(
-                                                            div()
-                                                                .text_sm()
-                                                                .font_semibold()
-                                                                .text_color(cx.theme().foreground)
-                                                                .child("SQL Log")
-                                                        )
-                                                        .child(
-                                                            Button::new("clear-log")
-                                                                .ghost()
-                                                                .xsmall()
-                                                                .icon(IconName::Close)
-                                                                .label("Clear")
-                                                                .on_click(cx.listener(|this, _, _window, cx| {
-                                                                    if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
-                                                                        query_tab.sql_log.update(cx, |log, cx| {
-                                                                            log.clear(cx);
-                                                                        });
-                                                                    }
-                                                                })),
-                                                        )
-                                                )
                                         )
                                         // SQL Log panel (bottom)
                                         .child(

@@ -6,6 +6,7 @@ use blanco_core::{
 };
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Column, Row, TypeInfo};
+use crate::sql_parser::PostgresTableExtractor;
 
 /// PostgreSQL connection implementation of the Connection trait
 /// This uses SQLX directly to provide a unified interface
@@ -183,6 +184,9 @@ impl PostgresConnection {
                         query_text: None,
                         execution_time_ms: None,
                         is_error: false,
+                        table_name: None,
+                        primary_key_column: None,
+                        connection_string: None,
                     });
                 }
 
@@ -236,6 +240,9 @@ impl PostgresConnection {
                     query_text: None,
                     execution_time_ms: None,
                     is_error: false,
+                    table_name: None,
+                    primary_key_column: None,
+                    connection_string: None,
                 })
             }
             Err(_e) => {
@@ -249,6 +256,9 @@ impl PostgresConnection {
                     query_text: None,
                     execution_time_ms: None,
                     is_error: false,
+                    table_name: None,
+                    primary_key_column: None,
+                    connection_string: None,
                 })
             }
         }
@@ -382,6 +392,9 @@ impl Connection for PostgresConnection {
                         query_text: Some(sql_template.to_string()),
                         execution_time_ms: None,
                         is_error: false,
+                        table_name: None,
+                        primary_key_column: None,
+                        connection_string: None,
                     });
                 }
 
@@ -435,6 +448,9 @@ impl Connection for PostgresConnection {
                     query_text: Some(sql_template.to_string()),
                     execution_time_ms: None,
                     is_error: false,
+                    table_name: None,
+                    primary_key_column: None,
+                    connection_string: None,
                 })
             }
             Err(_e) => {
@@ -453,6 +469,9 @@ impl Connection for PostgresConnection {
                     query_text: Some(sql_template.to_string()),
                     execution_time_ms: None,
                     is_error: false,
+                    table_name: None,
+                    primary_key_column: None,
+                    connection_string: None,
                 })
             }
         }
@@ -618,6 +637,22 @@ impl Connection for PostgresConnection {
             file_safe_name: self.get_file_safe_name(),
             supports_schemas: self.supports_schemas(),
             icon_name: self.get_icon_name(),
+        }
+    }
+
+    fn extract_table_name_from_query(&self, query: &str) -> Result<Option<String>> {
+        log::debug!("Extracting table name from PostgreSQL query: {}", query);
+
+        let extractor = PostgresTableExtractor::new();
+        match extractor.extract_primary_table(query) {
+            Ok(table_name) => {
+                log::debug!("Successfully extracted table name: {}", table_name);
+                Ok(Some(table_name))
+            }
+            Err(e) => {
+                log::debug!("Could not extract table name from query: {}", e);
+                Ok(None)
+            }
         }
     }
 }
