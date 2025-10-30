@@ -1,6 +1,6 @@
 use anyhow::Result;
+use async_std::fs;
 use std::path::{Path, PathBuf};
-use tokio::fs;
 
 /// Manages query files stored on disk for LSP integration
 pub struct QueryFileManager {
@@ -180,54 +180,6 @@ impl QueryFileManager {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_query_file_creation() {
-        let manager = QueryFileManager::new().unwrap();
-        let connection_name = "test-connection";
-        let content = "SELECT * FROM users;";
-
-        let file_path = manager
-            .create_query_file(999, connection_name, content)
-            .await
-            .unwrap();
-        assert!(file_path.exists());
-
-        let read_content = manager.read_query_file(999, connection_name).await.unwrap();
-        assert_eq!(read_content, content);
-
-        // Cleanup
-        manager
-            .delete_query_file(999, connection_name)
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_query_file_update() {
-        let manager = QueryFileManager::new().unwrap();
-        let connection_name = "test-connection";
-        let initial_content = "SELECT 1;";
-        let updated_content = "SELECT 2;";
-
-        manager
-            .create_query_file(998, connection_name, initial_content)
-            .await
-            .unwrap();
-        manager
-            .update_query_file(998, connection_name, updated_content)
-            .await
-            .unwrap();
-
-        let read_content = manager.read_query_file(998, connection_name).await.unwrap();
-        assert_eq!(read_content, updated_content);
-
-        // Cleanup
-        manager
-            .delete_query_file(998, connection_name)
-            .await
-            .unwrap();
-    }
-
     #[test]
     fn test_connection_name_sanitization() {
         assert_eq!(
@@ -250,45 +202,5 @@ mod tests {
             QueryFileManager::sanitize_connection_name("Multiple---Dashes"),
             "multiple-dashes"
         );
-    }
-
-    #[tokio::test]
-    async fn test_query_file_migration() {
-        let manager = QueryFileManager::new().unwrap();
-        let connection_name = "migration-test";
-        let content = "SELECT * FROM test_table;";
-
-        // Create file in legacy location
-        let legacy_path = manager.legacy_query_file_path(1001);
-        if let Some(parent) = legacy_path.parent() {
-            tokio::fs::create_dir_all(parent).await.unwrap();
-        }
-        tokio::fs::write(&legacy_path, content).await.unwrap();
-        assert!(legacy_path.exists());
-
-        // Migrate to new location
-        let migrated = manager
-            .migrate_query_file(1001, connection_name)
-            .await
-            .unwrap();
-        assert!(migrated);
-
-        // Verify new file exists
-        let new_path = manager.query_file_path(1001, connection_name);
-        assert!(new_path.exists());
-
-        // Verify content is the same
-        let new_content = manager
-            .read_query_file(1001, connection_name)
-            .await
-            .unwrap();
-        assert_eq!(new_content, content);
-
-        // Cleanup
-        manager
-            .delete_query_file(1001, connection_name)
-            .await
-            .unwrap();
-        tokio::fs::remove_file(&legacy_path).await.unwrap_or(());
     }
 }

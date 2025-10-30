@@ -1,7 +1,7 @@
 use crate::connection_sidebar::{Sidebar, SidebarGroup, SidebarMenu, SidebarMenuItem};
 use gpui::{
-    div, App, AppContext, Context, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, Styled, Window,
+    div, App, AppContext, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, ParentElement, Render, SharedString, Styled, Window,
 };
 use gpui_component::{
     button::Button, h_flex, v_flex, ActiveTheme, ContextModal as _, IconName as GCIconName, Side,
@@ -9,17 +9,35 @@ use gpui_component::{
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::app_events::AppEvent;
 use crate::connection_modal::NewConnectionModal;
 use crate::db_service::DbService;
-use crate::icon::IconName;
-use crate::postgres::SchemaNode;
-use crate::unified_connection_manager::UnifiedConnectionManager;
+use blanco_ui::IconName;
 use log::info;
+
+/// Simple schema node for sidebar display
+#[derive(Clone, Debug)]
+pub struct SchemaNode {
+    pub name: String,
+    pub expanded: bool,
+    pub tables: Vec<String>,
+}
+
+impl SchemaNode {
+    pub fn new(name: String) -> Self {
+        let expanded = name == "public"; // Default expand public schema
+        Self {
+            name,
+            expanded,
+            tables: Vec::new(),
+        }
+    }
+}
 
 /// Unified connection information stored in the sidebar
 #[derive(Clone)]
 pub struct UnifiedConnectionInfo {
-    pub connection: Arc<dyn crate::connection_trait::Connection>,
+    pub connection: Arc<dyn blanco_core::Connection>,
     pub connection_string: String,
     pub expanded: bool,
     pub schemas: Vec<SchemaNode>,
@@ -30,8 +48,6 @@ pub struct UnifiedConnectionInfo {
 pub struct ConnectionSidebar {
     focus_handle: FocusHandle,
     collapsed: bool,
-    // Unified connection manager for new connection system
-    unified_manager: UnifiedConnectionManager,
     // Unified connections cache (connection_string -> connection info)
     unified_connections: HashMap<String, UnifiedConnectionInfo>,
 }
@@ -41,12 +57,14 @@ impl ConnectionSidebar {
         let mut sidebar = Self {
             focus_handle: cx.focus_handle(),
             collapsed: false,
-            unified_manager: UnifiedConnectionManager::new(),
             unified_connections: HashMap::new(),
         };
 
         // Load real connections from database first
         sidebar.load_database_connections(cx);
+
+        // Subscribe to connection events to refresh when connections are added
+        sidebar.subscribe_to_connection_events(cx);
 
         // Debug: Log initial state
         log::info!("Sidebar initialized with unified connection system");
@@ -57,15 +75,25 @@ impl ConnectionSidebar {
         sidebar
     }
 
+    /// Subscribe to connection events to refresh when connections are added
+    // TODO: Re-implement with GPUI EventEmitter system
+    fn subscribe_to_connection_events(&mut self, _cx: &mut Context<Self>) {
+        // This function will be re-implemented using GPUI's EventEmitter system
+        // For now, the sidebar refreshes through other mechanisms
+        log::info!(
+            "Connection event subscription temporarily disabled during EventEmitter migration"
+        );
+    }
+
     /// Load real connections from the app database
-    fn load_database_connections(&mut self, cx: &mut Context<Self>) {
+    pub fn load_database_connections(&mut self, cx: &mut Context<Self>) {
         let db_service = DbService::global(cx).clone();
         let app_db = db_service.app_db_handle();
 
         // Load connections asynchronously and update UI
         log::info!("Starting to load database connections...");
-        let task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
-            match *app_db.read().await {
+        cx.spawn(async move |sidebar_handle, mut cx| {
+            let connections = match *app_db.read().await {
                 Some(ref app_db) => match app_db.load_connections().await {
                     Ok(connections) => {
                         log::info!("Loaded {} connections from database", connections.len());
@@ -80,96 +108,96 @@ impl ConnectionSidebar {
                                          conn.database_name,
                                          conn.username);
                         }
-                        Ok(connections)
+                        connections
                     }
                     Err(e) => {
                         log::error!("Failed to load connections from database: {}", e);
-                        Err(anyhow::anyhow!("Failed to load connections: {}", e))
+                        return;
                     }
                 },
                 None => {
                     log::warn!("App database not initialized");
-                    Err(anyhow::anyhow!("App database not initialized"))
+                    return;
                 }
-            }
-        });
+            };
 
-        cx.spawn(async move |handle, cx| {
-            if let Ok(connections) = task.await {
-                if let Some(sidebar) = handle.upgrade() {
-                    let _ = sidebar.update(cx, |sidebar, cx| {
-                        // Process loaded connections and add them to unified connection system
-                        for conn in &connections {
-                            // Build connection string for unified system
-                            let connection_string = if conn.db_type == "PostgreSQL" {
-                                if let (Some(host), Some(port), Some(database), Some(username)) =
-                                    (&conn.host, conn.port, &conn.database_name, &conn.username) {
+            if let Some(sidebar) = sidebar_handle.upgrade() {
+                let _ = sidebar.update(cx, |sidebar, cx| {
+                    // Process loaded connections and add them to unified connection system
+                    for conn in &connections {
+                        // Build connection string for unified system
+                        let connection_string = if conn.db_type == "PostgreSQL" {
+                            if let (Some(host), Some(port), Some(database), Some(username)) =
+                                (&conn.host, conn.port, &conn.database_name, &conn.username) {
 
-                                    log::info!("Processing PostgreSQL connection: {} ({}:{}/{})",
-                                             conn.name, host, port, database);
+                                log::info!("Processing PostgreSQL connection: {} ({}:{}/{})",
+                                            conn.name, host, port, database);
 
-                                    // Build PostgreSQL connection string
-                                    Some(format!("postgresql://{}:{}@{}:{}/{}",
-                                        username,
-                                        conn.password.as_ref().unwrap_or(&"".to_string()),
-                                        host, port, database))
-                                } else {
-                                    log::warn!("PostgreSQL connection missing required fields: {}", conn.name);
-                                    None
-                                }
-                            } else if conn.db_type == "SQLite" {
-                                if let Some(database_path) = &conn.database_path {
-                                    log::info!("Processing SQLite connection: {} -> {}", conn.name, database_path);
-
-                                    // Build SQLite connection string
-                                    Some(format!("sqlite:{}", database_path))
-                                } else {
-                                    log::warn!("SQLite connection has no database_path: {}", conn.name);
-                                    None
-                                }
+                                // Build PostgreSQL connection string
+                                let built_conn_string = format!("postgresql://{}:{}@{}:{}/{}",
+                                    username,
+                                    conn.password.as_ref().unwrap_or(&"".to_string()),
+                                    host, port, database);
+                                log::info!("Built connection string for {}: {}", conn.name, built_conn_string);
+                                Some(built_conn_string)
                             } else {
-                                log::warn!("Unsupported connection type: {} for connection {}", conn.db_type, conn.name);
+                                log::warn!("PostgreSQL connection missing required fields: {}", conn.name);
                                 None
-                            };
-
-                            // Add to unified connections system
-                            if let Some(conn_str) = connection_string {
-                                let unified_manager = sidebar.unified_manager.clone();
-                                let conn_name = conn.name.clone();
-                                let conn_str_clone = conn_str.clone();
-
-                                // Create task to add connection to unified system
-                                let unified_task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
-                                    unified_manager.get_or_create_connection(&conn_str_clone).await
-                                });
-
-                                cx.spawn(async move |handle, cx| {
-                                    if let Ok(connection) = unified_task.await {
-                                        if let Some(sidebar) = handle.upgrade() {
-                                            let _ = sidebar.update(cx, |sidebar, cx| {
-                                                let connection_key = connection.get_connection_key_str();
-                                                let unified_info = UnifiedConnectionInfo {
-                                                    connection: connection.clone(),
-                                                    connection_string: conn_str.clone(),
-                                                    expanded: false,
-                                                    schemas: Vec::new(),
-                                                    display_name: conn_name.clone(),
-                                                    tables: Vec::new(),
-                                                };
-                                                sidebar.unified_connections.insert(connection_key, unified_info);
-                                                log::info!("Added connection to unified system: {} -> {}", conn_name, conn_str);
-                                                cx.notify();
-                                            });
-                                        }
-                                    } else {
-                                        log::error!("Failed to create unified connection for: {}", conn_name);
-                                    }
-                                }).detach();
                             }
+                        } else if conn.db_type == "SQLite" {
+                            if let Some(database_path) = &conn.database_path {
+                                log::info!("Processing SQLite connection: {} -> {}", conn.name, database_path);
+
+                                // Build SQLite connection string
+                                Some(format!("sqlite:{}", database_path))
+                            } else {
+                                log::warn!("SQLite connection has no database_path: {}", conn.name);
+                                None
+                            }
+                        } else {
+                            log::warn!("Unsupported connection type: {} for connection {}", conn.db_type, conn.name);
+                            None
+                        };
+
+                        // Add to unified connections system
+                        if let Some(conn_str) = connection_string {
+                            let unified_manager = DbService::global(cx).unified_manager_handle();
+                            let conn_name = conn.name.clone();
+                            let conn_str_clone = conn_str.clone();
+
+                            // Add connection to unified system
+                            cx.spawn(async move |sidebar_handle, mut cx| {
+                                if let Ok(connection) = unified_manager.read().await.get_or_create_connection(&conn_str_clone).await {
+                                    if let Some(sidebar) = sidebar_handle.upgrade() {
+                                        let _ = sidebar.update(cx, |sidebar, cx| {
+                                            let connection_key = connection.get_connection_key_str();
+                                            let unified_info = UnifiedConnectionInfo {
+                                                connection: connection.clone(),
+                                                connection_string: conn_str.clone(),
+                                                expanded: false,
+                                                schemas: Vec::new(),
+                                                display_name: conn_name.clone(),
+                                                tables: Vec::new(),
+                                            };
+                                            sidebar.unified_connections.insert(connection_key, unified_info);
+                                            log::info!("Added connection to unified system: {} -> {}", conn_name, conn_str);
+                                            cx.notify();
+                                        });
+                                    }
+                                } else {
+                                    log::error!("Failed to create unified connection for: {}", conn_name);
+                                }
+                            }).detach();
                         }
-                        cx.notify();
+                    }
+
+                    // Emit ConnectionsLoaded event to trigger tab restoration
+                    cx.emit(crate::app_events::AppEvent::ConnectionsLoaded {
+                        count: connections.len(),
                     });
-                }
+
+                    cx.notify();
+                });
             }
         }).detach();
     }
@@ -179,9 +207,6 @@ impl ConnectionSidebar {
         cx.notify();
     }
 
-    
-    
-    
     /// Load tables using the unified connection interface
     pub async fn load_unified_tables(
         &mut self,
@@ -194,9 +219,9 @@ impl ConnectionSidebar {
         );
 
         // Get or create connection using unified manager
-        let connection = self
-            .unified_manager
-            .get_or_create_connection(connection_string)
+        let db_service = DbService::global(_cx);
+        let connection = db_service
+            .get_or_create_unified_connection(connection_string)
             .await?;
 
         // Load tables using the unified trait
@@ -218,9 +243,9 @@ impl ConnectionSidebar {
         );
 
         // Get or create connection using unified manager
-        let connection = self
-            .unified_manager
-            .get_or_create_connection(connection_string)
+        let db_service = DbService::global(_cx);
+        let connection = db_service
+            .get_or_create_unified_connection(connection_string)
             .await?;
 
         // Load schemas using the unified trait
@@ -243,9 +268,9 @@ impl ConnectionSidebar {
         );
 
         // Create connection using unified manager
-        let connection = self
-            .unified_manager
-            .get_or_create_connection(connection_string)
+        let db_service = DbService::global(_cx);
+        let connection = db_service
+            .get_or_create_unified_connection(connection_string)
             .await?;
 
         // Cache the connection with proper info
@@ -267,7 +292,7 @@ impl ConnectionSidebar {
         Ok(())
     }
 
-    /// Load tables for a connection using unified interface (with proper Tokio context)
+    /// Load tables for a connection using unified interface
     pub fn load_tables_unified_async(
         &mut self,
         connection_string: &str,
@@ -276,53 +301,55 @@ impl ConnectionSidebar {
         error_callback: impl Fn(&mut Self, String) + Send + Sync + 'static,
         cx: &mut Context<Self>,
     ) {
-        let unified_manager = self.unified_manager.clone();
+        let unified_manager = DbService::global(cx).unified_manager_handle();
         let connection_string_clone = connection_string.to_string();
         let connection_string_for_logging = connection_string_clone.clone();
         let schema_clone = schema.map(|s| s.to_string());
 
-        // Create a task that runs in the proper Tokio context
-        let tables_task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
+        cx.spawn(async move |sidebar_handle, mut cx| {
             // Get connection and tables in sequence using unified interface
-            let connection = unified_manager
+            match unified_manager
+                .read()
+                .await
                 .get_or_create_connection(&connection_string_clone)
-                .await?;
-            let tables = connection.get_tables(schema_clone.as_deref()).await?;
-            Ok(tables)
-        });
-
-        cx.spawn(async move |handle, cx| {
-            match tables_task.await {
-                Ok(tables) => {
-                    if let Some(sidebar) = handle.upgrade() {
-                        let _ = sidebar.update(cx, |sidebar, cx| {
-                            ui_update_callback(sidebar, tables);
-                            cx.notify();
-                        });
+                .await
+            {
+                Ok(connection) => match connection.get_tables(schema_clone.as_deref()).await {
+                    Ok(tables) => {
+                        if let Some(sidebar) = sidebar_handle.upgrade() {
+                            let _ = sidebar.update(cx, |sidebar, cx| {
+                                ui_update_callback(sidebar, tables);
+                                cx.notify();
+                            });
+                        }
                     }
-                }
+                    Err(e) => {
+                        log::error!(
+                            "Failed to load tables for connection '{}': {}",
+                            connection_string_for_logging,
+                            e
+                        );
+                        if let Some(sidebar) = sidebar_handle.upgrade() {
+                            let _ = sidebar.update(cx, |sidebar, cx| {
+                                error_callback(sidebar, format!("Error loading tables: {}", e));
+                                cx.notify();
+                            });
+                        }
+                    }
+                },
                 Err(e) => {
                     log::error!(
-                        "Failed to load tables for connection '{}': {}",
+                        "Failed to get connection for '{}': {}",
                         connection_string_for_logging,
                         e
                     );
-                    if let Some(sidebar) = handle.upgrade() {
-                        let _ = sidebar.update(cx, |sidebar, cx| {
-                            error_callback(
-                                sidebar,
-                                format!("Error loading tables: {}", e),
-                            );
-                            cx.notify();
-                        });
-                    }
                 }
             }
         })
-                .detach();
+        .detach();
     }
 
-    /// Load schemas for a connection using unified interface (with proper Tokio context)
+    /// Load schemas for a connection using unified interface
     pub fn load_schemas_unified_async(
         &mut self,
         connection_string: &str,
@@ -330,49 +357,51 @@ impl ConnectionSidebar {
         error_callback: impl Fn(&mut Self, String) + Send + Sync + 'static,
         cx: &mut Context<Self>,
     ) {
-        let unified_manager = self.unified_manager.clone();
+        let unified_manager = DbService::global(cx).unified_manager_handle();
         let connection_string_clone = connection_string.to_string();
         let connection_string_for_logging = connection_string_clone.clone();
 
-        // Create a task that runs in the proper Tokio context
-        let schemas_task = crate::gpui_tokio::Tokio::spawn_result(cx, async move {
+        cx.spawn(async move |sidebar_handle, mut cx| {
             // Get connection and schemas in sequence using unified interface
-            let connection = unified_manager
+            match unified_manager
+                .read()
+                .await
                 .get_or_create_connection(&connection_string_clone)
-                .await?;
-            let schemas = connection.get_schemas().await?;
-            Ok(schemas)
-        });
-
-        cx.spawn(async move |handle, cx| {
-            match schemas_task.await {
-                Ok(schemas) => {
-                    if let Some(sidebar) = handle.upgrade() {
-                        let _ = sidebar.update(cx, |sidebar, cx| {
-                            ui_update_callback(sidebar, schemas);
-                            cx.notify();
-                        });
+                .await
+            {
+                Ok(connection) => match connection.get_schemas().await {
+                    Ok(schemas) => {
+                        if let Some(sidebar) = sidebar_handle.upgrade() {
+                            let _ = sidebar.update(cx, |sidebar, cx| {
+                                ui_update_callback(sidebar, schemas);
+                                cx.notify();
+                            });
+                        }
                     }
-                }
+                    Err(e) => {
+                        log::error!(
+                            "Failed to load schemas for connection '{}': {}",
+                            connection_string_for_logging,
+                            e
+                        );
+                        if let Some(sidebar) = sidebar_handle.upgrade() {
+                            let _ = sidebar.update(cx, |sidebar, cx| {
+                                error_callback(sidebar, format!("Error loading schemas: {}", e));
+                                cx.notify();
+                            });
+                        }
+                    }
+                },
                 Err(e) => {
                     log::error!(
-                        "Failed to load schemas for connection '{}': {}",
+                        "Failed to get connection for schemas '{}': {}",
                         connection_string_for_logging,
                         e
                     );
-                    if let Some(sidebar) = handle.upgrade() {
-                        let _ = sidebar.update(cx, |sidebar, cx| {
-                            error_callback(
-                                sidebar,
-                                format!("Error loading schemas: {}", e),
-                            );
-                            cx.notify();
-                        });
-                    }
                 }
             }
         })
-                .detach();
+        .detach();
     }
 
     /// Toggle expansion of a unified connection and load schemas/tables as needed
@@ -386,7 +415,8 @@ impl ConnectionSidebar {
                 let connection_string = connection_info.connection_string.clone();
                 let connection_key_clone = connection_key.to_string();
                 let connection_key_for_schemas_callbacks = connection_key_clone.clone();
-                let connection_key_for_schemas_logging = connection_key_for_schemas_callbacks.clone();
+                let connection_key_for_schemas_logging =
+                    connection_key_for_schemas_callbacks.clone();
                 if connection_info.connection.supports_schemas() {
                     // Load schemas for connections that support them (e.g., PostgreSQL)
                     self.load_schemas_unified_async(
@@ -398,8 +428,7 @@ impl ConnectionSidebar {
                             {
                                 conn_info.schemas.clear();
                                 for schema_name in &schemas {
-                                    let mut schema =
-                                        crate::postgres::SchemaNode::new(schema_name.clone());
+                                    let mut schema = SchemaNode::new(schema_name.clone());
                                     // Expand "public" schema by default
                                     schema.expanded = schema_name == "public";
                                     conn_info.schemas.push(schema);
@@ -418,8 +447,7 @@ impl ConnectionSidebar {
                                 .get_mut(&connection_key_for_schemas_callbacks)
                             {
                                 conn_info.schemas.clear();
-                                let mut error_schema =
-                                    crate::postgres::SchemaNode::new("Error".to_string());
+                                let mut error_schema = SchemaNode::new("Error".to_string());
                                 error_schema.tables = vec![error_msg.clone()];
                                 conn_info.schemas.push(error_schema);
                             }
@@ -434,8 +462,10 @@ impl ConnectionSidebar {
                 } else {
                     // Load tables for flat structure connections (e.g., SQLite)
                     let connection_key_for_tables_callbacks = connection_key_clone.clone();
-                    let connection_key_for_tables_logging = connection_key_for_tables_callbacks.clone();
-                    let connection_key_for_tables_error = connection_key_for_tables_callbacks.clone();
+                    let connection_key_for_tables_logging =
+                        connection_key_for_tables_callbacks.clone();
+                    let connection_key_for_tables_error =
+                        connection_key_for_tables_callbacks.clone();
                     self.load_tables_unified_async(
                         &connection_string,
                         None,
@@ -497,8 +527,10 @@ impl ConnectionSidebar {
                     // Schema is being expanded - load tables
                     let connection_string = connection_info.connection_string.clone();
                     let connection_key_for_schema_tables_callbacks = connection_key.to_string();
-                    let connection_key_for_schema_tables_logging = connection_key_for_schema_tables_callbacks.clone();
-                    let connection_key_for_schema_tables_error = connection_key_for_schema_tables_callbacks.clone();
+                    let connection_key_for_schema_tables_logging =
+                        connection_key_for_schema_tables_callbacks.clone();
+                    let connection_key_for_schema_tables_error =
+                        connection_key_for_schema_tables_callbacks.clone();
                     let schema_name_for_callbacks = schema_name.to_string();
                     let schema_name_for_logging = schema_name_for_callbacks.clone();
                     let schema_name_for_error = schema_name_for_callbacks.clone();
@@ -558,6 +590,7 @@ impl ConnectionSidebar {
     }
 }
 
+impl EventEmitter<AppEvent> for ConnectionSidebar {}
 impl Focusable for ConnectionSidebar {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -591,7 +624,14 @@ impl Render for ConnectionSidebar {
 
                                             // Create menu item for connection
                                             let menu_item = SidebarMenuItem::new(SharedString::from(display_name.clone()))
-                                                .icon(connection_info.connection.get_icon_name())
+                                                .icon(match connection_info.connection.get_icon_name() {
+                            blanco_core::IconName::Sqlite => IconName::Sqlite,
+                            blanco_core::IconName::Postgres => IconName::Postgresql,
+                            blanco_core::IconName::Database => IconName::SquareTerminal,
+                            blanco_core::IconName::Table => IconName::SquareTerminal,
+                            blanco_core::IconName::Column => IconName::SquareTerminal,
+                            _ => IconName::SquareTerminal,
+                        })
                                                 .active(was_expanded)
                                                 .id(("unified-connection", connection_key.len() as u64))
                                                 .context_menu({
@@ -737,33 +777,56 @@ impl Render for ConnectionSidebar {
                                                             conn_data.username.as_ref(),
                                                             conn_data.password.as_ref()
                                                         ) {
-                                                            let _connection_string = format!(
+                                                            let connection_string = format!(
                                                                 "postgresql://{}:{}@{}:{}/{}",
                                                                 username, password, host, port, database
                                                             );
 
+                                                            log::info!("Attempting to save PostgreSQL connection: {} (name: {})", connection_string, conn_data.name);
+                                                            log::info!("Connection data: db_type={}, host={:?}, port={:?}, database={:?}, username={:?}",
+                                                                conn_data.db_type, conn_data.host, conn_data.port, conn_data.database_name, conn_data.username);
+
                                                             // Save to database
-                                                            crate::gpui_tokio::Tokio::spawn_result(cx, async move {
-                                                                if let Some(db) = app_db.read().await.as_ref() {
-                                                                    db.save_connection(&conn_data).await.map_err(|e| {
-                                                                        anyhow::anyhow!("Failed to save connection: {}", e)
-                                                                    })
+                                                            log::info!("Attempting to save PostgreSQL connection to database...");
+                                                            let connection_string_clone = connection_string.clone();
+                                                            let conn_name_clone = conn_data.name.clone();
+                                                            cx.spawn(async move |cx| {
+                                                                let db_result = if let Some(db) = app_db.read().await.as_ref() {
+                                                                    db.save_connection(&conn_data).await
                                                                 } else {
-                                                                    Err(anyhow::anyhow!("App database not initialized"))
+                                                                    Err(sqlx::Error::Configuration("App database not initialized".into()))
+                                                                };
+
+                                                                match db_result {
+                                                                    Ok(saved_id) => {
+                                                                        log::info!("✅ PostgreSQL connection saved to database with ID: {}", saved_id);
+
+                                                                        // We'll emit the event from the main context after the async task completes
+                                                                        // For now, just log that the connection was saved
+                                                                    }
+                                                                    Err(e) => {
+                                                                        log::error!("❌ Failed to save PostgreSQL connection to database: {}", e);
+                                                                    }
                                                                 }
                                                             })
                                                             .detach();
 
+                                                            // Event emission temporarily disabled during EventEmitter migration
+                                                            // The sidebar refreshes through other mechanisms when connections are saved
+                                                            log::info!("Connection saved, sidebar will refresh through database polling");
+
+                                                            // Always show notification (user will get success/failure details from logs)
+                                                            window.push_notification("Saving PostgreSQL connection...", cx);
+
                                                             // Connection is automatically added to unified system
                                                             // The user will see the new connection after a brief moment
-                                                            window.push_notification("PostgreSQL connection saved successfully", cx);
                                                         } else {
                                                             window.push_notification("Missing PostgreSQL connection details", cx);
                                                             return false;
                                                         }
                                                     } else {
                                                         // SQLite or other database types
-                                                        crate::gpui_tokio::Tokio::spawn_result(cx, async move {
+                                                        cx.spawn(async move |cx| {
                                                             if let Some(db) = app_db.read().await.as_ref() {
                                                                 db.save_connection(&conn_data).await.map_err(|e| {
                                                                     anyhow::anyhow!("Failed to save connection: {}", e)

@@ -96,4 +96,49 @@ impl TableChangeOperation {
             changes: vec![],
         }
     }
+
+    /// Generate the actual SQL query for logging purposes
+    pub fn to_sql_query(&self) -> String {
+        match self.operation_type {
+            OperationType::Update => {
+                if let (Some(change), RowIdentifier::PrimaryKey { column: pk_column, value: pk_value }) =
+                    (self.changes.first(), &self.row_identifier) {
+                    format!(
+                        "UPDATE {} SET {} = '{}' WHERE {} = '{}'",
+                        self.table_name,
+                        change.column_name,
+                        change.new_value.as_ref().unwrap_or(&String::new()),
+                        pk_column,
+                        pk_value
+                    )
+                } else {
+                    format!("UPDATE {}", self.table_name)
+                }
+            }
+            OperationType::Insert => {
+                let columns: Vec<String> = self.changes.iter().map(|c| c.column_name.clone()).collect();
+                let values: Vec<String> = self.changes.iter()
+                    .map(|c| format!("'{}'", c.new_value.as_ref().unwrap_or(&String::new())))
+                    .collect();
+                format!(
+                    "INSERT INTO {} ({}) VALUES ({})",
+                    self.table_name,
+                    columns.join(", "),
+                    values.join(", ")
+                )
+            }
+            OperationType::Delete => {
+                if let RowIdentifier::PrimaryKey { column: pk_column, value: pk_value } = &self.row_identifier {
+                    format!(
+                        "DELETE FROM {} WHERE {} = '{}'",
+                        self.table_name,
+                        pk_column,
+                        pk_value
+                    )
+                } else {
+                    format!("DELETE FROM {}", self.table_name)
+                }
+            }
+        }
+    }
 }

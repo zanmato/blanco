@@ -4,7 +4,7 @@ use gpui::{App, Global};
 use sqlx::postgres::PgConnectOptions;
 use std::str::FromStr;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use async_std::sync::RwLock;
 
 /// Connection key for PostgreSQL connections
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -108,42 +108,158 @@ impl DbService {
     }
 
     /// Convenience method to get or create a connection
-    pub async fn get_or_create_unified_connection(&self, connection_string: &str) -> Result<std::sync::Arc<dyn crate::connection_trait::Connection>, anyhow::Error> {
+    pub async fn get_or_create_unified_connection(&self, connection_string: &str) -> Result<std::sync::Arc<dyn blanco_core::Connection>, anyhow::Error> {
         let unified_manager = self.unified_manager().await;
         let result = unified_manager.read().await.get_or_create_connection(connection_string).await;
         result
     }
 
     /// Convenience method to execute a query
-    pub async fn execute_query_unified(&self, connection_string: &str, sql: &str) -> Result<crate::connection_trait::QueryResult, anyhow::Error> {
+    pub async fn execute_query_unified(&self, connection_string: &str, sql: &str) -> Result<blanco_core::QueryResult, anyhow::Error> {
         let unified_manager = self.unified_manager().await;
-        let connection = unified_manager.read().await.get_connection(connection_string).await
-            .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_string))?;
-        connection.execute_query(sql).await
+        let manager_read = unified_manager.read().await;
+
+        // Try to get the connection
+        match manager_read.get_connection(connection_string).await {
+            Some(connection) => connection.execute_query(sql).await,
+            None => {
+                // Log detailed debug information about available connections
+                log::error!("=== CONNECTION NOT FOUND DEBUG INFO ===");
+                log::error!("Looking for connection: {}", connection_string);
+
+                // Try to generate the key to see what format is expected
+                if let Ok(expected_key) = manager_read.generate_connection_key(connection_string) {
+                    log::error!("Expected connection key format: {}", expected_key);
+                }
+
+                // Log all available connections in the manager
+                let connections = manager_read.get_all_connections().await;
+                log::error!("Available connections in unified manager:");
+                if connections.is_empty() {
+                    log::error!("  No connections available");
+                } else {
+                    for (i, conn) in connections.iter().enumerate() {
+                        let conn_key = conn.get_connection_key_str();
+                        log::error!("  {}. Key: '{}', Type: {}", i + 1, conn_key, conn.get_connection_type());
+                    }
+                }
+
+                log::error!("=== END DEBUG INFO ===");
+
+                Err(anyhow::anyhow!("Connection not found: {}", connection_string))
+            }
+        }
     }
 
     /// Convenience method to execute a prepared query
-    pub async fn execute_prepared_query_unified(&self, connection_string: &str, sql_template: &str, parameters: &[String]) -> Result<crate::connection_trait::QueryResult, anyhow::Error> {
+    pub async fn execute_prepared_query_unified(&self, connection_string: &str, sql_template: &str, parameters: &[String]) -> Result<blanco_core::QueryResult, anyhow::Error> {
         let unified_manager = self.unified_manager().await;
-        let connection = unified_manager.read().await.get_connection(connection_string).await
-            .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_string))?;
-        connection.execute_prepared_query(sql_template, parameters).await
+        let manager_read = unified_manager.read().await;
+
+        // Try to get the connection
+        match manager_read.get_connection(connection_string).await {
+            Some(connection) => connection.execute_prepared_query(sql_template, parameters).await,
+            None => {
+                // Log detailed debug information about available connections
+                log::error!("=== CONNECTION NOT FOUND DEBUG INFO (Prepared Query) ===");
+                log::error!("Looking for connection: {}", connection_string);
+
+                // Try to generate the key to see what format is expected
+                if let Ok(expected_key) = manager_read.generate_connection_key(connection_string) {
+                    log::error!("Expected connection key format: {}", expected_key);
+                }
+
+                // Log all available connections in the manager
+                let connections = manager_read.get_all_connections().await;
+                log::error!("Available connections in unified manager:");
+                if connections.is_empty() {
+                    log::error!("  No connections available");
+                } else {
+                    for (i, conn) in connections.iter().enumerate() {
+                        let conn_key = conn.get_connection_key_str();
+                        log::error!("  {}. Key: '{}', Type: {}", i + 1, conn_key, conn.get_connection_type());
+                    }
+                }
+
+                log::error!("=== END DEBUG INFO ===");
+
+                Err(anyhow::anyhow!("Connection not found: {}", connection_string))
+            }
+        }
     }
 
     /// Convenience method to get schemas
     pub async fn get_schemas_unified(&self, connection_string: &str) -> Result<Vec<String>, anyhow::Error> {
         let unified_manager = self.unified_manager().await;
-        let connection = unified_manager.read().await.get_connection(connection_string).await
-            .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_string))?;
-        connection.get_schemas().await
+        let manager_read = unified_manager.read().await;
+
+        // Try to get the connection
+        match manager_read.get_connection(connection_string).await {
+            Some(connection) => connection.get_schemas().await,
+            None => {
+                // Log detailed debug information about available connections
+                log::error!("=== CONNECTION NOT FOUND DEBUG INFO (Get Schemas) ===");
+                log::error!("Looking for connection: {}", connection_string);
+
+                // Try to generate the key to see what format is expected
+                if let Ok(expected_key) = manager_read.generate_connection_key(connection_string) {
+                    log::error!("Expected connection key format: {}", expected_key);
+                }
+
+                // Log all available connections in the manager
+                let connections = manager_read.get_all_connections().await;
+                log::error!("Available connections in unified manager:");
+                if connections.is_empty() {
+                    log::error!("  No connections available");
+                } else {
+                    for (i, conn) in connections.iter().enumerate() {
+                        let conn_key = conn.get_connection_key_str();
+                        log::error!("  {}. Key: '{}', Type: {}", i + 1, conn_key, conn.get_connection_type());
+                    }
+                }
+
+                log::error!("=== END DEBUG INFO ===");
+
+                Err(anyhow::anyhow!("Connection not found: {}", connection_string))
+            }
+        }
     }
 
     /// Convenience method to get tables
     pub async fn get_tables_unified(&self, connection_string: &str, schema: Option<&str>) -> Result<Vec<String>, anyhow::Error> {
         let unified_manager = self.unified_manager().await;
-        let connection = unified_manager.read().await.get_connection(connection_string).await
-            .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_string))?;
-        connection.get_tables(schema).await
+        let manager_read = unified_manager.read().await;
+
+        // Try to get the connection
+        match manager_read.get_connection(connection_string).await {
+            Some(connection) => connection.get_tables(schema).await,
+            None => {
+                // Log detailed debug information about available connections
+                log::error!("=== CONNECTION NOT FOUND DEBUG INFO (Get Tables) ===");
+                log::error!("Looking for connection: {}", connection_string);
+
+                // Try to generate the key to see what format is expected
+                if let Ok(expected_key) = manager_read.generate_connection_key(connection_string) {
+                    log::error!("Expected connection key format: {}", expected_key);
+                }
+
+                // Log all available connections in the manager
+                let connections = manager_read.get_all_connections().await;
+                log::error!("Available connections in unified manager:");
+                if connections.is_empty() {
+                    log::error!("  No connections available");
+                } else {
+                    for (i, conn) in connections.iter().enumerate() {
+                        let conn_key = conn.get_connection_key_str();
+                        log::error!("  {}. Key: '{}', Type: {}", i + 1, conn_key, conn.get_connection_type());
+                    }
+                }
+
+                log::error!("=== END DEBUG INFO ===");
+
+                Err(anyhow::anyhow!("Connection not found: {}", connection_string))
+            }
+        }
     }
 
     /// Convenience method to get tables for a specific schema

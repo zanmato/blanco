@@ -1,0 +1,24 @@
+[package]
+name = "blanco-core"
+version = "0.1.0"
+edition = "2021"
+description = "Shared traits and types for Blanco SQL editor"
+
+[dependencies]
+# GPUI dependencies
+gpui = { workspace = true }
+gpui-component = { workspace = true }
+
+# LSP dependencies
+lsp-types = { workspace = true }
+
+# Common dependencies
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+# For position and range handling
+ropey = { workspace = true }

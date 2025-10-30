@@ -3,7 +3,7 @@ use std::ops::Range;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, px, App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement,
+    div, px, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
     IntoElement, MouseButton, ParentElement, Render, Styled, Window,
 };
 use gpui_component::{
@@ -14,10 +14,10 @@ use gpui_component::{
 };
 
 use crate::async_pipeline::{AsyncEvent, TaskPriority};
-use crate::connection_trait::QueryResult;
-use crate::events::{emit_event, AppEvent};
-use crate::sql_parser::SqlTableExtractor;
-use crate::table_operations::ColumnChange;
+use blanco_core::QueryResult;
+use crate::app_events::AppEvent;
+use blanco_core::ColumnChange;
+use blanco_core::table_operations::{TableChangeOperation, OperationType, RowIdentifier};
 
 #[derive(Clone, Debug)]
 pub struct TableChange {
@@ -394,7 +394,7 @@ impl ResultsTableDelegate {
     }
 
     /// Convert table changes to database-agnostic TableChangeOperations
-    pub fn create_change_operations(&self) -> Vec<crate::table_operations::TableChangeOperation> {
+    pub fn create_change_operations(&self) -> Vec<blanco_core::table_operations::TableChangeOperation> {
         let mut operations = Vec::new();
 
         for change in &self.edit_state.changes {
@@ -411,7 +411,7 @@ impl ResultsTableDelegate {
                     if let (Some(pk_column), Some(pk_value)) =
                         (&change.primary_key_column, &change.primary_key_value)
                     {
-                        crate::table_operations::TableChangeOperation::update_cell(
+                        TableChangeOperation::update_cell(
                             change.table_name.clone(),
                             pk_column.clone(),
                             pk_value.clone(),
@@ -426,7 +426,7 @@ impl ResultsTableDelegate {
                                 self.rows.get(change.row_index).and_then(|row| row.get(0))
                             {
                                 // Assume PK is first column as fallback
-                                crate::table_operations::TableChangeOperation::update_cell(
+                                TableChangeOperation::update_cell(
                                     change.table_name.clone(),
                                     pk_column.clone(),
                                     pk_value.clone(),
@@ -459,7 +459,7 @@ impl ResultsTableDelegate {
                             })
                             .collect();
 
-                        crate::table_operations::TableChangeOperation::insert_row(
+                        TableChangeOperation::insert_row(
                             change.table_name.clone(),
                             column_changes,
                         )
@@ -472,7 +472,7 @@ impl ResultsTableDelegate {
                     if let (Some(pk_column), Some(pk_value)) =
                         (&change.primary_key_column, &change.primary_key_value)
                     {
-                        crate::table_operations::TableChangeOperation::delete_row(
+                        TableChangeOperation::delete_row(
                             change.table_name.clone(),
                             pk_column.clone(),
                             pk_value.clone(),
@@ -651,28 +651,10 @@ impl ResultsTableDelegate {
     }
 
     fn extract_table_name_from_query(&self, query: &str) -> Option<String> {
-        // Use the robust SQL parser
-        let extractor = SqlTableExtractor::new();
-        match extractor.extract_primary_table(query) {
-            Ok(table_name) => {
-                // Debug logging
-                log::debug!(
-                    "Extracted table name '{}' from query: {}",
-                    table_name,
-                    query
-                );
-                Some(table_name)
-            }
-            Err(e) => {
-                // Debug logging
-                log::warn!(
-                    "Failed to extract table name from query: {}. Query: {}",
-                    e,
-                    query
-                );
-                None
-            }
-        }
+        // TODO: Use the connection trait to parse SQL and extract table name
+        // This method should be called with access to a connection to use its SQL parser
+        log::warn!("Table name extraction not yet implemented - needs connection access");
+        None
     }
 
     pub fn start_editing_cell(&mut self, row: usize, col: usize) {
@@ -744,9 +726,9 @@ impl ResultsTableDelegate {
                 self.edit_state.add_change(change);
             }
 
-            // Clear editing state for this cell
+            // Clear only the editing state, keep edited_values for visual indicator
             self.edit_state.editing_cell = None;
-            self.edit_state.edited_values.remove(&(row, col));
+            // Note: Keep in edited_values to maintain yellow border until committed to database
 
             Some(new_value)
         } else {
@@ -1265,27 +1247,11 @@ impl ResultsPanel {
                         let new_value = input.read(cx).text().to_string();
                         log::info!("Blur: saving value '{}' at ({}, {})", new_value, row, col);
 
-                        // Save to edited_values for later commit (don't actually commit now)
-                        table
-                            .delegate_mut()
-                            .edit_state
-                            .edited_values
-                            .insert((row, col), new_value.clone());
-                        log::info!("Blur: value saved to edited_values");
-
-                        // Clear editing state but preserve edited_values
-                        table.delegate_mut().edit_state.stop_editing();
+                        // Commit the cell edit to create a TableChange entry
+                        log::info!("Blur: committing cell edit at ({}, {})", row, col);
+                        table.delegate_mut().commit_cell_edit(row, col);
                         table.refresh(cx);
-
-                        log::info!(
-                            "Blur: edit state cleared, edited_values preserved for later commit"
-                        );
-
-                        // Clear editing state
-                        table.delegate_mut().edit_state.stop_editing();
-                        table.refresh(cx);
-
-                        log::info!("Blur: edit state cleared and table refreshed");
+                        log::info!("Blur: cell edit committed and table refreshed");
                     } else {
                         log::info!("Blur: no editing cell found");
                     }
@@ -1611,6 +1577,7 @@ impl ResultsPanel {
             .connection_string
             .clone()
             .unwrap_or_else(|| "sqlite::memory:".to_string());
+        // TODO: error here instead of fallback to sqlite::memory
 
         // Get table name for logging
         let table_name = self
@@ -1621,33 +1588,26 @@ impl ResultsPanel {
             .clone()
             .unwrap_or_else(|| "unknown".to_string());
 
-        // Create a response channel for the async operation
-        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-
         // Create clones for different uses
         let change_operations_for_pipeline = change_operations.clone();
         let change_operations_for_logging = change_operations.clone();
-        let change_operations_for_response = change_operations.clone();
         let table_name_for_logging = table_name.clone();
         let _table_name_for_event = table_name.clone();
-        let table_name_for_response = table_name.clone();
         let connection_string_for_pipeline = connection_string.clone();
         let connection_string_for_event = connection_string.clone();
-        let connection_string_for_response = connection_string.clone();
 
         // Send the table operations to the async pipeline
         let async_event_sender = cx.global::<crate::async_pipeline::AsyncEventSender>();
         match async_event_sender.try_send(AsyncEvent::ExecuteTableOperations {
             connection_string: connection_string_for_pipeline.clone(),
             operations: change_operations_for_pipeline.clone(),
-            response_tx,
             priority: TaskPriority::High,
         }) {
             Ok(_) => {
                 log::info!("Commit Changes: Operations sent to async pipeline");
 
                 // Emit a query execution started event
-                emit_event!(AppEvent::QueryExecutionStarted {
+                cx.emit(AppEvent::QueryExecutionStarted {
                     connection_id: connection_string_for_event.clone(),
                     query: format!(
                         "Table operations on {} ({} operations)",
@@ -1656,139 +1616,29 @@ impl ResultsPanel {
                     ),
                 });
 
-                // Handle the response asynchronously
-                let sql_log_for_response = sql_log.cloned();
-                let connection_id_for_event = connection_string_for_response.clone();
-                let table_name_for_async = table_name_for_response.clone();
-                let _change_operations_for_async = change_operations_for_response.clone();
-                let panel_handle = cx.entity().downgrade();
+                log::info!("Commit Changes: Table operations event sent, waiting for TableOperationCompleted event");
 
-                cx.spawn(async move |_this, cx| {
-                    match response_rx.await {
-                        Ok(Ok(operation_result)) => {
-                            log::info!(
-                                "Commit Changes: Async operations completed successfully - {} rows affected",
-                                operation_result.rows_affected
-                            );
-
-                            // Update UI on main thread
-                            if let Some(panel) = panel_handle.upgrade() {
-                                panel.update(cx, |panel, cx| {
-                                    // Log to SQL log if available
-                                    if let Some(sql_log) = sql_log_for_response {
-                                        for operation in &change_operations_for_response {
-                                            let operation_desc = format!(
-                                                "{} on {}",
-                                                operation.operation_type.to_string(),
-                                                operation.table_name
-                                            );
-                                            sql_log.update(cx, |log, cx| {
-                                                log.append_text(&blanco_ui::SqlLogMessage::SqlStatement(operation_desc), cx);
-                                                log.append_text(&blanco_ui::SqlLogMessage::Comment(
-                                                    format!("Query executed successfully, {} rows affected", operation_result.rows_affected)
-                                                ), cx);
-                                            });
-                                        }
-
-                                        // Log summary
-                                        let summary = format!(
-                                            "All inline edit queries completed successfully\n-- Total rows affected: {}",
-                                            operation_result.rows_affected
-                                        );
-                                        sql_log.update(cx, |log, cx| {
-                                            log.append_text(&blanco_ui::SqlLogMessage::Comment(summary), cx);
-                                        });
-                                    }
-
-                                    // Clear changes and refresh query results
-                                    panel.clear_changes(cx);
-
-                                    // Refresh the current query to show the changes
-                                    if let Some(current_result) = &panel.current_result.clone() {
-                                        if let Some(query_text) = &current_result.query_text {
-                                            // Emit query execution to refresh data
-                                            let (refresh_tx, refresh_rx) = tokio::sync::oneshot::channel();
-                                            let refresh_sender = cx.global::<crate::async_pipeline::AsyncEventSender>();
-
-                                            if let Ok(_) = refresh_sender.try_send(AsyncEvent::ExecuteQuery {
-                                                connection_string: connection_id_for_event.clone(),
-                                                sql: query_text.clone(),
-                                                response_tx: refresh_tx,
-                                                priority: TaskPriority::Normal,
-                                            }) {
-                                                // Handle refresh response
-                                                cx.spawn(async move |_this, cx| {
-                                                    match refresh_rx.await {
-                                                        Ok(Ok(result)) => {
-                                                            if let Some(panel) = panel_handle.upgrade() {
-                                                                panel.update(cx, |panel, cx| {
-                                                                    panel.set_query_result(result, cx);
-                                                                }).ok();
-                                                            }
-                                                        }
-                                                        Ok(Err(e)) => {
-                                                            log::error!("Failed to refresh query after commit: {}", e);
-                                                        }
-                                                        Err(_) => {
-                                                            log::error!("Refresh response channel closed");
-                                                        }
-                                                    }
-                                                }).detach();
-                                            }
-                                        }
-                                    }
-                                }).ok();
-                            }
-
-                            // Emit success event
-                            emit_event!(AppEvent::TableChangesCommitted {
-                                table_name: table_name_for_async,
-                                connection_id: connection_id_for_event,
-                                changes_count: operation_result.operations_executed,
-                                rows_affected: operation_result.rows_affected,
-                                success: true,
-                            });
-                        }
-                        Ok(Err(e)) => {
-                            log::error!("Commit Changes: Async operations failed: {}", e);
-
-                            // Log error to SQL log if available
-                            if let Some(panel) = panel_handle.upgrade() {
-                                panel.update(cx, |_panel, cx| {
-                                    if let Some(sql_log) = sql_log_for_response {
-                                        for operation in &change_operations_for_response {
-                                            let operation_desc = format!(
-                                                "{} on {} - FAILED",
-                                                operation.operation_type.to_string(),
-                                                operation.table_name
-                                            );
-                                            sql_log.update(cx, |log, cx| {
-                                                log.append_text(&blanco_ui::SqlLogMessage::SqlStatement(operation_desc), cx);
-                                                log.append_text(&blanco_ui::SqlLogMessage::Comment(format!("Error: {}", e)), cx);
-                                            });
-                                        }
-
-                                        sql_log.update(cx, |log, cx| {
-                                            log.append_text(&blanco_ui::SqlLogMessage::Comment(
-                                                "Some inline edit queries had errors".to_string()
-                                            ), cx);
-                                        });
-                                    }
-                                }).ok();
-                            }
-
-                            // Emit error event
-                            emit_event!(AppEvent::ErrorOccurred {
-                                context: format!("Table operations on {}", table_name_for_async),
-                                error: e.to_string(),
-                                severity: crate::events::ErrorSeverity::Error,
-                            });
-                        }
-                        Err(e) => {
-                            log::error!("Commit Changes: Failed to receive async response: {}", e);
-                        }
+                // Log the operations to SQL log if available
+                if let Some(sql_log) = sql_log {
+                    for operation in &change_operations_for_logging {
+                        let sql_query = operation.to_sql_query();
+                        sql_log.update(cx, |log, cx| {
+                            log.append_text(&blanco_ui::SqlLogMessage::SqlStatement(sql_query), cx);
+                            log.append_text(&blanco_ui::SqlLogMessage::Comment(
+                                "Table operation sent to async pipeline".to_string()
+                            ), cx);
+                        });
                     }
-                }).detach();
+
+                    // Log summary
+                    let summary = format!(
+                        "Sent {} table operations to async pipeline\n-- Response handling will be implemented",
+                        change_operations_for_logging.len()
+                    );
+                    sql_log.update(cx, |log, cx| {
+                        log.append_text(&blanco_ui::SqlLogMessage::Comment(summary), cx);
+                    });
+                }
             }
             Err(e) => {
                 log::error!(
@@ -1836,6 +1686,8 @@ impl ResultsPanel {
             .clone()
             .unwrap_or_else(|| "sqlite::memory:".to_string());
 
+        // TODO: error here instead of fallback to sqlite::memory
+
         log::info!(
             "Rollback Changes: Rolling back {} changes on table {}",
             changes.len(),
@@ -1877,7 +1729,7 @@ impl ResultsPanel {
 
         // Emit rollback event
         let changes_count = changes.len();
-        emit_event!(AppEvent::TableChangesRolledBack {
+        cx.emit(AppEvent::TableChangesRollback {
             table_name: table_name.clone(),
             connection_id: connection_string,
             changes_count,
@@ -2058,8 +1910,45 @@ impl ResultsPanel {
         });
         cx.notify();
     }
+
+    /// Handle table operation completion event
+    pub fn handle_table_operation_completed(
+        &mut self,
+        _table_name: &str,
+        success: bool,
+        rows_affected: Option<u64>,
+        error_message: Option<String>,
+        operations_executed: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if success {
+            log::info!(
+                "Table operation completed successfully: {} operations, {} rows affected",
+                operations_executed,
+                rows_affected.unwrap_or(0)
+            );
+
+            // Clear edit state after successful commit
+            self.table.update(cx, |table, cx| {
+                table.delegate_mut().edit_state.clear_edits();
+                table.refresh(cx);
+            });
+
+            // Optionally refresh the data or show a success message
+            cx.notify();
+        } else {
+            log::error!(
+                "Table operation failed: {}",
+                error_message.unwrap_or_else(|| "Unknown error".to_string())
+            );
+
+            // Keep the edit state so user can retry or fix issues
+            // Don't refresh the table to preserve user's changes
+        }
+    }
 }
 
+impl EventEmitter<AppEvent> for ResultsPanel {}
 impl Focusable for ResultsPanel {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()

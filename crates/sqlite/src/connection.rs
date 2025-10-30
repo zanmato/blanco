@@ -1,6 +1,9 @@
-use crate::connection_trait::{Connection, ConnectionFactory, QueryResult};
-use crate::icon::IconName;
+use anyhow::Result;
 use async_trait::async_trait;
+use blanco_core::{
+    Connection, ConnectionFactory, IconName, QueryResult, ColumnInfo, TableMetadata,
+    ConnectionUIMetadata, TableChangeOperation,
+};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use sqlx::{Column, ConnectOptions, Row, TypeInfo};
 use std::str::FromStr;
@@ -36,7 +39,7 @@ impl SqliteConnectionKey {
     }
 
     /// Extract connection key from a SQLite connection string
-    pub fn from_connection_string(connection_string: &str) -> Result<Self, anyhow::Error> {
+    pub fn from_connection_string(connection_string: &str) -> Result<Self> {
         // Handle different SQLite connection string formats:
         // - sqlite://path/to/db.sqlite
         // - sqlite:path/to/db.sqlite
@@ -50,16 +53,8 @@ impl SqliteConnectionKey {
             connection_string
         };
 
-        // Expand ~ to home directory if present
-        let expanded_path = if let Some(home) = dirs::home_dir() {
-            if path.starts_with('~') {
-                path.replacen('~', &home.to_string_lossy(), 1)
-            } else {
-                path.to_string()
-            }
-        } else {
-            path.to_string()
-        };
+        // For now, don't expand ~ - just use the path as-is
+        let expanded_path = path.to_string();
 
         // Convert to absolute path
         let absolute_path = if std::path::Path::new(&expanded_path).is_absolute() {
@@ -83,12 +78,11 @@ impl SqliteConnectionKey {
     pub fn to_connection_string(&self) -> String {
         format!("sqlite://{}", self.database_path)
     }
-
-  }
+}
 
 impl SqliteConnection {
     /// Create a new SQLite connection
-    pub fn new(database_path: String) -> Result<Self, anyhow::Error> {
+    pub fn new(database_path: String) -> Result<Self> {
         let connection_key = SqliteConnectionKey::from_connection_string(&database_path)?;
         let display_name = Self::generate_display_name(&connection_key.database_path);
 
@@ -113,17 +107,14 @@ impl SqliteConnection {
         }
     }
 
-    // Helper methods that were previously provided by DatabaseManager
-
     /// Helper method to connect asynchronously
-    async fn connect_async(&mut self, database_path: &str) -> Result<(), sqlx::Error> {
+    async fn connect_async(&mut self, database_path: &str) -> Result<sqlx::SqlitePool> {
         let options = SqliteConnectOptions::from_str(database_path)?
             .create_if_missing(true)
             .disable_statement_logging();
 
         let pool = SqlitePool::connect_with(options).await?;
-        self.pool = Some(pool);
-        Ok(())
+        Ok(pool)
     }
 
     /// Check if the database connection is healthy with a ping query
@@ -137,7 +128,7 @@ impl SqliteConnection {
     }
 
     /// Execute a query asynchronously using SQLX directly
-    async fn execute_query_async(&self, query: &str) -> Result<QueryResult, Box<dyn std::error::Error>> {
+    async fn execute_query_async(&self, query: &str) -> Result<QueryResult> {
         let pool = self.pool.as_ref().ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
 
         // Try to execute as a query that returns rows
@@ -256,10 +247,60 @@ impl SqliteConnection {
     }
 
     /// Get the size of the database file in bytes
-    pub fn get_database_size(&self) -> Result<u64, anyhow::Error> {
+    pub fn get_database_size(&self) -> Result<u64> {
         let metadata = std::fs::metadata(&self.database_path)?;
         Ok(metadata.len())
     }
+
+    /// Sanitize path for logging (remove sensitive parts if any)
+    fn get_sanitize_path(&self, path: &str) -> String {
+        // For SQLite, paths are generally not sensitive, but we can still clean them up
+        path.replace("\\", "/") // Normalize path separators
+    }
+
+    /// Extract primary key information from RowIdentifier
+    fn extract_pk_info(&self, row_identifier: &RowIdentifier) -> Option<(String, String)> {
+        match row_identifier {
+            RowIdentifier::PrimaryKey { column, value } => Some((column.clone(), value.clone())),
+            RowIdentifier::RowIndex(_) => None,
+        }
+    }
+
+    /// Quote a value for SQL and return both quoted and unquoted versions
+    fn quote_value(&self, value: &Option<String>) -> (String, String) {
+        match value {
+            Some(v) => {
+                if v.is_empty() {
+                    ("NULL".to_string(), "NULL".to_string())
+                } else {
+                    let clean_value = v.trim_matches('\'');
+                    let quoted = format!("'{}'", clean_value.replace("'", "''"));
+                    (quoted, clean_value.to_string())
+                }
+            }
+            None => ("NULL".to_string(), "NULL".to_string()),
+        }
+    }
+
+    /// Fetch SQLite tables using async background task
+    async fn fetch_sqlite_tables(&self) -> Result<Vec<String>> {
+        let result = self.execute_query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        ).await?;
+
+        let tables: Vec<String> = result.rows.into_iter()
+            .filter_map(|row| row.into_iter().next())
+            .collect();
+
+        Ok(tables)
+    }
+}
+
+// Placeholder types for table operations (these would need to be defined or moved from main crate)
+#[derive(Debug, Clone)]
+pub enum RowIdentifier {
+    PrimaryKey { column: String, value: String },
+    RowIndex(usize),
 }
 
 #[async_trait]
@@ -284,7 +325,7 @@ impl Connection for SqliteConnection {
         self
     }
 
-    async fn connect(&mut self, connection_string: &str) -> Result<(), anyhow::Error> {
+    async fn connect(&mut self, connection_string: &str) -> Result<()> {
         log::info!("Connecting to SQLite database: {}", self.get_sanitize_path(connection_string));
 
         // Parse and validate the connection string
@@ -299,11 +340,8 @@ impl Connection for SqliteConnection {
         }
 
         // Connect using SQLX directly
-        let options = SqliteConnectOptions::from_str(&self.database_path)?
-            .create_if_missing(true)
-            .disable_statement_logging();
-
-        let pool = SqlitePool::connect_with(options).await?;
+        let database_path = self.database_path.clone();
+        let pool = self.connect_async(&database_path).await?;
         self.pool = Some(pool);
 
         log::info!("Successfully connected to SQLite database");
@@ -321,7 +359,7 @@ impl Connection for SqliteConnection {
         self.pool.is_some()
     }
 
-    async fn ensure_connected(&mut self, connection_string: &str) -> Result<(), anyhow::Error> {
+    async fn ensure_connected(&mut self, connection_string: &str) -> Result<()> {
         if !self.is_connected() || !self.is_connection_healthy().await {
             log::info!("Reconnecting to SQLite database");
             self.connect(connection_string).await?;
@@ -329,7 +367,7 @@ impl Connection for SqliteConnection {
         Ok(())
     }
 
-    async fn execute_query(&self, query: &str) -> Result<QueryResult, anyhow::Error> {
+    async fn execute_query(&self, query: &str) -> Result<QueryResult> {
         log::debug!("Executing SQLite query: {}", query);
 
         let result = self.execute_query_async(query).await
@@ -343,7 +381,7 @@ impl Connection for SqliteConnection {
         &self,
         sql_template: &str,
         parameters: &[String],
-    ) -> Result<QueryResult, anyhow::Error> {
+    ) -> Result<QueryResult> {
         log::debug!("Executing prepared SQLite query with {} parameters", parameters.len());
 
         let pool = self.pool.as_ref().ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
@@ -444,7 +482,7 @@ impl Connection for SqliteConnection {
         }
     }
 
-    async fn get_databases(&self) -> Result<Vec<String>, anyhow::Error> {
+    async fn get_databases(&self) -> Result<Vec<String>> {
         // SQLite has a single database, so we return the current database name
         let db_name = std::path::Path::new(&self.database_path)
             .file_stem()
@@ -455,7 +493,7 @@ impl Connection for SqliteConnection {
         Ok(vec![db_name])
     }
 
-    async fn get_schemas(&self) -> Result<Vec<String>, anyhow::Error> {
+    async fn get_schemas(&self) -> Result<Vec<String>> {
         // SQLite has a main schema by default, plus any attached databases
         let mut schemas = vec!["main".to_string()];
 
@@ -478,7 +516,7 @@ impl Connection for SqliteConnection {
         Ok(schemas)
     }
 
-    async fn get_tables(&self, schema: Option<&str>) -> Result<Vec<String>, anyhow::Error> {
+    async fn get_tables(&self, schema: Option<&str>) -> Result<Vec<String>> {
         let schema_filter = schema.unwrap_or("main");
         let query = format!(
             "SELECT name FROM {}.sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
@@ -498,7 +536,7 @@ impl Connection for SqliteConnection {
         false // SQLite doesn't support schemas in the traditional sense
     }
 
-    async fn get_primary_key_for_table(&self, table_name: &str) -> Result<Option<String>, anyhow::Error> {
+    async fn get_primary_key_for_table(&self, table_name: &str) -> Result<Option<String>> {
         // Query SQLite's table_info to get primary key information
         let query = format!("PRAGMA table_info({})", table_name);
 
@@ -527,115 +565,87 @@ impl Connection for SqliteConnection {
         }
     }
 
-    async fn execute_table_changes(&self, changes: &[crate::table_operations::TableChangeOperation]) -> Result<QueryResult, anyhow::Error> {
-        use crate::table_operations::OperationType;
+    async fn get_columns_for_table(&self, table_name: &str, _schema: Option<&str>) -> Result<Vec<ColumnInfo>> {
+        log::debug!("Getting columns for SQLite table '{}'", table_name);
 
-        let mut total_affected: u64 = 0;
-        let mut all_results = Vec::new();
+        // Use PRAGMA table_info to get column information
+        let query = format!("PRAGMA table_info({})", table_name);
 
-        for change in changes {
-            let sql = match &change.operation_type {
-                OperationType::Update => {
-                    if let Some((pk_column, pk_value)) = self.extract_pk_info(&change.row_identifier) {
-                        if let Some(column_change) = change.changes.first() {
-                            let column_name = &column_change.column_name;
-                            let new_value = &column_change.new_value;
+        let result = self.execute_query(&query).await?;
 
-                            let (quoted_value, _param_value) = self.quote_value(new_value);
-                            let (quoted_pk, _) = self.quote_value(&Some(pk_value.clone()));
+        let mut columns = Vec::new();
+        for row in result.rows {
+            if row.len() >= 6 {
+                // PRAGMA table_info returns: cid, name, type, notnull, dflt_value, pk
+                let column_name = &row[1];
+                let data_type = &row[2];
+                let not_null = &row[3]; // 1 for NOT NULL, 0 for nullable
+                let default_value = &row[4]; // Default value or NULL
+                let is_primary_key = &row[5]; // 1 for PK, 0 for not PK
 
-                            format!(
-                                "UPDATE {} SET {} = {} WHERE {} = {}",
-                                change.table_name, column_name, quoted_value, pk_column, quoted_pk
-                            )
-                        } else {
-                            return Err(anyhow::anyhow!("Update operation requires at least one column change"));
-                        }
-                    } else {
-                        return Err(anyhow::anyhow!("Update operation requires primary key"));
-                    }
-                }
-                OperationType::Insert => {
-                    let column_names: Vec<String> = change.changes.iter().map(|c| c.column_name.clone()).collect();
-                    let values: Vec<(String, String)> = change.changes.iter()
-                        .map(|c| self.quote_value(&c.new_value))
-                        .collect();
-
-                    if column_names.is_empty() {
-                        return Err(anyhow::anyhow!("Insert operation requires at least one column"));
-                    }
-
-                    let columns_str = column_names.join(", ");
-                    let values_str: String = values.iter().map(|(quoted, _)| quoted.as_str()).collect::<Vec<&str>>().join(", ");
-
-                    format!(
-                        "INSERT INTO {} ({}) VALUES ({})",
-                        change.table_name, columns_str, values_str
-                    )
-                }
-                OperationType::Delete => {
-                    if let Some((pk_column, pk_value)) = self.extract_pk_info(&change.row_identifier) {
-                        let (quoted_pk, _) = self.quote_value(&Some(pk_value));
-                        format!(
-                            "DELETE FROM {} WHERE {} = {}",
-                            change.table_name, pk_column, quoted_pk
-                        )
-                    } else {
-                        return Err(anyhow::anyhow!("Delete operation requires primary key"));
-                    }
-                }
-            };
-
-            log::debug!("Executing SQL: {}", sql);
-
-            match self.execute_query(&sql).await {
-                Ok(result) => {
-                    let affected = result.row_count();
-                    total_affected += affected as u64;
-                    log::debug!("SQL execution affected {} rows", affected);
-                    all_results.push(result);
-                }
-                Err(e) => {
-                    log::error!("Failed to execute table change SQL: {}", e);
-                    return Err(e);
-                }
+                let column_info = ColumnInfo {
+                    name: column_name.clone(),
+                    data_type: data_type.clone(),
+                    is_nullable: not_null != "1", // Reverse logic: notnull=1 means NOT NULL
+                    is_primary_key: is_primary_key == "1",
+                    default_value: if default_value.is_empty() { None } else { Some(default_value.clone()) },
+                    character_maximum_length: None, // SQLite doesn't provide this info in PRAGMA
+                };
+                columns.push(column_info);
             }
         }
 
-        // Create a combined result
-        if all_results.len() == 1 {
-            Ok(all_results.into_iter().next().unwrap())
-        } else {
-            // Create a result summarizing all operations
-            Ok(QueryResult {
-                columns: vec!["affected_rows".to_string()],
-                column_types: vec!["INTEGER".to_string()],
-                rows: vec![vec![total_affected.to_string()]],
-                rows_affected: total_affected,
-                query_text: Some("Batch table operations".to_string()),
-                execution_time_ms: None,
-                is_error: false,
-            })
-        }
+        log::debug!("Found {} columns for table '{}'", columns.len(), table_name);
+        Ok(columns)
     }
 
-    async fn get_database_name(&self) -> Result<Option<String>, anyhow::Error> {
+    async fn get_table_metadata(&self, table_name: &str, schema: Option<&str>) -> Result<TableMetadata> {
+        let schema_name = schema.unwrap_or("main");
+        log::debug!("Getting metadata for SQLite table '{}'", table_name);
+
+        // Get basic table information
+        let columns = self.get_columns_for_table(table_name, Some(schema_name)).await?;
+
+        // Get row count
+        let row_count = match self.execute_prepared_query(
+            &format!("SELECT COUNT(*) FROM \"{}\"", table_name),
+            &[]
+        ).await {
+            Ok(count_result) if !count_result.rows.is_empty() => {
+                count_result.rows[0][0].parse().ok()
+            }
+            _ => None
+        };
+
+        // Extract primary key information
+        let primary_keys: Vec<String> = columns.iter()
+            .filter(|col| col.is_primary_key)
+            .map(|col| col.name.clone())
+            .collect();
+
+        let mut metadata = TableMetadata::new(table_name.to_string(), None); // SQLite doesn't use schemas
+        metadata.columns = columns;
+        metadata.row_count = row_count;
+        metadata.primary_keys = primary_keys;
+
+        log::debug!("Retrieved metadata for table '{}': {} columns, {} PKs",
+                   table_name, metadata.columns.len(), metadata.primary_keys.len());
+
+        Ok(metadata)
+    }
+
+    async fn execute_table_changes(&self, changes: &[TableChangeOperation]) -> Result<QueryResult> {
+        // This is a placeholder - would need implementation of table operations
+        Err(anyhow::anyhow!("Table changes not yet implemented for SQLite"))
+    }
+
+    async fn get_database_name(&self) -> Result<Option<String>> {
         // For SQLite, get the database file name without extension
         let path = std::path::Path::new(&self.database_path);
         let name = path.file_stem()
             .and_then(|s| s.to_str())
             .map(|s| s.to_string());
         Ok(name)
-    }
-
-    // === UI Integration Methods ===
-
-    fn supports_lsp(&self) -> bool {
-        false // SQLite doesn't support LSP
-    }
-
-    fn get_lsp_config(&self) -> Option<crate::connection_trait::LspConfig> {
-        None // SQLite doesn't support LSP
     }
 
     fn get_file_safe_name(&self) -> String {
@@ -649,215 +659,12 @@ impl Connection for SqliteConnection {
         name.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect()
     }
 
-    fn get_ui_metadata(&self) -> crate::connection_trait::ConnectionUIMetadata {
-        crate::connection_trait::ConnectionUIMetadata {
-            display_name: self.get_display_name(),
+    fn get_ui_metadata(&self) -> ConnectionUIMetadata {
+        ConnectionUIMetadata {
+            display_name: self.display_name.clone(),
             file_safe_name: self.get_file_safe_name(),
             supports_schemas: self.supports_schemas(),
-            supports_lsp: self.supports_lsp(),
             icon_name: self.get_icon_name(),
         }
-    }
-
-  }
-
-impl SqliteConnection {
-    /// Sanitize path for logging (remove sensitive parts if any)
-    fn get_sanitize_path(&self, path: &str) -> String {
-        // For SQLite, paths are generally not sensitive, but we can still clean them up
-        path.replace("\\", "/") // Normalize path separators
-    }
-
-    // === Helper Methods for Table Operations ===
-
-    /// Extract primary key information from RowIdentifier
-    fn extract_pk_info(&self, row_identifier: &crate::table_operations::RowIdentifier) -> Option<(String, String)> {
-        use crate::table_operations::RowIdentifier;
-        match row_identifier {
-            RowIdentifier::PrimaryKey { column, value } => Some((column.clone(), value.clone())),
-            RowIdentifier::RowIndex(_) => None,
-        }
-    }
-
-    /// Quote a value for SQL and return both quoted and unquoted versions
-    fn quote_value(&self, value: &Option<String>) -> (String, String) {
-        match value {
-            Some(v) => {
-                if v.is_empty() {
-                    ("NULL".to_string(), "NULL".to_string())
-                } else {
-                    let clean_value = v.trim_matches('\'');
-                    let quoted = format!("'{}'", clean_value.replace("'", "''"));
-                    (quoted, clean_value.to_string())
-                }
-            }
-            None => ("NULL".to_string(), "NULL".to_string()),
-        }
-    }
-}
-
-/// Factory for creating SQLite connections
-pub struct SqliteConnectionFactory;
-
-#[async_trait]
-impl ConnectionFactory for SqliteConnectionFactory {
-    async fn create_connection(&self, connection_string: &str) -> Result<Box<dyn Connection>, anyhow::Error> {
-        let mut conn = SqliteConnection::new(connection_string.to_string())?;
-        conn.connect(connection_string).await?;
-        Ok(Box::new(conn))
-    }
-
-    fn parse_connection_string(&self, connection_string: &str) -> Result<String, anyhow::Error> {
-        let key = SqliteConnectionKey::from_connection_string(connection_string)?;
-        Ok(key.to_connection_string())
-    }
-
-    fn get_connection_type(&self) -> &'static str {
-        "SQLite"
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::NamedTempFile;
-    use std::fs::File;
-
-    #[test]
-    fn test_sqlite_connection_key_from_path() {
-        let test_path = "/tmp/test.db";
-        let key = SqliteConnectionKey::from_connection_string(test_path).unwrap();
-        assert_eq!(key.database_path, test_path);
-    }
-
-    #[test]
-    fn test_sqlite_connection_key_from_sqlite_url() {
-        let test_path = "/tmp/test.db";
-        let url = format!("sqlite://{}", test_path);
-        let key = SqliteConnectionKey::from_connection_string(&url).unwrap();
-        assert_eq!(key.database_path, test_path);
-    }
-
-    #[test]
-    fn test_sqlite_connection_key_from_sqlite_prefix() {
-        let test_path = "/tmp/test.db";
-        let url = format!("sqlite:{}", test_path);
-        let key = SqliteConnectionKey::from_connection_string(&url).unwrap();
-        assert_eq!(key.database_path, test_path);
-    }
-
-    #[test]
-    fn test_generate_display_name() {
-        assert_eq!(
-            SqliteConnection::generate_display_name("/path/to/mydb.sqlite"),
-            "SQLite - mydb"
-        );
-        assert_eq!(
-            SqliteConnection::generate_display_name("/path/to/mydb.db"),
-            "SQLite - mydb"
-        );
-        assert_eq!(
-            SqliteConnection::generate_display_name("/path/to/mydb"),
-            "SQLite - mydb"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_sqlite_connection_lifecycle() {
-        // Create a temporary database file
-        let temp_file = NamedTempFile::new().unwrap();
-        let db_path = temp_file.path().to_string_lossy().to_string();
-        let connection_string = format!("sqlite://{}", db_path);
-
-        let mut conn = SqliteConnection::new(connection_string.clone()).unwrap();
-
-        // Initially not connected
-        assert!(!conn.is_connected());
-
-        // Connect
-        conn.connect(&connection_string).await.unwrap();
-        assert!(conn.is_connected());
-
-        // Test a simple query
-        let result = conn.execute_query("SELECT 1 as test_column").await.unwrap();
-        assert_eq!(result.columns.len(), 1);
-        assert_eq!(result.rows.len(), 1);
-        assert_eq!(result.rows[0][0], "1");
-
-        // Disconnect
-        conn.disconnect().await;
-        assert!(!conn.is_connected());
-    }
-
-    #[tokio::test]
-    async fn test_sqlite_schema_operations() {
-        // Create a temporary database file
-        let temp_file = NamedTempFile::new().unwrap();
-        let db_path = temp_file.path().to_string_lossy().to_string();
-        let connection_string = format!("sqlite://{}", db_path);
-
-        let mut conn = SqliteConnection::new(connection_string.clone()).unwrap();
-        conn.connect(&connection_string).await.unwrap();
-
-        // Create a test table
-        conn.execute_query("CREATE TABLE test_table (id INTEGER, name TEXT)").await.unwrap();
-
-        // Test get_tables
-        let tables = conn.get_tables(None).await.unwrap();
-        assert!(tables.contains(&"test_table".to_string()));
-
-        // Test get_schemas
-        let schemas = conn.get_schemas().await.unwrap();
-        assert!(schemas.contains(&"main".to_string()));
-
-        // Test get_databases
-        let databases = conn.get_databases().await.unwrap();
-        assert!(!databases.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_sqlite_prepared_query() {
-        // Create a temporary database file
-        let temp_file = NamedTempFile::new().unwrap();
-        let db_path = temp_file.path().to_string_lossy().to_string();
-        let connection_string = format!("sqlite://{}", db_path);
-
-        let mut conn = SqliteConnection::new(connection_string.clone()).unwrap();
-        conn.connect(&connection_string).await.unwrap();
-
-        // Create a test table
-        conn.execute_query("CREATE TABLE test_table (id INTEGER, name TEXT)").await.unwrap();
-
-        // Insert data using prepared query
-        let sql_template = "INSERT INTO test_table (id, name) VALUES (?, ?)";
-        let parameters = vec!["1".to_string(), "test_name".to_string()];
-
-        let result = conn.execute_prepared_query(sql_template, &parameters).await.unwrap();
-        assert_eq!(result.rows_affected, 1);
-
-        // Query the data back
-        let select_result = conn.execute_query("SELECT id, name FROM test_table").await.unwrap();
-        assert_eq!(select_result.rows.len(), 1);
-        assert_eq!(select_result.rows[0][0], "1");
-        assert_eq!(select_result.rows[0][1], "test_name");
-    }
-
-    #[tokio::test]
-    async fn test_sqlite_connection_factory() {
-        // Create a temporary database file
-        let temp_file = NamedTempFile::new().unwrap();
-        let db_path = temp_file.path().to_string_lossy().to_string();
-        let connection_string = format!("sqlite://{}", db_path);
-
-        let factory = SqliteConnectionFactory;
-
-        // Test parsing
-        let key = factory.parse_connection_string(&connection_string).unwrap();
-        assert_eq!(key.database_path, db_path);
-
-        // Test creation
-        let conn = factory.create_connection(&connection_string).await.unwrap();
-        assert!(conn.is_connected());
-        assert_eq!(conn.get_display_name(), "SQLite - tmp");
     }
 }

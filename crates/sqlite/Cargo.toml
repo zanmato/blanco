@@ -1,0 +1,34 @@
+[package]
+name = "sqlite"
+version = "0.1.0"
+edition = "2021"
+description = "SQLite database implementation for Blanco SQL editor"
+
+[dependencies]
+# Core dependencies
+blanco-core = { path = "../blanco-core" }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+
+# GPUI dependencies
+gpui = { workspace = true }
+gpui-component = { workspace = true }
+
+# Database dependencies
+sqlx = { workspace = true, features = ["sqlite", "chrono", "uuid"] }
+
+# SQL parsing
+sql-parse = { workspace = true }
+
+# Common dependencies
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+log = { workspace = true }
+
+# Rope handling for completion/hover
+ropey = { workspace = true }
+
+# LSP types for completion/hover
+lsp-types = { workspace = true }

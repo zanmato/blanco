@@ -1,7 +1,7 @@
 use gpui::{
     actions, div, prelude::FluentBuilder, px, Action, App, AppContext, Context, Entity,
-    FocusHandle, Focusable, InteractiveElement, IntoElement, Menu, MenuItem, ParentElement, Render,
-    Styled, Window,
+    EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, Menu, MenuItem, ParentElement, Render,
+    Styled, Window, Subscription,
 };
 use gpui_component::{
     button::Button, h_flex, menu::AppMenuBar, v_flex, ActiveTheme, ContextModal as _, Root,
@@ -10,11 +10,13 @@ use gpui_component::{
 use log::{debug, error, info};
 use serde::Deserialize;
 
+use blanco_ui::{Icon, IconName};
+
 use crate::{
+    app_events::AppEvent,
     connection_modal::NewConnectionModal,
     db_service::DbService,
     editor_panel::EditorPanel,
-    icon::{Icon, IconName},
     sidebar::ConnectionSidebar,
 };
 
@@ -36,7 +38,6 @@ actions!(
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
 #[action(namespace = blanco_app, no_json)]
 pub struct ToggleSidebar;
-
 
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
@@ -64,6 +65,7 @@ pub struct BlancoApp {
     editor_panel: Entity<EditorPanel>,
     sidebar_collapsed: bool,
     app_menu_bar: Entity<AppMenuBar>,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl BlancoApp {
@@ -79,22 +81,8 @@ impl BlancoApp {
 
         // Synchronously load tabs from database - wait for database to be initialized
         let saved_tabs = std::thread::spawn(move || {
-            let runtime = tokio::runtime::Runtime::new().unwrap();
-            runtime.block_on(async {
-                // Wait up to 1 second for database to be initialized
-                let mut attempts = 0;
-                while attempts < 10 {
-                    if app_db.read().await.is_some() {
-                        break;
-                    }
-                    debug!(
-                        "Waiting for app database to initialize... (attempt {})",
-                        attempts + 1
-                    );
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                    attempts += 1;
-                }
-
+            async_std::task::block_on(async {
+                // Database should already be initialized synchronously
                 if let Some(db) = app_db.read().await.as_ref() {
                     match db.load_query_tabs().await {
                         Ok(tabs) => {
@@ -115,7 +103,7 @@ impl BlancoApp {
                         }
                     }
                 } else {
-                    error!("App database not initialized after waiting");
+                    error!("App database not initialized");
                     Vec::new()
                 }
             })
@@ -127,12 +115,71 @@ impl BlancoApp {
             cx.new(|cx| EditorPanel::new_with_saved_tabs(window, cx, false, saved_tabs));
         let app_menu_bar = AppMenuBar::new(window, cx);
 
+        // Set up event subscriptions using subscribe_in pattern
+        let mut subscriptions = Vec::new();
+
+        // Subscribe to sidebar events with window access for tab restoration
+        let editor_panel_clone = editor_panel.clone();
+        let subscription = cx.subscribe_in(
+            &sidebar,
+            window,
+            move |app, sidebar, event, window, cx| {
+                match event {
+                    AppEvent::ConnectionEstablished { .. } => {
+                        // Refresh sidebar connections when a new connection is established
+                        sidebar.update(cx, |sidebar, cx| {
+                            sidebar.load_database_connections(cx);
+                        });
+
+                        // Optionally refresh editor panel connection options
+                        editor_panel_clone.update(cx, |editor_panel, cx| {
+                            // TODO: Refresh connection options in editor if needed
+                            log::info!("Connection established, refreshing components");
+                        });
+                    }
+                    AppEvent::ConnectionLost { .. } => {
+                        // Handle connection loss
+                        log::info!("Connection lost, updating UI components");
+                    }
+                    AppEvent::ConnectionsLoaded { .. } => {
+                        // This is the key event for tab restoration with window access!
+                        log::info!("Connections loaded, restoring saved tabs with window access");
+                        editor_panel_clone.update(cx, |editor_panel, cx| {
+                            if let Err(e) = editor_panel.restore_saved_tabs_with_connections_sync(window, cx) {
+                                log::error!("Failed to restore saved tabs: {}", e);
+                            }
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        );
+        subscriptions.push(subscription);
+
+        // Subscribe to editor panel events to update other components
+        let sidebar_clone = sidebar.clone();
+        let subscription = cx.subscribe(&editor_panel, move |app, editor_panel, event, cx| {
+            match event {
+                AppEvent::QueryExecutionStarted { .. } => {
+                    // Could show loading indicator or update status
+                    log::info!("Query execution started");
+                }
+                AppEvent::QueryExecutionCompleted { .. } => {
+                    // Could update status or refresh data
+                    log::info!("Query execution completed");
+                }
+                _ => {}
+            }
+        });
+        subscriptions.push(subscription);
+
         Self {
             focus_handle: cx.focus_handle(),
             sidebar,
             editor_panel,
             sidebar_collapsed: false,
             app_menu_bar,
+            _subscriptions: subscriptions,
         }
     }
 
@@ -142,11 +189,7 @@ impl BlancoApp {
             panel.save_tabs(cx);
         });
 
-        // Clean up LSP processes
-        self.editor_panel.update(cx, |panel, cx| {
-            panel.shutdown_lsp_processes(cx);
-        });
-
+        
         // Give a moment for operations to complete
         std::thread::sleep(std::time::Duration::from_millis(200));
         cx.quit();
@@ -156,22 +199,6 @@ impl BlancoApp {
         println!("Blanco SQL Editor v0.1.0");
     }
 
-    fn on_new_query(&mut self, _: &NewQuery, window: &mut Window, cx: &mut Context<Self>) {
-        // Create a new query tab with default in-memory SQLite connection
-        self.editor_panel.update(cx, |panel, cx| {
-            panel.add_new_tab_with_unified_connection(
-                window,
-                "Test Database".to_string(),
-                "sqlite::memory:".to_string(),
-                None,
-                cx,
-            );
-        });
-        cx.notify();
-    }
-
-    
-    
     fn on_open_connection(&mut self, _: &OpenConnection, _: &mut Window, cx: &mut Context<Self>) {
         // TODO: Open connection dialog
         cx.notify();
@@ -242,7 +269,7 @@ impl BlancoApp {
                             let db_service = DbService::global(cx).clone();
                             let app_db = db_service.app_db_handle();
 
-                            crate::gpui_tokio::Tokio::spawn_result(cx, async move {
+                            cx.spawn(async move |cx| {
                                 if let Some(db) = app_db.read().await.as_ref() {
                                     db.save_connection(&conn_data).await.map_err(|e| {
                                         anyhow::anyhow!("Failed to save connection: {}", e)
@@ -345,6 +372,8 @@ impl BlancoApp {
     }
 }
 
+impl EventEmitter<AppEvent> for BlancoApp {}
+
 impl Focusable for BlancoApp {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -362,7 +391,6 @@ impl Render for BlancoApp {
         v_flex()
             .on_action(cx.listener(Self::on_quit))
             .on_action(cx.listener(Self::on_about))
-            .on_action(cx.listener(Self::on_new_query))
             .on_action(cx.listener(Self::on_new_query_for_unified_connection))
             .on_action(cx.listener(Self::on_new_query_for_unified_schema))
             .on_action(cx.listener(Self::on_open_connection))

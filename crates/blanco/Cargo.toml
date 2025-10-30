@@ -10,7 +10,6 @@ gpui-component = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true }
 log = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
@@ -18,11 +17,13 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 sqlx = { workspace = true }
 sql-parse = { workspace = true }
-lsp-types = { workspace = true }
+async-std = { workspace = true }
 
 # Local dependencies
-postgres-lsp = { path = "../postgres-lsp" }
-blanco-ui = { path = "../ui" }
+blanco_ui = { path = "../ui", package = "blanco-ui" }
+blanco-core = { path = "../blanco-core" }
+postgres = { path = "../postgres" }
+sqlite = { path = "../sqlite" }
 
 # Additional dependencies
 env_logger = { workspace = true }
@@ -32,3 +33,6 @@ dirs = { workspace = true }
 rust-embed = { workspace = true }
 url = { workspace = true }
 crossbeam-channel = "0.5"
+async-trait = "0.1"
+lsp-types = { workspace = true }
+regex = { workspace = true }

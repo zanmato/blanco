@@ -1,4 +1,3 @@
-use core::str;
 use gpui::{
     div, px, Context, IntoElement, ParentElement, Render, SharedString, Styled, StyledText, Window,
 };
@@ -144,7 +143,7 @@ impl Render for SqlLog {
             .border_color(cx.theme().border)
             .rounded(cx.theme().radius)
             .p_4()
-            .font_family("Fira Code, monospace")
+            .font_family("Fira Code")
             .text_size(px(12.))
             .text_color(cx.theme().foreground)
             .child(StyledText::new(shared_text).with_highlights(highlights))

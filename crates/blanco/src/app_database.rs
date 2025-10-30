@@ -1,6 +1,6 @@
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use sqlx::{ConnectOptions, Row};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 /// Application database for persisting query tabs, history, and connections
@@ -237,6 +237,9 @@ impl AppDatabase {
         .execute(&self.pool)
         .await
         .ok(); // Ignore error if column already exists
+
+        // Note: database_path NOT NULL constraint has been manually fixed
+        // The database schema now allows NULL database_path for PostgreSQL connections
 
         Ok(())
     }
@@ -656,5 +659,112 @@ impl ConnectionData {
     /// Mark this connection as active/inactive
     pub fn set_active(&mut self, active: bool) {
         self.is_active = Some(active);
+    }
+}
+
+impl AppDatabase {
+    /// Get connection details by ID
+    pub async fn get_connection_by_id(&self, connection_id: i64) -> Result<Option<ConnectionData>, sqlx::Error> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, name, db_type, host, port, database_name, username, password, database_path,
+                   last_used_at, connection_string, is_active, connection_params
+            FROM connections
+            WHERE id = ?
+            "#,
+        )
+        .bind(connection_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(row) = row {
+            let connection_data = ConnectionData {
+                id: Some(row.get(0)),
+                name: row.get(1),
+                db_type: row.get(2),
+                host: row.get(3),
+                port: row.get(4),
+                database_name: row.get(5),
+                username: row.get(6),
+                password: row.get(7),
+                database_path: row.get(8),
+                last_used_at: row.get(9),
+                connection_string: row.get(10),
+                is_active: Some(row.get::<i64, _>(11) != 0),
+                connection_params: row.get(12),
+            };
+            Ok(Some(connection_data))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Find or create a connection from a connection string and return its ID
+    pub async fn find_or_create_connection(&self, connection_string: &str) -> Result<i64, anyhow::Error> {
+        // First try to find existing connection with the same connection string
+        let existing_connection = sqlx::query(
+            r#"
+            SELECT id FROM connections
+            WHERE connection_string = ?
+            LIMIT 1
+            "#,
+        )
+        .bind(connection_string)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(row) = existing_connection {
+            let connection_id = row.get::<i64, _>(0);
+            log::debug!("Found existing connection {} for connection string: {}", connection_id, connection_string);
+            Ok(connection_id)
+        } else {
+            // Create a new connection entry
+            let connection_name = self.generate_connection_name(connection_string);
+            let db_type = if connection_string.starts_with("sqlite:") {
+                "SQLite"
+            } else if connection_string.starts_with("postgres:") || connection_string.starts_with("postgresql:") {
+                "PostgreSQL"
+            } else {
+                "Unknown"
+            };
+
+            let now = chrono::Utc::now().timestamp();
+            let connection_id = sqlx::query(
+                r#"
+                INSERT INTO connections (name, db_type, connection_string, last_used_at, created_at, is_active)
+                VALUES (?, ?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(&connection_name)
+            .bind(db_type)
+            .bind(connection_string)
+            .bind(now)
+            .bind(now)
+            .bind(1i64) // is_active = true
+            .execute(&self.pool)
+            .await?
+            .last_insert_rowid();
+
+            log::info!("Created new connection {} for connection string: {}", connection_id, connection_string);
+            Ok(connection_id)
+        }
+    }
+
+    /// Generate a connection name from a connection string
+    fn generate_connection_name(&self, connection_string: &str) -> String {
+        if connection_string.starts_with("sqlite:") {
+            // Extract filename from SQLite path
+            let path = connection_string.trim_start_matches("sqlite:");
+            if let Some(filename) = Path::new(path).file_stem() {
+                format!("SQLite - {}", filename.to_string_lossy())
+            } else {
+                "SQLite Database".to_string()
+            }
+        } else if connection_string.starts_with("postgres:") || connection_string.starts_with("postgresql:") {
+            // Parse PostgreSQL connection string
+            "PostgreSQL Connection".to_string() // Simplified for now
+        } else {
+            "Unknown Connection".to_string()
+        }
     }
 }

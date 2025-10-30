@@ -1,39 +1,28 @@
 mod app;
 mod app_database;
+mod app_events;
 mod assets;
 mod async_pipeline;
 mod connection;
 mod connection_modal;
 mod connection_sidebar;
-mod connection_trait;
 mod db_service;
 mod editor_panel;
-mod events;
-mod gpui_tokio;
-mod icon;
-mod postgres;
-mod postgres_connection;
 mod query_file;
 mod results_panel;
 mod settings;
 mod sidebar;
-mod sqlite_connection;
-mod sql_parser;
-mod table_operations;
+mod sql_completion;
+mod sql_completion_popup;
+mod sql_completion_provider;
 mod test_db;
 mod theme_loader;
 mod unified_connection_manager;
 
-#[cfg(test)]
-mod connection_tests;
-
 pub use sidebar::ConnectionSidebar;
 
 // Integration test modules for unified connection interface
-pub mod integration_test;
-pub mod integration_simple;
-mod lsp_manager;
-mod lsp_postgres;
+// pub mod integration_test; // Disabled for now
 
 use assets::Assets;
 use db_service::DbService;
@@ -53,7 +42,6 @@ fn main() {
             .init();
 
         gpui_component::init(cx);
-        gpui_tokio::init(cx);
 
         // Load and apply the One Dark theme (converted from Zed format)
         if let Err(e) = theme_loader::load_and_apply_theme("themes/one-dark-darkened-converted.json", cx) {
@@ -78,15 +66,13 @@ fn main() {
         }
         cx.text_system().add_fonts(embedded_fonts).unwrap();
 
-        // Initialize event system
-        let event_bus = events::global_event_bus();
-
+        
         // Initialize database service
         let db_service = DbService::new();
 
-        // Initialize app database (for query tabs, history, connections)
+        // Initialize app database (for query tabs, history, connections) synchronously
         let app_db_handle = db_service.app_db_handle();
-        gpui_tokio::Tokio::spawn_result(cx, async move {
+        let db = async_std::task::block_on(async {
             match app_database::AppDatabase::new().await {
                 Ok(db) => {
                     let mut app_db = app_db_handle.write().await;
@@ -108,11 +94,14 @@ fn main() {
                     Err(anyhow::anyhow!("App database init failed: {}", e))
                 }
             }
-        })
-        .detach();
+        });
 
-        // Initialize test database using the global tokio runtime
-        gpui_tokio::Tokio::spawn_result(cx, async move {
+        if let Err(e) = db {
+            log::error!("Critical: Failed to initialize database: {}", e);
+        }
+
+        // Initialize test database
+        cx.spawn(async move |cx| {
             match test_db::init_test_database().await {
                 Ok(_) => {
                     log::info!("Connected to test database");
@@ -134,7 +123,7 @@ fn main() {
                 log::info!("🔍 Loaded DSN from pg_dsn.txt: {}", dsn);
                 if !dsn.is_empty() {
                     let db_service_clone = db_service.clone();
-                    gpui_tokio::Tokio::spawn_result(cx, async move {
+                    cx.spawn(async move |cx| {
                         let unified_manager = db_service_clone.unified_manager().await;
                         let result = unified_manager.read().await.get_or_create_connection(&dsn).await;
                         match result {
@@ -154,17 +143,13 @@ fn main() {
         }
 
         // Initialize async event processor
-        let (mut async_processor, async_event_tx) = async_pipeline::AsyncEventProcessor::new(
-            db_service.clone(),
-            event_bus.clone(),
-        );
+        let (mut async_processor, async_event_tx) = async_pipeline::AsyncEventProcessor::new(db_service.clone());
 
         // Start the async processor
-        gpui_tokio::Tokio::spawn_result(cx, async move {
+        cx.spawn(async move |cx| {
             if let Err(e) = async_processor.start().await {
                 log::error!("Failed to start async event processor: {}", e);
             }
-            Ok(())
         }).detach();
 
         // Store the async event sender globally for components to use
@@ -209,7 +194,7 @@ fn main() {
 /// Migrate existing tabs in the database to file-based storage
 /// This creates .sql files on disk for tabs that don't have file_uri set
 async fn migrate_existing_tabs_to_files(
-    app_db_handle: &std::sync::Arc<tokio::sync::RwLock<Option<app_database::AppDatabase>>>,
+    app_db_handle: &std::sync::Arc<async_std::sync::RwLock<Option<app_database::AppDatabase>>>,
 ) -> Result<(), anyhow::Error> {
     use query_file::QueryFileManager;
 

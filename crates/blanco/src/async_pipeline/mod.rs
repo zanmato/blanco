@@ -6,19 +6,20 @@
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc, oneshot, RwLock};
+use async_std::sync::RwLock;
+use async_std::stream::StreamExt;
 use std::collections::{HashMap, VecDeque};
 use anyhow::{Result, anyhow};
 use log::{debug, info, error};
 use gpui::Global;
 
-use crate::events::AppEvent;
-use crate::connection_trait::QueryResult;
-use crate::table_operations::TableChangeOperation;
+use blanco_core::{QueryResult};
+use blanco_core::table_operations::TableChangeOperation;
 use crate::db_service::DbService;
 
 /// Maximum number of async events to queue
 const ASYNC_QUEUE_SIZE: usize = 1000;
+
 
 /// Task priority levels for async operations
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -37,7 +38,7 @@ pub enum AsyncEvent {
     ExecuteQuery {
         connection_string: String,
         sql: String,
-        response_tx: oneshot::Sender<Result<QueryResult>>,
+        // response_tx: oneshot::Sender<Result<QueryResult>>, // TODO: Replace with async-std compatible pattern
         priority: TaskPriority,
     },
 
@@ -45,14 +46,13 @@ pub enum AsyncEvent {
     ExecuteTableOperations {
         connection_string: String,
         operations: Vec<TableChangeOperation>,
-        response_tx: oneshot::Sender<Result<TableOperationResult>>,
         priority: TaskPriority,
     },
 
     /// Connection health check
     CheckConnectionHealth {
         connection_string: String,
-        response_tx: oneshot::Sender<Result<ConnectionHealth>>,
+        // response_tx: oneshot::Sender<Result<ConnectionHealth>>, // TODO: Replace with async-std compatible pattern
         priority: TaskPriority,
     },
 
@@ -60,7 +60,7 @@ pub enum AsyncEvent {
     RefreshSchema {
         connection_string: String,
         schema_name: Option<String>,
-        response_tx: oneshot::Sender<Result<Vec<SchemaInfo>>>,
+        // response_tx: oneshot::Sender<Result<Vec<SchemaInfo>>>, // TODO: Replace with async-std compatible pattern
         priority: TaskPriority,
     },
 
@@ -68,14 +68,14 @@ pub enum AsyncEvent {
     RequestLspDiagnostics {
         connection_string: String,
         document_uri: String,
-        response_tx: oneshot::Sender<Result<Vec<gpui_component::highlighter::Diagnostic>>>,
+        // response_tx: oneshot::Sender<Result<Vec<gpui_component::highlighter::Diagnostic>>>, // TODO: Replace with async-std compatible pattern
         priority: TaskPriority,
     },
 
     /// Performance metrics collection
     CollectPerformanceMetrics {
         connection_string: String,
-        response_tx: oneshot::Sender<Result<PerformanceMetrics>>,
+        // response_tx: oneshot::Sender<Result<PerformanceMetrics>>, // TODO: Replace with async-std compatible pattern
         priority: TaskPriority,
     },
 
@@ -145,7 +145,7 @@ pub struct PerformanceMetrics {
 /// Async event processor that handles queued async operations
 pub struct AsyncEventProcessor {
     /// Event receiver
-    event_rx: mpsc::Receiver<AsyncEvent>,
+    event_rx: async_std::channel::Receiver<AsyncEvent>,
 
     /// Priority queues for different task priorities
     task_queues: Arc<RwLock<HashMap<TaskPriority, VecDeque<AsyncEvent>>>>,
@@ -153,9 +153,7 @@ pub struct AsyncEventProcessor {
     /// Database service handle
     db_service: DbService,
 
-    /// Event bus for emitting results
-    event_bus: Arc<crate::events::EventBus>,
-
+  
     /// Performance tracking
     performance_metrics: Arc<RwLock<HashMap<String, PerformanceMetrics>>>,
 
@@ -168,15 +166,14 @@ pub struct AsyncEventProcessor {
 
 impl AsyncEventProcessor {
     /// Create a new async event processor
-    pub fn new(db_service: DbService, event_bus: Arc<crate::events::EventBus>) -> (Self, AsyncEventSender) {
-        let (event_tx, event_rx) = mpsc::channel(ASYNC_QUEUE_SIZE);
+    pub fn new(db_service: DbService) -> (Self, AsyncEventSender) {
+        let (event_tx, event_rx) = async_std::channel::bounded(ASYNC_QUEUE_SIZE);
         let wrapped_sender = AsyncEventSender::new(event_tx);
 
         let processor = Self {
             event_rx,
             task_queues: Arc::new(RwLock::new(HashMap::new())),
             db_service,
-            event_bus,
             performance_metrics: Arc::new(RwLock::new(HashMap::new())),
             debounced_queries: Arc::new(RwLock::new(HashMap::new())),
             is_running: Arc::new(RwLock::new(false)),
@@ -207,17 +204,16 @@ impl AsyncEventProcessor {
         }
 
         // Start the main processing loop
-        let event_rx = std::mem::replace(&mut self.event_rx, mpsc::channel(1).1);
+        let event_rx = std::mem::replace(&mut self.event_rx, async_std::channel::bounded(1).1);
         let task_queues = self.task_queues.clone();
         let db_service = self.db_service.clone();
-        let event_bus = self.event_bus.clone();
-        let performance_metrics = self.performance_metrics.clone();
+            let performance_metrics = self.performance_metrics.clone();
         let debounced_queries = self.debounced_queries.clone();
         let is_running = self.is_running.clone();
 
-        tokio::spawn(async move {
+        async_std::task::spawn(async move {
             let mut event_rx = event_rx;
-            
+
             loop {
                 {
                     let running = is_running.read().await;
@@ -227,24 +223,20 @@ impl AsyncEventProcessor {
                     }
                 }
 
-                tokio::select! {
-                    // Handle incoming events
-                    event = event_rx.recv() => {
-                        match event {
-                            Some(async_event) => {
-                                if let Err(e) = Self::handle_incoming_event(
-                                    async_event,
-                                    &task_queues,
-                                    &debounced_queries
-                                ).await {
-                                    error!("Failed to handle incoming event: {}", e);
-                                }
-                            }
-                            None => {
-                                info!("Event channel closed, stopping processor");
-                                break;
-                            }
+                // Handle incoming events
+                match event_rx.next().await {
+                    Some(async_event) => {
+                        if let Err(e) = Self::handle_incoming_event(
+                            async_event,
+                            &task_queues,
+                            &debounced_queries
+                        ).await {
+                            error!("Failed to handle incoming event: {}", e);
                         }
+                    }
+                    None => {
+                        info!("Event channel closed, stopping processor");
+                        break;
                     }
                 }
 
@@ -252,7 +244,6 @@ impl AsyncEventProcessor {
                 if let Err(e) = Self::process_task_queue(
                     &task_queues,
                     &db_service,
-                    &event_bus,
                     &performance_metrics
                 ).await {
                     error!("Failed to process task queue: {}", e);
@@ -319,7 +310,6 @@ impl AsyncEventProcessor {
     async fn process_task_queue(
         task_queues: &Arc<RwLock<HashMap<TaskPriority, VecDeque<AsyncEvent>>>>,
         db_service: &DbService,
-        event_bus: &Arc<crate::events::EventBus>,
         performance_metrics: &Arc<RwLock<HashMap<String, PerformanceMetrics>>>,
     ) -> Result<()> {
         let priorities = [
@@ -337,7 +327,7 @@ impl AsyncEventProcessor {
                     drop(queues);
 
                     // Process the event
-                    let result = Self::process_event(event, db_service, event_bus, performance_metrics).await;
+                    let result = Self::process_event(event, db_service, performance_metrics).await;
                     if let Err(e) = result {
                         error!("Failed to process event: {}", e);
                     }
@@ -355,95 +345,90 @@ impl AsyncEventProcessor {
     async fn process_event(
         event: AsyncEvent,
         db_service: &DbService,
-        event_bus: &Arc<crate::events::EventBus>,
         performance_metrics: &Arc<RwLock<HashMap<String, PerformanceMetrics>>>,
     ) -> Result<()> {
         let start_time = Instant::now();
 
         match event {
-            AsyncEvent::ExecuteQuery { connection_string, sql, response_tx, .. } => {
+            AsyncEvent::ExecuteQuery { connection_string, sql, .. } => {
                 let result = Self::execute_query_operation(&connection_string, &sql, db_service).await;
                 let execution_time = start_time.elapsed();
 
-                // Emit query execution event
                 let success = result.is_ok();
                 let rows_affected = result.as_ref().ok().map(|r| r.rows_affected);
+                let error_message = if let Err(ref e) = result {
+                    Some(e.to_string())
+                } else {
+                    None
+                };
 
-                if let Err(e) = event_bus.emit(AppEvent::QueryExecuted {
-                    connection_id: connection_string.clone(),
-                    query: sql.clone(),
-                    duration: execution_time,
-                    rows_affected,
-                    success,
-                }).await {
-                    error!("Failed to emit query executed event: {}", e);
-                }
+                // TODO: Re-enable event emission when we have a proper global event system
+                // For now, UI components handle their own event emissions
+                log::info!("Query execution completed: success={}, rows_affected={:?}", success, rows_affected);
 
                 // Send response
-                let _ = response_tx.send(result);
+                // TODO: Replace response_tx.send(result) with async-std compatible pattern
 
                 // Update performance metrics
                 Self::update_performance_metrics(&connection_string, execution_time, performance_metrics).await;
             }
 
-            AsyncEvent::ExecuteTableOperations { connection_string, operations, response_tx, .. } => {
-                let result = Self::execute_table_operations(&connection_string, operations, db_service).await;
+            AsyncEvent::ExecuteTableOperations { connection_string, operations, .. } => {
+                let result = Self::execute_table_operations(&connection_string, operations.clone(), db_service).await;
                 let _execution_time = start_time.elapsed();
 
-                if let Ok(ref operation_result) = result {
-                    // Emit table changes committed event
-                    if let Err(e) = event_bus.emit(AppEvent::TableChangesCommitted {
-                        table_name: "table".to_string(), // TODO: Get actual table name
-                        connection_id: connection_string.clone(),
-                        changes_count: operation_result.operations_executed,
-                        rows_affected: operation_result.rows_affected,
-                        success: true,
-                    }).await {
-                        error!("Failed to emit table changes event: {}", e);
-                    }
-                }
+                // Use generic table name since TableChangeOperation doesn't include table info
+                let table_name = "table".to_string();
 
-                let _ = response_tx.send(result);
+                let (success, rows_affected, error_message, operations_executed) = match &result {
+                    Ok(operation_result) => (
+                        true,
+                        Some(operation_result.rows_affected),
+                        None,
+                        operation_result.operations_executed
+                    ),
+                    Err(e) => (
+                        false,
+                        None,
+                        Some(e.to_string()),
+                        0
+                    )
+                };
+
+                // TODO: Re-enable table operation events when we have a proper global event system
+                log::info!("Table operations completed: success={}, operations_executed={}", success, operations_executed);
             }
 
-            AsyncEvent::CheckConnectionHealth { connection_string, response_tx, .. } => {
+            AsyncEvent::CheckConnectionHealth { connection_string, .. } => {
                 let result = Self::check_connection_health(&connection_string, db_service).await;
 
+                // TODO: Re-enable connection health events when we have a proper global event system
                 if let Ok(ref health) = result {
-                    if let Err(e) = event_bus.emit(AppEvent::ConnectionHealthCheck {
-                        connection_id: connection_string.clone(),
-                        is_healthy: health.is_healthy,
-                    }).await {
-                        error!("Failed to emit connection health event: {}", e);
-                    }
+                    log::info!("Connection health check completed: is_healthy={}", health.is_healthy);
                 }
 
-                let _ = response_tx.send(result);
+                // TODO: Replace response_tx.send(result) with async-std compatible pattern
             }
 
-            AsyncEvent::RefreshSchema { connection_string, schema_name, response_tx, .. } => {
+            AsyncEvent::RefreshSchema { connection_string, schema_name, .. } => {
                 let result = Self::refresh_schema(&connection_string, schema_name.as_deref(), db_service).await;
 
+                // TODO: Re-enable schema refresh events when we have a proper global event system
                 if let Ok(ref schema_info) = result {
-                    if let Err(e) = event_bus.emit(AppEvent::TablesRefreshed {
-                        connection_id: connection_string.clone(),
-                        table_count: schema_info.first().map(|s| s.table_count).unwrap_or(0),
-                    }).await {
-                        error!("Failed to emit tables refreshed event: {}", e);
-                    }
+                    let table_count = schema_info.first().map(|s| s.table_count).unwrap_or(0);
+                    log::info!("Schema refresh completed: table_count={}", table_count);
                 }
 
-                let _ = response_tx.send(result);
+                // TODO: Replace response_tx.send(result) with async-std compatible pattern
             }
 
-            AsyncEvent::RequestLspDiagnostics { response_tx, .. } => {
+            AsyncEvent::RequestLspDiagnostics { .. } => {
                 // TODO: Implement LSP diagnostics request
-                let _ = response_tx.send(Ok(Vec::new()));
             }
 
-            AsyncEvent::CollectPerformanceMetrics { connection_string, response_tx, .. } => {
-                let metrics = Self::collect_performance_metrics(&connection_string, performance_metrics).await;
-                let _ = response_tx.send(Ok(metrics));
+            AsyncEvent::CollectPerformanceMetrics { connection_string, .. } => {
+                let _metrics = Self::collect_performance_metrics(&connection_string, performance_metrics).await;
+                // TODO: Replace response_tx.send(Ok(metrics)) with async-std compatible pattern
             }
 
                     }
@@ -470,13 +455,28 @@ impl AsyncEventProcessor {
         debug!("Executing {} table operations", operations.len());
 
         let connection = db_service.get_or_create_unified_connection(connection_string).await?;
-        let result = connection.execute_table_changes(&operations).await?;
+
+        // Convert table operations to SQL and execute
+        let mut total_rows_affected = 0;
+        let mut errors = Vec::new();
+
+        for operation in &operations {
+            let sql_query = operation.to_sql_query();
+            match connection.execute_query(&sql_query).await {
+                Ok(result) => {
+                    total_rows_affected += result.rows_affected;
+                }
+                Err(e) => {
+                    errors.push(format!("Failed to execute '{}': {}", sql_query, e));
+                }
+            }
+        }
 
         Ok(TableOperationResult {
-            rows_affected: result.row_count() as u64,
+            rows_affected: total_rows_affected,
             operations_executed: operations.len(),
             execution_time: Duration::from_millis(0), // TODO: Track actual execution time
-            errors: Vec::new(), // TODO: Collect actual errors
+            errors,
         })
     }
 
@@ -567,15 +567,15 @@ impl AsyncEventProcessor {
 
 // Wrapper type for the async event sender to implement Global
 pub struct AsyncEventSenderWrapper {
-    sender: mpsc::Sender<AsyncEvent>,
+    sender: async_std::channel::Sender<AsyncEvent>,
 }
 
 impl AsyncEventSenderWrapper {
-    pub fn new(sender: mpsc::Sender<AsyncEvent>) -> Self {
+    pub fn new(sender: async_std::channel::Sender<AsyncEvent>) -> Self {
         Self { sender }
     }
 
-    pub fn try_send(&self, event: AsyncEvent) -> Result<(), mpsc::error::TrySendError<AsyncEvent>> {
+    pub fn try_send(&self, event: AsyncEvent) -> Result<(), async_std::channel::TrySendError<AsyncEvent>> {
         self.sender.try_send(event)
     }
 }
