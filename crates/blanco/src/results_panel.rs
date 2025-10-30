@@ -3,8 +3,9 @@ use std::ops::Range;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, px, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, MouseButton, ParentElement, Render, Styled, Window,
+    div, px, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, MouseButton, ParentElement, Render,
+    StatefulInteractiveElement, Styled, Window,
 };
 use gpui_component::{
     h_flex,
@@ -13,11 +14,11 @@ use gpui_component::{
     v_flex, ActiveTheme, Icon, IconName,
 };
 
-use crate::async_pipeline::{AsyncEvent, TaskPriority};
-use blanco_core::QueryResult;
 use crate::app_events::AppEvent;
+use crate::async_pipeline::{AsyncEvent, TaskPriority};
+use blanco_core::table_operations::{OperationType, RowIdentifier, TableChangeOperation};
 use blanco_core::ColumnChange;
-use blanco_core::table_operations::{TableChangeOperation, OperationType, RowIdentifier};
+use blanco_core::QueryResult;
 
 #[derive(Clone, Debug)]
 pub struct TableChange {
@@ -394,7 +395,9 @@ impl ResultsTableDelegate {
     }
 
     /// Convert table changes to database-agnostic TableChangeOperations
-    pub fn create_change_operations(&self) -> Vec<blanco_core::table_operations::TableChangeOperation> {
+    pub fn create_change_operations(
+        &self,
+    ) -> Vec<blanco_core::table_operations::TableChangeOperation> {
         let mut operations = Vec::new();
 
         for change in &self.edit_state.changes {
@@ -459,10 +462,7 @@ impl ResultsTableDelegate {
                             })
                             .collect();
 
-                        TableChangeOperation::insert_row(
-                            change.table_name.clone(),
-                            column_changes,
-                        )
+                        TableChangeOperation::insert_row(change.table_name.clone(), column_changes)
                     } else {
                         continue; // Skip if no values
                     }
@@ -1624,9 +1624,12 @@ impl ResultsPanel {
                         let sql_query = operation.to_sql_query();
                         sql_log.update(cx, |log, cx| {
                             log.append_text(&blanco_ui::SqlLogMessage::SqlStatement(sql_query), cx);
-                            log.append_text(&blanco_ui::SqlLogMessage::Comment(
-                                "Table operation sent to async pipeline".to_string()
-                            ), cx);
+                            log.append_text(
+                                &blanco_ui::SqlLogMessage::Comment(
+                                    "Table operation sent to async pipeline".to_string(),
+                                ),
+                                cx,
+                            );
                         });
                     }
 
@@ -2008,7 +2011,9 @@ impl Render for ResultsPanel {
             // The table component (table should have built-in scrolling)
             .child(
                 div()
+                    .id("results-table")
                     .flex_1() // Allow table to fill available space
+                    .overflow_hidden()
                     .min_h(px(200.0)) // Minimum height for table
                     .child(self.table.clone()),
             )

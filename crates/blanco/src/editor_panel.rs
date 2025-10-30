@@ -1,5 +1,5 @@
 use gpui::{
-    div, prelude::FluentBuilder, px, Action, App, AppContext, ClickEvent, Context, Entity,
+    div, prelude::FluentBuilder, px, Action, App, AppContext, Axis, ClickEvent, Context, Entity,
     EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, Keystroke,
     ParentElement, Pixels, Point, Render, Styled, Window,
 };
@@ -7,7 +7,7 @@ use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
     highlighter::Diagnostic,
-    input::{InputEvent, InputState, TabSize, TextInput},
+    input::{InputState, TabSize, TextInput},
     sidebar::SidebarToggleButton,
     tab::{Tab, TabBar},
     v_flex, ActiveTheme, ContextModal as _, IconName, Kbd, Side, Sizable, StyledExt,
@@ -15,7 +15,7 @@ use gpui_component::{
 use log::{debug, error, info};
 use std::rc::Rc;
 
-use crate::app::{ConnectionType, ToggleSidebar};
+use crate::app::ToggleSidebar;
 use crate::app_database::QueryTabData;
 use crate::app_events::AppEvent;
 use crate::db_service::DbService;
@@ -722,9 +722,7 @@ impl EditorPanel {
                     log::info!("Executing query via async pipeline: {}", query);
 
                     // Log the query to the SQL log
-                    let log_message = "Executing query via async pipeline".to_string();
                     query_tab.sql_log.update(cx, |sql_log, cx| {
-                        sql_log.append_text(&blanco_ui::SqlLogMessage::Comment(log_message), cx);
                         sql_log.append_text(
                             &blanco_ui::SqlLogMessage::SqlStatement(query.clone()),
                             cx,
@@ -1787,63 +1785,56 @@ impl Render for EditorPanel {
                                 // Results section with split view (Results on top, SQL Log below)
                                 .child(
                                     v_flex()
-                                        .flex_1()
+                                        .flex_grow()
                                         .min_h(px(200.))
                                         // Results panel (top)
                                         .child(
                                             div()
                                                 .flex_1()
-                                                .min_h_0()
-                                                .overflow_hidden()
                                                 .child(query_tab.results_panel.clone())
+                                        )
+                                        .child(
+                                            div()
+                                                .p_2()
+                                                .border_b_1()
+                                                .border_color(cx.theme().border)
+                                                .bg(cx.theme().muted.opacity(0.5))
+                                                .child(
+                                                    h_flex()
+                                                        .items_center()
+                                                        .justify_between()
+                                                        .child(
+                                                            div()
+                                                                .text_sm()
+                                                                .font_semibold()
+                                                                .text_color(cx.theme().foreground)
+                                                                .child("SQL Log")
+                                                        )
+                                                        .child(
+                                                            Button::new("clear-log")
+                                                                .ghost()
+                                                                .xsmall()
+                                                                .icon(IconName::Close)
+                                                                .label("Clear")
+                                                                .on_click(cx.listener(|this, _, _window, cx| {
+                                                                    if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
+                                                                        query_tab.sql_log.update(cx, |log, cx| {
+                                                                            log.clear(cx);
+                                                                        });
+                                                                    }
+                                                                })),
+                                                        )
+                                                )
                                         )
                                         // SQL Log panel (bottom)
                                         .child(
                                             div()
                                                 .flex_1()
-                                                .min_h_0()
                                                 .overflow_hidden()
                                                 .child(
-                                                    v_flex()
-                                                        .size_full()
-                                                        .child(
-                                                            div()
-                                                                .p_2()
-                                                                .border_b_1()
-                                                                .border_color(cx.theme().border)
-                                                                .bg(cx.theme().muted.opacity(0.5))
-                                                                .child(
-                                                                    h_flex()
-                                                                        .items_center()
-                                                                        .justify_between()
-                                                                        .child(
-                                                                            div()
-                                                                                .text_sm()
-                                                                                .font_semibold()
-                                                                                .text_color(cx.theme().foreground)
-                                                                                .child("SQL Log")
-                                                                        )
-                                                                        .child(
-                                                                            Button::new("clear-log")
-                                                                                .ghost()
-                                                                                .xsmall()
-                                                                                .icon(IconName::Close)
-                                                                                .label("Clear")
-                                                                                .on_click(cx.listener(|this, _, _window, cx| {
-                                                                                    if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
-                                                                                        query_tab.sql_log.update(cx, |log, cx| {
-                                                                                            log.clear(cx);
-                                                                                        });
-                                                                                    }
-                                                                                })),
-                                                                        )
-                                                                )
-                                                        )
-                                                        .child(
-                                                            div()
-                                                                .flex_1()
-                                                                .child(query_tab.sql_log.clone())
-                                                        )
+                                                    div()
+                                                        .child(query_tab.sql_log.clone())
+                                                        .scrollable(Axis::Vertical)
                                                 )
                                         )
                                 )
