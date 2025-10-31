@@ -228,6 +228,7 @@ impl EditorPanel {
         schema_name: Option<String>,
         cx: &mut Context<Self>,
     ) {
+        log::debug!("Creating new tab with connection string: '{}', display_name: '{}'", connection_string, display_name);
         let tab_id = self.next_tab_id;
         self.next_tab_id += 1;
 
@@ -377,9 +378,7 @@ impl EditorPanel {
 
     fn set_active_tab(&mut self, ix: usize, _: &mut Window, cx: &mut Context<Self>) {
         if ix < self.tabs.len() {
-            // Save the current tab before switching
-            self.save_current_tab_immediate(cx);
-
+            // Tab switching no longer saves automatically - tabs are only saved on query execution
             self.active_tab_ix = ix;
             cx.notify();
         }
@@ -465,6 +464,123 @@ impl EditorPanel {
         if let Some(tab) = self.tabs.get(self.active_tab_ix) {
             match tab {
                 TabType::Query(query_tab) => {
+                    // Save the current tab before executing the query
+                    // Extract the tab data we need before starting async operations
+                    let tab_index = self.active_tab_ix;
+                    let content = query_tab.editor.read(cx).text().to_string();
+                    let connection_type = if query_tab.connection_string.starts_with("sqlite:") {
+                        Some("SQLite".to_string())
+                    } else if query_tab.connection_string.starts_with("postgresql:")
+                        || query_tab.connection_string.starts_with("postgres:")
+                    {
+                        Some("PostgreSQL".to_string())
+                    } else {
+                        None
+                    };
+                    let pg_connection_key = if connection_type.as_ref().is_some_and(|t| t == "PostgreSQL") {
+                        Some(query_tab.connection_string.clone())
+                    } else {
+                        None
+                    };
+                    let tab_data = QueryTabData {
+                        id: query_tab.db_id,
+                        title: query_tab.title.clone(),
+                        content: content.clone(),
+                        position: tab_index as i32,
+                        connection_id: None, // Will be set in async task
+                        connection_type,
+                        pg_connection_key,
+                        file_uri: None, // Will be updated after file creation
+                    };
+
+                    // Trigger the save operation in background
+                    let db_service = DbService::global(cx).clone();
+                    let app_db = db_service.app_db_handle();
+                    let connection_string = query_tab.connection_string.clone();
+                    let title = query_tab.title.clone();
+                    let query_file_manager = self.query_file_manager.clone();
+                    let connection_name = query_tab.title.clone();
+
+                    cx.spawn(async move |entity_handle, mut cx| {
+                        if let Some(app_db) = app_db.read().await.as_ref() {
+                            // Find or create the connection and get its ID
+                            let connection_id = if !connection_string.is_empty()
+                                && connection_string != "sqlite::memory:"
+                            {
+                                match app_db.find_or_create_connection(&connection_string).await {
+                                    Ok(id) => Some(id),
+                                    Err(e) => {
+                                        error!("Failed to find or create connection: {}", e);
+                                        return;
+                                    }
+                                }
+                            } else {
+                                None
+                            };
+
+                            // Create the final tab data with connection_id
+                            let mut final_tab_data = tab_data;
+                            final_tab_data.connection_id = connection_id;
+
+                            // First save to get or create the database ID
+                            let final_db_id = match app_db.save_query_tab(&final_tab_data).await {
+                                Ok(db_id) => {
+                                    debug!("Tab saved successfully with db_id: {}", db_id);
+                                    db_id
+                                }
+                                Err(e) => {
+                                    error!("Failed to save tab: {}", e);
+                                    return;
+                                }
+                            };
+
+                            // Try to migrate the query file from legacy location if it exists
+                            if let Err(e) = query_file_manager
+                                .migrate_query_file(final_db_id, &connection_name)
+                                .await
+                            {
+                                debug!("Migration not needed or failed for tab: {}", e);
+                            }
+
+                            // Create/update the query file on disk
+                            let file_uri = match query_file_manager
+                                .create_query_file(final_db_id, &connection_name, &content)
+                                .await
+                            {
+                                Ok(_) => {
+                                    let uri =
+                                        query_file_manager.query_file_uri(final_db_id, &connection_name);
+                                    debug!("Created query file for tab with URI: {}", uri);
+                                    Some(uri)
+                                }
+                                Err(e) => {
+                                    error!("Failed to create query file: {}", e);
+                                    None
+                                }
+                            };
+
+                            // Update the database record with the file URI
+                            if let Some(ref file_uri) = file_uri {
+                                let updated_tab_data = QueryTabData {
+                                    id: Some(final_db_id),
+                                    title: final_tab_data.title.clone(),
+                                    content: final_tab_data.content.clone(),
+                                    position: final_tab_data.position,
+                                    connection_id: final_tab_data.connection_id,
+                                    connection_type: final_tab_data.connection_type.clone(),
+                                    pg_connection_key: final_tab_data.pg_connection_key.clone(),
+                                    file_uri: Some(file_uri.clone()),
+                                };
+
+                                if let Err(e) = app_db.save_query_tab(&updated_tab_data).await {
+                                    error!("Failed to update file URI: {}", e);
+                                } else {
+                                    debug!("Updated file URI: {}", file_uri);
+                                }
+                            }
+                        }
+                    }).detach();
+
                     // Use the unified connection string
                     let connection_string = &query_tab.connection_string;
 
@@ -505,6 +621,7 @@ impl EditorPanel {
                         let start_time = std::time::Instant::now();
 
                         // Execute query using unified connection manager
+                        log::debug!("Query execution - using connection string: '{}'", connection_string_clone);
                         let unified_manager = db_service.unified_manager().await;
                         let manager_guard = unified_manager.read().await;
                         match manager_guard
@@ -512,6 +629,7 @@ impl EditorPanel {
                             .await
                         {
                             Ok(connection) => {
+                                log::debug!("Connection retrieved successfully, type: {}", connection.get_connection_type());
                                 match connection.execute_query(&query_clone).await {
                                     Ok(mut result) => {
                                         let duration_ms = start_time.elapsed().as_millis() as i64;

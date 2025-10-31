@@ -179,14 +179,18 @@ impl UnifiedConnectionManager {
     fn detect_connection_type(&self, connection_string: &str) -> Result<String> {
         let connection_lower = connection_string.to_lowercase();
 
+        // Log the connection string and detected type for debugging
+        log::debug!("Detecting connection type for: '{}'", connection_string);
+
         if connection_lower.starts_with("postgres://") ||
-           connection_lower.starts_with("postgresql://") ||
-           connection_lower.contains("postgresql") {
+           connection_lower.starts_with("postgresql://") {
+            log::debug!("Detected PostgreSQL connection type");
             Ok("PostgreSQL".to_string())
         } else if connection_lower.starts_with("sqlite:") ||
                   connection_lower.contains(".db") ||
                   connection_lower == ":memory:" ||
                   connection_lower == "sqlite::memory:" {
+            log::debug!("Detected SQLite connection type");
             Ok("SQLite".to_string())
         } else {
             // Default to SQLite for unknown types

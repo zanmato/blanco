@@ -36,3 +36,8 @@ crossbeam-channel = "0.5"
 async-trait = "0.1"
 lsp-types = { workspace = true }
 regex = { workspace = true }
+rust_decimal = "1.32"
+
+[dev-dependencies]
+# Dependencies for integration tests
+env_logger = "0.10"

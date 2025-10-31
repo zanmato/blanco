@@ -637,11 +637,13 @@ impl Render for ConnectionSidebar {
                                                 .context_menu({
                                                     let display_name_for_menu = display_name.clone();
                                                     let connection_key_for_menu = connection_key_clone.clone();
+                                                    let connection_string_for_menu = _connection_string.clone();
                                                     move |menu, _window, _cx| {
                                                         log::info!("Creating context menu for unified connection: {}", display_name_for_menu);
                                                         menu.menu("New Query", Box::new(crate::app::NewQueryForUnifiedConnection {
                                                             display_name: display_name_for_menu.clone(),
                                                             connection_key: connection_key_for_menu.clone(),
+                                                            connection_string: connection_string_for_menu.clone(),
                                                         }))
                                                     }
                                                 })

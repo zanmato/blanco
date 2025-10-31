@@ -43,6 +43,7 @@ pub struct ToggleSidebar;
 #[action(namespace = blanco_app, no_json)]
 pub struct NewQueryForUnifiedConnection {
     pub connection_key: String,
+    pub connection_string: String,
     pub display_name: String,
 }
 
@@ -353,7 +354,7 @@ impl BlancoApp {
             panel.add_new_tab_with_unified_connection(
                 window,
                 action.display_name.clone(),
-                action.connection_key.clone(),
+                action.connection_string.clone(),
                 None,
                 cx,
             );

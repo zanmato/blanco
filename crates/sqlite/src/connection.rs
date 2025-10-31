@@ -184,6 +184,12 @@ impl SqliteConnection {
                                 } else if let Ok(val) = row.try_get::<Option<bool>, _>(i) {
                                     val.map(|v| v.to_string())
                                         .unwrap_or_else(|| "NULL".to_string())
+                                } else if let Ok(val) = row.try_get::<Option<Vec<u8>>, _>(i) {
+                                    // BLOB support - convert to hex string
+                                    val.map(|bytes| {
+                                        bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>()
+                                    })
+                                    .unwrap_or_else(|| "NULL".to_string())
                                 } else {
                                     "NULL".to_string()
                                 }
@@ -456,6 +462,12 @@ impl Connection for SqliteConnection {
                                 } else if let Ok(val) = row.try_get::<Option<bool>, _>(i) {
                                     val.map(|v| v.to_string())
                                         .unwrap_or_else(|| "NULL".to_string())
+                                } else if let Ok(val) = row.try_get::<Option<Vec<u8>>, _>(i) {
+                                    // BLOB support - convert to hex string
+                                    val.map(|bytes| {
+                                        bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>()
+                                    })
+                                    .unwrap_or_else(|| "NULL".to_string())
                                 } else {
                                     "NULL".to_string()
                                 }

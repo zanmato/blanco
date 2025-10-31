@@ -32,3 +32,11 @@ ropey = { workspace = true }
 
 # LSP types for completion/hover
 lsp-types = { workspace = true }
+
+# Temporary file handling
+tempfile = "3.8"
+
+[dev-dependencies]
+# Dependencies for integration tests
+async-std = { workspace = true }
+env_logger = "0.10"

@@ -816,6 +816,7 @@ impl ResultsTableDelegate {
     pub fn is_numeric_column(&self, col_index: usize) -> bool {
         if let Some(column_type) = self.column_types.get(col_index) {
             let type_lower = column_type.to_lowercase();
+            // SQL standard names
             type_lower.contains("int")
                 || type_lower.contains("float")
                 || type_lower.contains("double")
@@ -826,7 +827,60 @@ impl ResultsTableDelegate {
                 || type_lower.contains("bigint")
                 || type_lower.contains("serial")
                 || type_lower.contains("money")
+                // PostgreSQL internal type names
+                || type_lower == "int2"    // smallint
+                || type_lower == "int4"    // integer
+                || type_lower == "int8"    // bigint
+                || type_lower == "float4"  // real
+                || type_lower == "float8"  // double precision
+                || type_lower == "numeric" // numeric
+                || type_lower == "money"   // money
         } else {
+            false
+        }
+    }
+
+    /// Check if a column contains UUID data
+    pub fn is_uuid_column(&self, col_index: usize) -> bool {
+        if let Some(column_type) = self.column_types.get(col_index) {
+            let type_lower = column_type.to_lowercase();
+            type_lower.contains("uuid")
+        } else {
+            false
+        }
+    }
+
+    /// Check if a column contains timestamp data (timestamp or timestamptz)
+    pub fn is_timestamp_column(&self, col_index: usize) -> bool {
+        if let Some(column_type) = self.column_types.get(col_index) {
+            let type_lower = column_type.to_lowercase();
+            type_lower.contains("timestamp")
+                || type_lower.contains("timestamptz")
+                || type_lower.contains("datetime")
+        } else {
+            false
+        }
+    }
+
+    /// Check if a column contains JSON or JSONB data
+    pub fn is_json_column(&self, col_index: usize) -> bool {
+        if let Some(column_type) = self.column_types.get(col_index) {
+            let type_lower = column_type.to_lowercase();
+            type_lower.contains("json")
+        } else {
+            false
+        }
+    }
+
+    /// Check if a column contains array data (PostgreSQL returns "ARRAY" or "type[]")
+    pub fn is_array_column(&self, col_index: usize) -> bool {
+        if let Some(column_type) = self.column_types.get(col_index) {
+            let type_lower = column_type.to_lowercase();
+            let is_array = type_lower == "array" || type_lower.ends_with("[]");
+            log::debug!("Array detection: type='{}', lower='{}', is_array={}", column_type, type_lower, is_array);
+            is_array
+        } else {
+            log::debug!("Array detection: No column type for index {}", col_index);
             false
         }
     }
@@ -909,9 +963,27 @@ impl TableDelegate for ResultsTableDelegate {
                     .font_family("Fira Code")
                     .text_xs()
                     .size_full()
+                    .flex() // Enable flexbox layout
+                    .items_center() // Center vertically
                     .p_0() // No padding since the cell already has padding
                     .when(self.is_numeric_column(col_ix), |this| {
                         this.justify_end() // Right-align numeric columns
+                    })
+                    .when(self.is_uuid_column(col_ix), |this| {
+                        this.font_family("Fira Code") // Monospace font for UUIDs
+                            .text_color(cx.theme().blue) // Blue color for UUIDs
+                    })
+                    .when(self.is_timestamp_column(col_ix), |this| {
+                        this.font_family("Fira Code") // Monospace font for timestamps
+                            .text_color(cx.theme().green) // Green color for timestamps
+                    })
+                    .when(self.is_json_column(col_ix), |this| {
+                        this.font_family("Fira Code") // Monospace font for JSON
+                            .text_color(cx.theme().yellow) // Yellow color for JSON
+                    })
+                    .when(self.is_array_column(col_ix), |this| {
+                        this.font_family("Fira Code") // Monospace font for arrays
+                            .text_color(cx.theme().blue) // Blue color for arrays
                     })
                     .child(
                         TextInput::new(&input)
@@ -933,8 +1005,26 @@ impl TableDelegate for ResultsTableDelegate {
                     .py_1()
                     .rounded(cx.theme().radius)
                     .size_full()
+                    .flex() // Enable flexbox layout
+                    .items_center() // Center vertically
                     .when(self.is_numeric_column(col_ix), |this| {
                         this.justify_end() // Right-align numeric columns
+                    })
+                    .when(self.is_uuid_column(col_ix), |this| {
+                        this.font_family("Fira Code") // Monospace font for UUIDs
+                            .text_color(cx.theme().blue) // Blue color for UUIDs
+                    })
+                    .when(self.is_timestamp_column(col_ix), |this| {
+                        this.font_family("Fira Code") // Monospace font for timestamps
+                            .text_color(cx.theme().green) // Green color for timestamps
+                    })
+                    .when(self.is_json_column(col_ix), |this| {
+                        this.font_family("Fira Code") // Monospace font for JSON
+                            .text_color(cx.theme().yellow) // Yellow color for JSON
+                    })
+                    .when(self.is_array_column(col_ix), |this| {
+                        this.font_family("Fira Code") // Monospace font for arrays
+                            .text_color(cx.theme().blue) // Blue color for arrays
                     })
                     .child(display_text)
             }
@@ -946,9 +1036,24 @@ impl TableDelegate for ResultsTableDelegate {
             div()
                 .font_family("Fira Code")
                 .text_size(px(12.))
+                .size_full() // Fill the entire cell container
+                .flex() // Enable flexbox layout
+                .items_center() // Center vertically
                 .when(is_numeric, |this| {
                     this.justify_end() // Right-align numeric columns
                         .text_color(cx.theme().foreground) // Ensure numeric text is visible
+                })
+                .when(self.is_uuid_column(col_ix), |this| {
+                    this.font_family("Fira Code") // Monospace font for UUIDs
+                        .text_color(cx.theme().blue) // Blue color for UUIDs
+                })
+                .when(self.is_timestamp_column(col_ix), |this| {
+                    this.font_family("Fira Code") // Monospace font for timestamps
+                        .text_color(cx.theme().green) // Green color for timestamps
+                })
+                .when(self.is_json_column(col_ix), |this| {
+                    this.font_family("Fira Code") // Monospace font for JSON
+                        .text_color(cx.theme().yellow) // Yellow color for JSON
                 })
                 .when(is_edited, |this| {
                     this.bg(cx.theme().yellow.opacity(0.1))
