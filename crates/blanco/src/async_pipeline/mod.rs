@@ -368,7 +368,7 @@ impl AsyncEventProcessor {
 
                 let success = result.is_ok();
                 let rows_affected = result.as_ref().ok().map(|r| r.rows_affected);
-                let error_message = if let Err(ref e) = result {
+                let _error_message = if let Err(ref e) = result {
                     Some(e.to_string())
                 } else {
                     None
@@ -387,7 +387,7 @@ impl AsyncEventProcessor {
 
             AsyncEvent::ExecuteTableOperations { connection_string, operations, response_tx, .. } => {
                 let result = Self::execute_table_operations(&connection_string, operations.clone(), db_service).await;
-                let execution_time = start_time.elapsed();
+                let _execution_time = start_time.elapsed();
 
                 // Extract table name from operations (all operations should be for the same table)
                 let table_name = operations.first()

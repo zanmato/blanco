@@ -2,7 +2,7 @@
 // TODO: Implement PostgreSQL-specific hover logic
 
 use anyhow::Result;
-use blanco_core::{HoverProvider, Hover, Position};
+use blanco_core::{HoverProvider, Hover};
 use gpui::{Task, Window};
 use gpui_component::input::InputState;
 use ropey::Rope;

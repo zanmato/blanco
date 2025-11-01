@@ -131,7 +131,7 @@ impl DataTransformer for MarkdownTransformer {
                 Vec<&crate::results_panel::SelectedCell>,
             > = std::collections::HashMap::new();
             for cell in &data.selected_cells {
-                rows.entry(cell.row).or_insert_with(Vec::new).push(cell);
+                rows.entry(cell.row).or_default().push(cell);
             }
 
             let mut row_indices: Vec<usize> = rows.keys().cloned().collect();

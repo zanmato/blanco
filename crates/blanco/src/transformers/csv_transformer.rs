@@ -27,7 +27,7 @@ impl DataTransformer for CsvTransformer {
             // Group cells by row for CSV format
             let mut rows: std::collections::HashMap<usize, Vec<&crate::results_panel::SelectedCell>> = std::collections::HashMap::new();
             for cell in &data.selected_cells {
-                rows.entry(cell.row).or_insert_with(Vec::new).push(cell);
+                rows.entry(cell.row).or_default().push(cell);
             }
 
             // Find the range of columns involved

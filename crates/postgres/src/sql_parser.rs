@@ -251,10 +251,10 @@ impl PostgresTableExtractor {
                     tables.push(table_name.value.to_string());
                 }
             }
-            Statement::Update(update) => {
+            Statement::Update(_update) => {
                 // Skip UPDATE for now - table extraction is complex
             }
-            Statement::Delete(delete) => {
+            Statement::Delete(_delete) => {
                 // Skip DELETE for now - table extraction is complex
             }
             _ => {}
@@ -287,21 +287,19 @@ impl PostgresTableExtractor {
     fn extract_aliases_from_statement(&self, statement: &Statement) -> Vec<TableAlias> {
         let mut aliases = Vec::new();
 
-        match statement {
-            Statement::Select(select) => {
-                if let Some(table_references) = &select.table_references {
-                    for table_ref in table_references {
-                        self.extract_aliases_from_reference(table_ref, &mut aliases);
-                    }
+        if let Statement::Select(select) = statement {
+            if let Some(table_references) = &select.table_references {
+                for table_ref in table_references {
+                    self.extract_aliases_from_reference(table_ref, &mut aliases);
                 }
             }
-            _ => {}
         }
 
         aliases
     }
 
     /// Extract aliases from a table reference
+    #[allow(clippy::only_used_in_recursion)]
     fn extract_aliases_from_reference(&self, table_ref: &TableReference, aliases: &mut Vec<TableAlias>) {
         match table_ref {
             TableReference::Table { identifier, as_, .. } => {
@@ -349,7 +347,7 @@ impl PostgresTableExtractor {
     }
 
     /// Detect completion context using PostgreSQL-specific parsing
-    fn detect_completion_context(&self, text: &str, position: Position, current_word: &Option<String>) -> CompletionKind {
+    fn detect_completion_context(&self, text: &str, position: Position, _current_word: &Option<String>) -> CompletionKind {
         let lines: Vec<&str> = text.lines().collect();
 
         if position.line as usize >= lines.len() {
@@ -358,12 +356,12 @@ impl PostgresTableExtractor {
 
         let current_line = lines[position.line as usize];
         let before_cursor = &current_line[..(position.character as usize).min(current_line.len())];
-        let before_cursor_lower = before_cursor.to_lowercase();
+        let _before_cursor_lower = before_cursor.to_lowercase();
 
         // Check for qualified column completion (table.column or schema.table.column)
         if let Some(dot_pos) = before_cursor.rfind('.') {
             let before_dot = &before_cursor[..dot_pos];
-            let potential_identifier = before_dot.trim().split_whitespace().last().unwrap_or("");
+            let potential_identifier = before_dot.split_whitespace().last().unwrap_or("");
 
             // Check if this might be a schema.table pattern
             if let Some(second_dot_pos) = potential_identifier.rfind('.') {

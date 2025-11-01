@@ -12,6 +12,21 @@ pub mod completion;
 pub mod hover;
 pub mod factory;
 
+// Re-export main types for convenience
+pub use connection::{
+    PostgresConnection, PgConnectionKey
+};
+
+pub use sql_parser::{
+    PostgresTableExtractor, CompletionKind, ParsedQuery, TableAlias
+};
+
+pub use factory::PostgresConnectionFactory;
+
+// Import completion and hover implementations to make them available
+// use completion::*;
+// use hover::*;
+
 #[cfg(test)]
 mod tests {
     use sqlx::{Row, postgres::PgPoolOptions};
@@ -247,18 +262,3 @@ mod tests {
         Ok(())
     }
 }
-
-// Re-export main types for convenience
-pub use connection::{
-    PostgresConnection, PgConnectionKey
-};
-
-pub use sql_parser::{
-    PostgresTableExtractor, CompletionKind, ParsedQuery, TableAlias
-};
-
-pub use factory::PostgresConnectionFactory;
-
-// Import completion and hover implementations to make them available
-// use completion::*;
-// use hover::*;

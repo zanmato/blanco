@@ -91,6 +91,7 @@ pub struct DoubleClickCell {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
+#[allow(dead_code)]
 pub enum ConnectionType {
     SQLite,
     PostgreSQL,
@@ -158,7 +159,7 @@ impl BlancoApp {
         // Subscribe to sidebar events with window access for tab restoration
         let editor_panel_clone = editor_panel.clone();
         let subscription =
-            cx.subscribe_in(&sidebar, window, move |app, sidebar, event, window, cx| {
+            cx.subscribe_in(&sidebar, window, move |_app, sidebar, event, window, cx| {
                 match event {
                     AppEvent::ConnectionEstablished { .. } => {
                         // Refresh sidebar connections when a new connection is established
@@ -167,7 +168,7 @@ impl BlancoApp {
                         });
 
                         // Optionally refresh editor panel connection options
-                        editor_panel_clone.update(cx, |editor_panel, cx| {
+                        editor_panel_clone.update(cx, |_editor_panel, _cx| {
                             // TODO: Refresh connection options in editor if needed
                             log::info!("Connection established, refreshing components");
                         });
@@ -344,7 +345,7 @@ impl BlancoApp {
                             let db_service = DbService::global(cx).clone();
                             let app_db = db_service.app_db_handle();
 
-                            cx.spawn(async move |cx| {
+                            cx.spawn(async move |_cx| {
                                 if let Some(db) = app_db.read().await.as_ref() {
                                     db.save_connection(&conn_data).await.map_err(|e| {
                                         anyhow::anyhow!("Failed to save connection: {}", e)

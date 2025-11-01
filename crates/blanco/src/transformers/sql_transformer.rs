@@ -71,7 +71,7 @@ impl DataTransformer for SqlTransformer {
             let mut cell_data: std::collections::HashMap<(usize, usize), &crate::results_panel::SelectedCell> = std::collections::HashMap::new();
 
             for cell in &data.selected_cells {
-                rows.entry(cell.row).or_insert_with(std::collections::HashSet::new).insert(cell.col);
+                rows.entry(cell.row).or_default().insert(cell.col);
                 cell_data.insert((cell.row, cell.col), cell);
             }
 

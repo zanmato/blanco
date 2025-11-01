@@ -1,5 +1,5 @@
 use gpui::{
-    div, prelude::FluentBuilder, px, Action, App, AppContext, Axis, ClickEvent, Context, Entity,
+    div, prelude::FluentBuilder, px, App, AppContext, Axis, ClickEvent, Context, Entity,
     EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, Keystroke,
     ParentElement, Pixels, Point, Render, Styled, Window,
 };
@@ -8,14 +8,12 @@ use gpui_component::{
     h_flex,
     highlighter::Diagnostic,
     input::{InputState, TabSize, TextInput},
-    sidebar::SidebarToggleButton,
     tab::{Tab, TabBar},
-    v_flex, ActiveTheme, ContextModal as _, IconName, Kbd, Side, Sizable, StyledExt,
+    v_flex, ActiveTheme, ContextModal as _, IconName, Kbd, Sizable, StyledExt,
 };
 use log::{debug, error, info};
 use std::rc::Rc;
 
-use crate::app::ToggleSidebar;
 use crate::app_database::QueryTabData;
 use crate::app_events::AppEvent;
 use crate::db_service::DbService;
@@ -60,16 +58,7 @@ pub struct QueryTab {
 }
 
 impl QueryTab {
-    /// Get the URI for this query tab
-    fn uri(&self) -> String {
-        // Use file URI if available (for LSP integration), otherwise fall back to synthetic URI
-        if let Some(ref file_uri) = self.file_uri {
-            file_uri.clone()
-        } else {
-            format!("inmemory://blanco/query_{}.sql", self.id)
-        }
-    }
-
+  
     /// Get connection instance from unified connection manager
     #[allow(dead_code)]
     pub async fn get_connection(
@@ -157,8 +146,7 @@ pub struct EditorPanel {
     active_tab_ix: usize,
     next_tab_id: usize,
     sidebar_collapsed: bool,
-    pending_save_task: Option<gpui::Task<()>>,
-    _subscriptions: Vec<gpui::Subscription>,
+      _subscriptions: Vec<gpui::Subscription>,
     query_file_manager: Arc<QueryFileManager>,
     // Temporary storage for saved tabs that will be restored after connections are loaded
     pending_saved_tabs: Option<Vec<crate::app_database::QueryTabData>>,
@@ -171,6 +159,17 @@ pub struct EditorPanel {
     dragging_split: Option<SplitType>, // Which handle is being dragged
     #[allow(dead_code)]
     drag_start_position: Option<Point<f32>>, // Start position of drag
+}
+
+/// Parameters for creating a new tab with connection
+#[derive(Clone)]
+struct TabCreationParams {
+    title: String,
+    content: String,
+    db_id: Option<i64>,
+    connection_string: String,
+    #[allow(dead_code)]
+    connection_type: String,
 }
 
 impl EditorPanel {
@@ -202,7 +201,6 @@ impl EditorPanel {
             active_tab_ix: 0,
             next_tab_id: 1,
             sidebar_collapsed,
-            pending_save_task: None,
             _subscriptions: Vec::new(),
             query_file_manager,
             pending_saved_tabs: None,
@@ -311,7 +309,7 @@ impl EditorPanel {
                 let db_service = DbService::global(cx).clone();
                 let app_db = db_service.app_db_handle();
 
-                cx.spawn(async move |_, mut cx| {
+                cx.spawn(async move |_, _cx| {
                     if let Some(app_db) = app_db.read().await.as_ref() {
                         app_db
                             .delete_query_tab(db_id)
@@ -503,11 +501,11 @@ impl EditorPanel {
                     let db_service = DbService::global(cx).clone();
                     let app_db = db_service.app_db_handle();
                     let connection_string = query_tab.connection_string.clone();
-                    let title = query_tab.title.clone();
+                    let _title = query_tab.title.clone();
                     let query_file_manager = self.query_file_manager.clone();
                     let connection_name = query_tab.title.clone();
 
-                    cx.spawn(async move |entity_handle, mut cx| {
+                    cx.spawn(async move |_entity_handle, _cx| {
                         if let Some(app_db) = app_db.read().await.as_ref() {
                             // Find or create the connection and get its ID
                             let connection_id = if !connection_string.is_empty()
@@ -622,7 +620,7 @@ impl EditorPanel {
                     let results_panel_clone = query_tab.results_panel.clone();
                     let sql_log_clone = query_tab.sql_log.clone();
                     let db_service = DbService::global(cx).clone();
-                    let app_db_handle = db_service.app_db_handle();
+                    let _app_db_handle = db_service.app_db_handle();
 
                     cx.spawn(async move |editor_panel_entity, cx| {
                         let start_time = std::time::Instant::now();
@@ -698,7 +696,7 @@ impl EditorPanel {
                                         });
 
                                         // Log execution result to SQL log
-                                        sql_log_clone.update(cx, |sql_log, cx| {
+                                        let _ = sql_log_clone.update(cx, |sql_log, cx| {
                                             let log_message = format!(
                                                 "{}, {} rows in {}",
                                                 crate::time_format::format_current_timestamp(),
@@ -728,12 +726,12 @@ impl EditorPanel {
                                         log::error!("Query execution failed: {}", e);
 
                                         // Log execution error to SQL log
-                                        let error_duration =
+                                        let _error_duration =
                                             start_time.elapsed().as_millis() as i64;
-                                        sql_log_clone.update(cx, |sql_log, cx| {
+                                        let _ = sql_log_clone.update(cx, |sql_log, cx| {
                                             let log_message = format!(
                                                 "query execution failed: {}",
-                                                e.to_string()
+                                                e
                                             );
                                             sql_log.append_text(
                                                 &blanco_ui::SqlLogMessage::Comment(log_message),
@@ -794,8 +792,6 @@ impl EditorPanel {
                         connection_id: connection_string.clone(),
                         query: query.clone(),
                     });
-
-                    return;
                 }
                 TabType::Settings(_) => {
                     // Not a query tab, do nothing
@@ -918,7 +914,7 @@ impl EditorPanel {
 
         // Save tabs in background
         let query_file_manager = self.query_file_manager.clone();
-        cx.spawn(async move |editor_panel_handle, mut cx| {
+        cx.spawn(async move |editor_panel_handle, cx| {
             let mut saved_ids = Vec::new();
             if let Some(app_db) = app_db.read().await.as_ref() {
                 for (
@@ -1041,7 +1037,7 @@ impl EditorPanel {
     /// Load saved query tabs from the app database
     /// This should be called from BlancoApp initialization
     pub fn new_with_saved_tabs(
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
         sidebar_collapsed: bool,
         saved_tabs: Vec<QueryTabData>,
@@ -1064,7 +1060,6 @@ impl EditorPanel {
             active_tab_ix: 0,
             next_tab_id: 0,
             sidebar_collapsed,
-            pending_save_task: None,
             _subscriptions: Vec::new(),
             query_file_manager,
             pending_saved_tabs: None,
@@ -1118,7 +1113,7 @@ impl EditorPanel {
 
         // Get all available connections from the database to match with saved tabs
         let db_service = DbService::global(cx).clone();
-        let app_db = db_service.app_db_handle();
+        let _app_db = db_service.app_db_handle();
 
         let mut restored_count = 0;
         let total_tabs = saved_tabs.len();
@@ -1170,15 +1165,14 @@ impl EditorPanel {
                     tab_title, connection_string
                 );
 
-                self.create_and_add_tab_with_connection_string(
-                    window,
-                    &tab_title,
-                    &tab_content,
-                    tab_db_id,
+                let params = TabCreationParams {
+                    title: tab_title,
+                    content: tab_content,
+                    db_id: tab_db_id,
                     connection_string,
-                    tab_connection_type.as_deref().unwrap_or("Unknown"),
-                    cx,
-                );
+                    connection_type: tab_connection_type.as_deref().unwrap_or("Unknown").to_string(),
+                };
+                self.create_and_add_tab_with_connection_string(window, params, cx);
                 restored_count += 1;
             } else {
                 debug!(
@@ -1199,11 +1193,7 @@ impl EditorPanel {
     fn create_and_add_tab_with_connection_string(
         &mut self,
         window: &mut Window,
-        title: &str,
-        content: &str,
-        db_id: Option<i64>,
-        connection_string: String,
-        connection_type: &str,
+        params: TabCreationParams,
         cx: &mut Context<Self>,
     ) {
         let tab_id = self.next_tab_id;
@@ -1223,7 +1213,7 @@ impl EditorPanel {
             // Set up completion provider using connection string and DbService
             let db_service = DbService::global(cx).clone();
             let completion_provider =
-                SqlCompletionProvider::new(connection_string.clone(), db_service);
+                SqlCompletionProvider::new(params.connection_string.clone(), db_service);
             let completion_provider: Rc<dyn gpui_component::input::CompletionProvider> =
                 Rc::new(completion_provider);
             editor.lsp.completion_provider = Some(completion_provider);
@@ -1232,8 +1222,8 @@ impl EditorPanel {
         });
 
         // Set content if provided
-        if !content.is_empty() {
-            let content_owned = content.to_string();
+        if !params.content.is_empty() {
+            let content_owned = params.content.clone();
             editor.update(cx, |state, cx| {
                 state.replace(&content_owned, window, cx);
             });
@@ -1242,10 +1232,10 @@ impl EditorPanel {
         // Create query tab with the connection string
         let query_tab = QueryTab {
             id: tab_id,
-            title: title.to_string(),
-            connection_string,
+            title: params.title.clone(),
+            connection_string: params.connection_string,
             editor,
-            db_id,
+            db_id: params.db_id,
             results_panel: cx.new(|cx| ResultsPanel::new(window, cx)),
             sql_log: cx.new(|cx| SqlLog::new(1000, cx.theme().highlight_theme.clone())),
             cached_diagnostics: Arc::new(Mutex::new(Vec::new())),
@@ -1258,182 +1248,7 @@ impl EditorPanel {
         cx.notify();
     }
 
-    /// Save the current tab immediately (used when switching tabs)
-    fn save_current_tab_immediate(&mut self, cx: &mut Context<Self>) {
-        if let Some(TabType::Query(query_tab)) = self.tabs.get(self.active_tab_ix) {
-            let content = query_tab.editor.read(cx).text().to_string();
-            let connection_type = if query_tab.connection_string.starts_with("sqlite:") {
-                Some("SQLite".to_string())
-            } else if query_tab.connection_string.starts_with("postgresql:")
-                || query_tab.connection_string.starts_with("postgres:")
-            {
-                Some("PostgreSQL".to_string())
-            } else {
-                None
-            };
-            let pg_connection_key = if connection_type.as_ref().is_some_and(|t| t == "PostgreSQL") {
-                Some(query_tab.connection_string.clone())
-            } else {
-                None
-            };
-            let tab_data_without_connection_id = QueryTabData {
-                id: query_tab.db_id,
-                title: query_tab.title.clone(),
-                content: content.clone(),
-                position: self.active_tab_ix as i32,
-                connection_id: None, // Will be set in async task
-                connection_type,
-                pg_connection_key,
-                file_uri: None, // Will be updated after file creation
-            };
-
-            debug!(
-                "Saving tab '{}' (db_id: {:?}, position: {}, content_len: {})",
-                tab_data_without_connection_id.title,
-                tab_data_without_connection_id.id,
-                tab_data_without_connection_id.position,
-                content.len()
-            );
-
-            let db_service = DbService::global(cx).clone();
-            let app_db = db_service.app_db_handle();
-
-            // Handle connection finding and tab saving asynchronously
-            let connection_string = query_tab.connection_string.clone();
-            let title = query_tab.title.clone();
-            let tab_index = self.active_tab_ix;
-            let query_file_manager = self.query_file_manager.clone();
-            let connection_name = query_tab.title.clone();
-
-            // Update the tab's db_id after save completes
-            cx.spawn(async move |editor_panel_handle, mut cx| {
-                if let Some(app_db) = app_db.read().await.as_ref() {
-                    // Find or create the connection and get its ID
-                    let connection_id = if !connection_string.is_empty()
-                        && connection_string != "sqlite::memory:"
-                    {
-                        match app_db.find_or_create_connection(&connection_string).await {
-                            Ok(id) => Some(id),
-                            Err(e) => {
-                                error!("Failed to find or create connection: {}", e);
-                                return;
-                            }
-                        }
-                    } else {
-                        None
-                    };
-
-                    // Create the final tab data with connection_id
-                    let mut final_tab_data = tab_data_without_connection_id;
-                    final_tab_data.connection_id = connection_id;
-
-                    // First save to get or create the database ID
-                    let final_db_id = match app_db.save_query_tab(&final_tab_data).await {
-                        Ok(db_id) => {
-                            debug!("Tab saved successfully with db_id: {}", db_id);
-                            db_id
-                        }
-                        Err(e) => {
-                            error!("Failed to save tab: {}", e);
-                            return;
-                        }
-                    };
-
-                    // Try to migrate the query file from legacy location if it exists
-                    // This ensures backward compatibility when switching to connection-specific directories
-                    if let Err(e) = query_file_manager
-                        .migrate_query_file(final_db_id, &connection_name)
-                        .await
-                    {
-                        debug!("Migration not needed or failed for tab: {}", e);
-                    }
-
-                    // Create/update the query file on disk
-                    let file_uri = match query_file_manager
-                        .create_query_file(final_db_id, &connection_name, &content)
-                        .await
-                    {
-                        Ok(_) => {
-                            let uri =
-                                query_file_manager.query_file_uri(final_db_id, &connection_name);
-                            debug!("Created query file for tab with URI: {}", uri);
-                            Some(uri)
-                        }
-                        Err(e) => {
-                            error!("Failed to create query file: {}", e);
-                            None
-                        }
-                    };
-
-                    // Update the database record with the file URI
-                    if let Some(ref file_uri) = file_uri {
-                        let updated_tab_data = QueryTabData {
-                            id: Some(final_db_id),
-                            title: final_tab_data.title.clone(),
-                            content: final_tab_data.content.clone(),
-                            position: final_tab_data.position,
-                            connection_id: final_tab_data.connection_id,
-                            connection_type: final_tab_data.connection_type.clone(),
-                            pg_connection_key: final_tab_data.pg_connection_key.clone(),
-                            file_uri: Some(file_uri.clone()),
-                        };
-
-                        if let Err(e) = app_db.save_query_tab(&updated_tab_data).await {
-                            error!("Failed to update file URI: {}", e);
-                        } else {
-                            debug!("Updated file URI: {}", file_uri);
-                        }
-                    }
-
-                    if let Some(editor_panel) = editor_panel_handle.upgrade() {
-                        let _ = editor_panel.update(cx, |panel, _cx| {
-                            if let Some(TabType::Query(query_tab)) = panel.tabs.get_mut(tab_index) {
-                                if query_tab.db_id.is_none() {
-                                    query_tab.db_id = Some(final_db_id);
-                                    // Set the file URI on the QueryTab
-                                    if let Some(file_uri) = panel
-                                        .query_file_manager
-                                        .query_file_uri(final_db_id, &query_tab.title)
-                                        .into()
-                                    {
-                                        let file_uri_debug = file_uri.clone();
-                                        query_tab.file_uri = Some(file_uri);
-                                        debug!(
-                                            "Updated tab with db_id: {} and file_uri: {}",
-                                            final_db_id, file_uri_debug
-                                        );
-                                    } else {
-                                        debug!("Updated tab with db_id: {}", final_db_id);
-                                    }
-                                }
-                            }
-                        });
-                    }
-                }
-            })
-            .detach();
-        }
-    }
-
-    /// Trigger debounced auto-save for the current tab
-    pub fn trigger_auto_save(&mut self, cx: &mut Context<Self>) {
-        // Cancel any pending save task
-        self.pending_save_task = None;
-
-        // Schedule a new save after 500ms delay
-        let task = cx.spawn(async move |editor_panel, cx| {
-            cx.background_executor()
-                .timer(std::time::Duration::from_millis(500))
-                .await;
-
-            let _ = editor_panel.update(cx, |panel, cx| {
-                panel.save_current_tab_immediate(cx);
-            });
-        });
-
-        self.pending_save_task = Some(task);
-    }
-
+    
     /// Execute the current query in the active tab using unified connection system
     pub fn execute_current_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Use the unified query execution method without requiring ClickEvent

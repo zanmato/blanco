@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use gpui::{
     div, prelude::FluentBuilder, px, AnyElement, App, ClickEvent, DefiniteLength,
     InteractiveElement as _, IntoElement, ParentElement, Pixels, RenderOnce, Styled, Window,
@@ -9,6 +11,9 @@ use gpui_component::{
     v_flex, ActiveTheme, Collapsible, Icon, IconName, Side, Sizable, StyledExt,
 };
 use std::rc::Rc;
+
+// Type alias to reduce complexity
+type SidebarClickHandler = Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>;
 
 mod footer;
 mod group;
@@ -115,7 +120,7 @@ pub struct SidebarToggleButton {
     btn: Button,
     collapsed: bool,
     side: Side,
-    on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
+    on_click: SidebarClickHandler,
 }
 
 impl SidebarToggleButton {

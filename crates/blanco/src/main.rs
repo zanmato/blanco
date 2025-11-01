@@ -102,7 +102,7 @@ fn main() {
         }
 
         // Initialize test database
-        cx.spawn(async move |cx| {
+        cx.spawn(async move |_cx| {
             match test_db::init_test_database().await {
                 Ok(_) => {
                     log::info!("Connected to test database");
@@ -124,7 +124,7 @@ fn main() {
                 log::info!("🔍 Loaded DSN from pg_dsn.txt: {}", dsn);
                 if !dsn.is_empty() {
                     let db_service_clone = db_service.clone();
-                    cx.spawn(async move |cx| {
+                    cx.spawn(async move |_cx| {
                         let unified_manager = db_service_clone.unified_manager().await;
                         let result = unified_manager.read().await.get_or_create_connection(&dsn).await;
                         match result {
@@ -147,7 +147,7 @@ fn main() {
         let (mut async_processor, async_event_tx) = async_pipeline::AsyncEventProcessor::new(db_service.clone());
 
         // Start the async processor
-        cx.spawn(async move |cx| {
+        cx.spawn(async move |_cx| {
             if let Err(e) = async_processor.start().await {
                 log::error!("Failed to start async event processor: {}", e);
             }

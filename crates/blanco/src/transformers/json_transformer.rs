@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::transformers::{DataTransformer, TransformError, SelectedTableData};
 use std::collections::HashMap;
 
@@ -33,7 +35,7 @@ impl DataTransformer for JsonTransformer {
                     let mut obj = HashMap::new();
                     for cell in &row.cells {
                         if let Some(col_name) = &cell.column_name {
-                            let json_value = convert_to_json_value(&cell.value, &cell.column_type.as_deref().unwrap_or("text"));
+                            let json_value = convert_to_json_value(&cell.value, cell.column_type.as_deref().unwrap_or("text"));
                             obj.insert(col_name.clone(), json_value);
                         }
                     }
@@ -46,7 +48,7 @@ impl DataTransformer for JsonTransformer {
             // Group cells by row
             let mut rows: std::collections::HashMap<usize, Vec<&crate::results_panel::SelectedCell>> = std::collections::HashMap::new();
             for cell in &data.selected_cells {
-                rows.entry(cell.row).or_insert_with(Vec::new).push(cell);
+                rows.entry(cell.row).or_default().push(cell);
             }
 
             let mut row_indices: Vec<usize> = rows.keys().cloned().collect();
@@ -57,7 +59,7 @@ impl DataTransformer for JsonTransformer {
                     let mut obj = HashMap::new();
                     for cell in cells.iter() {
                         if let Some(col_name) = &cell.column_name {
-                            let json_value = convert_to_json_value(&cell.value, &cell.column_type.as_deref().unwrap_or("text"));
+                            let json_value = convert_to_json_value(&cell.value, cell.column_type.as_deref().unwrap_or("text"));
                             obj.insert(col_name.clone(), json_value);
                         }
                     }
@@ -239,7 +241,7 @@ mod tests {
         assert_eq!(parse_numeric("123"), Some(json!(123)));
         assert_eq!(parse_numeric("-42"), Some(json!(-42)));
         assert_eq!(parse_numeric("45.67"), Some(json!(45.67)));
-        assert_eq!(parse_numeric("-3.14"), Some(json!(-3.14)));
+        assert_eq!(parse_numeric("-2.71"), Some(json!(-2.71_f64)));
         assert_eq!(parse_numeric("not_a_number"), None);
         assert_eq!(parse_numeric("inf"), None); // Special float values not supported by serde_json::Number
     }

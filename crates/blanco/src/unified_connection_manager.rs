@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
 use async_std::sync::RwLock;
-use postgres::{PostgresConnection, PostgresConnectionFactory as PgCrateFactory, PgConnectionKey};
-use sqlite::{SqliteConnection, SqliteConnectionFactory as SqliteCrateFactory, SqliteConnectionKey};
+use postgres::{PostgresConnection, PgConnectionKey};
+use sqlite::{SqliteConnection, SqliteConnectionKey};
 
 
 
@@ -56,6 +56,7 @@ impl ConnectionFactory for PostgresConnectionFactory {
 /// through a common interface while maintaining type-specific functionality
 #[derive(Clone)]
 pub struct UnifiedConnectionManager {
+    #[allow(dead_code)]
     registry: Arc<ConnectionRegistry>,
     connections: Arc<RwLock<HashMap<String, Arc<dyn Connection>>>>,
     connection_factories: Arc<HashMap<String, Arc<dyn ConnectionFactory>>>,
@@ -146,11 +147,12 @@ impl UnifiedConnectionManager {
     }
 
     /// Close and remove a connection
+    #[allow(dead_code)]
     pub async fn close_connection(&self, connection_string: &str) -> Result<()> {
         let connection_key = self.generate_connection_key(connection_string)?;
         let mut connections = self.connections.write().await;
 
-        if let Some(conn) = connections.remove(&connection_key) {
+        if let Some(_conn) = connections.remove(&connection_key) {
             log::info!("Closing connection: {}", connection_key);
             // Note: We can't disconnect here as we need a mutable reference
             // The connection will be dropped when Arc goes out of scope
@@ -160,6 +162,7 @@ impl UnifiedConnectionManager {
     }
 
     /// Close all connections
+    #[allow(dead_code)]
     pub async fn close_all_connections(&self) -> Result<()> {
         let mut connections = self.connections.write().await;
         let count = connections.len();
@@ -200,6 +203,7 @@ impl UnifiedConnectionManager {
     }
 
     /// Test a connection string without storing the connection
+    #[allow(dead_code)]
     pub async fn test_connection(&self, connection_string: &str) -> Result<bool> {
         let connection_type = self.detect_connection_type(connection_string)?;
 

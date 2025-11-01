@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
-    Connection, ConnectionFactory, IconName, QueryResult, ColumnInfo, TableMetadata,
+    Connection, IconName, QueryResult, ColumnInfo, TableMetadata,
     ConnectionUIMetadata, TableChangeOperation,
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
@@ -273,50 +273,6 @@ impl SqliteConnection {
         // For SQLite, paths are generally not sensitive, but we can still clean them up
         path.replace("\\", "/") // Normalize path separators
     }
-
-    /// Extract primary key information from RowIdentifier
-    fn extract_pk_info(&self, row_identifier: &RowIdentifier) -> Option<(String, String)> {
-        match row_identifier {
-            RowIdentifier::PrimaryKey { column, value } => Some((column.clone(), value.clone())),
-            RowIdentifier::RowIndex(_) => None,
-        }
-    }
-
-    /// Quote a value for SQL and return both quoted and unquoted versions
-    fn quote_value(&self, value: &Option<String>) -> (String, String) {
-        match value {
-            Some(v) => {
-                if v.is_empty() {
-                    ("NULL".to_string(), "NULL".to_string())
-                } else {
-                    let clean_value = v.trim_matches('\'');
-                    let quoted = format!("'{}'", clean_value.replace("'", "''"));
-                    (quoted, clean_value.to_string())
-                }
-            }
-            None => ("NULL".to_string(), "NULL".to_string()),
-        }
-    }
-
-    /// Fetch SQLite tables using async background task
-    async fn fetch_sqlite_tables(&self) -> Result<Vec<String>> {
-        let result = self.execute_query(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
-        ).await?;
-
-        let tables: Vec<String> = result.rows.into_iter()
-            .filter_map(|row| row.into_iter().next())
-            .collect();
-
-        Ok(tables)
-    }
-}
-
-// Placeholder types for table operations (these would need to be defined or moved from main crate)
-#[derive(Debug, Clone)]
-pub enum RowIdentifier {
-    PrimaryKey { column: String, value: String },
-    RowIndex(usize),
 }
 
 #[async_trait]
@@ -669,7 +625,7 @@ impl Connection for SqliteConnection {
         Ok(metadata)
     }
 
-    async fn execute_table_changes(&self, changes: &[TableChangeOperation]) -> Result<QueryResult> {
+    async fn execute_table_changes(&self, _changes: &[TableChangeOperation]) -> Result<QueryResult> {
         // This is a placeholder - would need implementation of table operations
         Err(anyhow::anyhow!("Table changes not yet implemented for SQLite"))
     }

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use gpui::{
     prelude::FluentBuilder as _, Div, InteractiveElement, IntoElement, ParentElement, RenderOnce,
     Styled,

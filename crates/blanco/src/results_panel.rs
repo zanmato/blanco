@@ -1,16 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
-use async_std::channel;
-
 use gpui::prelude::FluentBuilder;
 use gpui::{
     div, px, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
-    InteractiveElement, IntoElement, MouseButton, ParentElement, Render,
-    StatefulInteractiveElement, Styled, Window,
+    InteractiveElement, IntoElement, MouseButton, ParentElement, Render, Styled, Window,
 };
 use gpui_component::{
-    h_flex,
     input::{InputEvent, InputState, TextInput},
     popup_menu::PopupMenu,
     table::{Column, ColumnSort, Table, TableDelegate},
@@ -19,12 +15,10 @@ use gpui_component::{
 
 use crate::app::{ClearSelection, CopyCell, SelectRow}; // Import the action types
 use crate::app_events::AppEvent;
-use crate::async_pipeline::{AsyncEvent, TableOperationResponse, TaskPriority};
-use crate::db_service::DbService;
+use crate::async_pipeline::{AsyncEvent, TaskPriority};
 use crate::transformers::CopyHandler;
-use blanco_core::table_operations::{OperationType, RowIdentifier, TableChangeOperation};
+use blanco_core::table_operations::TableChangeOperation;
 use blanco_core::ColumnChange;
-use blanco_core::Connection;
 use blanco_core::QueryResult;
 
 // Data structures for copy functionality
@@ -41,6 +35,7 @@ pub struct SelectedCell {
 pub struct SelectedRow {
     pub row: usize,
     pub cells: Vec<SelectedCell>,
+    #[allow(dead_code)]
     pub primary_key_value: Option<String>,
 }
 
@@ -49,9 +44,9 @@ pub struct SelectedTableData {
     pub table_name: Option<String>,
     pub columns: Vec<String>,
     pub column_types: Vec<String>,
-    pub rows: Vec<Vec<String>>,
     pub selected_cells: Vec<SelectedCell>,
     pub selected_rows: Vec<SelectedRow>,
+    #[allow(dead_code)]
     pub primary_key_column: Option<String>,
 }
 
@@ -74,18 +69,8 @@ pub struct TableChange {
 pub enum ChangeType {
     UpdateCell,
     InsertRow,
-    DeleteRow,
 }
 
-// Test helper structures
-#[derive(Clone, Debug)]
-pub struct ResultRow {
-    pub id: usize,
-    pub name: String,
-    pub email: String,
-    pub age: i32,
-    pub city: String,
-}
 
 #[derive(Clone, Debug, Default)]
 pub struct CellEditState {
@@ -113,10 +98,12 @@ impl CellEditState {
         self.edited_values.get(&(row, col))
     }
 
+    #[allow(dead_code)]
     pub fn get_original_value(&self, row: usize, col: usize) -> Option<&String> {
         self.original_values.get(&(row, col))
     }
 
+    
     pub fn start_editing(&mut self, row: usize, col: usize, input: Entity<InputState>) {
         self.editing_cell = Some((row, col));
         self.editing_input = Some(input);
@@ -161,10 +148,7 @@ impl CellEditState {
         self.changes.push(change);
     }
 
-    pub fn get_changes(&self) -> &[TableChange] {
-        &self.changes
-    }
-
+    
     pub fn clear_changes(&mut self) {
         self.changes.clear();
         self.edited_values.clear();
@@ -172,28 +156,9 @@ impl CellEditState {
         self.pending_new_rows.clear();
     }
 
-    pub fn update_editing_value(&mut self, row: usize, col: usize, new_value: String) {
-        if self.is_editing(row, col) {
-            self.edited_values.insert((row, col), new_value);
-        }
-    }
-
-    pub fn commit_edit(&mut self, row: usize, col: usize) -> Option<String> {
-        if self.is_editing(row, col) {
-            self.editing_cell = None;
-            self.edited_values.get(&(row, col)).cloned()
-        } else {
-            None
-        }
-    }
-
-    pub fn cancel_edit(&mut self, row: usize, col: usize) {
-        if self.is_editing(row, col) {
-            self.editing_cell = None;
-            self.edited_values.remove(&(row, col));
-        }
-    }
-
+    
+    
+    
     pub fn select_cell(&mut self, row: usize, col: usize) -> bool {
         // Toggle cell selection (col 0 is row number column)
         if col == 0 {
@@ -233,7 +198,79 @@ impl CellEditState {
     }
 }
 
+/// Builder for creating TableChange instances
+pub struct TableChangeBuilder {
+    change_type: ChangeType,
+    table_name: String,
+    row_index: usize,
+    column_index: Option<usize>,
+    old_value: Option<String>,
+    new_value: Option<String>,
+    primary_key_value: Option<String>,
+    primary_key_column: Option<String>,
+}
+
+impl TableChangeBuilder {
+    pub fn new(change_type: ChangeType, table_name: String, row_index: usize) -> Self {
+        Self {
+            change_type,
+            table_name,
+            row_index,
+            column_index: None,
+            old_value: None,
+            new_value: None,
+            primary_key_value: None,
+            primary_key_column: None,
+        }
+    }
+
+    pub fn column_index(mut self, column_index: Option<usize>) -> Self {
+        self.column_index = column_index;
+        self
+    }
+
+    pub fn old_value(mut self, old_value: Option<String>) -> Self {
+        self.old_value = old_value;
+        self
+    }
+
+    pub fn new_value(mut self, new_value: Option<String>) -> Self {
+        self.new_value = new_value;
+        self
+    }
+
+    pub fn primary_key_value(mut self, primary_key_value: Option<String>) -> Self {
+        self.primary_key_value = primary_key_value;
+        self
+    }
+
+    pub fn primary_key_column(mut self, primary_key_column: Option<String>) -> Self {
+        self.primary_key_column = primary_key_column;
+        self
+    }
+
+    pub fn build(self) -> TableChange {
+        let mut change = TableChange {
+            change_type: self.change_type,
+            table_name: self.table_name,
+            row_index: self.row_index,
+            column_index: self.column_index,
+            old_value: self.old_value,
+            new_value: self.new_value,
+            primary_key_value: self.primary_key_value,
+            primary_key_column: self.primary_key_column,
+            sql_template: None,
+            parameters: Vec::new(),
+        };
+
+        // Generate prepared statement immediately
+        let _ = change.generate_prepared_statement();
+        change
+    }
+}
+
 impl TableChange {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         change_type: ChangeType,
         table_name: String,
@@ -244,22 +281,13 @@ impl TableChange {
         primary_key_value: Option<String>,
         primary_key_column: Option<String>,
     ) -> Self {
-        let mut change = Self {
-            change_type,
-            table_name,
-            row_index,
-            column_index,
-            old_value,
-            new_value,
-            primary_key_value,
-            primary_key_column,
-            sql_template: None,
-            parameters: Vec::new(),
-        };
-
-        // Generate prepared statement immediately
-        let _ = change.generate_prepared_statement();
-        change
+        TableChangeBuilder::new(change_type, table_name, row_index)
+            .column_index(column_index)
+            .old_value(old_value)
+            .new_value(new_value)
+            .primary_key_value(primary_key_value)
+            .primary_key_column(primary_key_column)
+            .build()
     }
 
     fn generate_prepared_statement(&mut self) -> Result<(), String> {
@@ -305,25 +333,6 @@ impl TableChange {
                     self.parameters.push("NULL".to_string());
                 }
             }
-            ChangeType::DeleteRow => {
-                let pk_column = self
-                    .primary_key_column
-                    .clone()
-                    .or_else(|| Some("id".to_string())) // Default fallback
-                    .ok_or_else(|| "No primary key column".to_string())?;
-
-                // DELETE FROM table_name WHERE pk_column = $1
-                self.sql_template = Some(format!(
-                    "DELETE FROM {} WHERE {} = $1",
-                    self.table_name, pk_column
-                ));
-
-                if let Some(pk_val) = &self.primary_key_value {
-                    self.parameters.push(pk_val.clone());
-                } else {
-                    return Err("No primary key value available".to_string());
-                }
-            }
         }
         Ok(())
     }
@@ -342,19 +351,7 @@ pub struct ResultsTableDelegate {
 }
 
 impl ResultsTableDelegate {
-    pub fn new() -> Self {
-        Self {
-            columns: vec![],
-            column_types: vec![],
-            rows: vec![],
-            edit_state: CellEditState::default(),
-            table_name: None,
-            primary_key_column: None,
-            pending_edit_cell: None,
-            connection_string: None,
-        }
-    }
-
+    
     /// Remove a row at the specified index
     pub fn remove_row(&mut self, row_index: usize) {
         if row_index < self.rows.len() {
@@ -406,7 +403,7 @@ impl ResultsTableDelegate {
                         // Fallback: try to get primary key from delegate
                         if let Some(ref pk_column) = self.primary_key_column {
                             if let Some(pk_value) =
-                                self.rows.get(change.row_index).and_then(|row| row.get(0))
+                                self.rows.get(change.row_index).and_then(|row| row.first())
                             {
                                 // Assume PK is first column as fallback
                                 TableChangeOperation::update_cell(
@@ -445,20 +442,6 @@ impl ResultsTableDelegate {
                         TableChangeOperation::insert_row(change.table_name.clone(), column_changes)
                     } else {
                         continue; // Skip if no values
-                    }
-                }
-                ChangeType::DeleteRow => {
-                    // Use primary key information for deletion
-                    if let (Some(pk_column), Some(pk_value)) =
-                        (&change.primary_key_column, &change.primary_key_value)
-                    {
-                        TableChangeOperation::delete_row(
-                            change.table_name.clone(),
-                            pk_column.clone(),
-                            pk_value.clone(),
-                        )
-                    } else {
-                        continue; // Skip if no PK information
                     }
                 }
             };
@@ -627,7 +610,7 @@ impl ResultsTableDelegate {
     /// Simple heuristic method to detect primary key column (fallback)
     fn detect_primary_key_simple(&self, _table_name: &str) -> Option<String> {
         // Simple heuristic: look for common primary key column names
-        for (_i, column) in self.columns.iter().enumerate() {
+        for column in self.columns.iter() {
             let column_name_lower = column.name.to_lowercase();
             if column_name_lower.contains("id")
                 || column_name_lower == "uuid"
@@ -870,7 +853,7 @@ impl ResultsTableDelegate {
                 selected_rows.push(SelectedRow {
                     row,
                     cells,
-                    primary_key_value: self.get_primary_key_value(row),
+                    primary_key_value: None, // TODO: Extract primary key if needed
                 });
             }
         }
@@ -884,14 +867,9 @@ impl ResultsTableDelegate {
                 .map(|c| c.name.to_string())
                 .collect(), // Skip row number column
             column_types: self.column_types.clone(),
-            rows: self
-                .rows
-                .iter()
-                .map(|row| row.iter().skip(1).cloned().collect()) // Skip row number column
-                .collect(),
             selected_cells,
             selected_rows,
-            primary_key_column: self.primary_key_column.clone(),
+            primary_key_column: None, // TODO: Extract primary key if needed
         }
     }
 
@@ -1209,9 +1187,9 @@ impl TableDelegate for ResultsTableDelegate {
         div().w(px(300.0)).h_full().flex_shrink_0()
     }
 
-    fn context_menu(&self, row_ix: usize, menu: PopupMenu, window: &Window, cx: &App) -> PopupMenu {
+    fn context_menu(&self, row_ix: usize, menu: PopupMenu, _window: &Window, _cx: &App) -> PopupMenu {
         let has_selection = self.edit_state.has_selection();
-        let selected_data = self.get_selected_data();
+        let _selected_data = self.get_selected_data();
         let row_is_selected = self.edit_state.selected_rows.contains(&row_ix);
 
         // Basic copy operations - use simple menu items (no submenus for now)
@@ -1742,23 +1720,7 @@ impl ResultsPanel {
         cx.notify();
     }
 
-    pub fn get_edited_cells(&self, cx: &App) -> Vec<(usize, usize, String, String)> {
-        let mut edited_cells = Vec::new();
-        let delegate = self.table.read(cx).delegate();
-
-        for ((row, col), new_value) in &delegate.edit_state.edited_values {
-            let original_value = delegate
-                .edit_state
-                .original_values
-                .get(&(*row, *col))
-                .cloned()
-                .unwrap_or_else(|| "--".to_string());
-            edited_cells.push((*row, *col, original_value.clone(), new_value.clone()));
-        }
-
-        edited_cells
-    }
-
+    
     pub fn get_current_editing_cell(&self, cx: &App) -> Option<(usize, usize)> {
         self.table.read(cx).delegate().edit_state.editing_cell
     }
@@ -1787,6 +1749,7 @@ impl ResultsPanel {
         self.commit_changes_internal(_window, Some(sql_log), cx)
     }
 
+    #[allow(dead_code)]
     pub fn commit_changes(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.commit_changes_internal(_window, None, cx)
     }
@@ -1903,7 +1866,7 @@ impl ResultsPanel {
                     });
 
                     // Spawn async task to handle the response
-                    let table_entity = self.table.clone();
+                    let _table_entity = self.table.clone();
                     let sql_log_entity: Entity<blanco_ui::SqlLog> = sql_log.clone();
                     cx.spawn(async move |entity, cx| {
                     match response_rx.recv().await {
@@ -1945,7 +1908,7 @@ impl ResultsPanel {
                             } else {
                                 // Handle failed operations - show error but keep edits for retry
                                 let error_message_clone = response.error_message.clone();
-                                sql_log_entity.update(cx, |log, cx| {
+                                let _ = sql_log_entity.update(cx, |log, cx| {
                                     let error_msg = format!(
                                         "✗ Table operations failed: {}",
                                         error_message_clone.unwrap_or_else(|| "Unknown error".to_string())
@@ -1970,7 +1933,7 @@ impl ResultsPanel {
                             log::error!("Failed to receive table operation response: {}", e);
 
                             // Update SQL log with error
-                            sql_log_entity.update(cx, |log, cx| {
+                            let _ = sql_log_entity.update(cx, |log, cx| {
                                 let error_msg = format!("✗ Failed to get operation response: {}", e);
                                 log.append_text(&blanco_ui::SqlLogMessage::Comment(error_msg), cx);
                             });
@@ -2054,11 +2017,6 @@ impl ResultsPanel {
                     self.table.update(cx, |table, _cx| {
                         table.delegate_mut().remove_row(row);
                     });
-                }
-                ChangeType::DeleteRow => {
-                    // For deleted rows, we'd need to restore them from the original data
-                    // This is more complex and would require storing the full original row data
-                    // For now, we'll just clear the changes
                 }
             }
         }
@@ -2251,6 +2209,7 @@ impl ResultsPanel {
     }
 
     /// Handle table operation completion event
+    #[allow(dead_code)]
     pub fn handle_table_operation_completed(
         &mut self,
         _table_name: &str,
@@ -2465,7 +2424,7 @@ impl ResultsPanel {
                 }
             } else {
                 // If no selected cells, select the first cell
-                if delegate.rows.len() > 0 && delegate.columns.len() > 1 {
+                if !delegate.rows.is_empty() && delegate.columns.len() > 1 {
                     delegate.edit_state.selected_cells.insert((1, 1));
                 }
             }
@@ -2476,6 +2435,7 @@ impl ResultsPanel {
     }
 
     /// Sync the ResultsPanel's current_selected_col with the delegate's current_column
+    #[allow(dead_code)]
     fn sync_current_column(&mut self, cx: &mut Context<Self>) {
         self.current_selected_col = self.table.read(cx).delegate().edit_state.current_column;
     }
@@ -2499,10 +2459,10 @@ impl Render for ResultsPanel {
             self.start_cell_edit(row, col, window, cx);
         }
 
-        let row_count = self.table.read(cx).delegate().rows_count(cx);
-        let has_unsaved_changes = self.has_unsaved_changes(cx);
-        let table_name = self.get_table_name(cx);
-        let is_editable = self.table.read(cx).delegate().is_editable();
+        let _row_count = self.table.read(cx).delegate().rows_count(cx);
+        let _has_unsaved_changes = self.has_unsaved_changes(cx);
+        let _table_name = self.get_table_name(cx);
+        let _is_editable = self.table.read(cx).delegate().is_editable();
 
         v_flex()
             .size_full()
@@ -2619,15 +2579,17 @@ mod tests {
 
     #[test]
     fn test_cell_edit_state() {
-        let mut edit_state = CellEditState::default();
+        let mut edit_state = CellEditState {
+            editing_cell: Some((0, 0)),
+            ..Default::default()
+        };
 
         // Test initial state
-        assert!(!edit_state.is_editing(0, 0));
+        assert!(edit_state.is_editing(0, 0));
         assert!(!edit_state.is_edited(0, 0));
         assert!(!edit_state.has_unsaved_changes());
 
         // Test starting editing with string value
-        edit_state.editing_cell = Some((0, 0));
         edit_state
             .original_values
             .insert((0, 0), "original".to_string());
@@ -2693,10 +2655,12 @@ mod tests {
 
     #[test]
     fn test_cell_edit_state_clear_all() {
-        let mut edit_state = CellEditState::default();
+        let mut edit_state = CellEditState {
+            editing_cell: Some((0, 0)),
+            ..Default::default()
+        };
 
         // Add some data
-        edit_state.editing_cell = Some((0, 0));
         edit_state
             .original_values
             .insert((0, 0), "original".to_string());

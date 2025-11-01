@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -92,10 +94,9 @@ impl MetadataCache {
 
 /// Fetch table names using the DbService
 async fn fetch_tables(db_service: &DbService, connection_string: &str) -> Result<Vec<String>> {
-    if let Some(connection) = db_service
+    if let Ok(connection) = db_service
         .get_or_create_unified_connection(connection_string)
         .await
-        .ok()
     {
         connection.get_tables(None).await
     } else {
@@ -109,10 +110,9 @@ async fn fetch_columns(
     connection_string: &str,
     table_name: &str,
 ) -> Result<Vec<String>> {
-    if let Some(connection) = db_service
+    if let Ok(connection) = db_service
         .get_or_create_unified_connection(connection_string)
         .await
-        .ok()
     {
         {
             let columns = connection.get_columns_for_table(table_name, None).await?;
@@ -262,11 +262,10 @@ impl SqlCompletionProvider {
 
     /// Get table information using the DbService
     async fn get_table_info(&self, table_name: &str) -> Result<String> {
-        let columns = if let Some(connection) = self
+        let columns = if let Ok(connection) = self
             .db_service
             .get_or_create_unified_connection(&self.connection_string)
             .await
-            .ok()
         {
             connection.get_columns_for_table(table_name, None).await?
         } else {
@@ -293,11 +292,10 @@ impl SqlCompletionProvider {
 
     /// Get column information using the DbService
     async fn get_column_info(&self, table_name: &str, column_name: &str) -> Result<String> {
-        let columns = if let Some(connection) = self
+        let columns = if let Ok(connection) = self
             .db_service
             .get_or_create_unified_connection(&self.connection_string)
             .await
-            .ok()
         {
             connection.get_columns_for_table(table_name, None).await?
         } else {
@@ -331,15 +329,13 @@ impl SqlCompletionProvider {
         let (is_dot_notation, dot_table_name, current_word) =
             self.parse_dot_notation_context(text_before_cursor);
 
-        let context = SqlContext {
+        SqlContext {
             current_word,
             last_keyword: self.find_last_keyword(text_before_cursor),
             table_aliases: self.extract_table_aliases(text_before_cursor),
             is_dot_notation,
             dot_table_name,
-        };
-
-        context
+        }
     }
 
     /// Parse dot notation context using proper lookbehind logic
@@ -505,62 +501,54 @@ impl SqlCompletionProvider {
                 let mut table_name_idx = i + 1;
 
                 // Skip JOIN keywords to get to table name
-                if word_upper == "INNER" || word_upper == "LEFT" || word_upper == "RIGHT" {
-                    if table_name_idx < words.len()
-                        && words[table_name_idx].to_uppercase() == "JOIN"
-                    {
-                        table_name_idx += 1;
-                    }
+                if (word_upper == "INNER" || word_upper == "LEFT" || word_upper == "RIGHT")
+                    && table_name_idx < words.len()
+                    && words[table_name_idx].to_uppercase() == "JOIN"
+                {
+                    table_name_idx += 1;
                 }
 
                 // Extract table name and alias
-                while table_name_idx < words.len() {
+                if table_name_idx < words.len() {
                     let table_name = words[table_name_idx];
 
                     // Stop if we hit a keyword that indicates end of table reference
                     let table_name_upper = table_name.to_uppercase();
                     if [
-                        "WHERE", "JOIN", "INNER", "LEFT", "RIGHT", "ON", "SET", "VALUES", "ORDER",
-                        "GROUP", "HAVING", "LIMIT", "UNION",
+                        "WHERE", "ON", "SET", "VALUES", "ORDER", "GROUP", "HAVING", "LIMIT", "UNION",
                     ]
                     .contains(&table_name_upper.as_str())
                     {
-                        break;
-                    }
-
-                    // Check for AS alias or direct alias
-                    if table_name_idx + 1 < words.len() {
-                        let next_word_upper = words[table_name_idx + 1].to_uppercase();
-                        if next_word_upper == "AS" && table_name_idx + 2 < words.len() {
-                            // table_name AS alias
-                            let alias = words[table_name_idx + 2];
-                            aliases.push(TableAlias {
-                                table_name: table_name.to_string(),
-                                alias: alias.to_string(),
-                            });
-                            i = table_name_idx + 2;
-                            break;
-                        } else if ![
-                            "WHERE", "JOIN", "INNER", "LEFT", "RIGHT", "ON", "SET", "VALUES",
-                            "ORDER", "GROUP", "HAVING", "LIMIT", "UNION", "AS",
-                        ]
-                        .contains(&next_word_upper.as_str())
-                        {
-                            // table_name alias
-                            let alias = words[table_name_idx + 1];
-                            aliases.push(TableAlias {
-                                table_name: table_name.to_string(),
-                                alias: alias.to_string(),
-                            });
-                            i = table_name_idx + 1;
-                            break;
-                        } else {
-                            // Just table_name without alias
-                            break;
-                        }
+                        // Skip this word, it's not a table name
                     } else {
-                        // Just table_name at end of query
-                        break;
+                        // Check for AS alias or direct alias
+                        if table_name_idx + 1 < words.len() {
+                            let next_word_upper = words[table_name_idx + 1].to_uppercase();
+                            if next_word_upper == "AS" && table_name_idx + 2 < words.len() {
+                                // table_name AS alias
+                                let alias = words[table_name_idx + 2];
+                                aliases.push(TableAlias {
+                                    table_name: table_name.to_string(),
+                                    alias: alias.to_string(),
+                                });
+                                i = table_name_idx + 2;
+                            } else if ![
+                                "WHERE", "JOIN", "INNER", "LEFT", "RIGHT", "ON", "SET", "VALUES",
+                                "ORDER", "GROUP", "HAVING", "LIMIT", "UNION", "AS",
+                            ]
+                            .contains(&next_word_upper.as_str())
+                            {
+                                // table_name alias
+                                let alias = words[table_name_idx + 1];
+                                aliases.push(TableAlias {
+                                    table_name: table_name.to_string(),
+                                    alias: alias.to_string(),
+                                });
+                                i = table_name_idx + 1;
+                            }
+                            // If we reach here, we have just table_name without alias
+                        }
+                        // If we reach here, we have just table_name at end of query
                     }
                 }
             }
@@ -585,11 +573,11 @@ impl SqlCompletionProvider {
         let context = self.parse_sql_context(text_before_cursor);
 
         // Show tables after FROM, JOIN, INTO, UPDATE keywords
-        match context.last_keyword.as_deref() {
+        matches!(
+            context.last_keyword.as_deref(),
             Some("FROM") | Some("JOIN") | Some("INNER JOIN") | Some("LEFT JOIN")
-            | Some("RIGHT JOIN") | Some("OUTER JOIN") | Some("INTO") | Some("UPDATE") => true,
-            _ => false,
-        }
+                | Some("RIGHT JOIN") | Some("OUTER JOIN") | Some("INTO") | Some("UPDATE")
+        )
     }
 
     /// Determine if we should show column completions based on context
@@ -602,11 +590,11 @@ impl SqlCompletionProvider {
         }
 
         // Show columns after SELECT, WHERE, SET, ORDER BY, GROUP BY, HAVING
-        match context.last_keyword.as_deref() {
+        matches!(
+            context.last_keyword.as_deref(),
             Some("SELECT") | Some("WHERE") | Some("SET") | Some("ORDER BY") | Some("GROUP BY")
-            | Some("HAVING") => true,
-            _ => false,
-        }
+                | Some("HAVING")
+        )
     }
 
     /// Extract table name from context for column completion using full text for better alias resolution
@@ -783,7 +771,7 @@ impl SqlCompletionProvider {
     fn is_valid_identifier(&self, word: &str) -> bool {
         !word.is_empty()
             && word.chars().all(|c| c.is_alphanumeric() || c == '_')
-            && !word.chars().next().map_or(true, |c| c.is_ascii_digit())
+            && !word.chars().next().is_none_or(|c| c.is_ascii_digit())
     }
 
     // Find table name after a specific keyword

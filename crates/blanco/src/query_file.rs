@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use anyhow::Result;
 use async_std::fs;
 use std::path::{Path, PathBuf};

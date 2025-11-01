@@ -10,6 +10,10 @@ use std::rc::Rc;
 use blanco_ui::{Icon, IconName};
 use gpui_component::{context_menu::ContextMenuExt, popup_menu::PopupMenu};
 
+// Type aliases to reduce complexity
+type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+type ContextMenuBuilder = Option<Box<dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static>>;
+
 #[derive(IntoElement)]
 pub struct SidebarMenu {
     collapsed: bool,
@@ -64,14 +68,13 @@ pub struct SidebarMenuItem {
     id: ElementId,
     icon: Option<Icon>,
     label: SharedString,
-    handler: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>,
+    handler: ClickHandler,
     active: bool,
     collapsed: bool,
     children: Vec<Self>,
     suffix: Option<AnyElement>,
     // NEW: Add context menu support
-    context_menu:
-        Option<Box<dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static>>,
+    context_menu: ContextMenuBuilder,
 }
 
 impl Clone for SidebarMenuItem {

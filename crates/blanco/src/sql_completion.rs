@@ -4,6 +4,8 @@
 //! through the unified connection trait. It includes table completion, column completion, and
 //! context-aware suggestions based on the current query position.
 
+#![allow(dead_code)]
+
 use blanco_core::{Connection, ColumnInfo, TableMetadata};
 use anyhow::Result;
 use std::collections::HashMap;
@@ -478,7 +480,7 @@ impl SqlCompletionEngine {
                     );
 
                     if let Some(metadata) = self.get_cached_table_metadata(&cache_key).await? {
-                        return Ok(Some(HoverInfo::table(&*metadata)));
+                        return Ok(Some(HoverInfo::table(&metadata)));
                     }
                 }
             }
@@ -550,7 +552,7 @@ impl SqlCompletionEngine {
         if before_cursor.contains('.') {
             if let Some(dot_pos) = before_cursor.rfind('.') {
                 let before_dot = &before_cursor[..dot_pos];
-                if before_dot.trim_end().split_whitespace().last().map_or(false, |token| {
+                if before_dot.split_whitespace().last().is_some_and(|token| {
                     !["FROM", "JOIN", "INTO", "UPDATE"].contains(&token.to_uppercase().as_str())
                 }) {
                     return CompletionKind::QualifiedColumn;
@@ -572,8 +574,7 @@ impl SqlCompletionEngine {
         // Check for "order by" and "group by"
         if tokens.len() >= 2 {
             let last_two = &tokens[tokens.len()-2..];
-            if (last_two[0] == "order" && last_two[1] == "by") ||
-               (last_two[0] == "group" && last_two[1] == "by") {
+            if (last_two[0] == "group" || last_two[0] == "order") && last_two[1] == "by" {
                 return CompletionKind::Column;
             }
         }
@@ -663,7 +664,7 @@ impl SqlCompletionEngine {
 
         for table_name in &parsed.tables {
             // Generate common alias patterns
-            if table_name.len() >= 1 {
+            if !table_name.is_empty() {
                 let single_char = table_name.chars().next().unwrap().to_string();
                 items.push(CompletionItem::alias(single_char));
             }

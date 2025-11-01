@@ -251,10 +251,10 @@ impl SqliteTableExtractor {
                     tables.push(table_name.value.to_string());
                 }
             }
-            Statement::Update(update) => {
+            Statement::Update(_update) => {
                 // Skip UPDATE for now - table extraction is complex
             }
-            Statement::Delete(delete) => {
+            Statement::Delete(_delete) => {
                 // Skip DELETE for now - table extraction is complex
             }
             _ => {}
@@ -287,21 +287,19 @@ impl SqliteTableExtractor {
     fn extract_aliases_from_statement(&self, statement: &Statement) -> Vec<TableAlias> {
         let mut aliases = Vec::new();
 
-        match statement {
-            Statement::Select(select) => {
-                if let Some(table_references) = &select.table_references {
-                    for table_ref in table_references {
-                        self.extract_aliases_from_reference(table_ref, &mut aliases);
-                    }
+        if let Statement::Select(select) = statement {
+            if let Some(table_references) = &select.table_references {
+                for table_ref in table_references {
+                    self.extract_aliases_from_reference(table_ref, &mut aliases);
                 }
             }
-            _ => {}
         }
 
         aliases
     }
 
     /// Extract aliases from a table reference
+    #[allow(clippy::only_used_in_recursion)]
     fn extract_aliases_from_reference(&self, table_ref: &TableReference, aliases: &mut Vec<TableAlias>) {
         match table_ref {
             TableReference::Table { identifier, as_, .. } => {
@@ -349,7 +347,7 @@ impl SqliteTableExtractor {
     }
 
     /// Detect completion context using SQLite-specific parsing
-    fn detect_completion_context(&self, text: &str, position: Position, current_word: &Option<String>) -> CompletionKind {
+    fn detect_completion_context(&self, text: &str, position: Position, _current_word: &Option<String>) -> CompletionKind {
         let lines: Vec<&str> = text.lines().collect();
 
         if position.line as usize >= lines.len() {
@@ -368,7 +366,7 @@ impl SqliteTableExtractor {
         // Check for qualified column completion (table.column)
         if let Some(dot_pos) = before_cursor.rfind('.') {
             let before_dot = &before_cursor[..dot_pos];
-            let potential_table = before_dot.trim().split_whitespace().last().unwrap_or("");
+            let potential_table = before_dot.split_whitespace().last().unwrap_or("");
 
             // Check if it's a table name or alias (simplified)
             if !potential_table.is_empty() && !["from", "join", "into", "update"].contains(&potential_table.to_lowercase().as_str()) {

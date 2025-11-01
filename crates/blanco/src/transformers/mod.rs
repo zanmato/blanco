@@ -1,7 +1,9 @@
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::results_panel::{SelectedTableData, SelectedCell, SelectedRow};
+use crate::results_panel::SelectedTableData;
 
 #[derive(Debug, Clone)]
 pub enum TransformError {
@@ -36,7 +38,7 @@ pub trait DataTransformer: Send + Sync {
     fn transform_selected_data(&self, data: &SelectedTableData) -> Result<String, TransformError>;
 
     /// Transforms a single cell value (for simple copy operations)
-    fn transform_single_cell(&self, value: &str, column_type: &str) -> Result<String, TransformError> {
+    fn transform_single_cell(&self, value: &str, _column_type: &str) -> Result<String, TransformError> {
         Ok(value.to_string())
     }
 
@@ -93,7 +95,7 @@ pub use csv_transformer::CsvTransformer;
 pub use sql_transformer::SqlTransformer;
 pub use json_transformer::JsonTransformer;
 pub use markdown_transformer::MarkdownTransformer;
-pub use copy_handler::{CopyHandler, CopyError};
+pub use copy_handler::CopyHandler;
 
 impl Default for TransformerRegistry {
     fn default() -> Self {

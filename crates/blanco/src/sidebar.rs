@@ -1,26 +1,19 @@
 use crate::connection_sidebar::{Sidebar, SidebarGroup, SidebarMenu, SidebarMenuItem};
 use gpui::Subscription;
 use gpui::{
-    div, App, AppContext, Axis, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window,
+    App, Context, EventEmitter, FocusHandle, Focusable, IntoElement, Render, SharedString, Window,
 };
-use gpui_component::{
-    button::Button, h_flex, v_flex, ActiveTheme, ContextModal as _, IconName as GCIconName, Side,
-    StyledExt,
-};
+use gpui_component::{Side};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use crate::app_events::AppEvent;
-use crate::connection_modal::NewConnectionModal;
 use crate::db_service::DbService;
 use blanco_ui::IconName;
 use log::info;
 
 // Constants for lazy loading and pagination
 const TABLES_PER_PAGE: usize = 100; // Load tables in chunks of 100
-const LARGE_SCHEMA_THRESHOLD: usize = 500; // Consider schema large if it has more than 500 tables
 
 /// Simple schema node for sidebar display
 #[derive(Clone, Debug)]
@@ -44,67 +37,6 @@ impl SchemaNode {
             has_more_tables: false,
             tables_loaded: 0,
         }
-    }
-}
-
-/// Cache entry to avoid rebuilding menu items on every render
-struct CacheEntry {
-    last_updated: Instant,
-}
-
-impl CacheEntry {
-    fn new() -> Self {
-        Self {
-            last_updated: Instant::now(),
-        }
-    }
-
-    fn is_valid(&self, max_age: Duration) -> bool {
-        self.last_updated.elapsed() < max_age
-    }
-}
-
-/// Menu cache for performance optimization
-struct MenuCache {
-    // Cache for connection menu items (stores timestamps)
-    connection_items: HashMap<String, CacheEntry>,
-    // Cache for schema menu items (stores timestamps)
-    schema_items: HashMap<String, CacheEntry>,
-    // Cache for table menu items (stores timestamps)
-    table_items: HashMap<String, CacheEntry>,
-    // Last cache invalidation time
-    last_invalidated: Instant,
-}
-
-impl Default for MenuCache {
-    fn default() -> Self {
-        Self {
-            connection_items: HashMap::new(),
-            schema_items: HashMap::new(),
-            table_items: HashMap::new(),
-            last_invalidated: Instant::now(),
-        }
-    }
-}
-
-impl MenuCache {
-    fn new() -> Self {
-        Self::default()
-    }
-
-    fn invalidate(&mut self) {
-        self.connection_items.clear();
-        self.schema_items.clear();
-        self.table_items.clear();
-        self.last_invalidated = Instant::now();
-    }
-
-    fn is_valid(&self, max_age: Duration) -> bool {
-        self.last_invalidated.elapsed() < max_age
-    }
-
-    fn get_cache_key(connection_key: &str, item_type: &str, name: &str) -> String {
-        format!("{}:{}:{}", connection_key, item_type, name)
     }
 }
 
@@ -161,7 +93,7 @@ impl ConnectionSidebar {
     }
 
     /// Subscribe to connection events to refresh when connections are added
-    fn subscribe_to_connection_events(&mut self, cx: &mut Context<Self>) {
+    fn subscribe_to_connection_events(&mut self, _cx: &mut Context<Self>) {
         // For now, we'll use a simpler approach with cache invalidation in async callbacks
         // The event-driven system can be improved later with proper GPUI event patterns
         log::info!(
@@ -176,10 +108,11 @@ impl ConnectionSidebar {
 
         // Load connections asynchronously and update UI
         log::info!("Starting to load database connections...");
-        cx.spawn(async move |sidebar_handle, mut cx| {
-            let connections = match *app_db.read().await {
+        cx.spawn(async move |sidebar_handle, cx| {
+            let (connections, connections_count) = match *app_db.read().await {
                 Some(ref app_db) => match app_db.load_connections().await {
                     Ok(connections) => {
+                        let count = connections.len();
                         log::info!("Loaded {} connections from database", connections.len());
                         for conn in &connections {
                             log::info!("Processing connection: {} ({})", conn.name, conn.db_type);
@@ -192,7 +125,7 @@ impl ConnectionSidebar {
                                          conn.database_name,
                                          conn.username);
                         }
-                        connections
+                        (connections, count)
                     }
                     Err(e) => {
                         log::error!("Failed to load connections from database: {}", e);
@@ -206,7 +139,11 @@ impl ConnectionSidebar {
             };
 
             if let Some(sidebar) = sidebar_handle.upgrade() {
-                let _ = sidebar.update(cx, |sidebar, cx| {
+                let _ = sidebar.update(cx, |_sidebar, cx| {
+                    // Emit ConnectionsLoaded event to trigger tab restoration
+                    cx.emit(crate::app_events::AppEvent::ConnectionsLoaded {
+                        count: connections_count,
+                    });
                     // Process loaded connections and add them to unified connection system
                     for conn in &connections {
                         // Build connection string for unified system
@@ -245,12 +182,13 @@ impl ConnectionSidebar {
 
                         // Add to unified connections system
                         if let Some(conn_str) = connection_string {
-                            let unified_manager = DbService::global(cx).unified_manager_handle();
+                            let db_service = DbService::global(cx).clone();
+                            let unified_manager = db_service.unified_manager_handle();
                             let conn_name = conn.name.clone();
                             let conn_str_clone = conn_str.clone();
 
                             // Add connection to unified system
-                            cx.spawn(async move |sidebar_handle, mut cx| {
+                            cx.spawn(async move |sidebar_handle, cx| {
                                 if let Ok(connection) = unified_manager.read().await.get_or_create_connection(&conn_str_clone).await {
                                     if let Some(sidebar) = sidebar_handle.upgrade() {
                                         let _ = sidebar.update(cx, |sidebar, cx| {
@@ -278,16 +216,12 @@ impl ConnectionSidebar {
                             }).detach();
                         }
                     }
-
-                    // Emit ConnectionsLoaded event to trigger tab restoration
-                    cx.emit(crate::app_events::AppEvent::ConnectionsLoaded {
-                        count: connections.len(),
-                    });
-
-                    cx.notify();
                 });
             }
         }).detach();
+
+        // Note: ConnectionsLoaded event is emitted from within the async context
+        cx.notify();
     }
 
     pub fn set_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
@@ -412,11 +346,9 @@ impl ConnectionSidebar {
             format!("{}:{}", connection_key, table_name)
         };
 
-        let menu_item = SidebarMenuItem::new(SharedString::from(table_name.to_string()))
+        SidebarMenuItem::new(SharedString::from(table_name.to_string()))
             .icon(IconName::Sheet)
-            .id(("unified-table", id_base.len() as u64));
-
-        menu_item
+            .id(("unified-table", id_base.len() as u64))
     }
 
     /// Mark menu as needing rebuild
@@ -577,8 +509,8 @@ impl ConnectionSidebar {
                     move |sidebar, mut new_tables| {
                         // Get only the new tables (paginated)
                         if new_tables.len() > TABLES_PER_PAGE {
-                            let connection_key_clone = connection_key_for_callback.clone();
-                            let schema_name_clone = schema_name_for_callback.clone();
+                            let _connection_key_clone = connection_key_for_callback.clone();
+                            let _schema_name_clone = schema_name_for_callback.clone();
 
                             if let Some(conn_info) = sidebar
                                 .unified_connections
@@ -751,7 +683,7 @@ impl ConnectionSidebar {
         let connection_string_for_logging = connection_string_clone.clone();
         let schema_clone = schema.map(|s| s.to_string());
 
-        cx.spawn(async move |sidebar_handle, mut cx| {
+        cx.spawn(async move |sidebar_handle, cx| {
             // Get connection and tables in sequence using unified interface
             match unified_manager
                 .read()
@@ -808,7 +740,7 @@ impl ConnectionSidebar {
         let connection_string_clone = connection_string.to_string();
         let connection_string_for_logging = connection_string_clone.clone();
 
-        cx.spawn(async move |sidebar_handle, mut cx| {
+        cx.spawn(async move |sidebar_handle, cx| {
             // Get connection and schemas in sequence using unified interface
             match unified_manager
                 .read()
@@ -1088,7 +1020,7 @@ impl Focusable for ConnectionSidebar {
 }
 
 impl Render for ConnectionSidebar {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Extract needed values before borrowing self for get_cached_menu_items
         let collapsed = self.collapsed;
 

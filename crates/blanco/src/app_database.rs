@@ -380,6 +380,7 @@ impl AppDatabase {
     }
 
     // Query History
+    #[allow(dead_code)]
     pub async fn save_query_history(&self, history: &QueryHistoryData) -> Result<i64, sqlx::Error> {
         let result = sqlx::query(
             r#"
@@ -427,7 +428,7 @@ impl AppDatabase {
             .bind(now)
             .bind(&conn.connection_string)
             .bind(conn.is_active.map(|b| if b { 1 } else { 0 }))
-            .bind(&conn.connection_params.as_ref().map(|v| v.to_string()))
+            .bind(conn.connection_params.as_ref().map(|v| v.to_string()))
             .bind(id)
             .execute(&self.pool)
             .await?;
@@ -452,7 +453,7 @@ impl AppDatabase {
             .bind(now)
             .bind(&conn.connection_string)
             .bind(conn.is_active.map(|b| if b { 1 } else { 0 }))
-            .bind(&conn.connection_params.as_ref().map(|v| v.to_string()))
+            .bind(conn.connection_params.as_ref().map(|v| v.to_string()))
             .execute(&self.pool)
             .await?;
 
@@ -514,6 +515,7 @@ pub struct QueryTabData {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct QueryHistoryData {
     #[allow(dead_code)]
     pub id: Option<i64>,
@@ -604,6 +606,7 @@ impl ConnectionData {
     }
 
     /// Create a ConnectionData from a unified connection string
+    #[allow(dead_code)]
     pub fn from_connection_string(name: String, connection_string: &str) -> Result<Self, anyhow::Error> {
         if connection_string.starts_with("sqlite://") || connection_string.starts_with("sqlite:") {
             let db_path = connection_string
@@ -628,6 +631,7 @@ impl ConnectionData {
     }
 
     /// Get the connection string for this connection
+    #[allow(dead_code)]
     pub fn get_connection_string(&self) -> Option<String> {
         self.connection_string.clone()
             .or_else(|| {
@@ -652,11 +656,13 @@ impl ConnectionData {
     }
 
     /// Check if this connection is marked as active
+    #[allow(dead_code)]
     pub fn is_active(&self) -> bool {
         self.is_active.unwrap_or(true)
     }
 
     /// Mark this connection as active/inactive
+    #[allow(dead_code)]
     pub fn set_active(&mut self, active: bool) {
         self.is_active = Some(active);
     }
@@ -664,6 +670,7 @@ impl ConnectionData {
 
 impl AppDatabase {
     /// Get connection details by ID
+    #[allow(dead_code)]
     pub async fn get_connection_by_id(&self, connection_id: i64) -> Result<Option<ConnectionData>, sqlx::Error> {
         let row = sqlx::query(
             r#"

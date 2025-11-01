@@ -14,7 +14,7 @@ pub mod factory;
 
 // Re-export main types for convenience
 pub use connection::{
-    SqliteConnection, SqliteConnectionKey, RowIdentifier
+    SqliteConnection, SqliteConnectionKey
 };
 
 pub use sql_parser::{

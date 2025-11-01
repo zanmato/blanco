@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::sync::Arc;
 
 use gpui::{App, ClipboardItem};
@@ -145,10 +147,6 @@ mod tests {
             table_name: Some("users".to_string()),
             columns: vec!["id".to_string(), "name".to_string(), "email".to_string()],
             column_types: vec!["integer".to_string(), "text".to_string(), "text".to_string()],
-            rows: vec![
-                vec!["1".to_string(), "Alice".to_string(), "alice@example.com".to_string()],
-                vec!["2".to_string(), "Bob".to_string(), "bob@example.com".to_string()],
-            ],
             selected_cells: vec![
                 SelectedCell {
                     row: 0,

@@ -152,6 +152,7 @@ impl DbService {
     }
 
     /// Convenience method to execute a prepared query
+    #[allow(dead_code)]
     pub async fn execute_prepared_query_unified(&self, connection_string: &str, sql_template: &str, parameters: &[String]) -> Result<blanco_core::QueryResult, anyhow::Error> {
         let unified_manager = self.unified_manager().await;
         let manager_read = unified_manager.read().await;
@@ -189,6 +190,7 @@ impl DbService {
     }
 
     /// Convenience method to get schemas
+    #[allow(dead_code)]
     pub async fn get_schemas_unified(&self, connection_string: &str) -> Result<Vec<String>, anyhow::Error> {
         let unified_manager = self.unified_manager().await;
         let manager_read = unified_manager.read().await;
