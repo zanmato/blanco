@@ -13,10 +13,11 @@ mod results_panel;
 mod settings;
 mod sidebar;
 mod sql_completion;
-mod sql_completion_popup;
 mod sql_completion_provider;
 mod test_db;
 mod theme_loader;
+mod time_format;
+mod transformers;
 mod unified_connection_manager;
 
 pub use sidebar::ConnectionSidebar;

@@ -953,7 +953,7 @@ impl CompletionProvider for SqlCompletionProvider {
                         log::debug!("SQL Completion: Filter logic - current_word_is_empty: {}, filtered_tables: {:?}", current_word_clone.is_empty(), filtered_tables);
 
                         // Convert to LSP completion items
-                        let completion_items = filtered_tables.into_iter().map(|table_name| {
+                        let completion_items = filtered_tables.into_iter().take(20).map(|table_name| {
                             CompletionItem {
                                 label: table_name.clone(),
                                 kind: Some(CompletionItemKind::CLASS),

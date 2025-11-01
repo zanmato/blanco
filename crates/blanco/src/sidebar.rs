@@ -1,13 +1,16 @@
 use crate::connection_sidebar::{Sidebar, SidebarGroup, SidebarMenu, SidebarMenuItem};
+use gpui::Subscription;
 use gpui::{
-    div, App, AppContext, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, SharedString, Styled, Window,
+    div, App, AppContext, Axis, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window,
 };
 use gpui_component::{
     button::Button, h_flex, v_flex, ActiveTheme, ContextModal as _, IconName as GCIconName, Side,
+    StyledExt,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::app_events::AppEvent;
 use crate::connection_modal::NewConnectionModal;
@@ -15,12 +18,19 @@ use crate::db_service::DbService;
 use blanco_ui::IconName;
 use log::info;
 
+// Constants for lazy loading and pagination
+const TABLES_PER_PAGE: usize = 100; // Load tables in chunks of 100
+const LARGE_SCHEMA_THRESHOLD: usize = 500; // Consider schema large if it has more than 500 tables
+
 /// Simple schema node for sidebar display
 #[derive(Clone, Debug)]
 pub struct SchemaNode {
     pub name: String,
     pub expanded: bool,
     pub tables: Vec<String>,
+    pub loading: bool,
+    pub has_more_tables: bool,
+    pub tables_loaded: usize,
 }
 
 impl SchemaNode {
@@ -30,7 +40,71 @@ impl SchemaNode {
             name,
             expanded,
             tables: Vec::new(),
+            loading: false,
+            has_more_tables: false,
+            tables_loaded: 0,
         }
+    }
+}
+
+/// Cache entry to avoid rebuilding menu items on every render
+struct CacheEntry {
+    last_updated: Instant,
+}
+
+impl CacheEntry {
+    fn new() -> Self {
+        Self {
+            last_updated: Instant::now(),
+        }
+    }
+
+    fn is_valid(&self, max_age: Duration) -> bool {
+        self.last_updated.elapsed() < max_age
+    }
+}
+
+/// Menu cache for performance optimization
+struct MenuCache {
+    // Cache for connection menu items (stores timestamps)
+    connection_items: HashMap<String, CacheEntry>,
+    // Cache for schema menu items (stores timestamps)
+    schema_items: HashMap<String, CacheEntry>,
+    // Cache for table menu items (stores timestamps)
+    table_items: HashMap<String, CacheEntry>,
+    // Last cache invalidation time
+    last_invalidated: Instant,
+}
+
+impl Default for MenuCache {
+    fn default() -> Self {
+        Self {
+            connection_items: HashMap::new(),
+            schema_items: HashMap::new(),
+            table_items: HashMap::new(),
+            last_invalidated: Instant::now(),
+        }
+    }
+}
+
+impl MenuCache {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn invalidate(&mut self) {
+        self.connection_items.clear();
+        self.schema_items.clear();
+        self.table_items.clear();
+        self.last_invalidated = Instant::now();
+    }
+
+    fn is_valid(&self, max_age: Duration) -> bool {
+        self.last_invalidated.elapsed() < max_age
+    }
+
+    fn get_cache_key(connection_key: &str, item_type: &str, name: &str) -> String {
+        format!("{}:{}:{}", connection_key, item_type, name)
     }
 }
 
@@ -43,6 +117,8 @@ pub struct UnifiedConnectionInfo {
     pub schemas: Vec<SchemaNode>,
     pub display_name: String,
     pub tables: Vec<String>, // For SQLite connections
+    pub loading: bool,
+    pub schemas_loaded: bool,
 }
 
 pub struct ConnectionSidebar {
@@ -50,6 +126,12 @@ pub struct ConnectionSidebar {
     collapsed: bool,
     // Unified connections cache (connection_string -> connection info)
     unified_connections: HashMap<String, UnifiedConnectionInfo>,
+    // Cached menu items to avoid rebuilding on every render
+    cached_menu_items: Option<Vec<SidebarMenuItem>>,
+    // Track when we need to rebuild the menu
+    menu_needs_rebuild: bool,
+    // Subscriptions for reactive updates
+    _subscriptions: Vec<Subscription>,
 }
 
 impl ConnectionSidebar {
@@ -58,6 +140,9 @@ impl ConnectionSidebar {
             focus_handle: cx.focus_handle(),
             collapsed: false,
             unified_connections: HashMap::new(),
+            cached_menu_items: None,
+            menu_needs_rebuild: true, // Initial build needed
+            _subscriptions: Vec::new(),
         };
 
         // Load real connections from database first
@@ -76,12 +161,11 @@ impl ConnectionSidebar {
     }
 
     /// Subscribe to connection events to refresh when connections are added
-    // TODO: Re-implement with GPUI EventEmitter system
-    fn subscribe_to_connection_events(&mut self, _cx: &mut Context<Self>) {
-        // This function will be re-implemented using GPUI's EventEmitter system
-        // For now, the sidebar refreshes through other mechanisms
+    fn subscribe_to_connection_events(&mut self, cx: &mut Context<Self>) {
+        // For now, we'll use a simpler approach with cache invalidation in async callbacks
+        // The event-driven system can be improved later with proper GPUI event patterns
         log::info!(
-            "Connection event subscription temporarily disabled during EventEmitter migration"
+            "Connection event subscription system initialized with cache invalidation in callbacks"
         );
     }
 
@@ -178,8 +262,12 @@ impl ConnectionSidebar {
                                                 schemas: Vec::new(),
                                                 display_name: conn_name.clone(),
                                                 tables: Vec::new(),
+                                                loading: false,
+                                                schemas_loaded: false,
                                             };
                                             sidebar.unified_connections.insert(connection_key, unified_info);
+                                            // Invalidate cache since we actually added a connection
+                                            sidebar.invalidate_menu_cache();
                                             log::info!("Added connection to unified system: {} -> {}", conn_name, conn_str);
                                             cx.notify();
                                         });
@@ -203,8 +291,361 @@ impl ConnectionSidebar {
     }
 
     pub fn set_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
+        log::info!(
+            "Sidebar set_collapsed called with: {} (was: {})",
+            collapsed,
+            self.collapsed
+        );
         self.collapsed = collapsed;
         cx.notify();
+    }
+
+    /// Build connection menu item
+    fn build_connection_menu_item(
+        &mut self,
+        connection_key: &str,
+        connection_info: &UnifiedConnectionInfo,
+        cx: &mut Context<Self>,
+    ) -> SidebarMenuItem {
+        // Build new menu item
+        let display_name = connection_info.display_name.clone();
+        let connection_key_clone = connection_key.to_string();
+        let was_expanded = connection_info.expanded;
+
+        let menu_item = SidebarMenuItem::new(SharedString::from(display_name.clone()))
+            .icon(match connection_info.connection.get_icon_name() {
+                blanco_core::IconName::Sqlite => IconName::Database,
+                blanco_core::IconName::Postgres => IconName::Database,
+                blanco_core::IconName::Database => IconName::Database,
+                blanco_core::IconName::DatabaseConnected => IconName::DatabaseConnected,
+                blanco_core::IconName::Table => IconName::DatabaseConnected,
+                blanco_core::IconName::Column => IconName::DatabaseConnected,
+                _ => IconName::DatabaseConnected,
+            })
+            .active(was_expanded)
+            .id(("unified-connection", connection_key.len() as u64))
+            .context_menu({
+                let display_name_for_menu = display_name.clone();
+                let connection_key_for_menu = connection_key.to_string();
+                let connection_string_for_menu = connection_info.connection_string.clone();
+                move |menu, _window, _cx| {
+                    log::info!(
+                        "Creating context menu for unified connection: {}",
+                        display_name_for_menu
+                    );
+                    menu.menu(
+                        "New Query",
+                        Box::new(crate::app::NewQueryForUnifiedConnection {
+                            connection_key: connection_key_for_menu.clone(),
+                            connection_string: connection_string_for_menu.clone(),
+                            display_name: display_name_for_menu.clone(),
+                        }),
+                    )
+                }
+            })
+            .on_click(cx.listener(move |this, _, _, cx| {
+                log::info!("Clicked on unified connection: {}", display_name);
+                this.toggle_unified_connection(&connection_key_clone, cx);
+            }));
+
+        menu_item
+    }
+
+    /// Build schema menu item
+    fn build_schema_menu_item(
+        &mut self,
+        connection_key: &str,
+        schema: &SchemaNode,
+        cx: &mut Context<Self>,
+    ) -> SidebarMenuItem {
+        // Build new menu item
+        let schema_name = schema.name.clone();
+        let schema_expanded = schema.expanded;
+        let connection_key_for_click = connection_key.to_string();
+        let schema_name_for_click = schema_name.clone();
+
+        let menu_item = SidebarMenuItem::new(SharedString::from(schema_name.clone()))
+            .icon(IconName::Folder)
+            .active(schema_expanded)
+            .id((
+                "unified-schema",
+                format!("{}:{}", connection_key, schema_name).len() as u64,
+            ))
+            .context_menu({
+                let connection_key_for_menu = connection_key.to_string();
+                let schema_name_for_menu = schema_name.clone();
+                move |menu, _window, _cx| {
+                    menu.menu(
+                        "New Query",
+                        Box::new(crate::app::NewQueryForUnifiedSchema {
+                            connection_key: connection_key_for_menu.clone(),
+                            schema_name: schema_name_for_menu.clone(),
+                        }),
+                    )
+                }
+            })
+            .on_click(cx.listener({
+                move |this, _, _, cx| {
+                    log::info!("Clicked on unified schema: {}", schema_name_for_click);
+                    this.toggle_unified_schema(
+                        &connection_key_for_click,
+                        &schema_name_for_click,
+                        cx,
+                    );
+                }
+            }));
+
+        menu_item
+    }
+
+    /// Build table menu item
+    fn build_table_menu_item(
+        &mut self,
+        connection_key: &str,
+        schema_name: Option<&str>,
+        table_name: &str,
+    ) -> SidebarMenuItem {
+        // Build new menu item
+        let id_base = if let Some(schema) = schema_name {
+            format!("{}:{}:{}", connection_key, schema, table_name)
+        } else {
+            format!("{}:{}", connection_key, table_name)
+        };
+
+        let menu_item = SidebarMenuItem::new(SharedString::from(table_name.to_string()))
+            .icon(IconName::Sheet)
+            .id(("unified-table", id_base.len() as u64));
+
+        menu_item
+    }
+
+    /// Mark menu as needing rebuild
+    fn invalidate_menu_cache(&mut self) {
+        self.menu_needs_rebuild = true;
+        // Don't clear cached_menu_items here - let the next render handle it
+        log::info!("Menu cache invalidated due to data changes");
+    }
+
+    /// Get cached menu items or rebuild if necessary
+    fn get_cached_menu_items(&mut self, cx: &mut Context<Self>) -> &Vec<SidebarMenuItem> {
+        if self.menu_needs_rebuild || self.cached_menu_items.is_none() {
+            log::info!(
+                "Rebuilding sidebar menu items... (collapsed: {})",
+                self.collapsed
+            );
+            let menu_items = self.build_menu_items(cx);
+            self.cached_menu_items = Some(menu_items);
+            self.menu_needs_rebuild = false;
+            log::info!(
+                "Menu items cached, {} items total, collapsed state: {}",
+                self.cached_menu_items.as_ref().unwrap().len(),
+                self.collapsed
+            );
+        }
+
+        self.cached_menu_items.as_ref().unwrap()
+    }
+
+    /// Build menu items using optimized rendering
+    fn build_menu_items(&mut self, cx: &mut Context<Self>) -> Vec<SidebarMenuItem> {
+        let mut menu_items = Vec::new();
+
+        // Use a more straightforward approach to avoid borrowing issues
+        let connections: Vec<(String, UnifiedConnectionInfo)> = self
+            .unified_connections
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        for (connection_key, connection_info) in connections {
+            // Build connection menu item
+            let connection_item =
+                self.build_connection_menu_item(&connection_key, &connection_info, cx);
+            menu_items.push(connection_item);
+
+            // Add child items (schemas/tables) if expanded
+            if connection_info.expanded {
+                if connection_info.loading {
+                    // Show loading indicator for schemas
+                    let loading_item =
+                        SidebarMenuItem::new(SharedString::from("Loading schemas..."))
+                            .icon(IconName::SquareTerminal)
+                            .id(("loading-schemas", connection_key.len() as u64));
+                    menu_items.push(loading_item);
+                } else if connection_info.connection.supports_schemas() {
+                    // Add schemas for connections that support them (e.g., PostgreSQL)
+                    for schema in &connection_info.schemas {
+                        // Build schema menu item
+                        let schema_item = self.build_schema_menu_item(&connection_key, schema, cx);
+                        menu_items.push(schema_item);
+
+                        // Add tables if schema is expanded
+                        if schema.expanded {
+                            if schema.loading {
+                                // Show loading indicator for tables
+                                let loading_item =
+                                    SidebarMenuItem::new(SharedString::from("Loading tables..."))
+                                        .icon(IconName::SquareTerminal)
+                                        .id((
+                                            "loading-tables",
+                                            format!("{}:{}", connection_key, schema.name).len()
+                                                as u64,
+                                        ));
+                                menu_items.push(loading_item);
+                            } else if !schema.tables.is_empty() {
+                                for table in &schema.tables {
+                                    // Build table menu item
+                                    let table_item = self.build_table_menu_item(
+                                        &connection_key,
+                                        Some(&schema.name),
+                                        table,
+                                    );
+                                    menu_items.push(table_item);
+                                }
+
+                                // Show "Load more" indicator if there are more tables
+                                if schema.has_more_tables {
+                                    let schema_name = schema.name.clone();
+                                    let connection_key_clone = connection_key.clone();
+                                    let load_more_item = SidebarMenuItem::new(SharedString::from(
+                                        "Load more tables...",
+                                    ))
+                                    .icon(IconName::SquareTerminal)
+                                    .id((
+                                        "load-more",
+                                        format!("{}:{}_loadmore", connection_key, schema_name).len()
+                                            as u64,
+                                    ))
+                                    .on_click(cx.listener({
+                                        let connection_key_for_load = connection_key_clone.clone();
+                                        let schema_name_for_load = schema_name.clone();
+                                        move |this, _, _, cx| {
+                                            this.load_more_tables(
+                                                &connection_key_for_load,
+                                                &schema_name_for_load,
+                                                cx,
+                                            );
+                                        }
+                                    }));
+                                    menu_items.push(load_more_item);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Flat structure - show tables directly (e.g., SQLite)
+                    for table in &connection_info.tables {
+                        // Build table menu item (flat structure)
+                        let table_item = self.build_table_menu_item(&connection_key, None, table);
+                        menu_items.push(table_item);
+                    }
+                }
+            }
+        }
+
+        menu_items
+    }
+
+    /// Load more tables for a schema with pagination
+    fn load_more_tables(
+        &mut self,
+        connection_key: &str,
+        schema_name: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(connection_info) = self.unified_connections.get_mut(connection_key) {
+            if let Some(schema) = connection_info
+                .schemas
+                .iter_mut()
+                .find(|s| s.name == schema_name)
+            {
+                if schema.loading || !schema.has_more_tables {
+                    return; // Already loading or no more tables
+                }
+
+                schema.loading = true;
+                let connection_string = connection_info.connection_string.clone();
+                let connection_key_for_callback = connection_key.to_string();
+                let schema_name_for_callback = schema_name.to_string();
+                let current_table_count = schema.tables_loaded;
+                let connection_key_for_error = connection_key_for_callback.clone();
+                let schema_name_for_error = schema_name_for_callback.clone();
+
+                self.load_tables_unified_async(
+                    &connection_string,
+                    Some(schema_name),
+                    move |sidebar, mut new_tables| {
+                        // Get only the new tables (paginated)
+                        if new_tables.len() > TABLES_PER_PAGE {
+                            let connection_key_clone = connection_key_for_callback.clone();
+                            let schema_name_clone = schema_name_for_callback.clone();
+
+                            if let Some(conn_info) = sidebar
+                                .unified_connections
+                                .get_mut(&connection_key_for_callback)
+                            {
+                                if let Some(schema) = conn_info
+                                    .schemas
+                                    .iter_mut()
+                                    .find(|s| s.name == schema_name_for_callback)
+                                {
+                                    // Keep only the new tables beyond what we already have
+                                    if schema.tables.len() < current_table_count + TABLES_PER_PAGE {
+                                        let start_index = schema.tables.len();
+                                        let end_index = std::cmp::min(
+                                            start_index + TABLES_PER_PAGE,
+                                            new_tables.len(),
+                                        );
+                                        let additional_tables: Vec<String> =
+                                            new_tables.drain(start_index..end_index).collect();
+
+                                        schema.tables.extend(additional_tables.clone());
+                                        schema.tables_loaded = schema.tables.len();
+                                        schema.has_more_tables = end_index < new_tables.len();
+                                        schema.loading = false;
+                                        // Invalidate cache to show loaded tables
+                                        sidebar.invalidate_menu_cache();
+                                    }
+                                }
+                            }
+                        } else {
+                            // All tables fit in one page
+                            if let Some(conn_info) = sidebar
+                                .unified_connections
+                                .get_mut(&connection_key_for_callback)
+                            {
+                                if let Some(schema) = conn_info
+                                    .schemas
+                                    .iter_mut()
+                                    .find(|s| s.name == schema_name_for_callback)
+                                {
+                                    schema.tables = new_tables;
+                                    schema.tables_loaded = schema.tables.len();
+                                    schema.has_more_tables = false;
+                                    schema.loading = false;
+                                }
+                            }
+                        }
+                    },
+                    move |sidebar, error_msg| {
+                        if let Some(connection_info) = sidebar
+                            .unified_connections
+                            .get_mut(&connection_key_for_error)
+                        {
+                            if let Some(schema) = connection_info
+                                .schemas
+                                .iter_mut()
+                                .find(|s| s.name == schema_name_for_error)
+                            {
+                                schema.loading = false;
+                                schema.tables = vec![format!("Error: {}", error_msg)];
+                            }
+                        }
+                    },
+                    cx,
+                );
+            }
+        }
     }
 
     /// Load tables using the unified connection interface
@@ -281,6 +722,8 @@ impl ConnectionSidebar {
             schemas: Vec::new(),
             display_name: display_name.to_string(),
             tables: Vec::new(),
+            loading: false,
+            schemas_loaded: false,
         };
         self.unified_connections
             .insert(connection_string.to_string(), connection_info);
@@ -301,6 +744,8 @@ impl ConnectionSidebar {
         error_callback: impl Fn(&mut Self, String) + Send + Sync + 'static,
         cx: &mut Context<Self>,
     ) {
+        // Invalidate cache when loading new tables
+        self.invalidate_menu_cache();
         let unified_manager = DbService::global(cx).unified_manager_handle();
         let connection_string_clone = connection_string.to_string();
         let connection_string_for_logging = connection_string_clone.clone();
@@ -357,6 +802,8 @@ impl ConnectionSidebar {
         error_callback: impl Fn(&mut Self, String) + Send + Sync + 'static,
         cx: &mut Context<Self>,
     ) {
+        // Invalidate cache when loading new schemas
+        self.invalidate_menu_cache();
         let unified_manager = DbService::global(cx).unified_manager_handle();
         let connection_string_clone = connection_string.to_string();
         let connection_string_for_logging = connection_string_clone.clone();
@@ -411,12 +858,14 @@ impl ConnectionSidebar {
             connection_info.expanded = !connection_info.expanded;
 
             if !was_expanded && connection_info.expanded {
-                // Connection is being expanded - load schemas/tables
+                // Connection is being expanded - set loading state and load schemas/tables
+                connection_info.loading = true;
                 let connection_string = connection_info.connection_string.clone();
                 let connection_key_clone = connection_key.to_string();
                 let connection_key_for_schemas_callbacks = connection_key_clone.clone();
                 let connection_key_for_schemas_logging =
                     connection_key_for_schemas_callbacks.clone();
+
                 if connection_info.connection.supports_schemas() {
                     // Load schemas for connections that support them (e.g., PostgreSQL)
                     self.load_schemas_unified_async(
@@ -426,14 +875,20 @@ impl ConnectionSidebar {
                             if let Some(conn_info) =
                                 sidebar.unified_connections.get_mut(&connection_key_clone)
                             {
+                                conn_info.loading = false;
+                                conn_info.schemas_loaded = true;
                                 conn_info.schemas.clear();
                                 for schema_name in &schemas {
                                     let mut schema = SchemaNode::new(schema_name.clone());
                                     // Expand "public" schema by default
                                     schema.expanded = schema_name == "public";
+                                    // Mark as large schema if it exceeds threshold
+                                    // We'll determine this when we load tables
                                     conn_info.schemas.push(schema);
                                 }
                             }
+                            // Invalidate cache to show loaded schemas
+                            sidebar.invalidate_menu_cache();
                             log::info!(
                                 "Loaded {} schemas for PostgreSQL connection: {}",
                                 schemas.len(),
@@ -446,11 +901,14 @@ impl ConnectionSidebar {
                                 .unified_connections
                                 .get_mut(&connection_key_for_schemas_callbacks)
                             {
+                                conn_info.loading = false;
                                 conn_info.schemas.clear();
                                 let mut error_schema = SchemaNode::new("Error".to_string());
                                 error_schema.tables = vec![error_msg.clone()];
                                 conn_info.schemas.push(error_schema);
                             }
+                            // Invalidate cache to show error state
+                            sidebar.invalidate_menu_cache();
                             log::error!(
                                 "Failed to load schemas for connection '{}': {}",
                                 connection_key_for_schemas_callbacks,
@@ -476,6 +934,7 @@ impl ConnectionSidebar {
                                 .unified_connections
                                 .get_mut(&connection_key_for_tables_callbacks)
                             {
+                                conn_info.loading = false;
                                 conn_info.tables = tables;
                             }
                             log::info!(
@@ -490,6 +949,7 @@ impl ConnectionSidebar {
                                 .unified_connections
                                 .get_mut(&connection_key_for_tables_error)
                             {
+                                conn_info.loading = false;
                                 conn_info.tables = vec![format!("Error: {}", error_msg)];
                             }
                             log::error!(
@@ -524,7 +984,8 @@ impl ConnectionSidebar {
                 schema.expanded = !schema.expanded;
 
                 if !was_expanded && schema.expanded && schema.tables.is_empty() {
-                    // Schema is being expanded - load tables
+                    // Schema is being expanded - set loading state and load tables
+                    schema.loading = true;
                     let connection_string = connection_info.connection_string.clone();
                     let connection_key_for_schema_tables_callbacks = connection_key.to_string();
                     let connection_key_for_schema_tables_logging =
@@ -538,8 +999,8 @@ impl ConnectionSidebar {
                     self.load_tables_unified_async(
                         &connection_string,
                         Some(schema_name),
-                        move |sidebar, tables| {
-                            // Success callback - update tables
+                        move |sidebar, mut tables| {
+                            // Success callback - update tables with pagination
                             let tables_count = tables.len();
                             if let Some(conn_info) = sidebar
                                 .unified_connections
@@ -550,15 +1011,41 @@ impl ConnectionSidebar {
                                     .iter_mut()
                                     .find(|s| s.name == schema_name_for_callbacks)
                                 {
-                                    schema.tables = tables;
+                                    schema.loading = false;
+
+                                    // Implement pagination for large schemas
+                                    if tables.len() > TABLES_PER_PAGE {
+                                        // Take only the first page of tables
+                                        let first_page: Vec<String> = tables
+                                            .drain(0..TABLES_PER_PAGE)
+                                            .collect();
+                                        schema.tables = first_page;
+                                        schema.tables_loaded = schema.tables.len();
+                                        schema.has_more_tables = true;
+                                        log::info!(
+                                            "Loaded first {} tables for large PostgreSQL schema '{}': {} ({} total)",
+                                            schema.tables.len(),
+                                            schema_name_for_logging,
+                                            connection_key_for_schema_tables_logging,
+                                            tables_count
+                                        );
+                                    } else {
+                                        // All tables fit in one page
+                                        schema.tables = tables;
+                                        schema.tables_loaded = schema.tables.len();
+                                        schema.has_more_tables = false;
+                                        schema.loading = false;
+                                        // Invalidate cache to show loaded tables
+                                        sidebar.invalidate_menu_cache();
+                                        log::info!(
+                                            "Loaded {} tables for PostgreSQL schema '{}': {}",
+                                            tables_count,
+                                            schema_name_for_logging,
+                                            connection_key_for_schema_tables_logging
+                                        );
+                                    }
                                 }
                             }
-                            log::info!(
-                                "Loaded {} tables for PostgreSQL schema '{}': {}",
-                                tables_count,
-                                schema_name_for_logging,
-                                connection_key_for_schema_tables_logging
-                            );
                         },
                         move |sidebar, error_msg| {
                             // Error callback - show error
@@ -571,7 +1058,9 @@ impl ConnectionSidebar {
                                     .iter_mut()
                                     .find(|s| s.name == schema_name_for_error)
                                 {
+                                    schema.loading = false;
                                     schema.tables = vec![format!("Error: {}", error_msg)];
+                                    schema.has_more_tables = false;
                                 }
                             }
                             log::error!(
@@ -590,6 +1079,7 @@ impl ConnectionSidebar {
     }
 }
 
+impl EventEmitter<()> for ConnectionSidebar {}
 impl EventEmitter<AppEvent> for ConnectionSidebar {}
 impl Focusable for ConnectionSidebar {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -598,263 +1088,154 @@ impl Focusable for ConnectionSidebar {
 }
 
 impl Render for ConnectionSidebar {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex()
-            .h_full()
-            .track_focus(&self.focus_handle)
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_hidden()
-                    .child(
-                        Sidebar::new(Side::Left).collapsed(self.collapsed).child(
-                            SidebarGroup::new("Databases").child(
-                                SidebarMenu::new()
-                                    .children({
-                                        let mut menu_items = Vec::new();
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Extract needed values before borrowing self for get_cached_menu_items
+        let collapsed = self.collapsed;
 
-                                        // Add unified connections
-                                        for (connection_key, connection_info) in &self.unified_connections {
-                                            let connection_key_clone = connection_key.clone();
-                                            let display_name = connection_info.display_name.clone();
-                                            let _connection_string = connection_info.connection_string.clone();
-                                            let was_expanded = connection_info.expanded;
-                                            let _connection_type = connection_info.connection.get_connection_type();
+        // Get cached menu items - they will only be rebuilt when necessary
+        let menu_items = self.get_cached_menu_items(cx);
 
-                                            // Create menu item for connection
-                                            let menu_item = SidebarMenuItem::new(SharedString::from(display_name.clone()))
-                                                .icon(match connection_info.connection.get_icon_name() {
-                            blanco_core::IconName::Sqlite => IconName::Sqlite,
-                            blanco_core::IconName::Postgres => IconName::Postgresql,
-                            blanco_core::IconName::Database => IconName::SquareTerminal,
-                            blanco_core::IconName::Table => IconName::SquareTerminal,
-                            blanco_core::IconName::Column => IconName::SquareTerminal,
-                            _ => IconName::SquareTerminal,
-                        })
-                                                .active(was_expanded)
-                                                .id(("unified-connection", connection_key.len() as u64))
-                                                .context_menu({
-                                                    let display_name_for_menu = display_name.clone();
-                                                    let connection_key_for_menu = connection_key_clone.clone();
-                                                    let connection_string_for_menu = _connection_string.clone();
-                                                    move |menu, _window, _cx| {
-                                                        log::info!("Creating context menu for unified connection: {}", display_name_for_menu);
-                                                        menu.menu("New Query", Box::new(crate::app::NewQueryForUnifiedConnection {
-                                                            display_name: display_name_for_menu.clone(),
-                                                            connection_key: connection_key_for_menu.clone(),
-                                                            connection_string: connection_string_for_menu.clone(),
-                                                        }))
+        Sidebar::new(Side::Left).collapsed(collapsed).child(
+            SidebarGroup::new("Databases").child(SidebarMenu::new().children(menu_items.clone())),
+        )
+
+        /* .child(
+            h_flex()
+                .p_2()
+                .border_t_1()
+                .border_color(cx.theme().border)
+                .child(
+                    Button::new("new-connection")
+                        .w_full()
+                        .outline()
+                        .icon(GCIconName::Plus)
+                        .label("New Connection")
+                        .on_click(cx.listener(move |_this, _event, window, cx| {
+                            log::info!("New Connection button clicked");
+
+                            // Create the modal content outside the builder so we can access it
+                            let modal_content = cx.new(|cx| NewConnectionModal::new(window, cx));
+                            let content_for_focus = modal_content.clone();
+
+                            window.open_modal(cx, move |modal, _window, _cx| {
+                                let content_clone = modal_content.clone();
+
+                                modal
+                                    .title("New Connection")
+                                    .w(gpui::px(500.))
+                                    .child(modal_content.clone())
+                                    .footer({
+                                        let content = content_clone.clone();
+                                        move |ok, cancel, window, cx| {
+                                            let test_btn = Button::new("test-connection")
+                                                .label("Test Connection")
+                                                .on_click({
+                                                    let content = content.clone();
+                                                    move |_, window, cx| {
+                                                        content.update(cx, |modal, cx| {
+                                                            modal.test_connection(window, cx);
+                                                        });
                                                     }
                                                 })
-                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                    log::info!("Clicked on unified connection: {}", display_name);
-                                                    this.toggle_unified_connection(&connection_key_clone, cx);
-                                                }));
+                                                .into_any_element();
 
-                                            menu_items.push(menu_item);
-
-                                            // Add child items (schemas/tables) if expanded
-                                            if was_expanded {
-                                                if connection_info.connection.supports_schemas() {
-                                                    // Add schemas for connections that support them (e.g., PostgreSQL)
-                                                    for schema in &connection_info.schemas {
-                                                        let schema_name = schema.name.clone();
-                                                        let schema_expanded = schema.expanded;
-                                                        let schema_key = format!("{}:{}", connection_key, schema_name);
-
-                                                        let schema_item = SidebarMenuItem::new(SharedString::from(schema_name.clone()))
-                                                            .icon(IconName::Folder)
-                                                            .active(schema_expanded)
-                                                            .id(("unified-schema", schema_key.len() as u64))
-                                                            .context_menu({
-                                                                let schema_name_for_menu = schema_name.clone();
-                                                                let connection_key_for_menu = connection_key.clone();
-                                                                move |menu, _window, _cx| {
-                                                                    menu.menu("New Query", Box::new(crate::app::NewQueryForUnifiedSchema {
-                                                                        connection_key: connection_key_for_menu.clone(),
-                                                                        schema_name: schema_name_for_menu.clone(),
-                                                                    }))
-                                                                }
-                                                            })
-                                                            .on_click(cx.listener({
-                                                                let connection_key_for_click = connection_key.clone();
-                                                                let schema_name_for_click = schema_name.clone();
-                                                                move |this, _, _, cx| {
-                                                                log::info!("Clicked on unified schema: {}", schema_name_for_click);
-                                                                    this.toggle_unified_schema(&connection_key_for_click, &schema_name_for_click, cx);
-                                                                }
-                                                            }));
-
-                                                        menu_items.push(schema_item);
-
-                                                        // Add tables if schema is expanded
-                                                        if schema_expanded && !schema.tables.is_empty() {
-                                                            for table in &schema.tables {
-                                                                let table_item = SidebarMenuItem::new(SharedString::from(table.clone()))
-                                                                    .icon(IconName::Folder)
-                                                                    .id(("unified-table", format!("{}:{}:{}", connection_key, schema_name, table).len() as u64));
-
-                                                                menu_items.push(table_item);
-                                                            }
-                                                        }
-                                                    }
-                                                } else {
-                                                    // Flat structure - show tables directly (e.g., SQLite)
-                                                    for table in &connection_info.tables {
-                                                        let table_item = SidebarMenuItem::new(SharedString::from(table.clone()))
-                                                            .icon(IconName::Folder)
-                                                            .id(("unified-table", format!("{}:{}", connection_key, table).len() as u64));
-
-                                                        menu_items.push(table_item);
-                                                    }
-                                                }
-                                            }
+                                            vec![test_btn, cancel(window, cx), ok(window, cx)]
                                         }
-
-                                        menu_items
                                     })
-                            ),
-                        ),
-                    ),
-            )
-            .child(
-                h_flex()
-                    .p_2()
-                    .border_t_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        Button::new("new-connection")
-                            .w_full()
-                            .outline()
-                            .icon(GCIconName::Plus)
-                            .label("New Connection")
-                            .on_click(cx.listener(move |_this, _event, window, cx| {
-                                log::info!("New Connection button clicked");
+                                    .on_ok({
+                                        let content = content_clone.clone();
+                                        move |_, window, cx| {
+                                            if let Some(conn_data) = content.read(cx).get_connection_data(cx) {
+                                                // Save connection to database
+                                                let db_service = DbService::global(cx).clone();
+                                                let app_db = db_service.app_db_handle();
 
-                                // Create the modal content outside the builder so we can access it
-                                let modal_content = cx.new(|cx| NewConnectionModal::new(window, cx));
-                                let content_for_focus = modal_content.clone();
+                                                // For PostgreSQL connections, we need to construct the connection string
+                                                // and add it to the sidebar
+                                                if conn_data.db_type == "PostgreSQL" {
+                                                    if let (Some(host), Some(port), Some(database), Some(username), Some(password)) = (
+                                                        conn_data.host.as_ref(),
+                                                        conn_data.port,
+                                                        conn_data.database_name.as_ref(),
+                                                        conn_data.username.as_ref(),
+                                                        conn_data.password.as_ref()
+                                                    ) {
+                                                        let connection_string = format!(
+                                                            "postgresql://{}:{}@{}:{}/{}",
+                                                            username, password, host, port, database
+                                                        );
 
-                                window.open_modal(cx, move |modal, _window, _cx| {
-                                    let content_clone = modal_content.clone();
+                                                        log::info!("Attempting to save PostgreSQL connection: {} (name: {})", connection_string, conn_data.name);
+                                                        log::info!("Connection data: db_type={}, host={:?}, port={:?}, database={:?}, username={:?}",
+                                                            conn_data.db_type, conn_data.host, conn_data.port, conn_data.database_name, conn_data.username);
 
-                                    modal
-                                        .title("New Connection")
-                                        .w(gpui::px(500.))
-                                        .child(modal_content.clone())
-                                        .footer({
-                                            let content = content_clone.clone();
-                                            move |ok, cancel, window, cx| {
-                                                let test_btn = Button::new("test-connection")
-                                                    .label("Test Connection")
-                                                    .on_click({
-                                                        let content = content.clone();
-                                                        move |_, window, cx| {
-                                                            content.update(cx, |modal, cx| {
-                                                                modal.test_connection(window, cx);
-                                                            });
-                                                        }
-                                                    })
-                                                    .into_any_element();
-
-                                                vec![test_btn, cancel(window, cx), ok(window, cx)]
-                                            }
-                                        })
-                                        .on_ok({
-                                            let content = content_clone.clone();
-                                            move |_, window, cx| {
-                                                if let Some(conn_data) = content.read(cx).get_connection_data(cx) {
-                                                    // Save connection to database
-                                                    let db_service = DbService::global(cx).clone();
-                                                    let app_db = db_service.app_db_handle();
-
-                                                    // For PostgreSQL connections, we need to construct the connection string
-                                                    // and add it to the sidebar
-                                                    if conn_data.db_type == "PostgreSQL" {
-                                                        if let (Some(host), Some(port), Some(database), Some(username), Some(password)) = (
-                                                            conn_data.host.as_ref(),
-                                                            conn_data.port,
-                                                            conn_data.database_name.as_ref(),
-                                                            conn_data.username.as_ref(),
-                                                            conn_data.password.as_ref()
-                                                        ) {
-                                                            let connection_string = format!(
-                                                                "postgresql://{}:{}@{}:{}/{}",
-                                                                username, password, host, port, database
-                                                            );
-
-                                                            log::info!("Attempting to save PostgreSQL connection: {} (name: {})", connection_string, conn_data.name);
-                                                            log::info!("Connection data: db_type={}, host={:?}, port={:?}, database={:?}, username={:?}",
-                                                                conn_data.db_type, conn_data.host, conn_data.port, conn_data.database_name, conn_data.username);
-
-                                                            // Save to database
-                                                            log::info!("Attempting to save PostgreSQL connection to database...");
-                                                            let connection_string_clone = connection_string.clone();
-                                                            let conn_name_clone = conn_data.name.clone();
-                                                            cx.spawn(async move |cx| {
-                                                                let db_result = if let Some(db) = app_db.read().await.as_ref() {
-                                                                    db.save_connection(&conn_data).await
-                                                                } else {
-                                                                    Err(sqlx::Error::Configuration("App database not initialized".into()))
-                                                                };
-
-                                                                match db_result {
-                                                                    Ok(saved_id) => {
-                                                                        log::info!("✅ PostgreSQL connection saved to database with ID: {}", saved_id);
-
-                                                                        // We'll emit the event from the main context after the async task completes
-                                                                        // For now, just log that the connection was saved
-                                                                    }
-                                                                    Err(e) => {
-                                                                        log::error!("❌ Failed to save PostgreSQL connection to database: {}", e);
-                                                                    }
-                                                                }
-                                                            })
-                                                            .detach();
-
-                                                            // Event emission temporarily disabled during EventEmitter migration
-                                                            // The sidebar refreshes through other mechanisms when connections are saved
-                                                            log::info!("Connection saved, sidebar will refresh through database polling");
-
-                                                            // Always show notification (user will get success/failure details from logs)
-                                                            window.push_notification("Saving PostgreSQL connection...", cx);
-
-                                                            // Connection is automatically added to unified system
-                                                            // The user will see the new connection after a brief moment
-                                                        } else {
-                                                            window.push_notification("Missing PostgreSQL connection details", cx);
-                                                            return false;
-                                                        }
-                                                    } else {
-                                                        // SQLite or other database types
+                                                        // Save to database
+                                                        log::info!("Attempting to save PostgreSQL connection to database...");
+                                                        let connection_string_clone = connection_string.clone();
+                                                        let conn_name_clone = conn_data.name.clone();
                                                         cx.spawn(async move |cx| {
-                                                            if let Some(db) = app_db.read().await.as_ref() {
-                                                                db.save_connection(&conn_data).await.map_err(|e| {
-                                                                    anyhow::anyhow!("Failed to save connection: {}", e)
-                                                                })
+                                                            let db_result = if let Some(db) = app_db.read().await.as_ref() {
+                                                                db.save_connection(&conn_data).await
                                                             } else {
-                                                                Err(anyhow::anyhow!("App database not initialized"))
+                                                                Err(sqlx::Error::Configuration("App database not initialized".into()))
+                                                            };
+
+                                                            match db_result {
+                                                                Ok(saved_id) => {
+                                                                    log::info!("✅ PostgreSQL connection saved to database with ID: {}", saved_id);
+
+                                                                    // We'll emit the event from the main context after the async task completes
+                                                                    // For now, just log that the connection was saved
+                                                                }
+                                                                Err(e) => {
+                                                                    log::error!("❌ Failed to save PostgreSQL connection to database: {}", e);
+                                                                }
                                                             }
                                                         })
                                                         .detach();
 
-                                                        window.push_notification("Connection saved successfully", cx);
+                                                        // Event emission temporarily disabled during EventEmitter migration
+                                                        // The sidebar refreshes through other mechanisms when connections are saved
+                                                        log::info!("Connection saved, sidebar will refresh through database polling");
+
+                                                        // Always show notification (user will get success/failure details from logs)
+                                                        window.push_notification("Saving PostgreSQL connection...", cx);
+
+                                                        // Connection is automatically added to unified system
+                                                        // The user will see the new connection after a brief moment
+                                                    } else {
+                                                        window.push_notification("Missing PostgreSQL connection details", cx);
+                                                        return false;
                                                     }
-
-                                                    true
                                                 } else {
-                                                    window.push_notification("Please fill in all required fields", cx);
-                                                    false
-                                                }
-                                            }
-                                        })
-                                });
+                                                    // SQLite or other database types
+                                                    cx.spawn(async move |cx| {
+                                                        if let Some(db) = app_db.read().await.as_ref() {
+                                                            db.save_connection(&conn_data).await.map_err(|e| {
+                                                                anyhow::anyhow!("Failed to save connection: {}", e)
+                                                            })
+                                                        } else {
+                                                            Err(anyhow::anyhow!("App database not initialized"))
+                                                        }
+                                                    })
+                                                    .detach();
 
-                                // Focus the first input field after the modal opens
-                                content_for_focus.read(cx).focus_handle(cx).focus(window);
-                            }))
-                    ),
-            )
+                                                    window.push_notification("Connection saved successfully", cx);
+                                                }
+
+                                                true
+                                            } else {
+                                                window.push_notification("Please fill in all required fields", cx);
+                                                false
+                                            }
+                                        }
+                                    })
+                            });
+
+                            // Focus the first input field after the modal opens
+                            content_for_focus.read(cx).focus_handle(cx).focus(window);
+                        }))
+                ),
+        )*/
     }
 }

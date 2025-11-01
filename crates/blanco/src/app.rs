@@ -1,11 +1,11 @@
 use gpui::{
     actions, div, prelude::FluentBuilder, px, Action, App, AppContext, Context, Entity,
-    EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, Menu, MenuItem, ParentElement, Render,
-    Styled, Window, Subscription,
+    EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, Menu, MenuItem,
+    ParentElement, Render, Styled, Subscription, Window,
 };
 use gpui_component::{
     button::Button, h_flex, menu::AppMenuBar, v_flex, ActiveTheme, ContextModal as _, Root,
-    TitleBar,
+    TitleBar, TITLE_BAR_HEIGHT,
 };
 use log::{debug, error, info};
 use serde::Deserialize;
@@ -13,11 +13,8 @@ use serde::Deserialize;
 use blanco_ui::{Icon, IconName};
 
 use crate::{
-    app_events::AppEvent,
-    connection_modal::NewConnectionModal,
-    db_service::DbService,
-    editor_panel::EditorPanel,
-    sidebar::ConnectionSidebar,
+    app_events::AppEvent, connection_modal::NewConnectionModal, db_service::DbService,
+    editor_panel::EditorPanel, sidebar::ConnectionSidebar,
 };
 
 actions!(
@@ -31,7 +28,12 @@ actions!(
         OpenNewConnectionModal,
         RunQuery,
         CommitChanges,
-        RollbackChanges
+        RollbackChanges,
+        CopyAsCSV,
+        CopyAsJSON,
+        CopyAsSQL,
+        CopyAsMarkdown,
+        ClearSelection
     ]
 );
 
@@ -52,6 +54,40 @@ pub struct NewQueryForUnifiedConnection {
 pub struct NewQueryForUnifiedSchema {
     pub connection_key: String,
     pub schema_name: String,
+}
+
+// Copy and selection actions
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct CopyCell {
+    pub row: usize,
+    pub col: usize,
+}
+
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct CopyAsFormat {
+    pub format: String,
+}
+
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct SelectRow {
+    pub row: usize,
+}
+
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct SelectCell {
+    pub row: usize,
+    pub col: usize,
+}
+
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct DoubleClickCell {
+    pub row: usize,
+    pub col: usize,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -121,10 +157,8 @@ impl BlancoApp {
 
         // Subscribe to sidebar events with window access for tab restoration
         let editor_panel_clone = editor_panel.clone();
-        let subscription = cx.subscribe_in(
-            &sidebar,
-            window,
-            move |app, sidebar, event, window, cx| {
+        let subscription =
+            cx.subscribe_in(&sidebar, window, move |app, sidebar, event, window, cx| {
                 match event {
                     AppEvent::ConnectionEstablished { .. } => {
                         // Refresh sidebar connections when a new connection is established
@@ -146,20 +180,23 @@ impl BlancoApp {
                         // This is the key event for tab restoration with window access!
                         log::info!("Connections loaded, restoring saved tabs with window access");
                         editor_panel_clone.update(cx, |editor_panel, cx| {
-                            if let Err(e) = editor_panel.restore_saved_tabs_with_connections_sync(window, cx) {
+                            if let Err(e) =
+                                editor_panel.restore_saved_tabs_with_connections_sync(window, cx)
+                            {
                                 log::error!("Failed to restore saved tabs: {}", e);
                             }
                         });
                     }
                     _ => {}
                 }
-            }
-        );
+            });
         subscriptions.push(subscription);
 
         // Subscribe to editor panel events to update other components
         let sidebar_clone = sidebar.clone();
-        let subscription = cx.subscribe(&editor_panel, move |app, editor_panel, event, cx| {
+        let editor_panel_for_subscription = editor_panel.clone();
+        let subscription = cx.subscribe(&editor_panel, move |app, _editor_panel, event, cx| {
+            let editor_panel_for_events = editor_panel_for_subscription.clone();
             match event {
                 AppEvent::QueryExecutionStarted { .. } => {
                     // Could show loading indicator or update status
@@ -182,6 +219,25 @@ impl BlancoApp {
                         );
                     }
                 }
+                AppEvent::ToggleSidebar => {
+                        log::info!("🔄 ToggleSidebar event received!");
+                        app.sidebar_collapsed = !app.sidebar_collapsed;
+                        log::info!("🔄 New sidebar_collapsed state: {}", app.sidebar_collapsed);
+
+                        // Update sidebar's collapse state
+                        sidebar_clone.update(cx, |sidebar, cx| {
+                            log::info!(
+                                "🔄 Calling sidebar.set_collapsed with: {}",
+                                app.sidebar_collapsed
+                            );
+                            sidebar.set_collapsed(app.sidebar_collapsed, cx);
+                        });
+
+                        // Update editor panel's sidebar state
+                        editor_panel_for_events.update(cx, |panel, cx| {
+                            panel.set_sidebar_collapsed(app.sidebar_collapsed, cx);
+                        });
+                }
                 _ => {}
             }
         });
@@ -203,7 +259,6 @@ impl BlancoApp {
             panel.save_tabs(cx);
         });
 
-        
         // Give a moment for operations to complete
         std::thread::sleep(std::time::Duration::from_millis(200));
         cx.quit();
@@ -219,10 +274,16 @@ impl BlancoApp {
     }
 
     fn toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
+        log::info!("🔄 ToggleSidebar action triggered!");
         self.sidebar_collapsed = !self.sidebar_collapsed;
+        log::info!("🔄 New sidebar_collapsed state: {}", self.sidebar_collapsed);
 
         // Update sidebar's collapse state
         self.sidebar.update(cx, |sidebar, cx| {
+            log::info!(
+                "🔄 Calling sidebar.set_collapsed with: {}",
+                self.sidebar_collapsed
+            );
             sidebar.set_collapsed(self.sidebar_collapsed, cx);
         });
 
@@ -402,6 +463,8 @@ impl Render for BlancoApp {
 
         let blanco_icon = Icon::new(IconName::Cat);
 
+        let window_bounds = window.bounds();
+
         v_flex()
             .on_action(cx.listener(Self::on_quit))
             .on_action(cx.listener(Self::on_about))
@@ -432,11 +495,14 @@ impl Render for BlancoApp {
             .child(
                 h_flex()
                     .flex_1()
-                    .overflow_hidden()
                     // Sidebar (always visible, handles its own collapsed state)
-                    .child(
+                    .items_start()
+                    .child({
+                        let window_height = window_bounds.size.height;
+
                         div()
-                            .h_full()
+                            .h(window_height - TITLE_BAR_HEIGHT - px(24.))
+                            .overflow_hidden()
                             .when(self.sidebar_collapsed, |div| {
                                 div.w(px(48.)) // Collapsed width
                             })
@@ -445,13 +511,24 @@ impl Render for BlancoApp {
                             })
                             .border_r_1()
                             .border_color(cx.theme().border)
-                            .child(self.sidebar.clone()),
-                    )
+                            .child(self.sidebar.clone())
+                    })
                     // Main panel
-                    .child(
-                        // Editor panel (now contains everything - tabs, editor, results)
-                        self.editor_panel.clone(),
-                    ),
+                    .child({
+                        // Get window bounds to calculate available width
+                        let window_width = window_bounds.size.width;
+                        let sidebar_width = if self.sidebar_collapsed {
+                            px(48.)
+                        } else {
+                            px(280.)
+                        };
+                        let available_width = window_width - sidebar_width;
+
+                        div().size_full().max_w(available_width).child(
+                            // Editor panel (now contains everything - tabs, editor, results)
+                            self.editor_panel.clone(),
+                        )
+                    }),
             )
             .children(drawer_layer)
             .children(modal_layer)

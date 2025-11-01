@@ -1,28 +1,59 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
 use async_std::channel;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, px, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    div, px, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
     InteractiveElement, IntoElement, MouseButton, ParentElement, Render,
     StatefulInteractiveElement, Styled, Window,
 };
 use gpui_component::{
     h_flex,
     input::{InputEvent, InputState, TextInput},
+    popup_menu::PopupMenu,
     table::{Column, ColumnSort, Table, TableDelegate},
     v_flex, ActiveTheme, Icon, IconName,
 };
 
+use crate::app::{ClearSelection, CopyCell, SelectRow}; // Import the action types
 use crate::app_events::AppEvent;
-use crate::async_pipeline::{AsyncEvent, TaskPriority, TableOperationResponse};
+use crate::async_pipeline::{AsyncEvent, TableOperationResponse, TaskPriority};
+use crate::db_service::DbService;
+use crate::transformers::CopyHandler;
 use blanco_core::table_operations::{OperationType, RowIdentifier, TableChangeOperation};
 use blanco_core::ColumnChange;
-use blanco_core::QueryResult;
 use blanco_core::Connection;
-use crate::db_service::DbService;
+use blanco_core::QueryResult;
+
+// Data structures for copy functionality
+#[derive(Clone, Debug)]
+pub struct SelectedCell {
+    pub row: usize,
+    pub col: usize,
+    pub value: String,
+    pub column_name: Option<String>,
+    pub column_type: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SelectedRow {
+    pub row: usize,
+    pub cells: Vec<SelectedCell>,
+    pub primary_key_value: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SelectedTableData {
+    pub table_name: Option<String>,
+    pub columns: Vec<String>,
+    pub column_types: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+    pub selected_cells: Vec<SelectedCell>,
+    pub selected_rows: Vec<SelectedRow>,
+    pub primary_key_column: Option<String>,
+}
 
 #[derive(Clone, Debug)]
 pub struct TableChange {
@@ -64,6 +95,9 @@ pub struct CellEditState {
     pub pending_new_rows: Vec<usize>, // Track rows that are newly added
     pub editing_input: Option<Entity<InputState>>, // Store input state per delegate
     pub changes: Vec<TableChange>,    // Track all changes for SQL generation
+    pub selected_cells: HashSet<(usize, usize)>, // Track selected cells
+    pub selected_rows: HashSet<usize>, // Track selected rows
+    pub current_column: usize,        // Track current column for selection
 }
 
 impl CellEditState {
@@ -118,6 +152,9 @@ impl CellEditState {
         self.pending_new_rows.clear();
         self.editing_input = None;
         self.changes.clear();
+        self.selected_cells.clear();
+        self.selected_rows.clear();
+        self.current_column = 1; // Start with first data column
     }
 
     pub fn add_change(&mut self, change: TableChange) {
@@ -155,6 +192,44 @@ impl CellEditState {
             self.editing_cell = None;
             self.edited_values.remove(&(row, col));
         }
+    }
+
+    pub fn select_cell(&mut self, row: usize, col: usize) -> bool {
+        // Toggle cell selection (col 0 is row number column)
+        if col == 0 {
+            return false;
+        }
+        if self.selected_cells.contains(&(row, col)) {
+            self.selected_cells.remove(&(row, col));
+            false
+        } else {
+            self.selected_cells.insert((row, col));
+            true
+        }
+    }
+
+    pub fn select_row(&mut self, row: usize) -> bool {
+        // Toggle row selection
+        if self.selected_rows.contains(&row) {
+            self.selected_rows.remove(&row);
+            false
+        } else {
+            self.selected_rows.insert(row);
+            true
+        }
+    }
+
+    pub fn is_cell_selected(&self, row: usize, col: usize) -> bool {
+        self.selected_cells.contains(&(row, col)) || self.selected_rows.contains(&row)
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.selected_cells.clear();
+        self.selected_rows.clear();
+    }
+
+    pub fn has_selection(&self) -> bool {
+        !self.selected_cells.is_empty() || !self.selected_rows.is_empty()
     }
 }
 
@@ -252,101 +327,6 @@ impl TableChange {
         }
         Ok(())
     }
-
-    pub fn to_prepared_statement(
-        &mut self,
-        columns: &[String],
-    ) -> Result<(String, Vec<String>), String> {
-        // Generate specific prepared statement based on column information
-        match self.change_type {
-            ChangeType::UpdateCell => {
-                let column_name = columns
-                    .get(self.column_index.unwrap_or(0))
-                    .ok_or_else(|| "Invalid column index".to_string())?;
-
-                let pk_column_name = if let Some(pk_col) = &self.primary_key_column {
-                    pk_col.clone()
-                } else {
-                    columns
-                        .first()
-                        .ok_or_else(|| "No columns available".to_string())?
-                        .clone()
-                };
-
-                let pk_value = self
-                    .primary_key_value
-                    .as_ref()
-                    .ok_or_else(|| "No primary key value available".to_string())?;
-
-                let new_value = self
-                    .new_value
-                    .as_ref()
-                    .cloned()
-                    .unwrap_or_else(|| "NULL".to_string());
-
-                let sql_template = format!(
-                    "UPDATE {} SET {} = $1 WHERE {} = $2",
-                    self.table_name, column_name, pk_column_name
-                );
-
-                let parameters = vec![new_value, pk_value.clone()];
-
-                self.sql_template = Some(sql_template.clone());
-                self.parameters = parameters.clone();
-
-                Ok((sql_template, parameters))
-            }
-            ChangeType::InsertRow => {
-                let column_list = columns.join(", ");
-                let placeholders: Vec<String> =
-                    (1..=columns.len()).map(|i| format!("${}", i)).collect();
-                let placeholder_list = placeholders.join(", ");
-
-                let values = if let Some(new_value) = &self.new_value {
-                    new_value.split(", ").map(|s| s.to_string()).collect()
-                } else {
-                    vec!["NULL".to_string(); columns.len()]
-                };
-
-                let sql_template = format!(
-                    "INSERT INTO {} ({}) VALUES ({})",
-                    self.table_name, column_list, placeholder_list
-                );
-
-                self.sql_template = Some(sql_template.clone());
-                self.parameters = values.clone();
-
-                Ok((sql_template, values))
-            }
-            ChangeType::DeleteRow => {
-                let pk_column_name = if let Some(pk_col) = &self.primary_key_column {
-                    pk_col.clone()
-                } else {
-                    columns
-                        .first()
-                        .ok_or_else(|| "No primary key column".to_string())?
-                        .clone()
-                };
-
-                let pk_value = self
-                    .primary_key_value
-                    .as_ref()
-                    .ok_or_else(|| "No primary key value available".to_string())?;
-
-                let sql_template = format!(
-                    "DELETE FROM {} WHERE {} = $1",
-                    self.table_name, pk_column_name
-                );
-
-                let parameters = vec![pk_value.clone()];
-
-                self.sql_template = Some(sql_template.clone());
-                self.parameters = parameters.clone();
-
-                Ok((sql_template, parameters))
-            }
-        }
-    }
 }
 
 #[derive(Default)]
@@ -375,10 +355,6 @@ impl ResultsTableDelegate {
         }
     }
 
-    pub fn take_pending_edit(&mut self) -> Option<(usize, usize)> {
-        self.pending_edit_cell.take()
-    }
-
     /// Remove a row at the specified index
     pub fn remove_row(&mut self, row_index: usize) {
         if row_index < self.rows.len() {
@@ -398,13 +374,6 @@ impl ResultsTableDelegate {
         self.connection_string = Some(connection_string);
     }
 
-    /// Set the table name for the current query result
-    pub fn set_table_name(&mut self, table_name: String) {
-        log::info!("Setting table name to: {}", table_name);
-        self.table_name = Some(table_name);
-    }
-
-    
     /// Convert table changes to database-agnostic TableChangeOperations
     pub fn create_change_operations(
         &self,
@@ -509,7 +478,7 @@ impl ResultsTableDelegate {
         self.column_types = result.column_types.clone();
 
         // Calculate column widths based on content and type
-        let column_widths: Vec<f32> = result
+        let mut column_widths: Vec<f32> = result
             .columns
             .iter()
             .enumerate()
@@ -536,20 +505,35 @@ impl ResultsTableDelegate {
             })
             .collect();
 
-        // Build columns from result with calculated widths
-        self.columns = result
-            .columns
-            .iter()
+        // Add row number column width at the beginning
+        let row_num_width = 50.0; // Fixed width for row numbers
+        column_widths.insert(0, row_num_width);
+
+        // Build columns from result with calculated widths, starting with row number column
+        let mut columns = vec![Column::new("row_number".to_string(), "#".to_string())
+            .width(row_num_width)
+            .resizable(false)];
+
+        columns.extend(result.columns.iter().enumerate().map(|(i, name)| {
+            Column::new(format!("col_{}", i + 1), name)
+                .width(column_widths.get(i + 1).copied().unwrap_or(150.0))
+                .resizable(true)
+                .sortable()
+        }));
+
+        self.columns = columns;
+
+        // Add row numbers to the beginning of each row
+        self.rows = result
+            .rows
+            .into_iter()
             .enumerate()
-            .map(|(i, name)| {
-                Column::new(format!("col_{}", i), name)
-                    .width(column_widths.get(i).copied().unwrap_or(150.0))
-                    .resizable(true)
-                    .sortable()
+            .map(|(row_index, mut row)| {
+                let mut new_row = vec![(row_index + 1).to_string()];
+                new_row.append(&mut row);
+                new_row
             })
             .collect();
-
-        self.rows = result.rows;
 
         // Use table metadata from QueryResult if available
         let old_table_name = self.table_name.clone();
@@ -568,7 +552,10 @@ impl ResultsTableDelegate {
                 log::info!("Table name extracted from metadata: '{}'", new);
             }
             (Some(old), None) => {
-                log::warn!("Table name lost: '{}' (was extracted before, now None)", old);
+                log::warn!(
+                    "Table name lost: '{}' (was extracted before, now None)",
+                    old
+                );
             }
             (None, None) => {
                 if result.query_text.is_some() {
@@ -579,10 +566,11 @@ impl ResultsTableDelegate {
 
         // Use primary key from QueryResult if available, otherwise fall back to heuristic
         let old_pk = self.primary_key_column.clone();
-        self.primary_key_column = result.primary_key_column.clone()
-            .or_else(|| {
-                self.table_name.as_ref().and_then(|table_name| self.detect_primary_key_simple(table_name))
-            });
+        self.primary_key_column = result.primary_key_column.clone().or_else(|| {
+            self.table_name
+                .as_ref()
+                .and_then(|table_name| self.detect_primary_key_simple(table_name))
+        });
 
         // Debug: Log table setup details
         if let Some(table_name) = &self.table_name {
@@ -626,48 +614,14 @@ impl ResultsTableDelegate {
                 .iter()
                 .map(|col| col.name.to_string())
                 .collect();
-            log::debug!("Available columns for table '{}': {:?}", table_name, column_names);
+            log::debug!(
+                "Available columns for table '{}': {:?}",
+                table_name,
+                column_names
+            );
         } else {
             log::warn!("No table name could be extracted - table will not be editable");
         }
-    }
-
-    pub fn set_table_metadata(&mut self, table_name: String, primary_key_column: Option<String>) {
-        self.table_name = Some(table_name);
-        self.primary_key_column = primary_key_column;
-    }
-
-    /// Set table metadata and detect primary key using connection (async version)
-    pub async fn set_table_metadata_with_connection(
-        &mut self,
-        table_name: String,
-        connection_string: &str,
-        cx: &App,
-    ) -> Result<(), anyhow::Error> {
-        self.table_name = Some(table_name.clone());
-        self.connection_string = Some(connection_string.to_string());
-
-        // Create a temporary connection to detect primary key
-        let db_service = DbService::global(cx).clone();
-        if let Ok(connection) = db_service
-            .get_or_create_unified_connection(connection_string)
-            .await
-        {
-            match connection.get_primary_key_for_table(&table_name).await {
-                Ok(pk_column) => {
-                    self.primary_key_column = pk_column;
-                }
-                Err(e) => {
-                    log::warn!(
-                        "Failed to detect primary key for table {}: {}",
-                        table_name,
-                        e
-                    );
-                }
-            }
-        }
-
-        Ok(())
     }
 
     /// Simple heuristic method to detect primary key column (fallback)
@@ -688,20 +642,6 @@ impl ResultsTableDelegate {
         // Fallback: return the first column name
         self.columns.first().map(|col| col.name.to_string())
     }
-
-    fn extract_table_name_from_query(&self, query: &str) -> Option<String> {
-        // Use the connection string to get a connection for SQL parsing
-        if let Some(connection_string) = &self.connection_string {
-            // This is a synchronous method, so we can't await the connection
-            // For now, fall back to a warning until we can make this async
-            log::warn!("Table name extraction requires async connection access - connection string available: {}", connection_string);
-            None
-        } else {
-            log::warn!("No connection string available for table name extraction");
-            None
-        }
-    }
-
     pub fn start_editing_cell(&mut self, row: usize, col: usize) {
         if let Some(cell_value) = self.rows.get(row).and_then(|r| r.get(col)) {
             // Store the original value if not already stored
@@ -789,10 +729,6 @@ impl ResultsTableDelegate {
         self.edit_state.edited_values.remove(&(row, col));
     }
 
-    pub fn get_edit_state(&self) -> &CellEditState {
-        &self.edit_state
-    }
-
     pub fn get_table_name(&self) -> Option<&str> {
         self.table_name.as_deref()
     }
@@ -834,7 +770,7 @@ impl ResultsTableDelegate {
                 || type_lower == "float4"  // real
                 || type_lower == "float8"  // double precision
                 || type_lower == "numeric" // numeric
-                || type_lower == "money"   // money
+                || type_lower == "money" // money
         } else {
             false
         }
@@ -877,16 +813,17 @@ impl ResultsTableDelegate {
         if let Some(column_type) = self.column_types.get(col_index) {
             let type_lower = column_type.to_lowercase();
             let is_array = type_lower == "array" || type_lower.ends_with("[]");
-            log::debug!("Array detection: type='{}', lower='{}', is_array={}", column_type, type_lower, is_array);
+            log::debug!(
+                "Array detection: type='{}', lower='{}', is_array={}",
+                column_type,
+                type_lower,
+                is_array
+            );
             is_array
         } else {
             log::debug!("Array detection: No column type for index {}", col_index);
             false
         }
-    }
-
-    pub fn get_primary_key_column(&self) -> Option<&str> {
-        self.primary_key_column.as_deref()
     }
 
     pub fn get_cell_value(&self, row: usize, col: usize) -> Option<String> {
@@ -895,6 +832,80 @@ impl ResultsTableDelegate {
 
     pub fn is_editable(&self) -> bool {
         self.table_name.is_some() && self.primary_key_column.is_some()
+    }
+
+    pub fn get_selected_data(&self) -> SelectedTableData {
+        let mut selected_cells = Vec::new();
+        let mut selected_rows = Vec::new();
+
+        // Collect selected cell data
+        for &(row, col) in &self.edit_state.selected_cells {
+            if let Some(cell_value) = self.get_cell_value(row, col) {
+                selected_cells.push(SelectedCell {
+                    row,
+                    col: col - 1, // Adjust for row number column
+                    value: cell_value,
+                    column_name: self.columns.get(col).map(|c| c.name.to_string()),
+                    column_type: self.column_types.get(col - 1).cloned(), // Adjust for row number column
+                });
+            }
+        }
+
+        // Collect selected row data
+        for &row in &self.edit_state.selected_rows {
+            if let Some(row_data) = self.rows.get(row) {
+                let cells: Vec<SelectedCell> = row_data
+                    .iter()
+                    .enumerate()
+                    .filter(|&(col, _)| col > 0) // Skip row number column
+                    .map(|(col, value)| SelectedCell {
+                        row,
+                        col: col - 1, // Adjust for row number column
+                        value: value.clone(),
+                        column_name: self.columns.get(col).map(|c| c.name.to_string()),
+                        column_type: self.column_types.get(col - 1).cloned(), // Adjust for row number column
+                    })
+                    .collect();
+
+                selected_rows.push(SelectedRow {
+                    row,
+                    cells,
+                    primary_key_value: self.get_primary_key_value(row),
+                });
+            }
+        }
+
+        SelectedTableData {
+            table_name: self.table_name.clone(),
+            columns: self
+                .columns
+                .iter()
+                .skip(1)
+                .map(|c| c.name.to_string())
+                .collect(), // Skip row number column
+            column_types: self.column_types.clone(),
+            rows: self
+                .rows
+                .iter()
+                .map(|row| row.iter().skip(1).cloned().collect()) // Skip row number column
+                .collect(),
+            selected_cells,
+            selected_rows,
+            primary_key_column: self.primary_key_column.clone(),
+        }
+    }
+
+    // Wrapper methods for selection functionality
+    pub fn select_row(&mut self, row: usize) {
+        self.edit_state.select_row(row);
+    }
+
+    pub fn select_cell(&mut self, row: usize, col: usize) {
+        self.edit_state.select_cell(row, col);
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.edit_state.clear_selection();
     }
 }
 
@@ -931,9 +942,11 @@ impl TableDelegate for ResultsTableDelegate {
         _window: &mut Window,
         cx: &mut Context<Table<Self>>,
     ) -> impl IntoElement {
-        let is_editing = self.edit_state.is_editing(row_ix, col_ix);
-        let is_edited = self.edit_state.is_edited(row_ix, col_ix);
-        let is_editable = self.is_editable();
+        let is_row_number_col = col_ix == 0;
+        let is_editing = self.edit_state.is_editing(row_ix, col_ix) && !is_row_number_col;
+        let is_edited = self.edit_state.is_edited(row_ix, col_ix) && !is_row_number_col;
+        let is_editable = self.is_editable() && !is_row_number_col;
+        let is_selected = self.edit_state.is_cell_selected(row_ix, col_ix);
 
         let current_value = if is_edited {
             let edited_val = self.edit_state.get_edited_value(row_ix, col_ix).cloned();
@@ -957,7 +970,7 @@ impl TableDelegate for ResultsTableDelegate {
         };
 
         if is_editing {
-            // Embed TextInput directly in the cell
+            // Embed TextInput directly in the cell (not for row number column)
             if let Some(input) = self.edit_state.get_editing_input() {
                 div()
                     .font_family("Fira Code")
@@ -966,22 +979,27 @@ impl TableDelegate for ResultsTableDelegate {
                     .flex() // Enable flexbox layout
                     .items_center() // Center vertically
                     .p_0() // No padding since the cell already has padding
-                    .when(self.is_numeric_column(col_ix), |this| {
+                    .when(self.is_numeric_column(col_ix - 1), |this| {
+                        // Adjust for row number column
                         this.justify_end() // Right-align numeric columns
                     })
-                    .when(self.is_uuid_column(col_ix), |this| {
+                    .when(self.is_uuid_column(col_ix - 1), |this| {
+                        // Adjust for row number column
                         this.font_family("Fira Code") // Monospace font for UUIDs
                             .text_color(cx.theme().blue) // Blue color for UUIDs
                     })
-                    .when(self.is_timestamp_column(col_ix), |this| {
+                    .when(self.is_timestamp_column(col_ix - 1), |this| {
+                        // Adjust for row number column
                         this.font_family("Fira Code") // Monospace font for timestamps
                             .text_color(cx.theme().green) // Green color for timestamps
                     })
-                    .when(self.is_json_column(col_ix), |this| {
+                    .when(self.is_json_column(col_ix - 1), |this| {
+                        // Adjust for row number column
                         this.font_family("Fira Code") // Monospace font for JSON
                             .text_color(cx.theme().yellow) // Yellow color for JSON
                     })
-                    .when(self.is_array_column(col_ix), |this| {
+                    .when(self.is_array_column(col_ix - 1), |this| {
+                        // Adjust for row number column
                         this.font_family("Fira Code") // Monospace font for arrays
                             .text_color(cx.theme().blue) // Blue color for arrays
                     })
@@ -1007,82 +1025,126 @@ impl TableDelegate for ResultsTableDelegate {
                     .size_full()
                     .flex() // Enable flexbox layout
                     .items_center() // Center vertically
-                    .when(self.is_numeric_column(col_ix), |this| {
+                    .when(self.is_numeric_column(col_ix - 1), |this| {
+                        // Adjust for row number column
                         this.justify_end() // Right-align numeric columns
                     })
-                    .when(self.is_uuid_column(col_ix), |this| {
+                    .when(self.is_uuid_column(col_ix - 1), |this| {
+                        // Adjust for row number column
                         this.font_family("Fira Code") // Monospace font for UUIDs
                             .text_color(cx.theme().blue) // Blue color for UUIDs
                     })
-                    .when(self.is_timestamp_column(col_ix), |this| {
+                    .when(self.is_timestamp_column(col_ix - 1), |this| {
+                        // Adjust for row number column
                         this.font_family("Fira Code") // Monospace font for timestamps
                             .text_color(cx.theme().green) // Green color for timestamps
                     })
-                    .when(self.is_json_column(col_ix), |this| {
+                    .when(self.is_json_column(col_ix - 1), |this| {
+                        // Adjust for row number column
                         this.font_family("Fira Code") // Monospace font for JSON
                             .text_color(cx.theme().yellow) // Yellow color for JSON
                     })
-                    .when(self.is_array_column(col_ix), |this| {
+                    .when(self.is_array_column(col_ix - 1), |this| {
+                        // Adjust for row number column
                         this.font_family("Fira Code") // Monospace font for arrays
                             .text_color(cx.theme().blue) // Blue color for arrays
                     })
                     .child(display_text)
             }
         } else {
-            // Check if this is a numeric column for right-alignment
-            let is_numeric = self.is_numeric_column(col_ix);
+            // Check if this is a numeric column for right-alignment (adjust for row number column)
+            let is_numeric = !is_row_number_col && self.is_numeric_column(col_ix - 1);
 
-            // Render static cell with double-click handler only if table is editable
+            // Render static cell with appropriate handlers
             div()
                 .font_family("Fira Code")
                 .text_size(px(12.))
                 .size_full() // Fill the entire cell container
                 .flex() // Enable flexbox layout
                 .items_center() // Center vertically
-                .when(is_numeric, |this| {
+                .when(is_row_number_col, |this| {
+                    this.font_weight(FontWeight::BOLD) // Bold row numbers
+                        .text_color(cx.theme().muted_foreground) // Muted color for row numbers
+                        .cursor_pointer() // Pointer cursor for row selection
+                })
+                .when(is_numeric && !is_row_number_col, |this| {
                     this.justify_end() // Right-align numeric columns
                         .text_color(cx.theme().foreground) // Ensure numeric text is visible
                 })
-                .when(self.is_uuid_column(col_ix), |this| {
-                    this.font_family("Fira Code") // Monospace font for UUIDs
-                        .text_color(cx.theme().blue) // Blue color for UUIDs
-                })
-                .when(self.is_timestamp_column(col_ix), |this| {
-                    this.font_family("Fira Code") // Monospace font for timestamps
-                        .text_color(cx.theme().green) // Green color for timestamps
-                })
-                .when(self.is_json_column(col_ix), |this| {
-                    this.font_family("Fira Code") // Monospace font for JSON
-                        .text_color(cx.theme().yellow) // Yellow color for JSON
-                })
+                .when(
+                    !is_row_number_col && self.is_uuid_column(col_ix - 1),
+                    |this| {
+                        this.font_family("Fira Code") // Monospace font for UUIDs
+                            .text_color(cx.theme().blue) // Blue color for UUIDs
+                    },
+                )
+                .when(
+                    !is_row_number_col && self.is_timestamp_column(col_ix - 1),
+                    |this| {
+                        this.font_family("Fira Code") // Monospace font for timestamps
+                            .text_color(cx.theme().green) // Green color for timestamps
+                    },
+                )
+                .when(
+                    !is_row_number_col && self.is_json_column(col_ix - 1),
+                    |this| {
+                        this.font_family("Fira Code") // Monospace font for JSON
+                            .text_color(cx.theme().yellow) // Yellow color for JSON
+                    },
+                )
                 .when(is_edited, |this| {
                     this.bg(cx.theme().yellow.opacity(0.1))
                         .border_l_2()
                         .border_color(cx.theme().yellow)
                 })
+                .when(is_selected, |this| {
+                    this.bg(cx.theme().blue.opacity(0.2))
+                        .border_1()
+                        .border_color(cx.theme().blue)
+                })
                 .when(is_null, |this| {
                     this.text_color(cx.theme().muted_foreground).italic()
                 })
-                .when(!is_null && is_editable, |this| {
+                // All data cells (non-row-number) should be selectable for copying
+                .when(!is_row_number_col, |this| {
                     this.on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |table, event: &gpui::MouseDownEvent, _window, cx| {
-                            if event.click_count == 2 {
-                                // Double-click detected - set pending edit
-                                let delegate = table.delegate_mut();
-                                // Only set pending edit if not already editing this cell
-                                if delegate.edit_state.editing_cell != Some((row_ix, col_ix)) {
-                                    delegate.pending_edit_cell = Some((row_ix, col_ix));
-                                    table.refresh(cx);
-                                    cx.notify();
+                            let delegate = table.delegate_mut();
+
+                            if event.click_count == 1 {
+                                // Single click - select cell
+                                log::info!(
+                                    "Single click on cell {}:{} - selecting cell",
+                                    row_ix,
+                                    col_ix
+                                );
+                                delegate.clear_selection();
+                                delegate.select_cell(row_ix, col_ix);
+                                table.refresh(cx);
+                                cx.notify();
+                            } else if event.click_count == 2 {
+                                // Double click - start editing (only if editable)
+                                log::info!("Double click on cell {}:{}", row_ix, col_ix);
+
+                                if delegate.is_editable() {
+                                    // Only set pending edit if not already editing this cell
+                                    if delegate.edit_state.editing_cell != Some((row_ix, col_ix)) {
+                                        delegate.pending_edit_cell = Some((row_ix, col_ix));
+                                        table.refresh(cx);
+                                        cx.notify();
+                                    }
                                 }
                             }
                         }),
                     )
                 })
-                .when(!is_editable, |this| {
+                // Only show visual feedback for editable cells when hovering
+                .when(!is_row_number_col && !is_null && is_editable, |this| {
+                    this.cursor_pointer()
+                })
+                .when(!is_editable && !is_row_number_col, |this| {
                     this.text_color(cx.theme().muted_foreground.opacity(0.6))
-                        .cursor_not_allowed()
                 })
                 .px_2()
                 .py_1()
@@ -1097,7 +1159,12 @@ impl TableDelegate for ResultsTableDelegate {
         _: &mut Window,
         _: &mut Context<Table<Self>>,
     ) {
-        // Sort rows by the specified column
+        // Don't sort by row number column
+        if col_ix == 0 {
+            return;
+        }
+
+        // Sort rows by the specified column (excluding row number column)
         self.rows.sort_by(|a, b| {
             let a_val = a.get(col_ix).map(|s| s.as_str()).unwrap_or("");
             let b_val = b.get(col_ix).map(|s| s.as_str()).unwrap_or("");
@@ -1107,6 +1174,13 @@ impl TableDelegate for ResultsTableDelegate {
                 _ => a_val.cmp(b_val),
             }
         });
+
+        // Update row numbers after sorting
+        for (index, row) in self.rows.iter_mut().enumerate() {
+            if let Some(row_num_cell) = row.get_mut(0) {
+                *row_num_cell = (index + 1).to_string();
+            }
+        }
     }
 
     fn visible_rows_changed(
@@ -1134,6 +1208,57 @@ impl TableDelegate for ResultsTableDelegate {
         // This compensates for any viewport calculation issues
         div().w(px(300.0)).h_full().flex_shrink_0()
     }
+
+    fn context_menu(&self, row_ix: usize, menu: PopupMenu, window: &Window, cx: &App) -> PopupMenu {
+        let has_selection = self.edit_state.has_selection();
+        let selected_data = self.get_selected_data();
+        let row_is_selected = self.edit_state.selected_rows.contains(&row_ix);
+
+        // Basic copy operations - use simple menu items (no submenus for now)
+        let menu = if has_selection {
+            menu.menu_with_icon(
+                "Copy Selection as CSV",
+                Icon::new(IconName::Copy),
+                Box::new(crate::app::CopyAsCSV),
+            )
+            .menu("Copy Selection as JSON", Box::new(crate::app::CopyAsJSON))
+            .menu("Copy Selection as SQL", Box::new(crate::app::CopyAsSQL))
+            .menu(
+                "Copy Selection as Markdown",
+                Box::new(crate::app::CopyAsMarkdown),
+            )
+        } else {
+            menu.menu(
+                "Copy Cell",
+                Box::new(CopyCell {
+                    row: row_ix,
+                    col: 0,
+                }),
+            )
+            .menu("Copy Cell as CSV", Box::new(crate::app::CopyAsCSV))
+            .menu("Copy Cell as JSON", Box::new(crate::app::CopyAsJSON))
+            .menu("Copy Cell as SQL", Box::new(crate::app::CopyAsSQL))
+            .menu(
+                "Copy Cell as Markdown",
+                Box::new(crate::app::CopyAsMarkdown),
+            )
+        };
+
+        // Row selection options
+        let menu = if row_is_selected {
+            menu.menu_with_check("Select Row", true, Box::new(SelectRow { row: row_ix }))
+        } else {
+            menu.menu("Select Row", Box::new(SelectRow { row: row_ix }))
+        };
+
+        // Clear selection if we have any
+        if has_selection {
+            menu.separator()
+                .menu("Clear Selection", Box::new(ClearSelection))
+        } else {
+            menu
+        }
+    }
 }
 
 pub struct ResultsPanel {
@@ -1142,6 +1267,8 @@ pub struct ResultsPanel {
     current_result: Option<QueryResult>,
     editing_input: Option<Entity<InputState>>,
     editing_cell: Option<(usize, usize)>,
+    copy_handler: CopyHandler,
+    current_selected_col: usize, // Track current column for selection/editing
 }
 
 impl ResultsPanel {
@@ -1161,7 +1288,13 @@ impl ResultsPanel {
             delegate.set_connection_string(conn_str);
         }
 
-        let table = cx.new(|cx| Table::new(delegate, window, cx));
+        let table = cx.new(|cx| {
+            Table::new(delegate, window, cx)
+                .row_selectable(true)
+                .col_selectable(false)
+        });
+
+        // The cell-level mouse events will handle selection and editing directly
 
         Self {
             table,
@@ -1169,16 +1302,17 @@ impl ResultsPanel {
             current_result: None,
             editing_input: None,
             editing_cell: None,
+            copy_handler: CopyHandler::new(),
+            current_selected_col: 1, // Start with first data column (column 1, after row number)
         }
     }
 
-    /// Helper function to quote SQL identifiers properly
-    fn quote_identifier(identifier: &str) -> String {
-        // Simple identifier quoting - wrap in double quotes and escape any existing quotes
-        format!("\"{}\"", identifier.replace('"', "\"\""))
-    }
-
-    pub fn set_query_result(&mut self, result: QueryResult, connection_string: Option<String>, cx: &mut Context<Self>) {
+    pub fn set_query_result(
+        &mut self,
+        result: QueryResult,
+        connection_string: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
         // Set connection string on the delegate for table extraction
         if let Some(conn_str) = connection_string {
             self.table.update(cx, |table, _cx| {
@@ -1196,18 +1330,6 @@ impl ResultsPanel {
         self.editing_input = None;
         self.editing_cell = None;
 
-        
-        cx.notify();
-    }
-
-    pub fn clear_results(&mut self, cx: &mut Context<Self>) {
-        self.table.update(cx, |table, cx| {
-            table
-                .delegate_mut()
-                .set_query_result(QueryResult::default());
-            table.refresh(cx);
-        });
-        self.current_result = None;
         cx.notify();
     }
 
@@ -1528,14 +1650,6 @@ impl ResultsPanel {
             .map(|s| s.to_string())
     }
 
-    pub fn get_primary_key_column(&self, cx: &App) -> Option<String> {
-        self.table
-            .read(cx)
-            .delegate()
-            .get_primary_key_column()
-            .map(|s| s.to_string())
-    }
-
     pub fn is_editing(&self, cx: &App) -> bool {
         self.table
             .read(cx)
@@ -1788,10 +1902,10 @@ impl ResultsPanel {
                         log.append_text(&blanco_ui::SqlLogMessage::Comment(summary), cx);
                     });
 
-                // Spawn async task to handle the response
-                let table_entity = self.table.clone();
-                let sql_log_entity: Entity<blanco_ui::SqlLog> = sql_log.clone();
-                cx.spawn(async move |entity, cx| {
+                    // Spawn async task to handle the response
+                    let table_entity = self.table.clone();
+                    let sql_log_entity: Entity<blanco_ui::SqlLog> = sql_log.clone();
+                    cx.spawn(async move |entity, cx| {
                     match response_rx.recv().await {
                         Ok(response) => {
                             log::info!("Received table operation response: success={}, rows_affected={:?}",
@@ -2171,6 +2285,200 @@ impl ResultsPanel {
             // Don't refresh the table to preserve user's changes
         }
     }
+
+    // Copy and selection action handlers
+    fn on_copy_cell(&mut self, action: &CopyCell, _window: &mut Window, cx: &mut Context<Self>) {
+        let cell_value = self
+            .table
+            .read(cx)
+            .delegate()
+            .get_cell_value(action.row, action.col);
+
+        // Get column type if available
+        let column_types = self.table.read(cx).delegate().column_types.clone();
+        let column_type = column_types
+            .get(action.col.saturating_sub(1)) // Adjust for row number column
+            .map(|s| s.as_str())
+            .unwrap_or("text");
+
+        if let Some(cell_value) = cell_value {
+            if let Err(e) = self
+                .copy_handler
+                .copy_single_cell(&cell_value, column_type, "csv", cx)
+            {
+                log::error!("Failed to copy cell: {}", e);
+            }
+        }
+    }
+
+    fn on_copy_as_csv(
+        &mut self,
+        _action: &crate::app::CopyAsCSV,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let selected_data = self.table.read(cx).delegate().get_selected_data();
+
+        if let Err(e) = self.copy_handler.copy_as_format(&selected_data, "csv", cx) {
+            log::error!("Failed to copy as CSV: {}", e);
+        }
+    }
+
+    fn on_copy_as_json(
+        &mut self,
+        _action: &crate::app::CopyAsJSON,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let selected_data = self.table.read(cx).delegate().get_selected_data();
+
+        if let Err(e) = self.copy_handler.copy_as_format(&selected_data, "json", cx) {
+            log::error!("Failed to copy as JSON: {}", e);
+        }
+    }
+
+    fn on_copy_as_sql(
+        &mut self,
+        _action: &crate::app::CopyAsSQL,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let selected_data = self.table.read(cx).delegate().get_selected_data();
+
+        if let Err(e) = self.copy_handler.copy_as_format(&selected_data, "sql", cx) {
+            log::error!("Failed to copy as SQL: {}", e);
+        }
+    }
+
+    fn on_copy_as_markdown(
+        &mut self,
+        _action: &crate::app::CopyAsMarkdown,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let selected_data = self.table.read(cx).delegate().get_selected_data();
+
+        if let Err(e) = self
+            .copy_handler
+            .copy_as_format(&selected_data, "markdown", cx)
+        {
+            log::error!("Failed to copy as Markdown: {}", e);
+        }
+    }
+
+    fn on_select_row(&mut self, action: &SelectRow, _window: &mut Window, cx: &mut Context<Self>) {
+        self.table.update(cx, |table, _cx| {
+            let delegate = table.delegate_mut();
+            delegate.select_row(action.row);
+            table.refresh(_cx);
+        });
+        cx.notify();
+    }
+
+    fn on_clear_selection(
+        &mut self,
+        _action: &crate::app::ClearSelection,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.table.update(cx, |table, _cx| {
+            let delegate = table.delegate_mut();
+            delegate.edit_state.clear_selection();
+            table.refresh(_cx);
+        });
+        cx.notify();
+    }
+
+    fn on_select_row_action(
+        &mut self,
+        action: &crate::app::SelectRow,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Handle row selection for the current column
+        self.table.update(cx, |table, cx| {
+            let delegate = table.delegate_mut();
+
+            // Select the current column in the clicked row
+            delegate.edit_state.clear_selection();
+            delegate
+                .edit_state
+                .selected_cells
+                .insert((action.row, self.current_selected_col));
+            table.refresh(cx);
+        });
+        cx.notify();
+    }
+
+    /// Navigate cells in the table with keyboard
+    fn navigate_cells(&mut self, cx: &mut Context<Self>, row_delta: isize, col_delta: isize) {
+        self.table.update(cx, |table, cx| {
+            let delegate = table.delegate_mut();
+
+            // Start from current tracked position
+            let mut current_row = 1;
+            let mut current_col = self.current_selected_col;
+
+            // Find first selected cell, or use current position
+            if let Some(&(row, col)) = delegate.edit_state.selected_cells.iter().next() {
+                current_row = row;
+                current_col = col;
+            }
+
+            // Calculate new position
+            let new_row = (current_row as isize + row_delta).max(1) as usize;
+            let new_col = (current_col as isize + col_delta).max(1) as usize;
+
+            // Keep within bounds
+            let max_row = delegate.rows.len();
+            let max_col = delegate.columns.len().saturating_sub(1);
+
+            let final_row = new_row.min(max_row);
+            let final_col = new_col.min(max_col);
+
+            // Update both tracked columns
+            self.current_selected_col = final_col;
+            delegate.edit_state.current_column = final_col;
+
+            // Clear current selection and select new cell
+            delegate.edit_state.clear_selection();
+            delegate
+                .edit_state
+                .selected_cells
+                .insert((final_row, final_col));
+
+            table.refresh(cx);
+        });
+        cx.notify();
+    }
+
+    /// Select the current cell based on keyboard focus
+    fn select_current_cell(&mut self, cx: &mut Context<Self>) {
+        self.table.update(cx, |table, cx| {
+            let delegate = table.delegate_mut();
+
+            // If there are selected cells, toggle the first one
+            if let Some(&(row, col)) = delegate.edit_state.selected_cells.iter().next() {
+                if delegate.edit_state.selected_cells.contains(&(row, col)) {
+                    // If already selected, clear all selections
+                    delegate.edit_state.clear_selection();
+                }
+            } else {
+                // If no selected cells, select the first cell
+                if delegate.rows.len() > 0 && delegate.columns.len() > 1 {
+                    delegate.edit_state.selected_cells.insert((1, 1));
+                }
+            }
+
+            table.refresh(cx);
+        });
+        cx.notify();
+    }
+
+    /// Sync the ResultsPanel's current_selected_col with the delegate's current_column
+    fn sync_current_column(&mut self, cx: &mut Context<Self>) {
+        self.current_selected_col = self.table.read(cx).delegate().edit_state.current_column;
+    }
 }
 
 impl EventEmitter<AppEvent> for ResultsPanel {}
@@ -2212,6 +2520,59 @@ impl Render for ResultsPanel {
                         "escape" => {
                             if this.is_editing(cx) {
                                 this.cancel_current_edit(cx);
+                            } else {
+                                // Clear all selections when not editing
+                                this.table.update(cx, |table, cx| {
+                                    table.delegate_mut().clear_selection();
+                                    table.refresh(cx);
+                                });
+                                cx.notify();
+                            }
+                        }
+                        "up" => {
+                            // Navigate up in the table
+                            if this.is_editing(cx) {
+                                // If editing, cancel editing first
+                                this.cancel_current_edit(cx);
+                            } else {
+                                // Navigate to previous row
+                                this.navigate_cells(cx, -1, 0);
+                            }
+                        }
+                        "down" => {
+                            // Navigate down in the table
+                            if this.is_editing(cx) {
+                                // If editing, cancel editing first
+                                this.cancel_current_edit(cx);
+                            } else {
+                                // Navigate to next row
+                                this.navigate_cells(cx, 1, 0);
+                            }
+                        }
+                        "left" => {
+                            // Navigate left in the table
+                            if this.is_editing(cx) {
+                                // If editing, cancel editing first
+                                this.cancel_current_edit(cx);
+                            } else {
+                                // Navigate to previous column
+                                this.navigate_cells(cx, 0, -1);
+                            }
+                        }
+                        "right" => {
+                            // Navigate right in the table
+                            if this.is_editing(cx) {
+                                // If editing, cancel editing first
+                                this.cancel_current_edit(cx);
+                            } else {
+                                // Navigate to next column
+                                this.navigate_cells(cx, 0, 1);
+                            }
+                        }
+                        "space" => {
+                            // Select current cell
+                            if !this.is_editing(cx) {
+                                this.select_current_cell(cx);
                             }
                         }
                         "ctrl-shift-n" => {
@@ -2230,6 +2591,16 @@ impl Render for ResultsPanel {
                     }
                 }),
             )
+            // Handle table events for row-based selection
+            .on_action(cx.listener(Self::on_select_row_action))
+            // Handle copy and selection actions
+            .on_action(cx.listener(Self::on_copy_cell))
+            .on_action(cx.listener(Self::on_copy_as_csv))
+            .on_action(cx.listener(Self::on_copy_as_json))
+            .on_action(cx.listener(Self::on_copy_as_sql))
+            .on_action(cx.listener(Self::on_copy_as_markdown))
+            .on_action(cx.listener(Self::on_select_row))
+            .on_action(cx.listener(Self::on_clear_selection))
             // The table component (table should have built-in scrolling)
             .child(
                 div()
@@ -2238,82 +2609,6 @@ impl Render for ResultsPanel {
                     .overflow_hidden()
                     .min_h(px(200.0)) // Minimum height for table
                     .child(self.table.clone()),
-            )
-            .child(
-                h_flex()
-                    .px_4()
-                    .py_2()
-                    .gap_3()
-                    .bg(cx.theme().muted)
-                    .border_t_1()
-                    .border_color(cx.theme().border)
-                    .text_sm()
-                    .items_center()
-                    .when_some(self.current_result.as_ref(), |this, result| {
-                        this
-                            // Status indicator
-                            .child(
-                                h_flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .when(!result.is_error, |this| {
-                                        this.text_color(cx.theme().green)
-                                            .child(Icon::new(IconName::CircleCheck).size(px(14.)))
-                                            .child("Success")
-                                    })
-                                    .when(result.is_error, |this| {
-                                        this.text_color(cx.theme().red)
-                                            .child(Icon::new(IconName::CircleX).size(px(14.)))
-                                            .child("Error")
-                                    }),
-                            )
-                            // Separator
-                            .child(div().h(px(16.)).w(px(1.)).bg(cx.theme().border))
-                            // Table name (if available)
-                            .when_some(table_name.as_ref(), |this, name| {
-                                this.child(div().text_color(cx.theme().muted_foreground).child(
-                                    format!(
-                                        "Table: {}{}",
-                                        name,
-                                        if is_editable { "" } else { " (read-only)" }
-                                    ),
-                                ))
-                            })
-                            // Spacer
-                            .child(div().flex_1())
-                            // Unsaved changes indicator
-                            .when(has_unsaved_changes, |this| {
-                                this.child(
-                                    h_flex()
-                                        .items_center()
-                                        .gap_1()
-                                        .text_color(cx.theme().yellow)
-                                        .child(Icon::new(IconName::CircleCheck).size(px(14.)))
-                                        .child("Unsaved changes"),
-                                )
-                            })
-                            // Execution time
-                            .when_some(result.execution_time_ms, |this, time_ms| {
-                                this.child(
-                                    div()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(format!("{}ms", time_ms)),
-                                )
-                            })
-                            // Row count
-                            .child(
-                                h_flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(Icon::new(IconName::ChevronsUpDown).size(px(14.)))
-                                    .child(format!("{} rows", row_count)),
-                            )
-                    })
-                    .when(self.current_result.is_none(), |this| {
-                        this.text_color(cx.theme().muted_foreground)
-                            .child("No query executed")
-                    }),
             )
     }
 }

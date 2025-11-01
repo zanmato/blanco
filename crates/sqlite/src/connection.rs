@@ -330,7 +330,11 @@ impl Connection for SqliteConnection {
     }
 
     fn get_icon_name(&self) -> IconName {
-        IconName::Sqlite
+        // Return DatabaseConnected when pool is Some (active connection), otherwise Database
+        match self.pool {
+            Some(_) => IconName::DatabaseConnected,
+            None => IconName::Database,
+        }
     }
 
     fn get_display_name(&self) -> String {

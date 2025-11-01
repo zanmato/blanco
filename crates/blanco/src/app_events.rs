@@ -26,6 +26,9 @@ pub enum AppEvent {
         count: usize,
     },
 
+    /// UI events
+    ToggleSidebar,
+
     /// Query execution events
     QueryExecutionStarted {
         connection_id: String,
@@ -71,8 +74,12 @@ pub enum AppEvent {
 
     /// UI events
     ThemeChanged(gpui_component::ThemeMode),
-    SidebarToggled { collapsed: bool },
-    TabChanged { tab_id: usize },
+    SidebarToggled {
+        collapsed: bool,
+    },
+    TabChanged {
+        tab_id: usize,
+    },
 
     /// SQL completion events
     CompletionTriggered {

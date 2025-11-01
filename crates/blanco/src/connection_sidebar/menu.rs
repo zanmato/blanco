@@ -49,7 +49,7 @@ impl Collapsible for SidebarMenu {
 }
 impl RenderOnce for SidebarMenu {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        v_flex().gap_2().children(
+        v_flex().gap_1().children(
             self.items
                 .into_iter()
                 .enumerate()
@@ -72,6 +72,22 @@ pub struct SidebarMenuItem {
     // NEW: Add context menu support
     context_menu:
         Option<Box<dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static>>,
+}
+
+impl Clone for SidebarMenuItem {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id.clone(),     // ElementId should implement Clone
+            icon: self.icon.clone(), // Icon should implement Clone
+            label: self.label.clone(),
+            handler: Rc::clone(&self.handler),
+            active: self.active,
+            collapsed: self.collapsed,
+            children: self.children.clone(),
+            suffix: None,       // We'll clone the suffix if needed in a future iteration
+            context_menu: None, // Context menu functions are complex to clone, we'll rebuild these as needed
+        }
+    }
 }
 
 impl SidebarMenuItem {
@@ -264,7 +280,7 @@ impl RenderOnce for SidebarMenuItem {
                         .id("submenu")
                         .border_l_1()
                         .border_color(cx.theme().sidebar_border)
-                        .gap_1()
+                        .gap_0p5()
                         .ml_3p5()
                         .pl_2p5()
                         .py_0p5()

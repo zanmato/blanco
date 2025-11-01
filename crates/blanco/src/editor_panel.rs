@@ -24,6 +24,7 @@ use crate::results_panel::ResultsPanel;
 use crate::settings::Settings;
 use crate::sql_completion_provider::SqlCompletionProvider;
 use blanco_ui::SqlLog;
+use gpui_component::Icon;
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -228,7 +229,11 @@ impl EditorPanel {
         schema_name: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        log::debug!("Creating new tab with connection string: '{}', display_name: '{}'", connection_string, display_name);
+        log::debug!(
+            "Creating new tab with connection string: '{}', display_name: '{}'",
+            connection_string,
+            display_name
+        );
         let tab_id = self.next_tab_id;
         self.next_tab_id += 1;
 
@@ -477,11 +482,12 @@ impl EditorPanel {
                     } else {
                         None
                     };
-                    let pg_connection_key = if connection_type.as_ref().is_some_and(|t| t == "PostgreSQL") {
-                        Some(query_tab.connection_string.clone())
-                    } else {
-                        None
-                    };
+                    let pg_connection_key =
+                        if connection_type.as_ref().is_some_and(|t| t == "PostgreSQL") {
+                            Some(query_tab.connection_string.clone())
+                        } else {
+                            None
+                        };
                     let tab_data = QueryTabData {
                         id: query_tab.db_id,
                         title: query_tab.title.clone(),
@@ -548,8 +554,8 @@ impl EditorPanel {
                                 .await
                             {
                                 Ok(_) => {
-                                    let uri =
-                                        query_file_manager.query_file_uri(final_db_id, &connection_name);
+                                    let uri = query_file_manager
+                                        .query_file_uri(final_db_id, &connection_name);
                                     debug!("Created query file for tab with URI: {}", uri);
                                     Some(uri)
                                 }
@@ -579,7 +585,8 @@ impl EditorPanel {
                                 }
                             }
                         }
-                    }).detach();
+                    })
+                    .detach();
 
                     // Use the unified connection string
                     let connection_string = &query_tab.connection_string;
@@ -621,7 +628,10 @@ impl EditorPanel {
                         let start_time = std::time::Instant::now();
 
                         // Execute query using unified connection manager
-                        log::debug!("Query execution - using connection string: '{}'", connection_string_clone);
+                        log::debug!(
+                            "Query execution - using connection string: '{}'",
+                            connection_string_clone
+                        );
                         let unified_manager = db_service.unified_manager().await;
                         let manager_guard = unified_manager.read().await;
                         match manager_guard
@@ -629,7 +639,10 @@ impl EditorPanel {
                             .await
                         {
                             Ok(connection) => {
-                                log::debug!("Connection retrieved successfully, type: {}", connection.get_connection_type());
+                                log::debug!(
+                                    "Connection retrieved successfully, type: {}",
+                                    connection.get_connection_type()
+                                );
                                 match connection.execute_query(&query_clone).await {
                                     Ok(mut result) => {
                                         let duration_ms = start_time.elapsed().as_millis() as i64;
@@ -684,6 +697,20 @@ impl EditorPanel {
                                             );
                                         });
 
+                                        // Log execution result to SQL log
+                                        sql_log_clone.update(cx, |sql_log, cx| {
+                                            let log_message = format!(
+                                                "{}, {} rows in {}",
+                                                crate::time_format::format_current_timestamp(),
+                                                rows_affected,
+                                                crate::time_format::format_duration(duration_ms)
+                                            );
+                                            sql_log.append_text(
+                                                &blanco_ui::SqlLogMessage::Comment(log_message),
+                                                cx,
+                                            );
+                                        });
+
                                         // Emit success event
                                         editor_panel_entity
                                             .update(cx, |_, cx| {
@@ -699,6 +726,20 @@ impl EditorPanel {
                                     }
                                     Err(e) => {
                                         log::error!("Query execution failed: {}", e);
+
+                                        // Log execution error to SQL log
+                                        let error_duration =
+                                            start_time.elapsed().as_millis() as i64;
+                                        sql_log_clone.update(cx, |sql_log, cx| {
+                                            let log_message = format!(
+                                                "query execution failed: {}",
+                                                e.to_string()
+                                            );
+                                            sql_log.append_text(
+                                                &blanco_ui::SqlLogMessage::Comment(log_message),
+                                                cx,
+                                            );
+                                        });
 
                                         // Emit error event
                                         editor_panel_entity
@@ -1075,12 +1116,9 @@ impl EditorPanel {
             saved_tabs.len()
         );
 
-        // For now, use a simple approach - we know there's a SQLite connection with ID 1
-        // This matches the database structure we saw earlier
-        info!("Using simple connection matching for tab restoration");
-
-        // Hardcoded for the current case - this will be improved later
-        let sqlite_connection_id = 1;
+        // Get all available connections from the database to match with saved tabs
+        let db_service = DbService::global(cx).clone();
+        let app_db = db_service.app_db_handle();
 
         let mut restored_count = 0;
         let total_tabs = saved_tabs.len();
@@ -1092,39 +1130,61 @@ impl EditorPanel {
             );
 
             // Try to find matching connection
-            if let Some(connection_id) = tab_data.connection_id {
-                if connection_id == sqlite_connection_id {
-                    debug!(
-                        "Found matching SQLite connection for tab {}",
-                        tab_data.title
-                    );
+            if let Some(_connection_id) = tab_data.connection_id {
+                let tab_title = tab_data.title.clone();
+                let tab_content = tab_data.content.clone();
+                let tab_db_id = tab_data.id;
+                let tab_connection_type = tab_data.connection_type.clone();
+                let tab_pg_connection_key = tab_data.pg_connection_key.clone();
 
-                    // Use the known SQLite database path
-                    let connection_string =
-                        "sqlite:/home/user/.config/blanco/test.db".to_string();
-
-                    debug!(
-                        "Restoring tab '{}' with connection string: {}",
-                        tab_data.title, connection_string
-                    );
-                    self.create_and_add_tab_with_connection_string(
-                        window,
-                        &tab_data.title,
-                        &tab_data.content,
-                        tab_data.id,
-                        connection_string,
-                        "SQLite",
-                        cx,
-                    );
-                    restored_count += 1;
+                // We need to do this synchronously since we need window access
+                // Use the pg_connection_key for PostgreSQL or construct the SQLite path
+                let connection_string = if let Some(tab_connection_type) = &tab_connection_type {
+                    if tab_connection_type == "PostgreSQL" {
+                        if let Some(pg_key) = &tab_pg_connection_key {
+                            pg_key.clone()
+                        } else {
+                            debug!(
+                                "PostgreSQL tab missing pg_connection_key, skipping tab '{}'",
+                                tab_title
+                            );
+                            continue;
+                        }
+                    } else if tab_connection_type == "SQLite" {
+                        // For SQLite, use the standard path
+                        "sqlite:/home/user/.config/blanco/test.db".to_string()
+                    } else {
+                        debug!(
+                            "Unsupported connection type '{}', skipping tab '{}'",
+                            tab_connection_type, tab_title
+                        );
+                        continue;
+                    }
                 } else {
-                    debug!(
-                        "No matching connection found for connection_id: {}, skipping tab",
-                        connection_id
-                    );
-                }
+                    debug!("Tab has no connection_type, skipping tab '{}'", tab_title);
+                    continue;
+                };
+
+                debug!(
+                    "Restoring tab '{}' with connection string: {}",
+                    tab_title, connection_string
+                );
+
+                self.create_and_add_tab_with_connection_string(
+                    window,
+                    &tab_title,
+                    &tab_content,
+                    tab_db_id,
+                    connection_string,
+                    tab_connection_type.as_deref().unwrap_or("Unknown"),
+                    cx,
+                );
+                restored_count += 1;
             } else {
-                debug!("Tab has no connection_id, skipping tab");
+                debug!(
+                    "Tab '{}' has no connection_id, skipping tab",
+                    tab_data.title
+                );
             }
         }
 
@@ -1500,13 +1560,20 @@ impl Render for EditorPanel {
                         this.set_active_tab(*ix, window, cx);
                     }))
                     .prefix(
-                        SidebarToggleButton::left()
-                            .side(Side::Left)
-                            .collapsed(self.sidebar_collapsed)
-                            .on_click(cx.listener(|_this, _event, window, cx| {
-                                // Dispatch the toggle sidebar action
-                                let action = ToggleSidebar;
-                                window.dispatch_action(action.boxed_clone(), cx);
+                        Button::new("toggle-sidebar")
+                            .ghost()
+                            .small()
+                            .icon(if self.sidebar_collapsed {
+                                Icon::new(IconName::PanelLeftOpen).size_4()
+                            } else {
+                                Icon::new(IconName::PanelLeftClose).size_4()
+                            })
+                            .on_click(cx.listener(|_this, _event, _window, cx| {
+                                log::info!("🖱️ Sidebar collapse button clicked!");
+                                // Emit the toggle sidebar event
+                                log::info!("🖱️ Emitting ToggleSidebar event...");
+                                cx.emit(AppEvent::ToggleSidebar);
+                                log::info!("🖱️ ToggleSidebar event emitted");
                             }))
                     )
                     .children(self.tabs.iter().enumerate().map(|(ix, tab)| {
@@ -1666,12 +1733,13 @@ impl Render for EditorPanel {
                                 // Button bar (between editor and results)
                                 .child(
                                     h_flex()
-                                        .p_3()
+                                        .px_3()
+                                        .py_1()
                                         .gap_2()
                                         .border_t_1()
                                         .border_color(cx.theme().border)
                                         .bg(cx.theme().muted.opacity(0.5))
-                                        .child(div().flex_1())
+                                        .justify_end()
                                         // Run button (always visible)
                                         .child(
                                                 Button::new("run-query")
@@ -1698,6 +1766,7 @@ impl Render for EditorPanel {
                                             div()
                                                 .flex_1()
                                                 .overflow_hidden()
+                                                .bg(cx.theme().highlight_theme.style.editor_background.unwrap_or(cx.theme().background))
                                                 .child(
                                                     div()
                                                         .child(query_tab.sql_log.clone())

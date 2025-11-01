@@ -1,13 +1,13 @@
+use crate::sql_parser::PostgresTableExtractor;
 use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
-    Connection, ConnectionFactory, IconName, QueryResult, ColumnInfo, TableMetadata,
-    ConnectionUIMetadata, TableChangeOperation,
+    ColumnInfo, Connection, ConnectionFactory, ConnectionUIMetadata, IconName, QueryResult,
+    TableChangeOperation, TableMetadata,
 };
+use sqlx::postgres::types::PgMoney;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Column, Row, TypeInfo};
-use sqlx::postgres::types::PgMoney;
-use crate::sql_parser::PostgresTableExtractor;
 
 /// PostgreSQL connection implementation of the Connection trait
 /// This uses SQLX directly to provide a unified interface
@@ -39,7 +39,13 @@ pub struct PgConnectionKey {
 }
 
 impl PgConnectionKey {
-    pub fn new(host: String, port: u16, database: String, username: String, password: Option<String>) -> Self {
+    pub fn new(
+        host: String,
+        port: u16,
+        database: String,
+        username: String,
+        password: Option<String>,
+    ) -> Self {
         Self {
             host,
             port,
@@ -60,7 +66,9 @@ impl PgConnectionKey {
         } else if connection_string.starts_with("postgres://") {
             connection_string
         } else {
-            return Err(anyhow::anyhow!("Invalid PostgreSQL connection string format"));
+            return Err(anyhow::anyhow!(
+                "Invalid PostgreSQL connection string format"
+            ));
         };
 
         // Parse the URL
@@ -73,7 +81,9 @@ impl PgConnectionKey {
         let password = parsed.password().map(|p| p.to_string());
 
         if database.is_empty() {
-            return Err(anyhow::anyhow!("Database name is required in connection string"));
+            return Err(anyhow::anyhow!(
+                "Database name is required in connection string"
+            ));
         }
 
         if username.is_empty() {
@@ -92,16 +102,28 @@ impl PgConnectionKey {
     /// Generate a connection string from this key
     pub fn to_connection_string(&self) -> String {
         if let Some(ref password) = self.password {
-            format!("postgresql://{}:{}@{}:{}/{}", self.username, password, self.host, self.port, self.database)
+            format!(
+                "postgresql://{}:{}@{}:{}/{}",
+                self.username, password, self.host, self.port, self.database
+            )
         } else {
-            format!("postgresql://{}@{}:{}/{}", self.username, self.host, self.port, self.database)
+            format!(
+                "postgresql://{}@{}:{}/{}",
+                self.username, self.host, self.port, self.database
+            )
         }
     }
 }
 
 impl PostgresConnection {
     /// Create a new PostgreSQL connection
-    pub fn new(host: String, port: u16, database: String, username: String, password: Option<String>) -> Self {
+    pub fn new(
+        host: String,
+        port: u16,
+        database: String,
+        username: String,
+        password: Option<String>,
+    ) -> Self {
         let connection_key = PgConnectionKey::new(host, port, database, username, password);
         let display_name = Self::generate_display_name(&connection_key);
         let connection_string = connection_key.to_connection_string();
@@ -142,12 +164,20 @@ impl PostgresConnection {
 
     /// Generate a human-readable display name for the connection
     fn generate_display_name(key: &PgConnectionKey) -> String {
-        format!("PostgreSQL - {}@{}:{}/{}", key.username, key.host, key.port, key.database)
+        format!(
+            "PostgreSQL - {}@{}:{}/{}",
+            key.username, key.host, key.port, key.database
+        )
     }
 
     /// Get connection details
     pub fn get_connection_details(&self) -> (&str, u16, &str, &str) {
-        (&self.connection_key.host, self.connection_key.port, &self.connection_key.database, &self.connection_key.username)
+        (
+            &self.connection_key.host,
+            self.connection_key.port,
+            &self.connection_key.database,
+            &self.connection_key.username,
+        )
     }
 
     /// Helper method to connect asynchronously
@@ -171,7 +201,10 @@ impl PostgresConnection {
 
     /// Execute a query asynchronously using SQLX directly
     async fn execute_query_async(&self, query: &str) -> Result<QueryResult> {
-        let pool = self.pool.as_ref().ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
+        let pool = self
+            .pool
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
 
         // Try to execute as a query that returns rows
         match sqlx::query(query).fetch_all(pool).await {
@@ -420,8 +453,12 @@ impl PostgresConnection {
             ORDER BY table_name
         ";
 
-        let result = self.execute_prepared_query(query, &[schema_filter.to_string()]).await?;
-        let tables: Vec<String> = result.rows.into_iter()
+        let result = self
+            .execute_prepared_query(query, &[schema_filter.to_string()])
+            .await?;
+        let tables: Vec<String> = result
+            .rows
+            .into_iter()
             .filter_map(|row| row.into_iter().next())
             .collect();
 
@@ -432,7 +469,8 @@ impl PostgresConnection {
 #[async_trait]
 impl Connection for PostgresConnection {
     fn get_connection_key_str(&self) -> String {
-        format!("postgres:{}@{}:{}/{}",
+        format!(
+            "postgres:{}@{}:{}/{}",
             self.connection_key.username,
             self.connection_key.host,
             self.connection_key.port,
@@ -445,7 +483,11 @@ impl Connection for PostgresConnection {
     }
 
     fn get_icon_name(&self) -> IconName {
-        IconName::Postgres
+        // Return DatabaseConnected when pool is Some (active connection), otherwise Database
+        match self.pool {
+            Some(_) => IconName::DatabaseConnected,
+            None => IconName::Database,
+        }
     }
 
     fn get_display_name(&self) -> String {
@@ -457,7 +499,8 @@ impl Connection for PostgresConnection {
     }
 
     async fn connect(&mut self, connection_string: &str) -> Result<()> {
-        log::info!("Connecting to PostgreSQL database: {}@{}:{}/{}",
+        log::info!(
+            "Connecting to PostgreSQL database: {}@{}:{}/{}",
             self.connection_key.username,
             self.connection_key.host,
             self.connection_key.port,
@@ -480,7 +523,10 @@ impl Connection for PostgresConnection {
     }
 
     async fn disconnect(&mut self) {
-        log::info!("Disconnecting from PostgreSQL database: {}", self.display_name);
+        log::info!(
+            "Disconnecting from PostgreSQL database: {}",
+            self.display_name
+        );
         if let Some(pool) = self.pool.take() {
             pool.close().await;
         }
@@ -501,9 +547,14 @@ impl Connection for PostgresConnection {
     async fn execute_query(&self, query: &str) -> Result<QueryResult> {
         log::debug!("Executing PostgreSQL query: {}", query);
 
-        let result = self.execute_query_async(query).await
+        let result = self
+            .execute_query_async(query)
+            .await
             .map_err(|e| anyhow::anyhow!("PostgreSQL query execution failed: {}", e))?;
-        log::debug!("Query executed successfully, {} rows returned", result.row_count());
+        log::debug!(
+            "Query executed successfully, {} rows returned",
+            result.row_count()
+        );
 
         Ok(result)
     }
@@ -513,9 +564,15 @@ impl Connection for PostgresConnection {
         sql_template: &str,
         parameters: &[String],
     ) -> Result<QueryResult> {
-        log::debug!("Executing prepared PostgreSQL query with {} parameters", parameters.len());
+        log::debug!(
+            "Executing prepared PostgreSQL query with {} parameters",
+            parameters.len()
+        );
 
-        let pool = self.pool.as_ref().ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
+        let pool = self
+            .pool
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
 
         // Build the query with parameter placeholders
         let mut query = sqlx::query(sql_template);
@@ -767,16 +824,28 @@ impl Connection for PostgresConnection {
     }
 
     async fn get_databases(&self) -> Result<Vec<String>> {
-        let result = self.execute_query("SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname").await?;
-        let databases: Vec<String> = result.rows.into_iter()
+        let result = self
+            .execute_query(
+                "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname",
+            )
+            .await?;
+        let databases: Vec<String> = result
+            .rows
+            .into_iter()
             .filter_map(|row| row.into_iter().next())
             .collect();
         Ok(databases)
     }
 
     async fn get_schemas(&self) -> Result<Vec<String>> {
-        let result = self.execute_query("SELECT schema_name FROM information_schema.schemata ORDER BY schema_name").await?;
-        let schemas: Vec<String> = result.rows.into_iter()
+        let result = self
+            .execute_query(
+                "SELECT schema_name FROM information_schema.schemata ORDER BY schema_name",
+            )
+            .await?;
+        let schemas: Vec<String> = result
+            .rows
+            .into_iter()
             .filter_map(|row| row.into_iter().next())
             .collect();
         Ok(schemas)
@@ -802,7 +871,9 @@ impl Connection for PostgresConnection {
                 AND tc.table_schema = 'public'
         ";
 
-        let result = self.execute_prepared_query(query, &[table_name.to_string()]).await?;
+        let result = self
+            .execute_prepared_query(query, &[table_name.to_string()])
+            .await?;
 
         if !result.rows.is_empty() {
             Ok(result.rows[0].get(0).cloned())
@@ -811,9 +882,17 @@ impl Connection for PostgresConnection {
         }
     }
 
-    async fn get_columns_for_table(&self, table_name: &str, schema: Option<&str>) -> Result<Vec<ColumnInfo>> {
+    async fn get_columns_for_table(
+        &self,
+        table_name: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<ColumnInfo>> {
         let schema_name = schema.unwrap_or("public");
-        log::debug!("Getting columns for PostgreSQL table '{}.{}", schema_name, table_name);
+        log::debug!(
+            "Getting columns for PostgreSQL table '{}.{}",
+            schema_name,
+            table_name
+        );
 
         let query = "
             SELECT
@@ -829,7 +908,9 @@ impl Connection for PostgresConnection {
             ORDER BY ordinal_position
         ";
 
-        let result = self.execute_prepared_query(query, &[table_name.to_string(), schema_name.to_string()]).await?;
+        let result = self
+            .execute_prepared_query(query, &[table_name.to_string(), schema_name.to_string()])
+            .await?;
 
         let mut columns = Vec::new();
         for row in result.rows {
@@ -839,69 +920,107 @@ impl Connection for PostgresConnection {
                 let is_nullable = &row[2]; // YES/NO
                 let default_value = &row[3]; // Default value or NULL
                 let max_length = &row[4]; // character_maximum_length
-                // row[5] = numeric_precision, row[6] = numeric_scale (not used for now)
+                                          // row[5] = numeric_precision, row[6] = numeric_scale (not used for now)
 
                 // Check if it's a primary key
-                let is_primary_key = if let Ok(Some(pk)) = self.get_primary_key_for_table(table_name).await {
-                    pk == *column_name
-                } else {
-                    false
-                };
+                let is_primary_key =
+                    if let Ok(Some(pk)) = self.get_primary_key_for_table(table_name).await {
+                        pk == *column_name
+                    } else {
+                        false
+                    };
 
                 let column_info = ColumnInfo {
                     name: column_name.clone(),
                     data_type: data_type.clone(),
                     is_nullable: is_nullable == "YES",
                     is_primary_key,
-                    default_value: if default_value.is_empty() { None } else { Some(default_value.clone()) },
+                    default_value: if default_value.is_empty() {
+                        None
+                    } else {
+                        Some(default_value.clone())
+                    },
                     character_maximum_length: max_length.parse().ok(),
                 };
                 columns.push(column_info);
             }
         }
 
-        log::debug!("Found {} columns for table '{}.{}", columns.len(), schema_name, table_name);
+        log::debug!(
+            "Found {} columns for table '{}.{}",
+            columns.len(),
+            schema_name,
+            table_name
+        );
         Ok(columns)
     }
 
-    async fn get_table_metadata(&self, table_name: &str, schema: Option<&str>) -> Result<TableMetadata> {
+    async fn get_table_metadata(
+        &self,
+        table_name: &str,
+        schema: Option<&str>,
+    ) -> Result<TableMetadata> {
         let schema_name = schema.unwrap_or("public");
-        log::debug!("Getting metadata for PostgreSQL table '{}.{}", schema_name, table_name);
+        log::debug!(
+            "Getting metadata for PostgreSQL table '{}.{}",
+            schema_name,
+            table_name
+        );
 
         // Get basic table information
-        let columns = self.get_columns_for_table(table_name, Some(schema_name)).await?;
+        let columns = self
+            .get_columns_for_table(table_name, Some(schema_name))
+            .await?;
 
         // Get row count
-        let row_count = match self.execute_prepared_query(
-            &format!("SELECT COUNT(*) FROM \"{}\".\"{}\"", schema_name, table_name),
-            &[]
-        ).await {
+        let row_count = match self
+            .execute_prepared_query(
+                &format!(
+                    "SELECT COUNT(*) FROM \"{}\".\"{}\"",
+                    schema_name, table_name
+                ),
+                &[],
+            )
+            .await
+        {
             Ok(count_result) if !count_result.rows.is_empty() => {
                 count_result.rows[0][0].parse().ok()
             }
-            _ => None
+            _ => None,
         };
 
         // Extract primary key information
-        let primary_keys: Vec<String> = columns.iter()
+        let primary_keys: Vec<String> = columns
+            .iter()
             .filter(|col| col.is_primary_key)
             .map(|col| col.name.clone())
             .collect();
 
-        let mut metadata = TableMetadata::new(table_name.to_string(), Some(schema_name.to_string()));
+        let mut metadata =
+            TableMetadata::new(table_name.to_string(), Some(schema_name.to_string()));
         metadata.columns = columns;
         metadata.row_count = row_count;
         metadata.primary_keys = primary_keys;
 
-        log::debug!("Retrieved metadata for table '{}.{}': {} columns, {} PKs",
-                   schema_name, table_name, metadata.columns.len(), metadata.primary_keys.len());
+        log::debug!(
+            "Retrieved metadata for table '{}.{}': {} columns, {} PKs",
+            schema_name,
+            table_name,
+            metadata.columns.len(),
+            metadata.primary_keys.len()
+        );
 
         Ok(metadata)
     }
 
-    async fn execute_table_changes(&self, _changes: &[TableChangeOperation]) -> Result<QueryResult> {
+    async fn execute_table_changes(
+        &self,
+        _changes: &[TableChangeOperation],
+    ) -> Result<QueryResult> {
         // This is a placeholder - would need implementation of table operations for PostgreSQL
-        Err(anyhow::anyhow!("Table changes not yet implemented for PostgreSQL"))
+        Err(anyhow::anyhow!(
+            "Table changes not yet implemented for PostgreSQL"
+        ))
     }
 
     async fn get_database_name(&self) -> Result<Option<String>> {
@@ -910,14 +1029,15 @@ impl Connection for PostgresConnection {
 
     fn get_file_safe_name(&self) -> String {
         // Create a file-safe name from PostgreSQL connection details
-        let name = format!("{}_{}_{}",
-            self.connection_key.username,
-            self.connection_key.host,
-            self.connection_key.database
+        let name = format!(
+            "{}_{}_{}",
+            self.connection_key.username, self.connection_key.host, self.connection_key.database
         );
 
         // Make it file-safe
-        name.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect()
+        name.chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '_' })
+            .collect()
     }
 
     fn get_ui_metadata(&self) -> ConnectionUIMetadata {

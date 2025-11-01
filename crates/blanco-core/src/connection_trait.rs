@@ -6,6 +6,7 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IconName {
     Database,
+    DatabaseConnected,
     Sqlite,
     Postgres,
     Table,
