@@ -123,6 +123,33 @@ pub enum AppEvent {
         query_time: Duration,
         connection_pool_size: usize,
     },
+
+    /// Chat events
+    ChatMessageSent {
+        tab_id: usize,
+        message_content: String,
+    },
+    ChatMessageReceived {
+        tab_id: usize,
+        message_content: String,
+        role: String, // "user" | "assistant" | "system"
+    },
+    ChatSessionStarted {
+        tab_id: usize,
+        provider: String,
+        model: String,
+    },
+    ChatSessionEnded {
+        tab_id: usize,
+    },
+    ChatToggled {
+        tab_id: usize,
+        enabled: bool,
+    },
+    ChatError {
+        tab_id: usize,
+        error_message: String,
+    },
 }
 
 /// Error severity levels

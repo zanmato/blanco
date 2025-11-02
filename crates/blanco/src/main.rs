@@ -3,6 +3,7 @@ mod app_database;
 mod app_events;
 mod assets;
 mod async_pipeline;
+mod agent;
 mod connection;
 mod connection_modal;
 mod connection_sidebar;
