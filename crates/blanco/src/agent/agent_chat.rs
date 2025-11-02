@@ -1,7 +1,7 @@
 use gpui::{
     actions, div, prelude::FluentBuilder, px, App, AppContext, Context, Entity, EventEmitter,
-    FocusHandle, Focusable, InteractiveElement, IntoElement, ParentElement, Render, ScrollHandle,
-    Styled, Subscription, Window,
+    FocusHandle, Focusable, InteractiveElement, IntoElement, ParentElement, Render, Styled,
+    Subscription, Window,
 };
 use gpui_component::{
     button::{Button, ButtonVariants},
@@ -23,7 +23,6 @@ pub struct ChatPanel {
     pub session: Entity<ChatSession>,
     pub input_state: Entity<InputState>,
     pub messages: Vec<ChatMessage>,
-    pub scroll_handle: ScrollHandle,
     pub _subscriptions: Vec<Subscription>,
     pub is_loading: bool,
     pub tab_id: usize,
@@ -131,7 +130,6 @@ impl ChatPanel {
             session,
             input_state,
             messages: Vec::new(),
-            scroll_handle: ScrollHandle::new(),
             _subscriptions: subscriptions,
             is_loading: false,
             tab_id,
@@ -187,7 +185,6 @@ impl ChatPanel {
             session,
             input_state,
             messages: Vec::new(),
-            scroll_handle: ScrollHandle::new(),
             _subscriptions: subscriptions,
             is_loading: false,
             tab_id,
