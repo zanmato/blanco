@@ -53,6 +53,9 @@ pub trait ChatProvider: Send + Sync {
 
     /// Call a tool/function
     async fn call_tool(&self, tool_call: ToolCall) -> Result<ToolResult, Self::Error>;
+
+    /// Get the available tools for this provider
+    fn get_tools(&self) -> Option<Vec<ToolDefinition>>;
 }
 
 /// Generic chat completion request that works across providers

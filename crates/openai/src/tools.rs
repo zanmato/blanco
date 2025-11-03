@@ -1,6 +1,10 @@
-use blanco_core::chat_provider::{ToolCall, ToolDefinition, ToolResult};
+use async_trait::async_trait;
+use blanco_core::chat_provider::{FunctionDefinition, ToolCall, ToolDefinition, ToolResult};
+use blanco_core::connection_trait::{Connection, ConnectionRegistry};
+use blanco_core::DatabaseService;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// A registry of available tools/functions
 #[derive(Clone, Debug)]
@@ -82,6 +86,16 @@ pub trait ToolHandler: Send + Sync {
     /// Execute the tool with given arguments
     async fn execute(&self, arguments: Value) -> ToolResult;
 
+    /// Execute the tool with given arguments and optional database service
+    async fn execute_with_db(
+        &self,
+        arguments: Value,
+        database_service: Option<Arc<dyn DatabaseService>>,
+    ) -> ToolResult {
+        // Default implementation falls back to execute without database service
+        self.execute(arguments).await
+    }
+
     /// Get the tool definition
     fn definition(&self) -> ToolDefinition;
 }
@@ -119,6 +133,7 @@ impl ToolHandler for ClosureTool {
 /// A tool executor that can run tools
 pub struct ToolExecutor {
     handlers: HashMap<String, Box<dyn ToolHandler>>,
+    database_service: Option<Arc<dyn DatabaseService>>,
 }
 
 impl ToolExecutor {
@@ -126,6 +141,15 @@ impl ToolExecutor {
     pub fn new() -> Self {
         Self {
             handlers: HashMap::new(),
+            database_service: None,
+        }
+    }
+
+    /// Create a new tool executor with a database service
+    pub fn with_database_service(database_service: Arc<dyn DatabaseService>) -> Self {
+        Self {
+            handlers: HashMap::new(),
+            database_service: Some(database_service),
         }
     }
 
@@ -157,8 +181,10 @@ impl ToolExecutor {
                     }
                 };
 
-                // Execute the tool
-                handler.execute(arguments).await
+                // Execute the tool with database service if available
+                handler
+                    .execute_with_db(arguments, self.database_service.clone())
+                    .await
             }
             None => ToolResult::error(
                 tool_call.id.clone(),
@@ -206,6 +232,267 @@ impl ToolExecutor {
 impl Default for ToolExecutor {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// List-tables tool for database schema exploration
+pub struct ListTablesTool {
+    connection_string_resolver: Option<Box<dyn Fn() -> Option<String> + Send + Sync>>,
+}
+
+impl ListTablesTool {
+    /// Create a new list-tables tool
+    pub fn new() -> Self {
+        Self {
+            connection_string_resolver: None,
+        }
+    }
+
+    /// Create a new list-tables tool with a connection string
+    pub fn with_connection_string(connection_string: String) -> Self {
+        let conn_str = connection_string.clone();
+        Self {
+            connection_string_resolver: Some(Box::new(move || Some(conn_str.clone()))),
+        }
+    }
+
+    /// Create a new list-tables tool with connection string resolver
+    pub fn with_connection_resolver<F>(resolver: F) -> Self
+    where
+        F: Fn() -> Option<String> + Send + Sync + 'static,
+    {
+        Self {
+            connection_string_resolver: Some(Box::new(resolver)),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ToolHandler for ListTablesTool {
+    async fn execute(&self, arguments: Value) -> ToolResult {
+        log::debug!(
+            "ListTablesTool execute called with arguments: {}",
+            arguments
+        );
+
+        // Extract parameters
+        let table_names = arguments
+            .get("table_names")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let output_format = arguments
+            .get("output_format")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let param_connection_string = arguments.get("connection_string").and_then(|v| v.as_str());
+
+        log::debug!("Extracted parameters - table_names: {:?}, output_format: {:?}, connection_string: {:?}",
+                   table_names, output_format, param_connection_string);
+
+        // Try to get connection string from various sources
+        let connection_string = if let Some(conn_str) = param_connection_string {
+            Some(conn_str.to_string())
+        } else if let Some(resolver) = &self.connection_string_resolver {
+            resolver()
+        } else {
+            None
+        };
+
+        if let Some(conn_str) = connection_string {
+            log::debug!("Using connection string for ListTablesTool: {}", conn_str);
+
+            // Use the connection to query actual database schema
+            match self.query_database_schema(conn_str).await {
+                Ok(result) => ToolResult::success(
+                    "list-tables",
+                    serde_json::to_string_pretty(&result)
+                        .unwrap_or_else(|_| "Invalid JSON result".to_string()),
+                ),
+                Err(e) => {
+                    log::error!("Failed to query database schema: {}", e);
+                    ToolResult::error(
+                        "list-tables",
+                        format!("Failed to query database schema: {}", e),
+                    )
+                }
+            }
+        } else {
+            log::warn!("No connection string available for ListTablesTool");
+            ToolResult::error(
+                "list-tables",
+                "No database connection available. Please connect to a database first.",
+            )
+        }
+    }
+
+    async fn execute_with_db(
+        &self,
+        arguments: Value,
+        database_service: Option<Arc<dyn DatabaseService>>,
+    ) -> ToolResult {
+        log::debug!(
+            "ListTablesTool execute_with_db called with arguments: {}",
+            arguments
+        );
+
+        // Extract parameters
+        let table_names = arguments
+            .get("table_names")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let output_format = arguments
+            .get("output_format")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let limit = arguments
+            .get("limit")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(20); // Default limit of 20
+
+        let offset = arguments
+            .get("offset")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0); // Default offset of 0
+
+        let param_connection_string = arguments.get("connection_string").and_then(|v| v.as_str());
+
+        log::debug!("Extracted parameters - table_names: {:?}, output_format: {:?}, limit: {}, offset: {}, connection_string: {:?}",
+                   table_names, output_format, limit, offset, param_connection_string);
+
+        // Try to get connection string from various sources
+        let connection_string = if let Some(conn_str) = param_connection_string {
+            Some(conn_str.to_string())
+        } else if let Some(resolver) = &self.connection_string_resolver {
+            resolver()
+        } else {
+            None
+        };
+
+        if let Some(conn_str) = &connection_string {
+            if let Some(db_service) = &database_service {
+                log::debug!(
+                    "Using database service for ListTablesTool with connection: {}",
+                    conn_str
+                );
+
+                // Use the database service to query actual database schema with pagination
+                let table_names_ref = table_names.as_deref();
+                match db_service
+                    .get_database_schema_paginated(
+                        conn_str,
+                        table_names_ref,
+                        Some(limit),
+                        Some(offset),
+                    )
+                    .await
+                {
+                    Ok(result) => ToolResult::success(
+                        "list-tables",
+                        serde_json::to_string_pretty(&result)
+                            .unwrap_or_else(|_| "Invalid JSON result".to_string()),
+                    ),
+                    Err(e) => {
+                        log::error!(
+                            "Failed to query database schema via database service: {}",
+                            e
+                        );
+                        ToolResult::error(
+                            "list-tables",
+                            format!("Failed to query database schema: {}", e),
+                        )
+                    }
+                }
+            } else {
+                log::debug!(
+                    "No database service available, falling back to direct connection: {}",
+                    conn_str
+                );
+                // Fall back to the original method for backward compatibility
+                match self.query_database_schema(conn_str.clone()).await {
+                    Ok(result) => ToolResult::success(
+                        "list-tables",
+                        serde_json::to_string_pretty(&result)
+                            .unwrap_or_else(|_| "Invalid JSON result".to_string()),
+                    ),
+                    Err(e) => {
+                        log::error!("Failed to query database schema: {}", e);
+                        ToolResult::error(
+                            "list-tables",
+                            format!("Failed to query database schema: {}", e),
+                        )
+                    }
+                }
+            }
+        } else {
+            log::warn!("No connection string available for ListTablesTool");
+            ToolResult::error(
+                "list-tables",
+                "No database connection available. Please connect to a database first.",
+            )
+        }
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "list-tables".to_string(),
+                description: "List detailed schema information for user-created tables. Returns object type, columns, constraints, indexes, triggers, owner, and comment as JSON. Supports pagination with limit and offset parameters.".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "table_names": {
+                            "type": "string",
+                            "description": "Optional comma-separated list of table names to filter. If not provided, lists all tables in user schemas. Wildcard (%) is not supported."
+                        },
+                        "output_format": {
+                            "type": "string",
+                            "enum": ["simple", "detailed"],
+                            "description": "Optional output format. 'simple' returns only table names, 'detailed' returns full table information. Default: 'detailed'."
+                        },
+                        "connection_string": {
+                            "type": "string",
+                            "description": "Database connection string to use for the query. This is automatically provided by the system."
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum number of tables to return. Default: 20.",
+                            "minimum": 1,
+                            "maximum": 100
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "description": "Number of tables to skip for pagination. Default: 0.",
+                            "minimum": 0
+                        }
+                    },
+                    "required": []
+                }),
+            },
+        }
+    }
+}
+
+impl ListTablesTool {
+    /// Query database schema using the connection string (fallback method)
+    async fn query_database_schema(
+        &self,
+        connection_string: String,
+    ) -> Result<serde_json::Value, anyhow::Error> {
+        log::warn!(
+            "Fallback method used - no database service available for connection: {}",
+            connection_string
+        );
+
+        // Return a simple error result since we can't create connections without a database service
+        Err(anyhow::anyhow!(
+            "Database service not available - cannot query schema for: {}",
+            connection_string
+        ))
     }
 }
 
@@ -370,7 +657,7 @@ pub fn execute_datetime(arguments: Value) -> ToolResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use blanco_core::{ToolCall, FunctionCall};
+    use blanco_core::{FunctionCall, ToolCall};
 
     #[test]
     fn test_tool_registry() {

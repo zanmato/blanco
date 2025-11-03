@@ -20,6 +20,7 @@ serde_json = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
+log = { workspace = true }
 
 # For position and range handling
 ropey = { workspace = true }

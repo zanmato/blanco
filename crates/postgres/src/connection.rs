@@ -2,8 +2,8 @@ use crate::sql_parser::PostgresTableExtractor;
 use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
-    ColumnInfo, Connection, ConnectionUIMetadata, IconName, QueryResult,
-    TableChangeOperation, TableMetadata,
+    ColumnInfo, Connection, ConnectionUIMetadata, IconName, QueryResult, TableChangeOperation,
+    TableMetadata,
 };
 use sqlx::postgres::types::PgMoney;
 use sqlx::postgres::PgPoolOptions;
@@ -61,7 +61,9 @@ impl PgConnectionKey {
         // - postgresql://user:password@host:port/database
         // - postgres://user:password@host:port/database
 
-        let url = if connection_string.starts_with("postgresql://") || connection_string.starts_with("postgres://") {
+        let url = if connection_string.starts_with("postgresql://")
+            || connection_string.starts_with("postgres://")
+        {
             connection_string
         } else {
             return Err(anyhow::anyhow!(

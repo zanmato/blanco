@@ -8,6 +8,7 @@ pub mod connection_trait;
 pub mod lsp_traits;
 pub mod table_operations;
 pub mod chat_provider;
+pub mod database_service;
 
 // Re-export main types for convenience
 pub use connection_trait::{
@@ -29,3 +30,5 @@ pub use chat_provider::{
     CompletionChoice, FinishReason, FunctionCall, FunctionDefinition, Message, StreamChunk,
     StreamChoice, StreamDelta, ToolCall, ToolChoice, ToolDefinition, ToolResult, UsageInfo,
 };
+
+pub use database_service::DatabaseService;

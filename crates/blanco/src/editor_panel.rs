@@ -1425,7 +1425,7 @@ impl EditorPanel {
                 // Create chat panel if it doesn't exist
                 let chat_panel = cx.new(|cx| {
                     // Try to create a chat panel with real provider
-                    match create_chat_panel_with_provider(query_tab.id, window, cx) {
+                    match create_chat_panel_with_provider(query_tab.id, query_tab.connection_string.clone(), window, cx) {
                         Ok(panel) => panel,
                         Err(e) => {
                             log::error!("Failed to create chat provider: {}. Using mock provider.", e);
@@ -1951,6 +1951,7 @@ impl Render for EditorPanel {
 /// Create a chat panel with a real provider based on current settings
 fn create_chat_panel_with_provider(
     tab_id: usize,
+    connection_string: String,
     window: &mut Window,
     cx: &mut gpui::Context<ChatPanel>,
 ) -> anyhow::Result<ChatPanel> {
@@ -1966,8 +1967,12 @@ fn create_chat_panel_with_provider(
     // Create HTTP client using reqwest_client from zed
     let http_client = Arc::new(reqwest_client::ReqwestClient::new());
 
+    // Get db_service
+    let db_service = DbService::global(cx).clone();
+
     // Create resolver and get provider
-    let mut resolver = ChatProviderResolver::new(http_client);
+    let mut resolver = ChatProviderResolver::new(http_client, db_service);
+    resolver.set_connection_string(connection_string.clone());
     let provider_info = resolver.get_provider(&settings)?;
 
     // Create chat panel with the provider

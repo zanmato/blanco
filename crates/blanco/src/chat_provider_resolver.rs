@@ -9,7 +9,9 @@ use http_client::HttpClient;
 use std::sync::Arc;
 
 use crate::settings::{ChatSettings, Settings};
+use crate::db_service::DbService;
 use blanco_core::chat_provider::{ChatProvider, ProviderError};
+use blanco_core::{Connection, DatabaseService};
 
 /// Provider cache entry with configuration hash
 #[derive(Clone)]
@@ -27,16 +29,25 @@ struct CachedProvider {
 /// to settings and will recreate providers when necessary.
 pub struct ChatProviderResolver {
     http_client: Arc<dyn HttpClient>,
+    db_service: DbService,
+    current_connection_string: Option<String>,
     cached_provider: Option<CachedProvider>,
 }
 
 impl ChatProviderResolver {
     /// Create a new chat provider resolver
-    pub fn new(http_client: Arc<dyn HttpClient>) -> Self {
+    pub fn new(http_client: Arc<dyn HttpClient>, db_service: DbService) -> Self {
         Self {
             http_client,
+            db_service,
+            current_connection_string: None,
             cached_provider: None,
         }
+    }
+
+    /// Set the current connection string for tool execution
+    pub fn set_connection_string(&mut self, connection_string: String) {
+        self.current_connection_string = Some(connection_string);
     }
 
     /// Get a chat provider based on current settings
@@ -92,7 +103,7 @@ impl ChatProviderResolver {
             return Err(anyhow::anyhow!("OpenAI API key is required"));
         }
 
-        use blanco_openai::{OpenAIClient, OpenAIConfig};
+        use blanco_openai::{OpenAIClient, OpenAIConfig, ToolExecutor, ListTablesTool};
 
         let mut config = OpenAIConfig::new(&chat_settings.api_key)
             .with_model(&chat_settings.model)
@@ -104,8 +115,23 @@ impl ChatProviderResolver {
             config = config.with_base_url(&chat_settings.base_url);
         }
 
-        let client = OpenAIClient::new(self.http_client.clone(), config)
-            .map_err(|e| anyhow::anyhow!("Failed to create OpenAI client: {}", e))?;
+        // Create tool executor with database service
+        let database_service: Arc<dyn DatabaseService> = Arc::new(self.db_service.clone());
+        let mut tool_executor = ToolExecutor::with_database_service(database_service);
+
+        // Register the list-tables tool with connection resolver
+        let connection_string = self.current_connection_string.clone();
+        let list_tables_tool = Box::new(ListTablesTool::with_connection_resolver(move || {
+            // Use the connection string from the current query tab
+            connection_string.clone()
+        }));
+        tool_executor.register_tool(list_tables_tool);
+
+        let client = OpenAIClient::with_tool_executor(
+            self.http_client.clone(),
+            config,
+            tool_executor
+        ).map_err(|e| anyhow::anyhow!("Failed to create OpenAI client: {}", e))?;
 
         Ok(ProviderInfo {
             provider: Arc::new(client),
@@ -182,6 +208,82 @@ impl ChatProviderResolver {
         errors
     }
 }
+
+/// Helper function to query database schema using an existing connection
+async fn query_database_schema_with_connection(
+    connection: std::sync::Arc<dyn Connection>,
+) -> serde_json::Value {
+    log::info!("Querying database schema using existing connection");
+
+    // Get basic connection info
+    let connection_type = connection.get_connection_type();
+    let display_name = connection.get_display_name();
+
+    log::info!("Connected to {} database: {}", connection_type, display_name);
+
+    let mut result = serde_json::json!({
+        "connection_type": connection_type,
+        "database_name": display_name,
+        "tables": []
+    });
+
+    // Get all tables (without schema filter for now)
+    match connection.get_tables(None).await {
+        Ok(tables) => {
+            let mut tables_array = Vec::new();
+
+            for table_name in tables {
+                log::debug!("Processing table: {}", table_name);
+
+                // Get column information for each table
+                match connection.get_columns_for_table(&table_name, None).await {
+                    Ok(columns) => {
+                        let mut columns_array = Vec::new();
+                        for column in columns {
+                            columns_array.push(serde_json::json!({
+                                "name": column.name,
+                                "type": column.data_type,
+                                "nullable": column.is_nullable,
+                                "primary_key": column.is_primary_key,
+                                "default_value": column.default_value,
+                                "character_maximum_length": column.character_maximum_length
+                            }));
+                        }
+
+                                        tables_array.push(serde_json::json!({
+                            "name": table_name,
+                            "schema": "public", // Default schema, could be enhanced for PostgreSQL
+                            "object_type": "TABLE",
+                            "columns": columns_array,
+                            "column_count": columns_array.len()
+                        }));
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to get columns for table {}: {}", table_name, e);
+                        // Still add the table with basic info
+                        tables_array.push(serde_json::json!({
+                            "name": table_name,
+                            "schema": "public",
+                            "object_type": "TABLE",
+                            "columns": [],
+                            "error": format!("Failed to get columns: {}", e)
+                        }));
+                    }
+                }
+            }
+
+            result["tables"] = serde_json::json!(tables_array);
+            log::info!("Schema query completed: {} tables found", tables_array.len());
+        }
+        Err(e) => {
+            log::error!("Failed to get tables: {}", e);
+            result["error"] = serde_json::json!(format!("Failed to get tables: {}", e));
+        }
+    }
+
+    result
+}
+
 
 /// Information about a chat provider instance
 #[derive(Clone)]

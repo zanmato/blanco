@@ -5,6 +5,7 @@ use sqlx::postgres::PgConnectOptions;
 use std::str::FromStr;
 use std::sync::Arc;
 use async_std::sync::RwLock;
+use async_trait::async_trait;
 
 /// Connection key for PostgreSQL connections
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -268,5 +269,13 @@ impl DbService {
     #[allow(dead_code)]
     pub async fn get_schema_tables_unified(&self, connection_string: &str, schema_name: &str) -> Result<Vec<String>, anyhow::Error> {
         self.get_tables_unified(connection_string, Some(schema_name)).await
+    }
+}
+
+// Implement the DatabaseService trait for DbService
+#[async_trait::async_trait]
+impl blanco_core::DatabaseService for DbService {
+    async fn get_or_create_connection(&self, connection_string: &str) -> Result<std::sync::Arc<dyn blanco_core::Connection>, anyhow::Error> {
+        self.get_or_create_unified_connection(connection_string).await
     }
 }

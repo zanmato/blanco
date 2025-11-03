@@ -1,14 +1,12 @@
 use anyhow::Result;
+use async_std::task::sleep;
 use gpui::{Context, EventEmitter, Task};
 use std::sync::Arc;
 use std::time::Duration;
-use async_std::task::sleep;
 
-use super::chat_types::{
-    ChatCommand, ChatEvent, ChatMessage, MessageRole, SqlContext,
-};
+use super::chat_types::{ChatCommand, ChatEvent, ChatMessage, MessageRole, SqlContext};
 use blanco_core::chat_provider::{
-    ChatProvider, ChatCompletionRequest, Message as ProviderMessage, ProviderError,
+    ChatCompletionRequest, ChatProvider, Message as ProviderMessage, ProviderError,
 };
 
 #[derive(Clone)]
@@ -27,7 +25,11 @@ pub struct ChatSession {
 #[allow(dead_code)]
 impl ChatSession {
     /// Create a new ChatSession with a provider
-    pub fn new(provider: Arc<dyn ChatProvider<Error = ProviderError>>, provider_name: String, model_name: String) -> Self {
+    pub fn new(
+        provider: Arc<dyn ChatProvider<Error = ProviderError>>,
+        provider_name: String,
+        model_name: String,
+    ) -> Self {
         Self {
             messages: Vec::new(),
             provider: Some(provider),
@@ -66,7 +68,12 @@ impl ChatSession {
     }
 
     /// Set the provider after creation
-    pub fn set_provider(&mut self, provider: Arc<dyn ChatProvider<Error = ProviderError>>, provider_name: String, model_name: String) {
+    pub fn set_provider(
+        &mut self,
+        provider: Arc<dyn ChatProvider<Error = ProviderError>>,
+        provider_name: String,
+        model_name: String,
+    ) {
         self.provider = Some(provider);
         self.provider_name = provider_name;
         self.model_name = model_name;
@@ -178,28 +185,39 @@ Would you like me to help you implement any of these optimizations?",
                 } else {
                     let mut response = "Available tables:\n\n".to_string();
                     for table in &self.sql_context.tables {
-                        response.push_str(&format!("• {}.{} ({} columns)\n",
+                        response.push_str(&format!(
+                            "• {}.{} ({} columns)\n",
                             table.schema.as_deref().unwrap_or("public"),
                             table.name,
                             table.columns.len()
                         ));
                     }
-                    response.push_str("\nUse `/schema <table_name>` to see detailed schema for a specific table.");
+                    response.push_str(
+                        "\nUse `/schema <table_name>` to see detailed schema for a specific table.",
+                    );
                     response
                 }
             }
             ChatCommand::Export => {
                 let mut export = "Chat History Export\n".to_string();
-                export.push_str(&format!("Generated: {}\n", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")));
-                export.push_str(&format!("Provider: {} ({})\n\n", self.provider_name, self.model_name));
+                export.push_str(&format!(
+                    "Generated: {}\n",
+                    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+                ));
+                export.push_str(&format!(
+                    "Provider: {} ({})\n\n",
+                    self.provider_name, self.model_name
+                ));
 
                 for message in &self.messages {
                     let role = match message.role {
                         MessageRole::User => "You",
                         MessageRole::Assistant => "Assistant",
                         MessageRole::System => "System",
+                        MessageRole::Tool => "Tool",
                     };
-                    export.push_str(&format!("**{}** ({}):\n{}\n\n",
+                    export.push_str(&format!(
+                        "**{}** ({}):\n{}\n\n",
                         role,
                         message.timestamp.format("%H:%M:%S"),
                         message.content
@@ -274,12 +292,15 @@ Would you like me to help you implement any of these optimizations?",
         user_message: &str,
         cx: &mut Context<Self>,
     ) -> Task<Result<String>> {
-        let system_prompt = self.get_system_prompt();
+        let system_prompt = self.sql_context.to_system_prompt();
         let messages = self.messages.clone();
         let model_name = self.model_name.clone();
         let user_message = user_message.to_string();
 
-        cx.spawn(async move |_session, _cx| {
+        cx.spawn(async move |chat_session_handle, async_cx| {
+            // Clone model_name for use in the async closure
+            let model_name_for_tools = model_name.clone();
+
             // Build the request using the provider
             let mut request_messages = vec![
                 ProviderMessage {
@@ -315,6 +336,13 @@ Would you like me to help you implement any of these optimizations?",
                         tool_calls: None,
                         additional_data: None,
                     },
+                    MessageRole::Tool => ProviderMessage {
+                        role: "tool".to_string(),
+                        content: "".to_string(), // message.content.clone(),
+                        tool_call_id: message.tool_call_id.clone(),
+                        tool_calls: None,
+                        additional_data: None,
+                    },
                 };
                 request_messages.push(provider_message);
             }
@@ -328,13 +356,23 @@ Would you like me to help you implement any of these optimizations?",
                 additional_data: None,
             });
 
+            // Get tools from the provider if available
+            let tools = provider.get_tools();
+
+            // Clone values for potential follow-up requests
+            let model_name_clone = model_name.clone();
+            let model_name_clone2 = model_name.clone();
+            let request_messages_clone = request_messages.clone();
+            let request_messages_clone2 = request_messages.clone();
+            let provider_clone = provider.clone();
+
             let request = ChatCompletionRequest {
                 model: model_name,
                 messages: request_messages,
                 stream: false,
                 temperature: 0.7,
                 max_tokens: Some(2048),
-                tools: None,
+                tools,
                 tool_choice: None,
                 top_p: None,
                 frequency_penalty: None,
@@ -343,11 +381,223 @@ Would you like me to help you implement any of these optimizations?",
             };
 
             // Send the request using the provider
-            let response = provider.chat_completion(request).await
+            let response = provider_clone.chat_completion(request).await
                 .map_err(|e| anyhow::anyhow!("Chat completion failed: {}", e))?;
 
             if let Some(choice) = response.choices.first() {
-                Ok(choice.message.content.clone())
+                // Handle tool calls
+                match choice.finish_reason {
+                    blanco_core::chat_provider::FinishReason::ToolCalls => {
+                        log::debug!("Tool calls detected, processing {} tool calls",
+                                   choice.message.tool_calls.as_ref().map(|t| t.len()).unwrap_or(0));
+
+                        // Handle tool calls
+                        if let Some(tool_calls) = &choice.message.tool_calls {
+                            // Create tool call data for UI display
+                            let tool_call_data: Vec<crate::agent::chat_types::ToolCallData> = tool_calls.iter().map(|tc| {
+                                crate::agent::chat_types::ToolCallData {
+                                    id: tc.id.clone(),
+                                    tool_name: tc.function.name.clone(),
+                                    arguments: tc.function.arguments.clone(),
+                                    result: None, // Will be filled after execution
+                                }
+                            }).collect();
+
+                            // Add assistant message with tool calls to the chat
+                            let assistant_message = ChatMessage::assistant(
+                                choice.message.content.clone(),
+                                model_name_clone.clone()
+                            ).with_tool_calls(tool_call_data.clone());
+
+                            // Update state via the weak handle
+                            if let Ok(_) = chat_session_handle.update(async_cx, |chat_session, cx| {
+                                chat_session.add_message(assistant_message.clone());
+                                cx.emit(ChatEvent::MessageAdded { message: assistant_message });
+                            }) {
+                                // State updated successfully
+                            }
+
+                            // Execute each tool call
+                            let mut tool_results = Vec::new();
+                            for tool_call in tool_calls {
+                                // Tool call execution without connection injection for now
+                                let tool_call = tool_call.clone();
+
+                                log::debug!("Executing tool call: {} with args: {}", tool_call.function.name, tool_call.function.arguments);
+                                let result = provider_clone.call_tool(tool_call).await
+                                    .map_err(|e| anyhow::anyhow!("Tool call failed: {}", e))?;
+                                log::debug!("Tool call result - success: {}, content length: {}", result.success, result.content.len());
+
+                                // Create tool result message
+                                let tool_message = ChatMessage::tool(
+                                    result.content.clone(),
+                                    result.tool_call_id.clone(),
+                                    model_name_clone.clone()
+                                );
+
+                                // Update state via the weak handle
+                                if let Ok(_) = chat_session_handle.update(async_cx, |chat_session, cx| {
+                                    chat_session.add_message(tool_message.clone());
+                                    cx.emit(ChatEvent::MessageAdded { message: tool_message });
+                                }) {
+                                    // State updated successfully
+                                }
+
+                                tool_results.push(result);
+                            }
+
+                            // Create a new request with the assistant message and tool results
+                            let mut follow_up_messages = request_messages_clone2;
+
+                            // Add the assistant's tool call message
+                            follow_up_messages.push(blanco_core::chat_provider::Message {
+                                role: "assistant".to_string(),
+                                content: choice.message.content.clone(),
+                                tool_call_id: None,
+                                tool_calls: Some(tool_calls.clone()),
+                                additional_data: None,
+                            });
+
+                            // Add each tool result as a message
+                            for tool_result in tool_results {
+                                follow_up_messages.push(blanco_core::chat_provider::Message {
+                                    role: "tool".to_string(),
+                                    content: tool_result.content,
+                                    tool_call_id: Some(tool_result.tool_call_id),
+                                    tool_calls: None,
+                                    additional_data: None,
+                                });
+                            }
+
+                            log::debug!("Sending follow-up request with {} messages (including tool results)", follow_up_messages.len());
+
+                            // Send a follow-up request to get the final response
+                            let follow_up_request = blanco_core::chat_provider::ChatCompletionRequest {
+                                model: model_name_clone,
+                                messages: follow_up_messages,
+                                stream: false,
+                                temperature: 0.7,
+                                max_tokens: Some(2048),
+                                tools: provider_clone.get_tools(),
+                                tool_choice: None,
+                                top_p: None,
+                                frequency_penalty: None,
+                                presence_penalty: None,
+                                additional_params: None,
+                            };
+
+                            let follow_up_response = provider.chat_completion(follow_up_request).await
+                                .map_err(|e| anyhow::anyhow!("Follow-up chat completion failed: {}", e))?;
+
+                            log::debug!("Follow-up response received, choices: {}", follow_up_response.choices.len());
+
+                            if let Some(follow_up_choice) = follow_up_response.choices.first() {
+                                log::debug!("Follow-up finish reason: {:?}", follow_up_choice.finish_reason);
+
+                                // Handle the case where follow-up response also contains tool calls
+                                match follow_up_choice.finish_reason {
+                                    blanco_core::chat_provider::FinishReason::ToolCalls => {
+                                        log::debug!("Follow-up also contains tool calls, processing them...");
+
+                                        if let Some(follow_up_tool_calls) = &follow_up_choice.message.tool_calls {
+                                            // Process the new tool calls
+                                            let mut follow_up_tool_results = Vec::new();
+                                            for tool_call in follow_up_tool_calls {
+                                                let tool_call = tool_call.clone();
+
+                                                log::debug!("Executing follow-up tool call: {} with args: {}", tool_call.function.name, tool_call.function.arguments);
+                                                let result = provider_clone.call_tool(tool_call).await
+                                                    .map_err(|e| anyhow::anyhow!("Follow-up tool call failed: {}", e))?;
+                                                log::debug!("Follow-up tool call result - success: {}, content length: {}", result.success, result.content.len());
+
+                                                // Create tool result message
+                                                let tool_message = ChatMessage::tool(
+                                                    result.content.clone(),
+                                                    result.tool_call_id.clone(),
+                                                    model_name_for_tools.clone()
+                                                );
+
+                                                // Update state via the weak handle
+                                                if let Ok(_) = chat_session_handle.update(async_cx, |chat_session, cx| {
+                                                    chat_session.add_message(tool_message.clone());
+                                                    cx.emit(ChatEvent::MessageAdded { message: tool_message });
+                                                }) {
+                                                    // State updated successfully
+                                                }
+
+                                                follow_up_tool_results.push(result);
+                                            }
+
+                                            // Create another follow-up request with the new tool results
+                                            let mut final_follow_up_messages = request_messages_clone.clone();
+
+                                            // Add the assistant's follow-up tool call message
+                                            final_follow_up_messages.push(blanco_core::chat_provider::Message {
+                                                role: "assistant".to_string(),
+                                                content: follow_up_choice.message.content.clone(),
+                                                tool_call_id: None,
+                                                tool_calls: Some(follow_up_tool_calls.clone()),
+                                                additional_data: None,
+                                            });
+
+                                            // Add each new tool result as a message
+                                            for tool_result in follow_up_tool_results {
+                                                final_follow_up_messages.push(blanco_core::chat_provider::Message {
+                                                    role: "tool".to_string(),
+                                                    content: tool_result.content,
+                                                    tool_call_id: Some(tool_result.tool_call_id),
+                                                    tool_calls: None,
+                                                    additional_data: None,
+                                                });
+                                            }
+
+                                            log::debug!("Sending final follow-up request with {} messages", final_follow_up_messages.len());
+
+                                            // Send final follow-up request
+                                            let final_follow_up_request = blanco_core::chat_provider::ChatCompletionRequest {
+                                                model: model_name_clone2,
+                                                messages: final_follow_up_messages,
+                                                stream: false,
+                                                temperature: 0.7,
+                                                max_tokens: Some(2048),
+                                                tools: provider_clone.get_tools(),
+                                                tool_choice: None,
+                                                top_p: None,
+                                                frequency_penalty: None,
+                                                presence_penalty: None,
+                                                additional_params: None,
+                                            };
+
+                                            let final_follow_up_response = provider.chat_completion(final_follow_up_request).await
+                                                .map_err(|e| anyhow::anyhow!("Final follow-up chat completion failed: {}", e))?;
+
+                                            if let Some(final_choice) = final_follow_up_response.choices.first() {
+                                                log::debug!("Final follow-up finish reason: {:?}", final_choice.finish_reason);
+                                                Ok(final_choice.message.content.clone())
+                                            } else {
+                                                Err(anyhow::anyhow!("No final follow-up response content received"))
+                                            }
+                                        } else {
+                                            Err(anyhow::anyhow!("Follow-up tool calls indicated but no tool calls found"))
+                                        }
+                                    }
+                                    _ => {
+                                        // Normal response, return content
+                                        Ok(follow_up_choice.message.content.clone())
+                                    }
+                                }
+                            } else {
+                                Err(anyhow::anyhow!("No follow-up response content received"))
+                            }
+                        } else {
+                            Err(anyhow::anyhow!("Tool calls indicated but no tool calls found"))
+                        }
+                    }
+                    _ => {
+                        // Handle normal responses
+                        Ok(choice.message.content.clone())
+                    }
+                }
             } else {
                 Err(anyhow::anyhow!("No response content received"))
             }
@@ -355,11 +605,17 @@ Would you like me to help you implement any of these optimizations?",
     }
 
     pub fn get_last_assistant_message(&self) -> Option<&ChatMessage> {
-        self.messages.iter().rev().find(|m| m.role == MessageRole::Assistant)
+        self.messages
+            .iter()
+            .rev()
+            .find(|m| m.role == MessageRole::Assistant)
     }
 
     pub fn get_last_user_message(&self) -> Option<&ChatMessage> {
-        self.messages.iter().rev().find(|m| m.role == MessageRole::User)
+        self.messages
+            .iter()
+            .rev()
+            .find(|m| m.role == MessageRole::User)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -372,4 +628,3 @@ Would you like me to help you implement any of these optimizations?",
 }
 
 impl EventEmitter<ChatEvent> for ChatSession {}
-

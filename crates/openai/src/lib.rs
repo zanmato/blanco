@@ -61,7 +61,7 @@ pub mod types;
 pub use client::OpenAIClient;
 pub use config::{ConfigError, OpenAIConfig};
 pub use error::{OpenAIError, OpenAIResult};
-pub use tools::{ClosureTool, ToolExecutor, ToolHandler, ToolRegistry};
+pub use tools::{ClosureTool, ListTablesTool, ToolExecutor, ToolHandler, ToolRegistry};
 pub use types::*;
 
 /// Current version of the crate

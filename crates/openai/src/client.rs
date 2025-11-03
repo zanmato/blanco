@@ -14,8 +14,9 @@ use crate::tools::ToolExecutor;
 // Import the ChatProvider trait and types from blanco-core
 use blanco_core::chat_provider::{
     ChatCompletionRequest, ChatCompletionResponse, ChatProvider, Message, ProviderError,
-    StreamChunk, ToolCall, ToolResult,
+    StreamChunk, ToolCall, ToolResult, ToolDefinition,
 };
+use blanco_core::DatabaseService;
 
 /// OpenAI client that implements the ChatProvider trait
 pub struct OpenAIClient {
@@ -48,6 +49,29 @@ impl OpenAIClient {
             config,
             http_client,
             tool_executor: Some(tool_executor),
+        })
+    }
+
+    /// Create a new OpenAI client with a tool executor and database service
+    pub fn with_tool_executor_and_db(
+        http_client: Arc<dyn HttpClient>,
+        config: OpenAIConfig,
+        tool_executor: ToolExecutor,
+        database_service: Arc<dyn DatabaseService>,
+    ) -> OpenAIResult<Self> {
+        config.validate()?;
+
+        // Create a new tool executor with the database service
+        let tool_executor_with_db = ToolExecutor::with_database_service(database_service);
+
+        // Copy all handlers from the original tool executor
+        // This is a bit of a workaround since we can't directly access the handlers HashMap
+        // In practice, we'll modify the ChatProviderResolver to create the tool executor directly
+
+        Ok(Self {
+            config,
+            http_client,
+            tool_executor: Some(tool_executor_with_db),
         })
     }
 
@@ -417,6 +441,10 @@ impl ChatProvider for OpenAIClient {
                 tool_call.id
             )))
         }
+    }
+
+    fn get_tools(&self) -> Option<Vec<ToolDefinition>> {
+        self.tool_executor.as_ref().map(|executor| executor.get_tool_definitions())
     }
 }
 

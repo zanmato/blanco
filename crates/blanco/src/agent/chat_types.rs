@@ -6,6 +6,7 @@ pub enum MessageRole {
     User,
     Assistant,
     System,
+    Tool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -15,6 +16,16 @@ pub struct ChatMessage {
     pub content: String,
     pub timestamp: DateTime<Utc>,
     pub metadata: MessageMetadata,
+    pub tool_calls: Option<Vec<ToolCallData>>,
+    pub tool_call_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ToolCallData {
+    pub id: String,
+    pub tool_name: String,
+    pub arguments: String,
+    pub result: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -180,6 +191,8 @@ impl ChatMessage {
                 sql_context: None,
                 execution_time: None,
             },
+            tool_calls: None,
+            tool_call_id: None,
         }
     }
 
@@ -200,6 +213,28 @@ impl ChatMessage {
     #[allow(dead_code)]
     pub fn system(content: String) -> Self {
         Self::new(MessageRole::System, content, "system".to_string())
+    }
+
+    pub fn tool(content: String, tool_call_id: String, model: String) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            role: MessageRole::Tool,
+            content,
+            timestamp: Utc::now(),
+            metadata: MessageMetadata {
+                tokens_used: None,
+                model,
+                sql_context: None,
+                execution_time: None,
+            },
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id),
+        }
+    }
+
+    pub fn with_tool_calls(mut self, tool_calls: Vec<ToolCallData>) -> Self {
+        self.tool_calls = Some(tool_calls);
+        self
     }
 }
 

@@ -264,10 +264,22 @@ pub trait Connection: Send + Sync + fmt::Debug {
 /// Table change operations for schema modifications
 #[derive(Debug, Clone)]
 pub enum TableChangeOperation {
-    AddColumn { name: String, data_type: String, nullable: bool },
-    DropColumn { name: String },
-    RenameColumn { old_name: String, new_name: String },
-    ModifyColumn { name: String, new_type: String },
+    AddColumn {
+        name: String,
+        data_type: String,
+        nullable: bool,
+    },
+    DropColumn {
+        name: String,
+    },
+    RenameColumn {
+        old_name: String,
+        new_name: String,
+    },
+    ModifyColumn {
+        name: String,
+        new_type: String,
+    },
 }
 
 /// Information about a database connection

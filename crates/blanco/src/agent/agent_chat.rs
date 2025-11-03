@@ -7,7 +7,7 @@ use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{InputState, TextInput},
-    v_flex, ActiveTheme, Disableable, Icon, IconName, Sizable, StyledExt,
+    v_flex, ActiveTheme, Disableable, Sizable, StyledExt,Icon, IconName
 };
 use ropey::Rope;
 use std::sync::Arc;
@@ -243,6 +243,8 @@ impl ChatPanel {
                                         content: response.clone(),
                                         timestamp: chrono::Utc::now(),
                                         metadata: MessageMetadata::default(),
+                                        tool_calls: None,
+                                        tool_call_id: None,
                                     };
                                     chat_panel.messages.push(assistant_message);
 
@@ -269,6 +271,8 @@ impl ChatPanel {
                                         content: format!("Error: {}", e),
                                         timestamp: chrono::Utc::now(),
                                         metadata: MessageMetadata::default(),
+                                        tool_calls: None,
+                                        tool_call_id: None,
                                     };
                                     chat_panel.messages.push(error_message);
 
@@ -331,21 +335,6 @@ impl ChatPanel {
 
     fn on_export_chat(&mut self, _: &ExportChat, window: &mut Window, cx: &mut Context<Self>) {
         self.export_chat(window, cx);
-    }
-
-    /// Check if content contains SQL code
-    fn contains_sql_code(&self, content: &str) -> bool {
-        let sql_keywords = [
-            "SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", "FROM", "WHERE",
-            "JOIN",
-        ];
-        let content_upper = content.to_uppercase();
-
-        // Check if content contains SQL keywords and is reasonably long
-        sql_keywords
-            .iter()
-            .any(|keyword| content_upper.contains(keyword))
-            && content.trim().len() > 10
     }
 
     /// Parse markdown content preserving order using pulldown-cmark
@@ -586,10 +575,12 @@ impl ChatPanel {
                     let end_pos = result_text.len();
                     let range = start_pos..end_pos;
 
-                    // Create highlight with inline code styling using theme colors
+                    // Create highlight with inline code styling using Zed's approach
+                    // Background: subtle highlight like Zed's editor_document_highlight_read_background
+                    // Text: default foreground color like Zed uses
                     let highlight = gpui::HighlightStyle {
-                        color: Some(cx.theme().primary_foreground.into()), // Use theme foreground
-                        background_color: Some(cx.theme().muted.into()), // Use theme muted background
+                        color: Some(cx.theme().foreground.into()), // Use default text color like Zed
+                        background_color: Some(cx.theme().muted.into()), // Subtle background highlight
                         font_weight: None,
                         font_style: None,
                         underline: None,
@@ -966,7 +957,7 @@ impl Render for ChatPanel {
                     // Messages
                     .children(self.messages.iter().enumerate().map(|(ix, message)| {
                         let is_user = message.role == MessageRole::User;
-
+                        
                         div().id(("chat-message", ix)).w_full().child(
                             // Message content
                             v_flex()
@@ -977,30 +968,82 @@ impl Render for ChatPanel {
                                         .text_xs()
                                         .font_medium()
                                         .text_color(cx.theme().muted_foreground)
-                                        .child(if is_user { "You" } else { "Assistant" }),
+                                        .child(match message.role {
+                                            MessageRole::User => "You",
+                                            MessageRole::Assistant => "Assistant",
+                                            MessageRole::System => "System",
+                                            MessageRole::Tool => "Tool Result",
+                                        }),
                                 )
                                 .child(
                                     div()
                                         .px_3()
                                         .py_2()
                                         .rounded_lg()
-                                        .bg(if is_user {
-                                            cx.theme().primary
-                                        } else {
-                                            cx.theme().muted
+                                        .bg(match message.role {
+                                            MessageRole::User => cx.theme().primary,
+                                            MessageRole::Tool => cx.theme().accent.opacity(0.1),
+                                            _ => cx.theme().muted,
                                         })
-                                        .text_color(if is_user {
-                                            cx.theme().primary_foreground
-                                        } else {
-                                            cx.theme().foreground
+                                        .text_color(match message.role {
+                                            MessageRole::User => cx.theme().primary_foreground,
+                                            MessageRole::Tool => cx.theme().accent,
+                                            _ => cx.theme().foreground,
                                         })
                                         .when(!is_user, |div| {
                                             div.border_1().border_color(cx.theme().border)
                                         })
-                                        // Parse and render markdown content
-                                        .children(
-                                            self.parse_markdown_content(&message.content, cx)
-                                        ),
+                                        // Show tool calls for assistant messages
+                                        .when(message.tool_calls.is_some(), |this| {
+                                            if let Some(tool_calls) = &message.tool_calls {
+                                                this.child(
+                                                    v_flex()
+                                                        .gap_2()
+                                                        .mb_2()
+                                                        .children(tool_calls.iter().enumerate().map(|(tool_ix, tool_call)| {
+                                                            h_flex()
+                                                                .id(("tool-call", tool_ix))
+                                                                .items_center()
+                                                                .gap_2()
+                                                                .px_3()
+                                                                .py_2()
+                                                                .bg(cx.theme().muted.opacity(0.5))
+                                                                .rounded_lg()
+                                                                .border_1()
+                                                                .border_color(cx.theme().border)
+                                                                .child(
+                                                                    Icon::new(IconName::Settings2)
+                                                                        .size_4()
+                                                                        .text_color(cx.theme().accent)
+                                                                )
+                                                                .child(
+                                                                    div()
+                                                                        .text_sm()
+                                                                        .font_medium()
+                                                                        .text_color(cx.theme().foreground)
+                                                                        .child(tool_call.tool_name.clone())
+                                                                )
+                                                                .child(
+                                                                    div()
+                                                                        .text_xs()
+                                                                        .text_color(cx.theme().muted_foreground)
+                                                                        .child("tool executed")
+                                                                )
+                                                        }))
+                                                )
+                                            } else {
+                                                this
+                                            }
+                                        })
+                                        // Parse and render markdown content for non-empty content
+                                        .when(!message.content.trim().is_empty() && message.role != MessageRole::Tool, |div| {
+                                            div.child(
+                                                v_flex()
+                                                    .children(
+                                                        self.parse_markdown_content(&message.content, cx)
+                                                    )
+                                            )
+                                        }),
                                 ),
                         )
                     }))
