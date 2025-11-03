@@ -7,7 +7,8 @@ use gpui_component::{h_flex, v_flex, ActiveTheme as _, Collapsible, StyledExt};
 use std::rc::Rc;
 
 // Import context menu components
-use blanco_ui::{Icon, IconName};
+use blanco_ui::IconName;
+use gpui_component::Icon;
 use gpui_component::{context_menu::ContextMenuExt, popup_menu::PopupMenu};
 
 // Type aliases to reduce complexity

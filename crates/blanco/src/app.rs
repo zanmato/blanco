@@ -10,7 +10,8 @@ use gpui_component::{
 use log::{debug, error, info};
 use serde::Deserialize;
 
-use blanco_ui::{Icon, IconName};
+use blanco_ui::IconName;
+use gpui_component::Icon;
 
 use crate::{
     app_events::AppEvent, connection_modal::NewConnectionModal, db_service::DbService,

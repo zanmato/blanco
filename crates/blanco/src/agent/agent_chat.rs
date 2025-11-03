@@ -1,13 +1,13 @@
 use gpui::{
-    actions, div, prelude::FluentBuilder, px, App, AppContext, ClipboardItem, Context, Entity, EventEmitter,
-    FocusHandle, Focusable, InteractiveElement, IntoElement, ParentElement, Render, Styled,
-    Subscription, Window,
+    actions, div, prelude::FluentBuilder, px, App, AppContext, ClipboardItem, Context, Entity,
+    EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, ParentElement, Render,
+    StatefulInteractiveElement, Styled, Subscription, Window,
 };
 use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{InputState, TextInput},
-    v_flex, ActiveTheme, Disableable, Sizable, StyledExt,Icon, IconName
+    v_flex, ActiveTheme, Disableable, Icon, Sizable, StyledExt,
 };
 use ropey::Rope;
 use std::sync::Arc;
@@ -16,6 +16,7 @@ use std::time::Duration;
 use super::chat_session::ChatSession;
 use super::chat_types::{ChatEvent, ChatMessage, MessageMetadata, MessageRole, SqlContext};
 use blanco_core::chat_provider::{ChatProvider, ProviderError};
+use blanco_ui::IconName;
 
 actions!(agent_chat, [SendMessage, ClearChat, ExportChat]);
 
@@ -445,7 +446,8 @@ impl ChatPanel {
                                         .text_color(cx.theme().foreground)
                                         .text_left()
                                         .child(
-                                            gpui::StyledText::new(shared_text).with_highlights(highlights),
+                                            gpui::StyledText::new(shared_text)
+                                                .with_highlights(highlights),
                                         ),
                                 )
                                 .child(
@@ -457,10 +459,14 @@ impl ChatPanel {
                                         .absolute()
                                         .top_2()
                                         .right_2()
-                                        .on_click(cx.listener(move |_this, _event, _window, cx| {
-                                            // Copy the code content to clipboard
-                                            cx.write_to_clipboard(ClipboardItem::new_string(code.clone()));
-                                        })),
+                                        .on_click(cx.listener(
+                                            move |_this, _event, _window, cx| {
+                                                // Copy the code content to clipboard
+                                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                                    code.clone(),
+                                                ));
+                                            },
+                                        )),
                                 ),
                         );
 
@@ -888,16 +894,15 @@ impl Render for ChatPanel {
             // Messages area
             .child(
                 v_flex()
-                    .flex_1()
-                    .min_h_0()
                     .p_4()
-                    .scrollable(gpui::Axis::Vertical)
                     .gap_3()
+                    .flex_1()
+                    .scrollable(gpui::Axis::Vertical)
                     .child(
                         // Welcome message if empty
                         div().when(self.messages.is_empty(), |this| {
                             this.child(
-                                v_flex().items_center().justify_center().h_full().child(
+                                v_flex().items_center().justify_center().child(
                                     div()
                                         .text_center()
                                         .text_color(cx.theme().muted_foreground)
@@ -954,10 +959,10 @@ impl Render for ChatPanel {
                             )
                         }),
                     )
-                    // Messages
+                    /*// Messages
                     .children(self.messages.iter().enumerate().map(|(ix, message)| {
                         let is_user = message.role == MessageRole::User;
-                        
+
                         div().id(("chat-message", ix)).w_full().child(
                             // Message content
                             v_flex()
@@ -996,11 +1001,9 @@ impl Render for ChatPanel {
                                         // Show tool calls for assistant messages
                                         .when(message.tool_calls.is_some(), |this| {
                                             if let Some(tool_calls) = &message.tool_calls {
-                                                this.child(
-                                                    v_flex()
-                                                        .gap_2()
-                                                        .mb_2()
-                                                        .children(tool_calls.iter().enumerate().map(|(tool_ix, tool_call)| {
+                                                this.child(v_flex().gap_2().mb_2().children(
+                                                    tool_calls.iter().enumerate().map(
+                                                        |(tool_ix, tool_call)| {
                                                             h_flex()
                                                                 .id(("tool-call", tool_ix))
                                                                 .items_center()
@@ -1012,38 +1015,54 @@ impl Render for ChatPanel {
                                                                 .border_1()
                                                                 .border_color(cx.theme().border)
                                                                 .child(
-                                                                    Icon::new(IconName::Settings2)
+                                                                    Icon::new(IconName::Wrench)
                                                                         .size_4()
-                                                                        .text_color(cx.theme().accent)
+                                                                        .text_color(
+                                                                            cx.theme().accent,
+                                                                        ),
                                                                 )
                                                                 .child(
                                                                     div()
                                                                         .text_sm()
                                                                         .font_medium()
-                                                                        .text_color(cx.theme().foreground)
-                                                                        .child(tool_call.tool_name.clone())
+                                                                        .text_color(
+                                                                            cx.theme().foreground,
+                                                                        )
+                                                                        .child(
+                                                                            tool_call
+                                                                                .tool_name
+                                                                                .clone(),
+                                                                        ),
                                                                 )
                                                                 .child(
                                                                     div()
                                                                         .text_xs()
-                                                                        .text_color(cx.theme().muted_foreground)
-                                                                        .child("tool executed")
+                                                                        .text_color(
+                                                                            cx.theme()
+                                                                                .muted_foreground,
+                                                                        )
+                                                                        .child("tool executed"),
                                                                 )
-                                                        }))
-                                                )
+                                                        },
+                                                    ),
+                                                ))
                                             } else {
                                                 this
                                             }
                                         })
                                         // Parse and render markdown content for non-empty content
-                                        .when(!message.content.trim().is_empty() && message.role != MessageRole::Tool, |div| {
-                                            div.child(
-                                                v_flex()
-                                                    .children(
-                                                        self.parse_markdown_content(&message.content, cx)
-                                                    )
-                                            )
-                                        }),
+                                        .when(
+                                            !message.content.trim().is_empty()
+                                                && message.role != MessageRole::Tool,
+                                            |div| {
+                                                div.child(v_flex().children(
+                                                    self.parse_markdown_content(
+                                                        &message.content,
+                                                        cx,
+                                                    ),
+                                                ))
+                                            },
+                                        ),
                                 ),
                         )
                     }))
@@ -1064,19 +1083,29 @@ impl Render for ChatPanel {
                                         .child("Thinking..."),
                                 ),
                         )
-                    }),
+                    })*/
             )
             // Input area
             .child(
                 v_flex()
                     .p_4()
-                    .bg(cx.theme().highlight_theme.style.editor_background.unwrap_or(cx.theme().background))
+                    .bg(cx
+                        .theme()
+                        .highlight_theme
+                        .style
+                        .editor_background
+                        .unwrap_or(cx.theme().background))
                     .gap_3()
                     .child(
                         // Text input container with no borders
                         div()
                             .relative()
-                            .bg(cx.theme().highlight_theme.style.editor_background.unwrap_or(cx.theme().background))
+                            .bg(cx
+                                .theme()
+                                .highlight_theme
+                                .style
+                                .editor_background
+                                .unwrap_or(cx.theme().background))
                             .rounded_lg()
                             .border_0()
                             .p_3()
@@ -1085,26 +1114,27 @@ impl Render for ChatPanel {
                                 TextInput::new(&self.input_state)
                                     .disabled(self.is_loading)
                                     .bordered(false)
-                                    .bg(cx.theme().highlight_theme.style.editor_background.unwrap_or(cx.theme().background))
+                                    .bg(cx
+                                        .theme()
+                                        .highlight_theme
+                                        .style
+                                        .editor_background
+                                        .unwrap_or(cx.theme().background)),
                             )
                             // Send button positioned further to bottom right corner
                             .child(
-                                div()
-                                    .absolute()
-                                    .bottom_1()
-                                    .right_1()
-                                    .child(
-                                        Button::new("send-message")
-                                            .icon(IconName::ArrowUp)
-                                            .primary()
-                                            .xsmall()
-                                            .disabled(self.is_loading)
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.send_message(window, cx);
-                                            }))
-                                    )
-                            )
-                    )
+                                div().absolute().bottom_1().right_1().child(
+                                    Button::new("send-message")
+                                        .icon(IconName::ArrowUp)
+                                        .primary()
+                                        .xsmall()
+                                        .disabled(self.is_loading)
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.send_message(window, cx);
+                                        })),
+                                ),
+                            ),
+                    ),
             )
     }
 }
