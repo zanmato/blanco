@@ -77,110 +77,9 @@ pub struct ColumnInfo {
     pub primary_key: bool,
 }
 
-// OpenAI API types
-#[derive(Clone, Debug, Serialize)]
-pub struct OpenAIRequest {
-    pub model: String,
-    pub messages: Vec<OpenAIMessage>,
-    pub stream: bool,
-    pub temperature: f32,
-    pub max_tokens: Option<u32>,
-    pub top_p: Option<f32>,
-    pub frequency_penalty: Option<f32>,
-    pub presence_penalty: Option<f32>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct OpenAIMessage {
-    pub role: String,
-    pub content: String,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug, Deserialize)]
-pub struct OpenAIResponse {
-    #[allow(dead_code)]
-    pub id: String,
-    #[allow(dead_code)]
-    pub object: String,
-    #[allow(dead_code)]
-    pub created: u64,
-    #[allow(dead_code)]
-    pub model: String,
-    pub choices: Vec<OpenAIChoice>,
-    #[allow(dead_code)]
-    pub usage: OpenAIUsage,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug, Deserialize)]
-pub struct OpenAIChoice {
-    #[allow(dead_code)]
-    pub index: u32,
-    pub message: OpenAIResponseMessage,
-    #[allow(dead_code)]
-    pub finish_reason: String,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug, Deserialize)]
-pub struct OpenAIResponseMessage {
-    #[allow(dead_code)]
-    pub role: String,
-    pub content: String,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug, Deserialize)]
-pub struct OpenAIUsage {
-    #[allow(dead_code)]
-    pub prompt_tokens: u32,
-    #[allow(dead_code)]
-    pub completion_tokens: u32,
-    #[allow(dead_code)]
-    pub total_tokens: u32,
-}
-
-// Streaming response types
-#[allow(dead_code)]
-#[derive(Clone, Debug, Deserialize)]
-pub struct OpenAIStreamResponse {
-    #[allow(dead_code)]
-    pub id: String,
-    #[allow(dead_code)]
-    pub object: String,
-    #[allow(dead_code)]
-    pub created: u64,
-    #[allow(dead_code)]
-    pub model: String,
-    #[allow(dead_code)]
-    pub choices: Vec<OpenAIStreamChoice>,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug, Deserialize)]
-pub struct OpenAIStreamChoice {
-    #[allow(dead_code)]
-    pub index: u32,
-    #[allow(dead_code)]
-    pub delta: OpenAIStreamDelta,
-    #[allow(dead_code)]
-    pub finish_reason: Option<String>,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug, Deserialize)]
-pub struct OpenAIStreamDelta {
-    #[allow(dead_code)]
-    pub role: Option<String>,
-    #[allow(dead_code)]
-    pub content: Option<String>,
-}
-
 // Chat session events
 #[derive(Clone, Debug)]
 #[allow(clippy::large_enum_variant)]
-#[allow(dead_code)]
 pub enum ChatEvent {
     MessageAdded {
         message: ChatMessage,
@@ -214,55 +113,6 @@ pub enum ChatEvent {
         model: String,
     },
     SessionCleared,
-}
-
-// AI Provider types
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-pub enum ProviderType {
-    OpenAI,
-    Anthropic,
-    LocalLLM,
-    Mock,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-pub struct AIProvider {
-    pub provider_type: ProviderType,
-    pub name: String,
-    pub model: String,
-    pub api_key: Option<String>,
-    pub base_url: Option<String>,
-    pub max_tokens: u32,
-    pub temperature: f32,
-}
-
-#[allow(dead_code)]
-impl AIProvider {
-    pub fn openai(api_key: String, model: Option<String>) -> Self {
-        Self {
-            provider_type: ProviderType::OpenAI,
-            name: "OpenAI".to_string(),
-            model: model.unwrap_or_else(|| "gpt-4".to_string()),
-            api_key: Some(api_key),
-            base_url: Some("https://api.openai.com/v1".to_string()),
-            max_tokens: 2048,
-            temperature: 0.7,
-        }
-    }
-
-    pub fn mock() -> Self {
-        Self {
-            provider_type: ProviderType::Mock,
-            name: "Mock".to_string(),
-            model: "mock-gpt-4".to_string(),
-            api_key: None,
-            base_url: None,
-            max_tokens: 2048,
-            temperature: 0.7,
-        }
-    }
 }
 
 // Chat commands

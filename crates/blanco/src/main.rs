@@ -4,6 +4,7 @@ mod app_events;
 mod assets;
 mod async_pipeline;
 mod agent;
+mod chat_provider_resolver;
 mod connection;
 mod connection_modal;
 mod connection_sidebar;

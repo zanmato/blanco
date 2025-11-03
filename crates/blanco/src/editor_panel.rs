@@ -17,10 +17,11 @@ use std::rc::Rc;
 use crate::agent::{ChatPanel, SqlContext};
 use crate::app_database::QueryTabData;
 use crate::app_events::AppEvent;
+use crate::chat_provider_resolver::ChatProviderResolver;
 use crate::db_service::DbService;
 use crate::query_file::QueryFileManager;
 use crate::results_panel::ResultsPanel;
-use crate::settings::Settings;
+use crate::settings::{Settings, load_settings};
 use crate::sql_completion_provider::SqlCompletionProvider;
 use blanco_ui::SqlLog;
 use gpui_component::Icon;
@@ -1422,7 +1423,16 @@ impl EditorPanel {
 
             if query_tab.chat_enabled && query_tab.chat_panel.is_none() {
                 // Create chat panel if it doesn't exist
-                let chat_panel = cx.new(|cx| ChatPanel::new(query_tab.id, None, window, cx));
+                let chat_panel = cx.new(|cx| {
+                    // Try to create a chat panel with real provider
+                    match create_chat_panel_with_provider(query_tab.id, window, cx) {
+                        Ok(panel) => panel,
+                        Err(e) => {
+                            log::error!("Failed to create chat provider: {}. Using mock provider.", e);
+                            ChatPanel::new(query_tab.id, None, window, cx)
+                        }
+                    }
+                });
                 query_tab.chat_panel = Some(chat_panel);
 
                 // Emit chat session started event
@@ -1558,7 +1568,34 @@ impl Render for EditorPanel {
                                 if !settings_tab.is_valid {
                                     label.push_str(" ⚠️");
                                 }
+                                let show_close_button = self.tabs.len() > 1;
+                                let tab_index = ix;
+
                                 Tab::new(label)
+                                    .suffix(
+                                        h_flex()
+                                            .gap_2()
+                                            .items_center()
+                                            .child(
+                                                div()
+                                                    .pr_2()
+                                                    .text_xs()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child(settings_tab.title.clone())
+                                            )
+                                            .when(show_close_button, |this| {
+                                                this.child(
+                                                    Button::new(("close-settings-tab", ix))
+                                                        .ghost()
+                                                        .xsmall()
+                                                        .icon(IconName::Close)
+                                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                                            this.close_tab(tab_index, cx);
+                                                        }))
+                                                )
+                                            })
+                                            .into_any_element()
+                                    )
                             }
                         }
                     }))
@@ -1909,4 +1946,39 @@ impl Render for EditorPanel {
                 }
             })
     }
+}
+
+/// Create a chat panel with a real provider based on current settings
+fn create_chat_panel_with_provider(
+    tab_id: usize,
+    window: &mut Window,
+    cx: &mut gpui::Context<ChatPanel>,
+) -> anyhow::Result<ChatPanel> {
+    // Load current settings
+    let settings = load_settings().map_err(|e| anyhow::anyhow!("Failed to load settings: {}", e))?;
+
+    // Validate settings
+    let validation_errors = ChatProviderResolver::validate_settings(&settings);
+    if !validation_errors.is_empty() {
+        return Err(anyhow::anyhow!("Invalid chat settings: {}", validation_errors.join(", ")));
+    }
+
+    // Create HTTP client using reqwest_client from zed
+    let http_client = Arc::new(reqwest_client::ReqwestClient::new());
+
+    // Create resolver and get provider
+    let mut resolver = ChatProviderResolver::new(http_client);
+    let provider_info = resolver.get_provider(&settings)?;
+
+    // Create chat panel with the provider
+    let chat_panel = ChatPanel::new_with_provider(
+        tab_id,
+        provider_info.provider,
+        provider_info.provider_name,
+        provider_info.model_name,
+        window,
+        cx
+    );
+
+    Ok(chat_panel)
 }

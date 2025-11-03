@@ -9,7 +9,7 @@ pub struct Settings {
     pub editor: EditorSettings,
     pub database: DatabaseSettings,
     pub appearance: AppearanceSettings,
-    pub lsp: LspSettings,
+    pub chat: ChatSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,36 +52,15 @@ pub struct AppearanceSettings {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LspSettings {
-    pub enabled: bool,
-    pub auto_download: bool,
-    pub completion: LspCompletionSettings,
-    pub diagnostics: LspDiagnosticsSettings,
-    pub formatting: LspFormattingSettings,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LspCompletionSettings {
-    pub auto_trigger: bool,
-    pub trigger_characters: Vec<String>,
-    pub max_suggestions: u32,
-    pub show_documentation: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LspDiagnosticsSettings {
-    pub enabled: bool,
-    pub real_time_validation: bool,
-    pub underline_errors: bool,
-    pub show_warnings: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LspFormattingSettings {
-    pub enabled: bool,
-    pub format_on_save: bool,
-    pub format_on_type: bool,
-    pub sql_dialect: String,
+pub struct ChatSettings {
+    pub provider: String,
+    pub model: String,
+    pub api_key: String,
+    pub base_url: String,
+    pub max_tokens: u32,
+    pub temperature: f32,
+    pub auto_execute_queries: bool,
+    pub show_thinking_process: bool,
 }
 
 impl Default for GeneralSettings {
@@ -135,47 +114,17 @@ impl Default for AppearanceSettings {
     }
 }
 
-impl Default for LspSettings {
+impl Default for ChatSettings {
     fn default() -> Self {
         Self {
-            enabled: true,
-            auto_download: true,
-            completion: LspCompletionSettings::default(),
-            diagnostics: LspDiagnosticsSettings::default(),
-            formatting: LspFormattingSettings::default(),
-        }
-    }
-}
-
-impl Default for LspCompletionSettings {
-    fn default() -> Self {
-        Self {
-            auto_trigger: true,
-            trigger_characters: vec![".".to_string(), " ".to_string(), "(".to_string()],
-            max_suggestions: 20,
-            show_documentation: true,
-        }
-    }
-}
-
-impl Default for LspDiagnosticsSettings {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            real_time_validation: true,
-            underline_errors: true,
-            show_warnings: true,
-        }
-    }
-}
-
-impl Default for LspFormattingSettings {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            format_on_save: false,
-            format_on_type: false,
-            sql_dialect: "postgresql".to_string(),
+            provider: "openai".to_string(),
+            model: "gpt-4".to_string(),
+            api_key: "".to_string(), // User needs to provide this
+            base_url: "https://api.openai.com".to_string(),
+            max_tokens: 2048,
+            temperature: 0.7,
+            auto_execute_queries: false,
+            show_thinking_process: false,
         }
     }
 }

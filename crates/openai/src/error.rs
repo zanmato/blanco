@@ -198,11 +198,19 @@ impl From<crate::config::ConfigError> for OpenAIError {
     }
 }
 
+
 impl From<futures::channel::mpsc::SendError> for OpenAIError {
     fn from(err: futures::channel::mpsc::SendError) -> Self {
         Self::StreamError(format!("Failed to send to stream: {}", err))
     }
 }
+
+impl From<OpenAIError> for blanco_core::chat_provider::ProviderError {
+    fn from(err: OpenAIError) -> Self {
+        anyhow::anyhow!("OpenAI error: {}", err).into()
+    }
+}
+
 
 /// Result type for OpenAI operations
 pub type OpenAIResult<T> = Result<T, OpenAIError>;
@@ -287,7 +295,8 @@ mod tests {
 
     #[test]
     fn test_error_conversions() {
-        let json_err = serde_json::Error::syntax(serde_json::error::ErrorCode::ExpectedColon, 1, 1);
+        // Create a JSON error by parsing invalid JSON
+        let json_err: serde_json::Error = serde_json::from_str::<serde_json::Value>("{invalid json}").unwrap_err();
         let openai_err: OpenAIError = json_err.into();
         assert!(matches!(openai_err, OpenAIError::JsonError(_)));
 

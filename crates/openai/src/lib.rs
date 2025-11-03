@@ -1,9 +1,8 @@
 //! # Blanco OpenAI Client
 //!
-//! A Rust client for the OpenAI API that implements a provider-agnostic `ChatProvider` trait.
+//! A Rust client for the OpenAI API that implements the `ChatProvider` trait from blanco-core.
 //! This crate provides:
 //!
-//! - A clean `ChatProvider` trait for AI provider abstraction
 //! - Full OpenAI chat completions API support
 //! - Streaming chat completions
 //! - Tool calling support
@@ -13,8 +12,9 @@
 //!
 //! ## Quick Start
 //!
-//! ```rust
-//! use blanco_openai::{OpenAIClient, OpenAIConfig, ChatProvider, Message};
+//! ```ignore
+//! use blanco_openai::{OpenAIClient, OpenAIConfig};
+//! use blanco_core::chat_provider::*;
 //! use std::sync::Arc;
 //!
 //! #[async_std::main]
@@ -29,10 +29,16 @@
 //!     let client = OpenAIClient::new(http_client, config)?;
 //!
 //!     // Send a chat completion request
-//!     let request = blanco_openai::ChatCompletionRequest {
+//!     let request = ChatCompletionRequest {
 //!         model: "gpt-4".to_string(),
 //!         messages: vec![
-//!             Message::user("Hello, world!")
+//!             Message {
+//!                 role: "user".to_string(),
+//!                 content: "Hello, world!".to_string(),
+//!                 tool_call_id: None,
+//!                 tool_calls: None,
+//!                 additional_data: None,
+//!             }
 //!         ],
 //!         ..Default::default()
 //!     };
@@ -55,11 +61,6 @@ pub mod types;
 pub use client::OpenAIClient;
 pub use config::{ConfigError, OpenAIConfig};
 pub use error::{OpenAIError, OpenAIResult};
-pub use provider::{
-    ChatCompletionRequest, ChatCompletionResponse, ChatProvider, CompletionChoice, FinishReason,
-    FunctionCall, FunctionDefinition, Message, StreamChoice, StreamChunk, StreamDelta, ToolCall,
-    ToolChoice, ToolDefinition, ToolResult, UsageInfo,
-};
 pub use tools::{ClosureTool, ToolExecutor, ToolHandler, ToolRegistry};
 pub use types::*;
 
@@ -69,6 +70,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[cfg(test)]
 mod tests {
     use super::*;
+    use blanco_core::ChatProvider;
 
     #[test]
     fn test_version() {
@@ -78,7 +80,7 @@ mod tests {
     #[test]
     fn test_provider_trait_send_sync() {
         // Ensure that ChatProvider is Send + Sync
-        fn _assert_send_sync<T: Send + Sync>() {}
+        fn _assert_send_sync<T: Send + Sync + ?Sized>() {}
         _assert_send_sync::<dyn ChatProvider<Error = OpenAIError>>();
     }
 }

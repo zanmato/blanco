@@ -18,3 +18,7 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 thiserror = { workspace = true }
 async-stream = { workspace = true }
+log = { workspace = true }
+
+# Internal dependencies
+blanco-core = { path = "../blanco-core" }

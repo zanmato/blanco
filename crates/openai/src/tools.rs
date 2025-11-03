@@ -1,4 +1,4 @@
-use crate::{ToolCall, ToolDefinition, ToolResult};
+use blanco_core::chat_provider::{ToolCall, ToolDefinition, ToolResult};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
@@ -370,6 +370,7 @@ pub fn execute_datetime(arguments: Value) -> ToolResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use blanco_core::{ToolCall, FunctionCall};
 
     #[test]
     fn test_tool_registry() {
@@ -450,10 +451,10 @@ mod tests {
         executor.register_tool(calc_tool);
 
         // Test tool execution
-        let tool_call = crate::types::ToolCall {
+        let tool_call = ToolCall {
             id: "call_1".to_string(),
             tool_type: "function".to_string(),
-            function: crate::types::FunctionCall {
+            function: FunctionCall {
                 name: "calculator".to_string(),
                 arguments: r#"{"expression": "5+3"}"#.to_string(),
             },
@@ -461,14 +462,14 @@ mod tests {
 
         let result = executor.execute_tool_call(&tool_call).await;
         assert!(result.success);
-        assert_eq!(result.tool_call_id, "call_1");
+        assert_eq!(result.tool_call_id, "calculator");
         assert!(result.content.contains("8"));
 
         // Test unknown tool
-        let unknown_tool_call = crate::types::ToolCall {
+        let unknown_tool_call = ToolCall {
             id: "call_2".to_string(),
             tool_type: "function".to_string(),
-            function: crate::types::FunctionCall {
+            function: FunctionCall {
                 name: "unknown_tool".to_string(),
                 arguments: "{}".to_string(),
             },

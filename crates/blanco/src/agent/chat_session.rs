@@ -1,23 +1,22 @@
 use anyhow::Result;
 use gpui::{Context, EventEmitter, Task};
-use http::{Method, Request};
-use http_client::{AsyncBody, HttpClient};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::sleep;
-use async_std::io::ReadExt;
+use async_std::task::sleep;
 
 use super::chat_types::{
-    AIProvider, ChatCommand, ChatEvent, ChatMessage, MessageRole,
-    OpenAIRequest, OpenAIResponse, SqlContext, ProviderType,
+    ChatCommand, ChatEvent, ChatMessage, MessageRole, SqlContext,
+};
+use blanco_core::chat_provider::{
+    ChatProvider, ChatCompletionRequest, Message as ProviderMessage, ProviderError,
 };
 
 #[derive(Clone)]
-#[allow(dead_code)]
 pub struct ChatSession {
     pub messages: Vec<ChatMessage>,
-    pub provider: AIProvider,
-    pub http_client: Option<Arc<dyn HttpClient>>,
+    pub provider: Option<Arc<dyn ChatProvider<Error = ProviderError>>>,
+    pub model_name: String,
+    pub provider_name: String,
     #[allow(dead_code)]
     pub is_loading: bool,
     pub sql_context: SqlContext,
@@ -27,27 +26,50 @@ pub struct ChatSession {
 
 #[allow(dead_code)]
 impl ChatSession {
-    pub fn new(provider: AIProvider, http_client: Option<Arc<dyn HttpClient>>) -> Self {
+    /// Create a new ChatSession with a provider
+    pub fn new(provider: Arc<dyn ChatProvider<Error = ProviderError>>, provider_name: String, model_name: String) -> Self {
         Self {
             messages: Vec::new(),
-            provider,
-            http_client,
+            provider: Some(provider),
+            provider_name,
+            model_name,
             is_loading: false,
             sql_context: SqlContext::empty(),
             streaming_message_id: None,
         }
     }
 
-    pub fn with_provider(provider: AIProvider) -> Self {
-        Self::new(provider, None)
-    }
-
-    pub fn with_openai(api_key: String, http_client: Arc<dyn HttpClient>) -> Self {
-        Self::new(AIProvider::openai(api_key, None), Some(http_client))
-    }
-
+    /// Create a mock ChatSession for testing
     pub fn with_mock() -> Self {
-        Self::new(AIProvider::mock(), None)
+        Self {
+            messages: Vec::new(),
+            provider: None,
+            provider_name: "Mock".to_string(),
+            model_name: "mock-gpt-4".to_string(),
+            is_loading: false,
+            sql_context: SqlContext::empty(),
+            streaming_message_id: None,
+        }
+    }
+
+    /// Create a ChatSession without a provider (for deferred initialization)
+    pub fn new_empty() -> Self {
+        Self {
+            messages: Vec::new(),
+            provider: None,
+            provider_name: "Unknown".to_string(),
+            model_name: "unknown".to_string(),
+            is_loading: false,
+            sql_context: SqlContext::empty(),
+            streaming_message_id: None,
+        }
+    }
+
+    /// Set the provider after creation
+    pub fn set_provider(&mut self, provider: Arc<dyn ChatProvider<Error = ProviderError>>, provider_name: String, model_name: String) {
+        self.provider = Some(provider);
+        self.provider_name = provider_name;
+        self.model_name = model_name;
     }
 
     pub fn add_message(&mut self, message: ChatMessage) {
@@ -83,18 +105,12 @@ impl ChatSession {
             return self.handle_command(command, cx);
         }
 
-        // Handle regular message based on provider type
-        match &self.provider.provider_type {
-            ProviderType::Mock => {
-                self.send_mock_message(&user_message, cx)
-            }
-            ProviderType::OpenAI => {
-                self.send_openai_message(&user_message, cx)
-            }
-            _ => {
-                // Fallback to mock
-                self.send_mock_message(&user_message, cx)
-            }
+        // Handle regular message based on available provider
+        if let Some(provider) = &self.provider {
+            self.send_provider_message(provider.clone(), &user_message, cx)
+        } else {
+            // Fallback to mock if no provider
+            self.send_mock_message(&user_message, cx)
         }
     }
 
@@ -175,7 +191,7 @@ Would you like me to help you implement any of these optimizations?",
             ChatCommand::Export => {
                 let mut export = "Chat History Export\n".to_string();
                 export.push_str(&format!("Generated: {}\n", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")));
-                export.push_str(&format!("Provider: {} ({})\n\n", self.provider.name, self.provider.model));
+                export.push_str(&format!("Provider: {} ({})\n\n", self.provider_name, self.model_name));
 
                 for message in &self.messages {
                     let role = match message.role {
@@ -195,7 +211,7 @@ Would you like me to help you implement any of these optimizations?",
             }
         };
 
-        let message = ChatMessage::assistant(response.clone(), self.provider.model.clone());
+        let message = ChatMessage::assistant(response.clone(), self.model_name.clone());
         self.add_message(message.clone());
         cx.emit(ChatEvent::MessageAdded { message });
 
@@ -207,8 +223,6 @@ Would you like me to help you implement any of these optimizations?",
         user_message: &str,
         cx: &mut Context<Self>,
     ) -> Task<Result<String>> {
-        let _http_client = self.http_client.clone();
-        let _provider = self.provider.clone();
         let sql_context = self.sql_context.clone();
         let user_message = user_message.to_string();
 
@@ -254,88 +268,88 @@ Would you like me to help you implement any of these optimizations?",
         })
     }
 
-    fn send_openai_message(
+    fn send_provider_message(
         &mut self,
+        provider: Arc<dyn ChatProvider<Error = ProviderError>>,
         user_message: &str,
         cx: &mut Context<Self>,
     ) -> Task<Result<String>> {
-        if self.http_client.is_none() {
-            return self.send_mock_message(user_message, cx);
-        }
-
-        let http_client = self.http_client.clone().unwrap();
-        let provider = self.provider.clone();
         let system_prompt = self.get_system_prompt();
+        let messages = self.messages.clone();
+        let model_name = self.model_name.clone();
+        let user_message = user_message.to_string();
 
-        // Build OpenAI request
-        let mut openai_messages = vec![
-            serde_json::json!({
-                "role": "system",
-                "content": system_prompt
-            })
-        ];
+        cx.spawn(async move |_session, _cx| {
+            // Build the request using the provider
+            let mut request_messages = vec![
+                ProviderMessage {
+                    role: "system".to_string(),
+                    content: system_prompt,
+                    tool_call_id: None,
+                    tool_calls: None,
+                    additional_data: None,
+                },
+            ];
 
-        // Add conversation history
-        for message in &self.messages {
-            let role = match message.role {
-                MessageRole::User => "user",
-                MessageRole::Assistant => "assistant",
-                MessageRole::System => "system",
+            // Add conversation history
+            for message in &messages {
+                let provider_message = match message.role {
+                    MessageRole::User => ProviderMessage {
+                        role: "user".to_string(),
+                        content: message.content.clone(),
+                        tool_call_id: None,
+                        tool_calls: None,
+                        additional_data: None,
+                    },
+                    MessageRole::Assistant => ProviderMessage {
+                        role: "assistant".to_string(),
+                        content: message.content.clone(),
+                        tool_call_id: None,
+                        tool_calls: None,
+                        additional_data: None,
+                    },
+                    MessageRole::System => ProviderMessage {
+                        role: "system".to_string(),
+                        content: message.content.clone(),
+                        tool_call_id: None,
+                        tool_calls: None,
+                        additional_data: None,
+                    },
+                };
+                request_messages.push(provider_message);
+            }
+
+            // Add the current user message
+            request_messages.push(ProviderMessage {
+                role: "user".to_string(),
+                content: user_message,
+                tool_call_id: None,
+                tool_calls: None,
+                additional_data: None,
+            });
+
+            let request = ChatCompletionRequest {
+                model: model_name,
+                messages: request_messages,
+                stream: false,
+                temperature: 0.7,
+                max_tokens: Some(2048),
+                tools: None,
+                tool_choice: None,
+                top_p: None,
+                frequency_penalty: None,
+                presence_penalty: None,
+                additional_params: None,
             };
 
-            openai_messages.push(serde_json::json!({
-                "role": role,
-                "content": message.content
-            }));
-        }
+            // Send the request using the provider
+            let response = provider.chat_completion(request).await
+                .map_err(|e| anyhow::anyhow!("Chat completion failed: {}", e))?;
 
-        let request = OpenAIRequest {
-            model: provider.model.clone(),
-            messages: openai_messages.into_iter()
-                .map(|msg| serde_json::from_value(msg).unwrap())
-                .collect(),
-            stream: false,
-            temperature: provider.temperature,
-            max_tokens: Some(provider.max_tokens),
-            top_p: None,
-            frequency_penalty: None,
-            presence_penalty: None,
-        };
-
-        let api_key = provider.api_key.clone().unwrap_or_default();
-        let base_url = provider.base_url.clone().unwrap_or_else(|| "https://api.openai.com/v1".to_string());
-
-        cx.spawn(async move |_, _cx| {
-            // Create HTTP request
-            let request_body = serde_json::to_string(&request)?;
-
-            let http_request = Request::builder()
-                .method(Method::POST)
-                .uri(format!("{}/chat/completions", base_url))
-                .header("Content-Type", "application/json")
-                .header("Authorization", format!("Bearer {}", api_key))
-                .body(AsyncBody::from(request_body))?;
-
-            // Send request
-            let response = http_client.send(http_request).await?;
-
-            if response.status().is_success() {
-                let mut body_bytes = Vec::new();
-                response.into_body().read_to_end(&mut body_bytes).await?;
-                let body = String::from_utf8(body_bytes)?;
-                let openai_response: OpenAIResponse = serde_json::from_str(&body)?;
-
-                if let Some(choice) = openai_response.choices.first() {
-                    Ok(choice.message.content.clone())
-                } else {
-                    Err(anyhow::anyhow!("No response content received"))
-                }
+            if let Some(choice) = response.choices.first() {
+                Ok(choice.message.content.clone())
             } else {
-                let status = response.status();
-                let mut body_bytes = Vec::new();
-                response.into_body().read_to_end(&mut body_bytes).await?;
-                let body = String::from_utf8(body_bytes)?;
-                Err(anyhow::anyhow!("API request failed: {} - {}", status, body))
+                Err(anyhow::anyhow!("No response content received"))
             }
         })
     }

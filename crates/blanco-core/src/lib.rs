@@ -7,6 +7,7 @@
 pub mod connection_trait;
 pub mod lsp_traits;
 pub mod table_operations;
+pub mod chat_provider;
 
 // Re-export main types for convenience
 pub use connection_trait::{
@@ -21,4 +22,10 @@ pub use table_operations::{
 pub use lsp_traits::{
     CompletionProvider, HoverProvider, LanguageProvider, LanguageProviderRegistry,
     Position, Range, CompletionContext, CompletionResponse, Hover,
+};
+
+pub use chat_provider::{
+    ChatProvider, ProviderError, ChatCompletionRequest, ChatCompletionResponse,
+    CompletionChoice, FinishReason, FunctionCall, FunctionDefinition, Message, StreamChunk,
+    StreamChoice, StreamDelta, ToolCall, ToolChoice, ToolDefinition, ToolResult, UsageInfo,
 };

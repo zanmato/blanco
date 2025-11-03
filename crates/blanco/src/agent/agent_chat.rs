@@ -1,5 +1,5 @@
 use gpui::{
-    actions, div, prelude::FluentBuilder, px, App, AppContext, Context, Entity, EventEmitter,
+    actions, div, prelude::FluentBuilder, px, App, AppContext, ClipboardItem, Context, Entity, EventEmitter,
     FocusHandle, Focusable, InteractiveElement, IntoElement, ParentElement, Render, Styled,
     Subscription, Window,
 };
@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use super::chat_session::ChatSession;
 use super::chat_types::{ChatEvent, ChatMessage, MessageMetadata, MessageRole, SqlContext};
+use blanco_core::chat_provider::{ChatProvider, ProviderError};
 
 actions!(agent_chat, [SendMessage, ClearChat, ExportChat]);
 
@@ -136,14 +137,15 @@ impl ChatPanel {
         }
     }
 
-    pub fn new_with_openai(
+    pub fn new_with_provider(
         tab_id: usize,
-        api_key: String,
-        http_client: Arc<dyn http_client::HttpClient>,
+        provider: Arc<dyn ChatProvider<Error = ProviderError>>,
+        provider_name: String,
+        model_name: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let session = cx.new(|_cx| ChatSession::with_openai(api_key, http_client));
+        let session = cx.new(|_cx| ChatSession::new(provider, provider_name, model_name));
 
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
@@ -201,15 +203,9 @@ impl ChatPanel {
             return;
         }
 
-        // Add user message to chat
-        let user_message = ChatMessage {
-            id: uuid::Uuid::new_v4().to_string(),
-            role: MessageRole::User,
-            content: input_text.clone(),
-            timestamp: chrono::Utc::now(),
-            metadata: MessageMetadata::default(),
-        };
-        self.messages.push(user_message);
+        // Note: Don't add user message here directly
+        // It will be added through the session's MessageAdded event
+        // This prevents duplication of user messages
 
         // Emit message sent event
         cx.emit(crate::app_events::AppEvent::ChatMessageSent {
@@ -352,7 +348,7 @@ impl ChatPanel {
             && content.trim().len() > 10
     }
 
-    /// Parse markdown content and extract SQL code blocks
+    /// Parse markdown content preserving order using pulldown-cmark
     fn parse_markdown_content(
         &self,
         content: &str,
@@ -365,23 +361,44 @@ impl ChatPanel {
         let mut in_code_block = false;
         let mut code_content = Vec::new();
         let mut code_language = String::new();
-        let mut current_text = String::new();
+        let mut pending_text = String::new();
 
         for event in parser {
             match event {
                 Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(lang))) => {
+                    // Process any pending text before starting a code block
+                    if !pending_text.trim().is_empty() {
+                        elements.extend(self.process_inline_code(&pending_text, cx));
+                        pending_text.clear();
+                    }
+
                     in_code_block = true;
-                    code_language = lang.to_lowercase();
+                    let lang_str = lang.to_string();
+                    if lang_str.is_empty() || lang_str.trim().is_empty() {
+                        code_language = "plain".to_string(); // Use "plain" for empty language
+                    } else {
+                        code_language = lang_str.to_lowercase();
+                    }
                     code_content.clear();
                 }
                 Event::Start(Tag::CodeBlock(_)) => {
+                    // Process any pending text before starting a code block
+                    if !pending_text.trim().is_empty() {
+                        elements.extend(self.process_inline_code(&pending_text, cx));
+                        pending_text.clear();
+                    }
+
                     in_code_block = true;
-                    code_language.clear();
+                    code_language = "plain".to_string(); // Use "plain" for indented code blocks
                     code_content.clear();
+                }
+                Event::Code(code) => {
+                    // Inline code - append to pending text with markers for processing
+                    pending_text.push_str(&format!("`{}`", code));
                 }
                 Event::End(Tag::CodeBlock(_)) => {
                     if in_code_block {
-                        let code = code_content.join("\n");
+                        let code = code_content.join("\n").trim_end().to_string();
 
                         // Render as SQL code block with syntax highlighting
                         let shared_text = gpui::SharedString::from(code.clone());
@@ -391,32 +408,70 @@ impl ChatPanel {
                             end: text_len,
                         };
 
-                        // Create syntax highlighter for SQL
-                        let mut highlighter =
-                            gpui_component::highlighter::SyntaxHighlighter::new(&code_language);
-                        highlighter.update(None, &Rope::from(code));
-                        let theme = cx.theme().highlight_theme.clone();
-                        let highlights = highlighter.styles(&range, &theme);
+                        // Create syntax highlighter (or use plain styling for "plain" language)
+                        let highlights = if code_language == "plain" {
+                            // For plain code blocks, create simple monochrome highlights
+                            vec![(
+                                range.clone(),
+                                gpui::HighlightStyle {
+                                    color: Some(cx.theme().foreground.into()),
+                                    background_color: None,
+                                    font_weight: None,
+                                    font_style: None,
+                                    underline: None,
+                                    strikethrough: None,
+                                    fade_out: Some(0.0),
+                                },
+                            )]
+                        } else {
+                            // For language-specific code blocks, use syntax highlighting
+                            let mut highlighter =
+                                gpui_component::highlighter::SyntaxHighlighter::new(&code_language);
+                            highlighter.update(None, &Rope::from(code.clone()));
+                            let theme = cx.theme().highlight_theme.clone();
+                            highlighter.styles(&range, &theme)
+                        };
+
+                        // Create unique ID for this code block's copy button
+                        let copy_button_id = elements.len();
 
                         elements.push(
                             div()
-                                .w_full()
-                                .bg(cx
-                                    .theme()
-                                    .highlight_theme
-                                    .style
-                                    .editor_background
-                                    .unwrap_or(cx.theme().background))
-                                .border_1()
-                                .border_color(cx.theme().border)
-                                .rounded_lg()
-                                .p_3()
-                                .font_family("Fira Code")
-                                .text_size(px(13.))
-                                .text_color(cx.theme().foreground)
-                                .text_left()
+                                .relative() // Make this the positioning context
                                 .child(
-                                    gpui::StyledText::new(shared_text).with_highlights(highlights),
+                                    // Code block content
+                                    div()
+                                        .bg(cx
+                                            .theme()
+                                            .highlight_theme
+                                            .style
+                                            .editor_background
+                                            .unwrap_or(cx.theme().background))
+                                        .border_1()
+                                        .border_color(cx.theme().border)
+                                        .rounded_lg()
+                                        .p_3()
+                                        .font_family("Fira Code")
+                                        .text_size(px(13.))
+                                        .text_color(cx.theme().foreground)
+                                        .text_left()
+                                        .child(
+                                            gpui::StyledText::new(shared_text).with_highlights(highlights),
+                                        ),
+                                )
+                                .child(
+                                    // Copy button positioned at top right
+                                    Button::new(copy_button_id)
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(IconName::Copy)
+                                        .absolute()
+                                        .top_2()
+                                        .right_2()
+                                        .on_click(cx.listener(move |_this, _event, _window, cx| {
+                                            // Copy the code content to clipboard
+                                            cx.write_to_clipboard(ClipboardItem::new_string(code.clone()));
+                                        })),
                                 ),
                         );
 
@@ -429,14 +484,14 @@ impl ChatPanel {
                     if in_code_block {
                         code_content.push(text.to_string());
                     } else {
-                        current_text.push_str(&text);
+                        pending_text.push_str(&text);
                     }
                 }
                 Event::SoftBreak | Event::HardBreak => {
                     if in_code_block {
                         code_content.push("\n".to_string());
                     } else {
-                        current_text.push(' ');
+                        pending_text.push(' ');
                     }
                 }
                 Event::End(_) => {
@@ -448,12 +503,333 @@ impl ChatPanel {
             }
         }
 
-        // Add any remaining text (left-aligned)
-        if !current_text.trim().is_empty() {
-            elements.push(div().text_sm().text_left().child(current_text));
+        // Process any remaining text with inline code
+        if !pending_text.trim().is_empty() {
+            // Process inline code in the remaining text
+            let inline_elements = self.process_inline_code(&pending_text, cx);
+            elements.extend(inline_elements);
         }
 
         elements
+    }
+
+    /// Process text to find and style inline code segments using StyledText for true inline rendering
+    fn process_inline_code(&self, text: &str, cx: &mut Context<Self>) -> Vec<gpui::Div> {
+        use regex::Regex;
+
+        // Regex to match inline code: `code`
+        let inline_code_regex = Regex::new(r"`([^`]+)`").unwrap();
+
+        let mut last_end = 0;
+        let mut styled_segments = Vec::new();
+
+        // Find all inline code matches
+        for caps in inline_code_regex.captures_iter(text) {
+            let match_obj = caps.get(0).unwrap();
+            let code_match = caps.get(1).unwrap();
+
+            // Add text before the inline code
+            if match_obj.start() > last_end {
+                let text_segment = &text[last_end..match_obj.start()];
+                if !text_segment.is_empty() {
+                    styled_segments.push((text_segment.to_string(), TextStyleType::Normal));
+                }
+            }
+
+            // Add the inline code content (without backticks)
+            let code_content = code_match.as_str();
+            styled_segments.push((code_content.to_string(), TextStyleType::InlineCode));
+
+            last_end = match_obj.end();
+        }
+
+        // Add any remaining text after the last inline code
+        if last_end < text.len() {
+            let text_segment = &text[last_end..];
+            if !text_segment.is_empty() {
+                styled_segments.push((text_segment.to_string(), TextStyleType::Normal));
+            }
+        }
+
+        // If no inline code was found, just return the text as-is
+        if styled_segments.is_empty() {
+            return vec![div().text_sm().text_left().child(text.to_string())];
+        }
+
+        // Create a single div with StyledText that combines all segments
+        let styled_text = self.create_styled_text(styled_segments, cx);
+
+        vec![div().text_sm().text_left().child(styled_text)]
+    }
+
+    /// Create StyledText from segments with different styles
+    fn create_styled_text(
+        &self,
+        segments: Vec<(String, TextStyleType)>,
+        cx: &mut Context<Self>,
+    ) -> gpui::StyledText {
+        let mut result_text = String::new();
+        let mut highlights = Vec::new();
+
+        for (text, style_type) in segments {
+            let start_pos = result_text.len();
+
+            match style_type {
+                TextStyleType::Normal => {
+                    result_text.push_str(&text);
+                }
+                TextStyleType::InlineCode => {
+                    // Add inline code text without backticks
+                    result_text.push_str(&text);
+
+                    // Add highlight for the inline code segment
+                    let end_pos = result_text.len();
+                    let range = start_pos..end_pos;
+
+                    // Create highlight with inline code styling using theme colors
+                    let highlight = gpui::HighlightStyle {
+                        color: Some(cx.theme().primary_foreground.into()), // Use theme foreground
+                        background_color: Some(cx.theme().muted.into()), // Use theme muted background
+                        font_weight: None,
+                        font_style: None,
+                        underline: None,
+                        strikethrough: None,
+                        fade_out: Some(0.0), // No fade out
+                    };
+
+                    highlights.push((range, highlight));
+                }
+            }
+        }
+
+        // Create StyledText with highlights for inline code
+        let shared_text = gpui::SharedString::from(result_text);
+        if highlights.is_empty() {
+            gpui::StyledText::new(shared_text)
+        } else {
+            gpui::StyledText::new(shared_text).with_highlights(highlights)
+        }
+    }
+}
+
+/// Types of text styles for different segments
+#[derive(Debug, Clone, PartialEq)]
+enum TextStyleType {
+    Normal,
+    InlineCode,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TextStyleType;
+    use regex::Regex;
+
+    #[test]
+    fn test_inline_code_regex_patterns() {
+        // Test inline code regex pattern
+        let inline_code_regex = Regex::new(r"`([^`]+)`").unwrap();
+
+        let test_cases = vec![
+            ("Here is `simple` code", vec!["simple"]),
+            ("Here is `code with spaces` in it", vec!["code with spaces"]),
+            (
+                "Multiple `inline` code `segments` here",
+                vec!["inline", "segments"],
+            ),
+            ("Edge `case` at start", vec!["case"]),
+            ("Edge case at `end`", vec!["end"]),
+            ("`code` at start", vec!["code"]),
+            ("code at `end`", vec!["end"]),
+        ];
+
+        for (input, expected_matches) in test_cases {
+            let matches: Vec<_> = inline_code_regex
+                .captures_iter(input)
+                .map(|caps| caps.get(1).unwrap().as_str())
+                .collect();
+
+            assert_eq!(
+                matches.len(),
+                expected_matches.len(),
+                "Should find {} matches in: {}",
+                expected_matches.len(),
+                input
+            );
+            for (i, expected_code) in expected_matches.iter().enumerate() {
+                assert_eq!(
+                    matches[i], *expected_code,
+                    "Match {} should be correct in: {}",
+                    i, input
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_inline_code_replacement() {
+        let inline_code_regex = Regex::new(r"`([^`]+)`").unwrap();
+
+        let input = "Here is `inline code` that should be styled.";
+        let result = inline_code_regex.replace_all(input, "[$1]");
+
+        assert_eq!(result, "Here is [inline code] that should be styled.");
+        println!("Original: {}", input);
+        println!("Replaced: {}", result);
+    }
+
+    #[test]
+    fn test_mixed_content_parsing() {
+        let content = "Here is `inline code` and a code block:\n\n```sql\nSELECT * FROM users;\n```\n\nMore text with `more inline code`.";
+
+        // Test that we can distinguish between inline code and code blocks
+        // Inline code: `inline code`, `more inline code`
+        // Code block: ```sql\nSELECT * FROM users;\n```
+
+        let has_inline_code =
+            content.contains("`inline code`") && content.contains("`more inline code`");
+        let has_code_block = content.contains("```sql") && content.contains("SELECT * FROM users;");
+
+        assert!(has_inline_code, "Should contain inline code");
+        assert!(has_code_block, "Should contain code block");
+
+        println!("Content has both inline code and code blocks: {}", content);
+    }
+
+    #[test]
+    fn test_inline_code_backtick_removal() {
+        let inline_code_regex = Regex::new(r"`([^`]+)`").unwrap();
+
+        let input = "Here is `inline code` that should have backticks removed.";
+        let result = inline_code_regex.replace_all(input, "$1");
+
+        assert_eq!(
+            result,
+            "Here is inline code that should have backticks removed."
+        );
+        println!("Original with backticks: {}", input);
+        println!("Cleaned text: {}", result);
+    }
+
+    #[test]
+    fn test_styled_text_segments() {
+        // Test that we can create segments for StyledText
+        let segments = vec![
+            ("Here is ".to_string(), TextStyleType::Normal),
+            ("inline".to_string(), TextStyleType::InlineCode),
+            (" code in text.".to_string(), TextStyleType::Normal),
+        ];
+
+        let mut expected_result = String::new();
+        for (text, _style) in &segments {
+            expected_result.push_str(text);
+        }
+
+        assert_eq!(expected_result, "Here is inline code in text.");
+        println!("Styled segments result: {}", expected_result);
+    }
+
+    #[test]
+    fn test_mixed_inline_code_processing() {
+        let inline_code_regex = Regex::new(r"`([^`]+)`").unwrap();
+        let input = "Use `SELECT` to query and `INSERT` to add data.";
+
+        // Simulate the segment processing
+        let mut segments = Vec::new();
+        let mut last_end = 0;
+
+        for caps in inline_code_regex.captures_iter(input) {
+            let match_obj = caps.get(0).unwrap();
+            let code_match = caps.get(1).unwrap();
+
+            // Add text before inline code
+            if match_obj.start() > last_end {
+                let text_segment = &input[last_end..match_obj.start()];
+                if !text_segment.is_empty() {
+                    segments.push((text_segment.to_string(), TextStyleType::Normal));
+                }
+            }
+
+            // Add inline code
+            segments.push((code_match.as_str().to_string(), TextStyleType::InlineCode));
+            last_end = match_obj.end();
+        }
+
+        // Add remaining text
+        if last_end < input.len() {
+            let text_segment = &input[last_end..];
+            if !text_segment.is_empty() {
+                segments.push((text_segment.to_string(), TextStyleType::Normal));
+            }
+        }
+
+        // Verify segments
+        assert_eq!(segments.len(), 5); // "Use ", "SELECT", " to query and ", "INSERT", " to add data."
+
+        let reconstructed: String = segments.iter().map(|(text, _)| text.clone()).collect();
+
+        assert_eq!(reconstructed, "Use SELECT to query and INSERT to add data.");
+        println!("Processed segments: {:?}", segments);
+        println!("Reconstructed text: {}", reconstructed);
+    }
+
+    #[test]
+    fn test_plain_code_block_detection() {
+        use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag};
+
+        // Test plain code block detection (no language specified)
+        let plain_content = "```\nhello world\n```";
+        let parser = Parser::new(plain_content);
+
+        let mut found_plain_block = false;
+        let mut code_content = Vec::new();
+
+        for event in parser {
+            match event {
+                Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(lang))) => {
+                    let lang_str = lang.to_string();
+                    let code_language = if lang_str.is_empty() || lang_str.trim().is_empty() {
+                        "plain".to_string()
+                    } else {
+                        lang_str.to_lowercase()
+                    };
+                    assert_eq!(
+                        code_language, "plain",
+                        "Empty language should be treated as 'plain'"
+                    );
+                    found_plain_block = true;
+                }
+                Event::Text(text) => {
+                    code_content.push(text.to_string());
+                }
+                Event::End(Tag::CodeBlock(_)) => {
+                    // End of code block
+                }
+                _ => {}
+            }
+        }
+
+        assert!(found_plain_block, "Should detect plain code block");
+        assert_eq!(
+            code_content.join(""),
+            "hello world\n",
+            "Should capture code content correctly"
+        );
+        println!("Plain code block detected and content: {:?}", code_content);
+    }
+
+    #[test]
+    fn test_mixed_code_content() {
+        // Test content with both inline code and plain code blocks
+        let content =
+            "Here is `inline code` and a plain block:\n\n```\nplain code block\n```\n\nMore text.";
+
+        let has_inline_code = content.contains("`inline code`");
+        let has_plain_code_block = content.contains("```\nplain code block\n```");
+
+        assert!(has_inline_code, "Should contain inline code");
+        assert!(has_plain_code_block, "Should contain plain code block");
+
+        println!("Mixed content test passed - contains both inline code and plain code blocks");
     }
 }
 
@@ -576,7 +952,7 @@ impl Render for ChatPanel {
                                                                 // Show example markdown as it would be rendered
                                                                 .children(
                                                                     self.parse_markdown_content(
-                                                                        "I notice your query is doing a full table scan. Here's a more efficient version:\n\n```sql\nSELECT u.id, u.name, u.email, COUNT(o.id) as order_count\nFROM users u\nLEFT JOIN orders o ON u.id = o.user_id\nWHERE u.created_at >= '2024-01-01'\nGROUP BY u.id, u.name, u.email\nHAVING COUNT(o.id) > 5\nORDER BY order_count DESC\nLIMIT 10;\n```\n\nThis adds an index on `created_at` and uses proper JOIN syntax for better performance.",
+                                                                        "I notice your `query` is doing a \n\n```\nfull table scan\n```\n. Here's a more efficient version:\n\n```sql\nSELECT u.id, u.name, u.email, COUNT(o.id) as order_count\nFROM users u\nLEFT JOIN orders o ON u.id = o.user_id\nWHERE u.created_at >= '2024-01-01'\nGROUP BY u.id, u.name, u.email\nHAVING COUNT(o.id) > 5\nORDER BY order_count DESC\nLIMIT 10;\n```\n\nThis adds an index on `created_at` and uses proper JOIN syntax for better performance.",
                                                                         cx
                                                                     )
                                                                 )
@@ -592,70 +968,38 @@ impl Render for ChatPanel {
                         let is_user = message.role == MessageRole::User;
 
                         div().id(("chat-message", ix)).w_full().child(
-                            h_flex()
-                                .gap_3()
-                                .when(is_user, |h_flex| {
-                                    h_flex.flex_row_reverse() // User messages on the right
-                                })
+                            // Message content
+                            v_flex()
+                                .flex_1()
+                                .gap_1()
                                 .child(
-                                    // Avatar
                                     div()
-                                        .w(px(32.))
-                                        .h(px(32.))
-                                        .rounded_full()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
+                                        .text_xs()
+                                        .font_medium()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(if is_user { "You" } else { "Assistant" }),
+                                )
+                                .child(
+                                    div()
+                                        .px_3()
+                                        .py_2()
+                                        .rounded_lg()
                                         .bg(if is_user {
                                             cx.theme().primary
                                         } else {
-                                            cx.theme().secondary
+                                            cx.theme().muted
                                         })
-                                        .child(
-                                            Icon::new(if is_user {
-                                                IconName::User
-                                            } else {
-                                                IconName::Bot
-                                            })
-                                            .size_4()
-                                            .text_color(cx.theme().background),
-                                        ),
-                                )
-                                .child(
-                                    // Message content
-                                    v_flex()
-                                        .flex_1()
-                                        .max_w(px(600.))
-                                        .gap_1()
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .font_medium()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child(if is_user { "You" } else { "Assistant" }),
-                                        )
-                                        .child(
-                                            div()
-                                                .px_3()
-                                                .py_2()
-                                                .rounded_lg()
-                                                .bg(if is_user {
-                                                    cx.theme().primary
-                                                } else {
-                                                    cx.theme().muted
-                                                })
-                                                .text_color(if is_user {
-                                                    cx.theme().primary_foreground
-                                                } else {
-                                                    cx.theme().foreground
-                                                })
-                                                .when(!is_user, |div| {
-                                                    div.border_1().border_color(cx.theme().border)
-                                                })
-                                                // Parse and render markdown content
-                                                .children(
-                                                    self.parse_markdown_content(&message.content, cx)
-                                                ),
+                                        .text_color(if is_user {
+                                            cx.theme().primary_foreground
+                                        } else {
+                                            cx.theme().foreground
+                                        })
+                                        .when(!is_user, |div| {
+                                            div.border_1().border_color(cx.theme().border)
+                                        })
+                                        // Parse and render markdown content
+                                        .children(
+                                            self.parse_markdown_content(&message.content, cx)
                                         ),
                                 ),
                         )
@@ -663,37 +1007,18 @@ impl Render for ChatPanel {
                     // Loading indicator
                     .when(self.is_loading, |this| {
                         this.child(
-                            h_flex()
-                                .gap_3()
+                            div()
+                                .px_3()
+                                .py_2()
+                                .rounded_lg()
+                                .bg(cx.theme().muted)
+                                .border_1()
+                                .border_color(cx.theme().border)
                                 .child(
                                     div()
-                                        .w(px(32.))
-                                        .h(px(32.))
-                                        .rounded_full()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .bg(cx.theme().secondary)
-                                        .child(
-                                            Icon::new(IconName::Bot)
-                                                .size_4()
-                                                .text_color(cx.theme().background),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .px_3()
-                                        .py_2()
-                                        .rounded_lg()
-                                        .bg(cx.theme().muted)
-                                        .border_1()
-                                        .border_color(cx.theme().border)
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child("Thinking..."),
-                                        ),
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child("Thinking..."),
                                 ),
                         )
                     }),
