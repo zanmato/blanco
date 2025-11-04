@@ -477,7 +477,8 @@ impl AppDatabase {
             .iter()
             .map(|row| {
                 // Parse connection_params if present
-                let connection_params: Option<serde_json::Value> = row.get::<Option<String>, _>("connection_params")
+                let connection_params: Option<serde_json::Value> = row
+                    .get::<Option<String>, _>("connection_params")
                     .and_then(|s| serde_json::from_str(&s).ok());
 
                 ConnectionData {
@@ -499,6 +500,11 @@ impl AppDatabase {
             .collect();
 
         Ok(connections)
+    }
+
+    /// Get access to the database pool
+    pub fn pool(&self) -> &SqlitePool {
+        &self.pool
     }
 }
 
@@ -580,7 +586,10 @@ impl ConnectionData {
         let connection_string = if password.is_empty() {
             format!("postgresql://{}@{}:{}/{}", username, host, port, database)
         } else {
-            format!("postgresql://{}:{}@{}:{}/{}", username, password, host, port, database)
+            format!(
+                "postgresql://{}:{}@{}:{}/{}",
+                username, password, host, port, database
+            )
         };
 
         Self {
@@ -604,74 +613,15 @@ impl ConnectionData {
             last_used_at: None,
         }
     }
-
-    /// Create a ConnectionData from a unified connection string
-    #[allow(dead_code)]
-    pub fn from_connection_string(name: String, connection_string: &str) -> Result<Self, anyhow::Error> {
-        if connection_string.starts_with("sqlite://") || connection_string.starts_with("sqlite:") {
-            let db_path = connection_string
-                .trim_start_matches("sqlite://")
-                .trim_start_matches("sqlite:");
-            Ok(Self::new_sqlite(name, db_path.to_string()))
-        } else if connection_string.starts_with("postgres://") || connection_string.starts_with("postgresql://") {
-            match crate::db_service::PgConnectionKey::from_connection_string(connection_string) {
-                Ok(key) => Ok(Self::new_postgres(
-                    name,
-                    key.host,
-                    key.port as i32,
-                    key.database,
-                    key.username,
-                    key.password.unwrap_or_default(),
-                )),
-                Err(e) => Err(anyhow::anyhow!("Failed to parse PostgreSQL connection string: {}", e))
-            }
-        } else {
-            Err(anyhow::anyhow!("Unsupported connection string format: {}", connection_string))
-        }
-    }
-
-    /// Get the connection string for this connection
-    #[allow(dead_code)]
-    pub fn get_connection_string(&self) -> Option<String> {
-        self.connection_string.clone()
-            .or_else(|| {
-                // Generate connection string from individual components
-                match self.db_type.as_str() {
-                    "SQLite" => self.database_path.as_ref().map(|path| format!("sqlite://{}", path)),
-                    "PostgreSQL" => {
-                        if let (Some(host), Some(port), Some(database), Some(username)) =
-                            (&self.host, self.port, &self.database_name, &self.username) {
-                            if let Some(ref password) = self.password {
-                                Some(format!("postgresql://{}:{}@{}:{}/{}", username, password, host, port, database))
-                            } else {
-                                Some(format!("postgresql://{}@{}:{}/{}", username, host, port, database))
-                            }
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                }
-            })
-    }
-
-    /// Check if this connection is marked as active
-    #[allow(dead_code)]
-    pub fn is_active(&self) -> bool {
-        self.is_active.unwrap_or(true)
-    }
-
-    /// Mark this connection as active/inactive
-    #[allow(dead_code)]
-    pub fn set_active(&mut self, active: bool) {
-        self.is_active = Some(active);
-    }
 }
 
 impl AppDatabase {
     /// Get connection details by ID
     #[allow(dead_code)]
-    pub async fn get_connection_by_id(&self, connection_id: i64) -> Result<Option<ConnectionData>, sqlx::Error> {
+    pub async fn get_connection_by_id(
+        &self,
+        connection_id: i64,
+    ) -> Result<Option<ConnectionData>, sqlx::Error> {
         let row = sqlx::query(
             r#"
             SELECT id, name, db_type, host, port, database_name, username, password, database_path,
@@ -707,7 +657,10 @@ impl AppDatabase {
     }
 
     /// Find or create a connection from a connection string and return its ID
-    pub async fn find_or_create_connection(&self, connection_string: &str) -> Result<i64, anyhow::Error> {
+    pub async fn find_or_create_connection(
+        &self,
+        connection_string: &str,
+    ) -> Result<i64, anyhow::Error> {
         // First try to find existing connection with the same connection string
         let existing_connection = sqlx::query(
             r#"
@@ -722,14 +675,20 @@ impl AppDatabase {
 
         if let Some(row) = existing_connection {
             let connection_id = row.get::<i64, _>(0);
-            log::debug!("Found existing connection {} for connection string: {}", connection_id, connection_string);
+            log::debug!(
+                "Found existing connection {} for connection string: {}",
+                connection_id,
+                connection_string
+            );
             Ok(connection_id)
         } else {
             // Create a new connection entry
             let connection_name = self.generate_connection_name(connection_string);
             let db_type = if connection_string.starts_with("sqlite:") {
                 "SQLite"
-            } else if connection_string.starts_with("postgres:") || connection_string.starts_with("postgresql:") {
+            } else if connection_string.starts_with("postgres:")
+                || connection_string.starts_with("postgresql:")
+            {
                 "PostgreSQL"
             } else {
                 "Unknown"
@@ -752,7 +711,11 @@ impl AppDatabase {
             .await?
             .last_insert_rowid();
 
-            log::info!("Created new connection {} for connection string: {}", connection_id, connection_string);
+            log::info!(
+                "Created new connection {} for connection string: {}",
+                connection_id,
+                connection_string
+            );
             Ok(connection_id)
         }
     }
@@ -767,7 +730,9 @@ impl AppDatabase {
             } else {
                 "SQLite Database".to_string()
             }
-        } else if connection_string.starts_with("postgres:") || connection_string.starts_with("postgresql:") {
+        } else if connection_string.starts_with("postgres:")
+            || connection_string.starts_with("postgresql:")
+        {
             // Parse PostgreSQL connection string
             "PostgreSQL Connection".to_string() // Simplified for now
         } else {

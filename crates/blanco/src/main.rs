@@ -20,7 +20,6 @@ mod test_db;
 mod theme_loader;
 mod time_format;
 mod transformers;
-mod unified_connection_manager;
 
 pub use sidebar::ConnectionSidebar;
 
