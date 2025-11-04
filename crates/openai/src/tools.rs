@@ -1,8 +1,6 @@
-use async_trait::async_trait;
 use blanco_core::chat_provider::{FunctionDefinition, ToolCall, ToolDefinition, ToolResult};
-use blanco_core::connection_trait::{Connection, ConnectionRegistry};
 use blanco_core::DatabaseService;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -361,24 +359,5 @@ impl ToolHandler for ListTablesTool {
                 }),
             },
         }
-    }
-}
-
-impl ListTablesTool {
-    /// Query database schema using the connection string (fallback method)
-    async fn query_database_schema(
-        &self,
-        connection_string: String,
-    ) -> Result<serde_json::Value, anyhow::Error> {
-        log::warn!(
-            "Fallback method used - no database service available for connection: {}",
-            connection_string
-        );
-
-        // Return a simple error result since we can't create connections without a database service
-        Err(anyhow::anyhow!(
-            "Database service not available - cannot query schema for: {}",
-            connection_string
-        ))
     }
 }

@@ -1,9 +1,9 @@
+mod agent;
 mod app;
 mod app_database;
 mod app_events;
 mod assets;
 mod async_pipeline;
-mod agent;
 mod chat_provider_resolver;
 mod connection;
 mod connection_modal;
@@ -46,7 +46,9 @@ fn main() {
         gpui_component::init(cx);
 
         // Load and apply the One Dark theme (converted from Zed format)
-        if let Err(e) = theme_loader::load_and_apply_theme("themes/one-dark-darkened-converted.json", cx) {
+        if let Err(e) =
+            theme_loader::load_and_apply_theme("themes/one-dark-darkened-converted.json", cx)
+        {
             eprintln!("Failed to load theme: {}", e);
         }
 
@@ -68,7 +70,6 @@ fn main() {
         }
         cx.text_system().add_fonts(embedded_fonts).unwrap();
 
-        
         // Initialize database service
         let db_service = DbService::new();
 
@@ -103,56 +104,29 @@ fn main() {
         }
 
         // Initialize test database
-        cx.spawn(async move |_cx| {
-            match test_db::init_test_database().await {
-                Ok(_) => {
-                    log::info!("Connected to test database");
-                    Ok(())
-                }
-                Err(e) => {
-                    log::error!("Failed to initialize test database: {}", e);
-                    Err(anyhow::anyhow!("Test database init failed: {}", e))
-                }
+        cx.spawn(async move |_cx| match test_db::init_test_database().await {
+            Ok(_) => {
+                log::info!("Connected to test database");
+                Ok(())
+            }
+            Err(e) => {
+                log::error!("Failed to initialize test database: {}", e);
+                Err(anyhow::anyhow!("Test database init failed: {}", e))
             }
         })
         .detach();
 
-        // Initialize PostgreSQL connection from pg_dsn.txt using new connection management
-        let pg_dsn_path = std::path::Path::new("pg_dsn.txt");
-        if pg_dsn_path.exists() {
-            if let Ok(dsn) = std::fs::read_to_string(pg_dsn_path) {
-                let dsn = dsn.trim().to_string();
-                log::info!("🔍 Loaded DSN from pg_dsn.txt: {}", dsn);
-                if !dsn.is_empty() {
-                    let db_service_clone = db_service.clone();
-                    cx.spawn(async move |_cx| {
-                        let unified_manager = db_service_clone.unified_manager().await;
-                        let result = unified_manager.read().await.get_or_create_connection(&dsn).await;
-                        match result {
-                            Ok(_) => {
-                                log::info!("Connected to PostgreSQL database using unified connection management");
-                                Ok(())
-                            }
-                            Err(e) => {
-                                log::error!("Failed to connect to PostgreSQL: {}", e);
-                                Err(anyhow::anyhow!("PostgreSQL connection failed: {}", e))
-                            }
-                        }
-                    })
-                    .detach();
-                }
-            }
-        }
-
         // Initialize async event processor
-        let (mut async_processor, async_event_tx) = async_pipeline::AsyncEventProcessor::new(db_service.clone());
+        let (mut async_processor, async_event_tx) =
+            async_pipeline::AsyncEventProcessor::new(db_service.clone());
 
         // Start the async processor
         cx.spawn(async move |_cx| {
             if let Err(e) = async_processor.start().await {
                 log::error!("Failed to start async event processor: {}", e);
             }
-        }).detach();
+        })
+        .detach();
 
         // Store the async event sender globally for components to use
         cx.set_global(db_service);

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::db_service::DbService;
 use crate::settings::{ChatSettings, Settings};
 use blanco_core::chat_provider::{ChatProvider, ProviderError};
-use blanco_core::{Connection, DatabaseService};
+use blanco_core::DatabaseService;
 
 /// Provider cache entry with configuration hash
 #[derive(Clone)]
@@ -205,88 +205,6 @@ impl ChatProviderResolver {
 
         errors
     }
-}
-
-/// Helper function to query database schema using an existing connection
-async fn query_database_schema_with_connection(
-    connection: std::sync::Arc<dyn Connection>,
-) -> serde_json::Value {
-    log::info!("Querying database schema using existing connection");
-
-    // Get basic connection info
-    let connection_type = connection.get_connection_type();
-    let display_name = connection.get_display_name();
-
-    log::info!(
-        "Connected to {} database: {}",
-        connection_type,
-        display_name
-    );
-
-    let mut result = serde_json::json!({
-        "connection_type": connection_type,
-        "database_name": display_name,
-        "tables": []
-    });
-
-    // Get all tables (without schema filter for now)
-    match connection.get_tables(None).await {
-        Ok(tables) => {
-            let mut tables_array = Vec::new();
-
-            for table_name in tables {
-                log::debug!("Processing table: {}", table_name);
-
-                // Get column information for each table
-                match connection.get_columns_for_table(&table_name, None).await {
-                    Ok(columns) => {
-                        let mut columns_array = Vec::new();
-                        for column in columns {
-                            columns_array.push(serde_json::json!({
-                                "name": column.name,
-                                "type": column.data_type,
-                                "nullable": column.is_nullable,
-                                "primary_key": column.is_primary_key,
-                                "default_value": column.default_value,
-                                "character_maximum_length": column.character_maximum_length
-                            }));
-                        }
-
-                        tables_array.push(serde_json::json!({
-                            "name": table_name,
-                            "schema": "public", // Default schema, could be enhanced for PostgreSQL
-                            "object_type": "TABLE",
-                            "columns": columns_array,
-                            "column_count": columns_array.len()
-                        }));
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to get columns for table {}: {}", table_name, e);
-                        // Still add the table with basic info
-                        tables_array.push(serde_json::json!({
-                            "name": table_name,
-                            "schema": "public",
-                            "object_type": "TABLE",
-                            "columns": [],
-                            "error": format!("Failed to get columns: {}", e)
-                        }));
-                    }
-                }
-            }
-
-            result["tables"] = serde_json::json!(tables_array);
-            log::info!(
-                "Schema query completed: {} tables found",
-                tables_array.len()
-            );
-        }
-        Err(e) => {
-            log::error!("Failed to get tables: {}", e);
-            result["error"] = serde_json::json!(format!("Failed to get tables: {}", e));
-        }
-    }
-
-    result
 }
 
 /// Information about a chat provider instance

@@ -529,7 +529,6 @@ impl EditorPanel {
                     // For now, we don't have the connection_string from connection_id
                     // TODO: Resolve connection_string from connection_id if needed
                     let connection_type = None;
-                    let pg_connection_key = None;
                     let tab_data = QueryTabData {
                         id: query_tab.db_id,
                         title: query_tab.title.clone(),
@@ -537,7 +536,6 @@ impl EditorPanel {
                         position: tab_index as i32,
                         connection_id: None, // Will be set in async task
                         connection_type,
-                        pg_connection_key,
                         file_uri: None, // Will be updated after file creation
                     };
 
@@ -603,7 +601,6 @@ impl EditorPanel {
                                     position: final_tab_data.position,
                                     connection_id: final_tab_data.connection_id,
                                     connection_type: final_tab_data.connection_type.clone(),
-                                    pg_connection_key: final_tab_data.pg_connection_key.clone(),
                                     file_uri: Some(file_uri.clone()),
                                 };
 
@@ -904,7 +901,6 @@ impl EditorPanel {
                 // Note: Getting connection type from connection_id would require async context
                 // For now, we leave connection_type as None - this can be resolved when needed
                 let connection_type = None;
-                let pg_connection_key = None;
                 tabs_data.push((
                     pos,
                     query_tab.db_id,
@@ -913,7 +909,6 @@ impl EditorPanel {
                     pos as i32,
                     query_tab.connection_id,
                     connection_type,
-                    pg_connection_key,
                     query_tab.title.clone(),
                 ));
             }
@@ -934,7 +929,6 @@ impl EditorPanel {
                     position,
                     connection_id,
                     connection_type,
-                    pg_connection_key,
                     connection_name,
                 ) in tabs_data
                 {
@@ -946,7 +940,6 @@ impl EditorPanel {
                         position,
                         connection_id: Some(connection_id),
                         connection_type: connection_type.clone(),
-                        pg_connection_key: pg_connection_key.clone(),
                         file_uri: None, // Will be updated after file creation
                     };
 
@@ -996,7 +989,6 @@ impl EditorPanel {
                             position,
                             connection_id: Some(connection_id),
                             connection_type: connection_type.clone(),
-                            pg_connection_key: pg_connection_key.clone(),
                             file_uri: Some(file_uri.clone()),
                         };
 
@@ -1139,39 +1131,10 @@ impl EditorPanel {
                 let tab_content = tab_data.content.clone();
                 let tab_db_id = tab_data.id;
                 let tab_connection_type = tab_data.connection_type.clone();
-                let tab_pg_connection_key = tab_data.pg_connection_key.clone();
-
-                // We need to do this synchronously since we need window access
-                // Use the pg_connection_key for PostgreSQL or construct the SQLite path
-                let connection_string = if let Some(tab_connection_type) = &tab_connection_type {
-                    if tab_connection_type == "PostgreSQL" {
-                        if let Some(pg_key) = &tab_pg_connection_key {
-                            pg_key.clone()
-                        } else {
-                            debug!(
-                                "PostgreSQL tab missing pg_connection_key, skipping tab '{}'",
-                                tab_title
-                            );
-                            continue;
-                        }
-                    } else if tab_connection_type == "SQLite" {
-                        // For SQLite, use the standard path
-                        "sqlite:/home/user/.config/blanco/test.db".to_string()
-                    } else {
-                        debug!(
-                            "Unsupported connection type '{}', skipping tab '{}'",
-                            tab_connection_type, tab_title
-                        );
-                        continue;
-                    }
-                } else {
-                    debug!("Tab has no connection_type, skipping tab '{}'", tab_title);
-                    continue;
-                };
 
                 debug!(
-                    "Restoring tab '{}' with connection string: {}",
-                    tab_title, connection_string
+                    "Restoring tab '{}' with connection id: {:?}",
+                    tab_title, tab_data.connection_id,
                 );
 
                 let params = TabCreationParams {

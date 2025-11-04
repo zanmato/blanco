@@ -71,7 +71,6 @@ pub enum ChangeType {
     InsertRow,
 }
 
-
 #[derive(Clone, Debug, Default)]
 pub struct CellEditState {
     pub editing_cell: Option<(usize, usize)>, // (row, col)
@@ -103,7 +102,6 @@ impl CellEditState {
         self.original_values.get(&(row, col))
     }
 
-    
     pub fn start_editing(&mut self, row: usize, col: usize, input: Entity<InputState>) {
         self.editing_cell = Some((row, col));
         self.editing_input = Some(input);
@@ -148,7 +146,6 @@ impl CellEditState {
         self.changes.push(change);
     }
 
-    
     pub fn clear_changes(&mut self) {
         self.changes.clear();
         self.edited_values.clear();
@@ -156,9 +153,6 @@ impl CellEditState {
         self.pending_new_rows.clear();
     }
 
-    
-    
-    
     pub fn select_cell(&mut self, row: usize, col: usize) -> bool {
         // Toggle cell selection (col 0 is row number column)
         if col == 0 {
@@ -351,7 +345,6 @@ pub struct ResultsTableDelegate {
 }
 
 impl ResultsTableDelegate {
-    
     /// Remove a row at the specified index
     pub fn remove_row(&mut self, row_index: usize) {
         if row_index < self.rows.len() {
@@ -1187,7 +1180,13 @@ impl TableDelegate for ResultsTableDelegate {
         div().w(px(300.0)).h_full().flex_shrink_0()
     }
 
-    fn context_menu(&self, row_ix: usize, menu: PopupMenu, _window: &Window, _cx: &App) -> PopupMenu {
+    fn context_menu(
+        &self,
+        row_ix: usize,
+        menu: PopupMenu,
+        _window: &Window,
+        _cx: &App,
+    ) -> PopupMenu {
         let has_selection = self.edit_state.has_selection();
         let _selected_data = self.get_selected_data();
         let row_is_selected = self.edit_state.selected_rows.contains(&row_ix);
@@ -1720,7 +1719,6 @@ impl ResultsPanel {
         cx.notify();
     }
 
-    
     pub fn get_current_editing_cell(&self, cx: &App) -> Option<(usize, usize)> {
         self.table.read(cx).delegate().edit_state.editing_cell
     }
@@ -1789,12 +1787,7 @@ impl ResultsPanel {
         );
 
         // Get connection id from delegate (use fallback if not available)
-        let connection_id = self
-            .table
-            .read(cx)
-            .delegate()
-            .connection_id
-            .unwrap_or(0);
+        let connection_id = self.table.read(cx).delegate().connection_id.unwrap_or(0);
         // TODO: error here instead of fallback to connection_id 0
 
         // Get table name for logging
@@ -1979,11 +1972,7 @@ impl ResultsPanel {
             .table_name
             .clone()
             .unwrap_or_else(|| "unknown".to_string());
-        let connection_id = self
-            .table
-            .read(cx)
-            .delegate()
-            .connection_id;
+        let connection_id = self.table.read(cx).delegate().connection_id;
 
         // TODO: error here instead of fallback to sqlite::memory
 
@@ -2612,31 +2601,6 @@ mod tests {
         edit_state.editing_cell = None;
         assert!(!edit_state.is_editing(0, 0));
         assert!(edit_state.has_unsaved_changes());
-    }
-
-    #[test]
-    fn test_query_result_creation() {
-        let test_result = QueryResult {
-            columns: vec!["id".to_string(), "name".to_string()],
-            column_types: vec![],
-            rows: vec![
-                vec!["1".to_string(), "Alice".to_string()],
-                vec!["2".to_string(), "Bob".to_string()],
-            ],
-            query_text: Some("SELECT * FROM users".to_string()),
-            execution_time_ms: Some(50),
-            is_error: false,
-            rows_affected: 2,
-            table_name: Some("users".to_string()),
-            primary_key_column: Some("id".to_string()),
-            connection_string: Some("sqlite://test.db".to_string()),
-        };
-
-        assert_eq!(test_result.columns.len(), 2);
-        assert_eq!(test_result.rows.len(), 2);
-        assert_eq!(test_result.rows[0][1], "Alice");
-        assert_eq!(test_result.rows_affected, 2);
-        assert!(!test_result.is_error);
     }
 
     #[test]

@@ -128,9 +128,10 @@ impl BlancoApp {
                             info!("Loaded {} tabs from database", tabs.len());
                             for tab in &tabs {
                                 debug!(
-                                    "Tab '{}' (db_id: {:?}, content_len: {})",
+                                    "Tab '{}' (db_id: {:?}, connection_id: {:?}, content_len: {})",
                                     tab.title,
                                     tab.id,
+                                    tab.connection_id,
                                     tab.content.len()
                                 );
                             }

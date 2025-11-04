@@ -253,7 +253,7 @@ impl AppDatabase {
             sqlx::query(
                 r#"
                 UPDATE query_tabs
-                SET title = ?, content = ?, position = ?, connection_id = ?, connection_type = ?, pg_connection_key = ?, file_uri = ?, updated_at = ?
+                SET title = ?, content = ?, position = ?, connection_id = ?, connection_type = ?, file_uri = ?, updated_at = ?
                 WHERE id = ?
                 "#,
             )
@@ -262,7 +262,6 @@ impl AppDatabase {
             .bind(tab.position)
             .bind(tab.connection_id)
             .bind(&tab.connection_type)
-            .bind(&tab.pg_connection_key)
             .bind(&tab.file_uri)
             .bind(now)
             .bind(id)
@@ -273,7 +272,7 @@ impl AppDatabase {
             // Insert new tab
             let result = sqlx::query(
                 r#"
-                INSERT INTO query_tabs (title, content, position, connection_id, connection_type, pg_connection_key, file_uri, created_at, updated_at)
+                INSERT INTO query_tabs (title, content, position, connection_id, connection_type, file_uri, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 "#,
             )
@@ -282,7 +281,6 @@ impl AppDatabase {
             .bind(tab.position)
             .bind(tab.connection_id)
             .bind(&tab.connection_type)
-            .bind(&tab.pg_connection_key)
             .bind(&tab.file_uri)
             .bind(now)
             .bind(now)
@@ -296,9 +294,10 @@ impl AppDatabase {
     pub async fn load_query_tabs(&self) -> Result<Vec<QueryTabData>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
-            SELECT id, title, content, position, connection_id, connection_type, pg_connection_key, file_uri
-            FROM query_tabs
-            ORDER BY position ASC
+            SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type, file_uri
+            FROM query_tabs qt
+            INNER JOIN connections c ON c.id = qt.connection_id
+            ORDER BY qt.position ASC
             "#,
         )
         .fetch_all(&self.pool)
@@ -313,8 +312,7 @@ impl AppDatabase {
                 position: row.get(3),
                 connection_id: row.get(4),
                 connection_type: row.get(5),
-                pg_connection_key: row.get(6),
-                file_uri: row.get(7),
+                file_uri: row.get(6),
             })
             .collect();
 
@@ -333,7 +331,7 @@ impl AppDatabase {
     pub async fn find_tabs_needing_migration(&self) -> Result<Vec<QueryTabData>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
-            SELECT id, title, content, position, connection_id, connection_type, pg_connection_key, file_uri
+            SELECT id, title, content, position, connection_id, connection_type,file_uri
             FROM query_tabs
             WHERE file_uri IS NULL
             ORDER BY position ASC
@@ -351,7 +349,6 @@ impl AppDatabase {
                 position: row.get(3),
                 connection_id: row.get(4),
                 connection_type: row.get(5),
-                pg_connection_key: row.get(6),
                 file_uri: row.get(7),
             })
             .collect();
@@ -516,7 +513,6 @@ pub struct QueryTabData {
     pub position: i32,
     pub connection_id: Option<i64>,
     pub connection_type: Option<String>,
-    pub pg_connection_key: Option<String>,
     pub file_uri: Option<String>,
 }
 
@@ -653,90 +649,6 @@ impl AppDatabase {
             Ok(Some(connection_data))
         } else {
             Ok(None)
-        }
-    }
-
-    /// Find or create a connection from a connection string and return its ID
-    pub async fn find_or_create_connection(
-        &self,
-        connection_string: &str,
-    ) -> Result<i64, anyhow::Error> {
-        // First try to find existing connection with the same connection string
-        let existing_connection = sqlx::query(
-            r#"
-            SELECT id FROM connections
-            WHERE connection_string = ?
-            LIMIT 1
-            "#,
-        )
-        .bind(connection_string)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        if let Some(row) = existing_connection {
-            let connection_id = row.get::<i64, _>(0);
-            log::debug!(
-                "Found existing connection {} for connection string: {}",
-                connection_id,
-                connection_string
-            );
-            Ok(connection_id)
-        } else {
-            // Create a new connection entry
-            let connection_name = self.generate_connection_name(connection_string);
-            let db_type = if connection_string.starts_with("sqlite:") {
-                "SQLite"
-            } else if connection_string.starts_with("postgres:")
-                || connection_string.starts_with("postgresql:")
-            {
-                "PostgreSQL"
-            } else {
-                "Unknown"
-            };
-
-            let now = chrono::Utc::now().timestamp();
-            let connection_id = sqlx::query(
-                r#"
-                INSERT INTO connections (name, db_type, connection_string, last_used_at, created_at, is_active)
-                VALUES (?, ?, ?, ?, ?, ?)
-                "#,
-            )
-            .bind(&connection_name)
-            .bind(db_type)
-            .bind(connection_string)
-            .bind(now)
-            .bind(now)
-            .bind(1i64) // is_active = true
-            .execute(&self.pool)
-            .await?
-            .last_insert_rowid();
-
-            log::info!(
-                "Created new connection {} for connection string: {}",
-                connection_id,
-                connection_string
-            );
-            Ok(connection_id)
-        }
-    }
-
-    /// Generate a connection name from a connection string
-    fn generate_connection_name(&self, connection_string: &str) -> String {
-        if connection_string.starts_with("sqlite:") {
-            // Extract filename from SQLite path
-            let path = connection_string.trim_start_matches("sqlite:");
-            if let Some(filename) = Path::new(path).file_stem() {
-                format!("SQLite - {}", filename.to_string_lossy())
-            } else {
-                "SQLite Database".to_string()
-            }
-        } else if connection_string.starts_with("postgres:")
-            || connection_string.starts_with("postgresql:")
-        {
-            // Parse PostgreSQL connection string
-            "PostgreSQL Connection".to_string() // Simplified for now
-        } else {
-            "Unknown Connection".to_string()
         }
     }
 }
