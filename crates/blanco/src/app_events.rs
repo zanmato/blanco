@@ -10,16 +10,16 @@ use std::time::Duration;
 pub enum AppEvent {
     /// Connection events
     ConnectionEstablished {
-        connection_id: String,
+        connection_id: Option<i64>,
         connection_type: String,
         database_name: Option<String>,
     },
     ConnectionLost {
-        connection_id: String,
+        connection_id: Option<i64>,
         error: String,
     },
     ConnectionHealthCheck {
-        connection_id: String,
+        connection_id: Option<i64>,
         is_healthy: bool,
     },
     ConnectionsLoaded {
@@ -31,11 +31,11 @@ pub enum AppEvent {
 
     /// Query execution events
     QueryExecutionStarted {
-        connection_id: String,
+        connection_id: Option<i64>,
         query: String,
     },
     QueryExecutionCompleted {
-        connection_id: String,
+        connection_id: Option<i64>,
         success: bool,
         execution_time: Duration,
         rows_affected: Option<u64>,
@@ -44,28 +44,28 @@ pub enum AppEvent {
 
     /// Schema events
     SchemaChanged {
-        connection_id: String,
+        connection_id: Option<i64>,
         schema_name: String,
     },
     TablesRefreshed {
-        connection_id: String,
+        connection_id: Option<i64>,
         table_count: usize,
     },
 
     /// Table operations events
     TableChangesCommitted {
         table_name: String,
-        connection_id: String,
+        connection_id: Option<i64>,
         changes_count: usize,
     },
     TableChangesRollback {
         table_name: String,
-        connection_id: String,
+        connection_id: Option<i64>,
         changes_count: usize,
     },
     TableOperationCompleted {
         table_name: String,
-        connection_id: String,
+        connection_id: Option<i64>,
         success: bool,
         rows_affected: Option<u64>,
         error_message: Option<String>,
@@ -119,7 +119,7 @@ pub enum AppEvent {
 
     /// Performance monitoring events
     PerformanceMetrics {
-        connection_id: String,
+        connection_id: Option<i64>,
         query_time: Duration,
         connection_pool_size: usize,
     },

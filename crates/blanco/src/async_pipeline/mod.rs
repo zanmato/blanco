@@ -36,7 +36,7 @@ pub enum TaskPriority {
 pub enum AsyncEvent {
     /// Database query execution
     ExecuteQuery {
-        connection_string: String,
+        connection_id: i64,
         sql: String,
         // response_tx: oneshot::Sender<Result<QueryResult>>, // TODO: Replace with async-std compatible pattern
         priority: TaskPriority,
@@ -44,7 +44,7 @@ pub enum AsyncEvent {
 
     /// Database table operations (INSERT, UPDATE, DELETE)
     ExecuteTableOperations {
-        connection_string: String,
+        connection_id: i64,
         operations: Vec<TableChangeOperation>,
         response_tx: async_std::channel::Sender<TableOperationResponse>,
         priority: TaskPriority,
@@ -52,14 +52,14 @@ pub enum AsyncEvent {
 
     /// Connection health check
     CheckConnectionHealth {
-        connection_string: String,
+        connection_id: i64,
         // response_tx: oneshot::Sender<Result<ConnectionHealth>>, // TODO: Replace with async-std compatible pattern
         priority: TaskPriority,
     },
 
     /// Schema information refresh
     RefreshSchema {
-        connection_string: String,
+        connection_id: i64,
         schema_name: Option<String>,
         // response_tx: oneshot::Sender<Result<Vec<SchemaInfo>>>, // TODO: Replace with async-std compatible pattern
         priority: TaskPriority,
@@ -67,7 +67,7 @@ pub enum AsyncEvent {
 
     /// LSP diagnostics request
     RequestLspDiagnostics {
-        connection_string: String,
+        connection_id: i64,
         document_uri: String,
         // response_tx: oneshot::Sender<Result<Vec<gpui_component::highlighter::Diagnostic>>>, // TODO: Replace with async-std compatible pattern
         priority: TaskPriority,
@@ -75,7 +75,7 @@ pub enum AsyncEvent {
 
     /// Performance metrics collection
     CollectPerformanceMetrics {
-        connection_string: String,
+        connection_id: i64,
         // response_tx: oneshot::Sender<Result<PerformanceMetrics>>, // TODO: Replace with async-std compatible pattern
         priority: TaskPriority,
     },
@@ -96,7 +96,7 @@ pub struct TableOperationResult {
 #[derive(Debug, Clone)]
 pub struct TableOperationResponse {
     pub table_name: String,
-    pub connection_string: String,
+    pub connection_id: i64,
     pub success: bool,
     pub rows_affected: Option<u64>,
     pub error_message: Option<String>,
@@ -146,7 +146,7 @@ pub struct ColumnInfo {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct PerformanceMetrics {
-    pub connection_string: String,
+    pub connection_id: i64,
     pub query_count: u64,
     pub avg_query_time: Duration,
     pub connection_pool_size: usize,
@@ -167,7 +167,7 @@ pub struct AsyncEventProcessor {
 
   
     /// Performance tracking
-    performance_metrics: Arc<RwLock<HashMap<String, PerformanceMetrics>>>,
+    performance_metrics: Arc<RwLock<HashMap<i64, PerformanceMetrics>>>,
 
     /// Debounced queries cache (simplified for future use)
     debounced_queries: Arc<RwLock<HashMap<String, Instant>>>,
@@ -322,7 +322,7 @@ impl AsyncEventProcessor {
     async fn process_task_queue(
         task_queues: &Arc<RwLock<HashMap<TaskPriority, VecDeque<AsyncEvent>>>>,
         db_service: &DbService,
-        performance_metrics: &Arc<RwLock<HashMap<String, PerformanceMetrics>>>,
+        performance_metrics: &Arc<RwLock<HashMap<i64, PerformanceMetrics>>>,
     ) -> Result<()> {
         let priorities = [
             TaskPriority::Critical,
@@ -357,13 +357,13 @@ impl AsyncEventProcessor {
     async fn process_event(
         event: AsyncEvent,
         db_service: &DbService,
-        performance_metrics: &Arc<RwLock<HashMap<String, PerformanceMetrics>>>,
+        performance_metrics: &Arc<RwLock<HashMap<i64, PerformanceMetrics>>>,
     ) -> Result<()> {
         let start_time = Instant::now();
 
         match event {
-            AsyncEvent::ExecuteQuery { connection_string, sql, .. } => {
-                let result = Self::execute_query_operation(&connection_string, &sql, db_service).await;
+            AsyncEvent::ExecuteQuery { connection_id, sql, .. } => {
+                let result = Self::execute_query_operation(connection_id, &sql, db_service).await;
                 let execution_time = start_time.elapsed();
 
                 let success = result.is_ok();
@@ -382,11 +382,11 @@ impl AsyncEventProcessor {
                 // TODO: Replace response_tx.send(result) with async-std compatible pattern
 
                 // Update performance metrics
-                Self::update_performance_metrics(&connection_string, execution_time, performance_metrics).await;
+                Self::update_performance_metrics(connection_id, execution_time, performance_metrics).await;
             }
 
-            AsyncEvent::ExecuteTableOperations { connection_string, operations, response_tx, .. } => {
-                let result = Self::execute_table_operations(&connection_string, operations.clone(), db_service).await;
+            AsyncEvent::ExecuteTableOperations { connection_id, operations, response_tx, .. } => {
+                let result = Self::execute_table_operations(connection_id, operations.clone(), db_service).await;
                 let _execution_time = start_time.elapsed();
 
                 // Extract table name from operations (all operations should be for the same table)
@@ -412,7 +412,7 @@ impl AsyncEventProcessor {
                 // Send response back to caller
                 let response = TableOperationResponse {
                     table_name: table_name.clone(),
-                    connection_string: connection_string.clone(),
+                    connection_id,
                     success,
                     rows_affected,
                     error_message,
@@ -426,8 +426,8 @@ impl AsyncEventProcessor {
                 log::info!("Table operations completed: success={}, operations_executed={}", success, operations_executed);
             }
 
-            AsyncEvent::CheckConnectionHealth { connection_string, .. } => {
-                let result = Self::check_connection_health(&connection_string, db_service).await;
+            AsyncEvent::CheckConnectionHealth { connection_id, .. } => {
+                let result = Self::check_connection_health(connection_id, db_service).await;
 
                 // TODO: Re-enable connection health events when we have a proper global event system
                 if let Ok(ref health) = result {
@@ -437,8 +437,8 @@ impl AsyncEventProcessor {
                 // TODO: Replace response_tx.send(result) with async-std compatible pattern
             }
 
-            AsyncEvent::RefreshSchema { connection_string, schema_name, .. } => {
-                let result = Self::refresh_schema(&connection_string, schema_name.as_deref(), db_service).await;
+            AsyncEvent::RefreshSchema { connection_id, schema_name, .. } => {
+                let result = Self::refresh_schema(connection_id, schema_name.as_deref(), db_service).await;
 
                 // TODO: Re-enable schema refresh events when we have a proper global event system
                 if let Ok(ref schema_info) = result {
@@ -453,8 +453,8 @@ impl AsyncEventProcessor {
                 // TODO: Implement LSP diagnostics request
             }
 
-            AsyncEvent::CollectPerformanceMetrics { connection_string, .. } => {
-                let _metrics = Self::collect_performance_metrics(&connection_string, performance_metrics).await;
+            AsyncEvent::CollectPerformanceMetrics { connection_id, .. } => {
+                let _metrics = Self::collect_performance_metrics(connection_id, performance_metrics).await;
                 // TODO: Replace response_tx.send(Ok(metrics)) with async-std compatible pattern
             }
 
@@ -465,23 +465,23 @@ impl AsyncEventProcessor {
 
     /// Execute a database query
     async fn execute_query_operation(
-        connection_string: &str,
+        connection_id: i64,
         sql: &str,
         db_service: &DbService,
     ) -> Result<QueryResult> {
         debug!("Executing query: {}", sql);
-        db_service.execute_query_unified(connection_string, sql).await
+        db_service.execute_query_by_id(connection_id, sql).await
     }
 
     /// Execute table operations
     async fn execute_table_operations(
-        connection_string: &str,
+        connection_id: i64,
         operations: Vec<TableChangeOperation>,
         db_service: &DbService,
     ) -> Result<TableOperationResult> {
         debug!("Executing {} table operations", operations.len());
 
-        let connection = db_service.get_or_create_unified_connection(connection_string).await?;
+        let connection = db_service.get_or_create_connection(connection_id).await?;
 
         // Convert table operations to SQL and execute
         let mut total_rows_affected = 0;
@@ -509,12 +509,12 @@ impl AsyncEventProcessor {
 
     /// Check connection health
     async fn check_connection_health(
-        connection_string: &str,
+        connection_id: i64,
         db_service: &DbService,
     ) -> Result<ConnectionHealth> {
         let start_time = Instant::now();
 
-        match db_service.get_or_create_unified_connection(connection_string).await {
+        match db_service.get_or_create_connection(connection_id).await {
             Ok(connection) => {
                 // Simple health check - try to execute a basic query
                 match connection.execute_query("SELECT 1").await {
@@ -543,7 +543,7 @@ impl AsyncEventProcessor {
 
     /// Refresh schema information
     async fn refresh_schema(
-        _connection_string: &str,
+        _connection_id: i64,
         _schema_name: Option<&str>,
         _db_service: &DbService,
     ) -> Result<Vec<SchemaInfo>> {
@@ -553,12 +553,12 @@ impl AsyncEventProcessor {
 
     /// Collect performance metrics
     async fn collect_performance_metrics(
-        connection_string: &str,
-        performance_metrics: &Arc<RwLock<HashMap<String, PerformanceMetrics>>>,
+        connection_id: i64,
+        performance_metrics: &Arc<RwLock<HashMap<i64, PerformanceMetrics>>>,
     ) -> PerformanceMetrics {
         let metrics = performance_metrics.read().await;
-        metrics.get(connection_string).cloned().unwrap_or(PerformanceMetrics {
-            connection_string: connection_string.to_string(),
+        metrics.get(&connection_id).cloned().unwrap_or(PerformanceMetrics {
+            connection_id,
             query_count: 0,
             avg_query_time: Duration::from_millis(0),
             connection_pool_size: 0,
@@ -569,13 +569,13 @@ impl AsyncEventProcessor {
 
     /// Update performance metrics
     async fn update_performance_metrics(
-        connection_string: &str,
+        connection_id: i64,
         execution_time: Duration,
-        performance_metrics: &Arc<RwLock<HashMap<String, PerformanceMetrics>>>,
+        performance_metrics: &Arc<RwLock<HashMap<i64, PerformanceMetrics>>>,
     ) {
         let mut metrics = performance_metrics.write().await;
-        let metric = metrics.entry(connection_string.to_string()).or_insert(PerformanceMetrics {
-            connection_string: connection_string.to_string(),
+        let metric = metrics.entry(connection_id).or_insert(PerformanceMetrics {
+            connection_id,
             query_count: 0,
             avg_query_time: Duration::from_millis(0),
             connection_pool_size: 0,

@@ -220,7 +220,7 @@ impl PostgresConnection {
                         is_error: false,
                         table_name: None,
                         primary_key_column: None,
-                        connection_string: None,
+                        connection_id: None,
                     });
                 }
 
@@ -420,7 +420,7 @@ impl PostgresConnection {
                     is_error: false,
                     table_name: None,
                     primary_key_column: None,
-                    connection_string: None,
+                    connection_id: None,
                 })
             }
             Err(_e) => {
@@ -436,7 +436,7 @@ impl PostgresConnection {
                     is_error: false,
                     table_name: None,
                     primary_key_column: None,
-                    connection_string: None,
+                    connection_id: None,
                 })
             }
         }
@@ -596,7 +596,7 @@ impl Connection for PostgresConnection {
                         is_error: false,
                         table_name: None,
                         primary_key_column: None,
-                        connection_string: None,
+                        connection_id: None,
                     });
                 }
 
@@ -796,7 +796,7 @@ impl Connection for PostgresConnection {
                     is_error: false,
                     table_name: None,
                     primary_key_column: None,
-                    connection_string: None,
+                    connection_id: None,
                 })
             }
             Err(_e) => {
@@ -817,7 +817,7 @@ impl Connection for PostgresConnection {
                     is_error: false,
                     table_name: None,
                     primary_key_column: None,
-                    connection_string: None,
+                    connection_id: None,
                 })
             }
         }

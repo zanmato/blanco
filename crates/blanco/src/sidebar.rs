@@ -38,7 +38,7 @@ impl SchemaNode {
 #[derive(Clone)]
 pub struct UnifiedConnectionInfo {
     pub connection: Arc<dyn blanco_core::Connection>,
-    pub connection_string: String,
+    pub connection_id: i64,
     pub expanded: bool,
     pub schemas: Vec<SchemaNode>,
     pub display_name: String,
@@ -92,14 +92,15 @@ impl ConnectionSidebar {
 
         // Load connections asynchronously and update UI
         log::info!("Starting to load database connections...");
-        cx.spawn(async move |sidebar_handle, mut cx| {
+        cx.spawn(async move |sidebar_handle, cx| {
             let connections = match *app_db.read().await {
                 Some(ref app_db) => match app_db.load_connections().await {
                     Ok(connections) => {
                         log::info!("Loaded {} connections from database", connections.len());
                         for conn in &connections {
                             log::info!("Processing connection: {} ({})", conn.name, conn.db_type);
-                            log::info!("Connection details - name: '{}', db_type: '{}', db_path: {:?}, host: {:?}, port: {:?}, database: {:?}, username: {:?}",
+                            log::info!("Connection details - id: '{}', name: '{}', db_type: '{}', db_path: {:?}, host: {:?}, port: {:?}, database: {:?}, username: {:?}",
+                                        conn.id.unwrap_or(0),
                                          conn.name,
                                          conn.db_type,
                                          conn.database_path,
@@ -122,70 +123,38 @@ impl ConnectionSidebar {
             };
 
             if let Some(sidebar) = sidebar_handle.upgrade() {
-                let _ = sidebar.update(cx, |sidebar, cx| {
+                let _ = sidebar.update(cx, |_sidebar, cx| {
                     // Process loaded connections and add them to unified connection system
                     for conn in &connections {
-                        // Build connection string for unified system
-                        let connection_string = if conn.db_type == "PostgreSQL" {
-                            if let (Some(host), Some(port), Some(database), Some(username)) =
-                                (&conn.host, conn.port, &conn.database_name, &conn.username) {
-
-                                log::info!("Processing PostgreSQL connection: {} ({}:{}/{})",
-                                            conn.name, host, port, database);
-
-                                // Build PostgreSQL connection string
-                                let built_conn_string = format!("postgresql://{}:{}@{}:{}/{}",
-                                    username,
-                                    conn.password.as_ref().unwrap_or(&"".to_string()),
-                                    host, port, database);
-                                log::info!("Built connection string for {}: {}", conn.name, built_conn_string);
-                                Some(built_conn_string)
-                            } else {
-                                log::warn!("PostgreSQL connection missing required fields: {}", conn.name);
-                                None
-                            }
-                        } else if conn.db_type == "SQLite" {
-                            if let Some(database_path) = &conn.database_path {
-                                log::info!("Processing SQLite connection: {} -> {}", conn.name, database_path);
-
-                                // Build SQLite connection string
-                                Some(format!("sqlite:{}", database_path))
-                            } else {
-                                log::warn!("SQLite connection has no database_path: {}", conn.name);
-                                None
-                            }
-                        } else {
-                            log::warn!("Unsupported connection type: {} for connection {}", conn.db_type, conn.name);
-                            None
-                        };
-
                         // Add to unified connections system
-                        if let Some(conn_str) = connection_string {
-                            let unified_manager = DbService::global(cx).unified_manager_handle();
+                        if let Some(conn_id) = conn.id {
+                            let db_service = DbService::global(cx).clone();
                             let conn_name = conn.name.clone();
-                            let conn_str_clone = conn_str.clone();
 
                             // Add connection to unified system
-                            cx.spawn(async move |sidebar_handle, mut cx| {
-                                if let Ok(connection) = unified_manager.read().await.get_or_create_connection(&conn_str_clone).await {
-                                    if let Some(sidebar) = sidebar_handle.upgrade() {
-                                        let _ = sidebar.update(cx, |sidebar, cx| {
-                                            let connection_key = connection.get_connection_key_str();
-                                            let unified_info = UnifiedConnectionInfo {
-                                                connection: connection.clone(),
-                                                connection_string: conn_str.clone(),
-                                                expanded: false,
-                                                schemas: Vec::new(),
-                                                display_name: conn_name.clone(),
-                                                tables: Vec::new(),
-                                            };
-                                            sidebar.unified_connections.insert(connection_key, unified_info);
-                                            log::info!("Added connection to unified system: {} -> {}", conn_name, conn_str);
-                                            cx.notify();
-                                        });
+                            cx.spawn(async move |sidebar_handle, cx| {
+                                match db_service.get_or_create_connection(conn_id).await {
+                                    Ok(connection) => {
+                                        if let Some(sidebar) = sidebar_handle.upgrade() {
+                                            let _ = sidebar.update(cx, |sidebar, cx| {
+                                                let connection_key = connection.get_connection_key_str();
+                                                let unified_info = UnifiedConnectionInfo {
+                                                    connection: connection.clone(),
+                                                    connection_id: conn_id,
+                                                    expanded: false,
+                                                    schemas: Vec::new(),
+                                                    display_name: conn_name.clone(),
+                                                    tables: Vec::new(),
+                                                };
+                                                sidebar.unified_connections.insert(connection_key, unified_info);
+                                                log::info!("Added connection to unified system: {} -> {}", conn_name, conn_id);
+                                                cx.notify();
+                                            });
+                                        }
+                                    },
+                                    Err(e) => {
+                                        log::error!("Failed to create unified connection for: {}, {}", conn_name, e);
                                     }
-                                } else {
-                                    log::error!("Failed to create unified connection for: {}", conn_name);
                                 }
                             }).detach();
                         }
@@ -210,19 +179,17 @@ impl ConnectionSidebar {
     /// Load tables using the unified connection interface
     pub async fn load_unified_tables(
         &mut self,
-        connection_string: &str,
+        connection_id: i64,
         _cx: &mut Context<'_, Self>,
     ) -> Result<Vec<String>, anyhow::Error> {
         info!(
-            "Loading tables using unified interface for: {}",
-            connection_string
+            "Loading tables using unified interface for connection ID: {}",
+            connection_id
         );
 
         // Get or create connection using unified manager
         let db_service = DbService::global(_cx);
-        let connection = db_service
-            .get_or_create_unified_connection(connection_string)
-            .await?;
+        let connection = db_service.get_or_create_connection(connection_id).await?;
 
         // Load tables using the unified trait
         let tables = connection.get_tables(None).await?;
@@ -234,19 +201,17 @@ impl ConnectionSidebar {
     /// Load schemas using the unified connection interface
     pub async fn load_unified_schemas(
         &mut self,
-        connection_string: &str,
+        connection_id: i64,
         _cx: &mut Context<'_, Self>,
     ) -> Result<Vec<String>, anyhow::Error> {
         info!(
-            "Loading schemas using unified interface for: {}",
-            connection_string
+            "Loading schemas using unified interface for connection ID: {}",
+            connection_id
         );
 
         // Get or create connection using unified manager
         let db_service = DbService::global(_cx);
-        let connection = db_service
-            .get_or_create_unified_connection(connection_string)
-            .await?;
+        let connection = db_service.get_or_create_connection(connection_id).await?;
 
         // Load schemas using the unified trait
         let schemas = connection.get_schemas().await?;
@@ -255,65 +220,21 @@ impl ConnectionSidebar {
         Ok(schemas)
     }
 
-    /// Add a connection using the unified interface
-    pub async fn add_unified_connection(
-        &mut self,
-        connection_string: &str,
-        display_name: &str,
-        _cx: &mut Context<'_, Self>,
-    ) -> Result<(), anyhow::Error> {
-        info!(
-            "Adding unified connection: {} ({})",
-            display_name, connection_string
-        );
-
-        // Create connection using unified manager
-        let db_service = DbService::global(_cx);
-        let connection = db_service
-            .get_or_create_unified_connection(connection_string)
-            .await?;
-
-        // Cache the connection with proper info
-        let connection_info = UnifiedConnectionInfo {
-            connection: connection.clone(),
-            connection_string: connection_string.to_string(),
-            expanded: false,
-            schemas: Vec::new(),
-            display_name: display_name.to_string(),
-            tables: Vec::new(),
-        };
-        self.unified_connections
-            .insert(connection_string.to_string(), connection_info);
-
-        // TODO: Add the connection to the appropriate legacy structure for rendering
-        // For now, just log the success
-        info!("Successfully added unified connection: {}", display_name);
-
-        Ok(())
-    }
-
     /// Load tables for a connection using unified interface
     pub fn load_tables_unified_async(
         &mut self,
-        connection_string: &str,
+        connection_id: i64,
         schema: Option<&str>,
         ui_update_callback: impl Fn(&mut Self, Vec<String>) + Send + Sync + 'static,
         error_callback: impl Fn(&mut Self, String) + Send + Sync + 'static,
         cx: &mut Context<Self>,
     ) {
-        let unified_manager = DbService::global(cx).unified_manager_handle();
-        let connection_string_clone = connection_string.to_string();
-        let connection_string_for_logging = connection_string_clone.clone();
+        let db_service = DbService::global(cx).clone();
         let schema_clone = schema.map(|s| s.to_string());
 
-        cx.spawn(async move |sidebar_handle, mut cx| {
+        cx.spawn(async move |sidebar_handle, cx| {
             // Get connection and tables in sequence using unified interface
-            match unified_manager
-                .read()
-                .await
-                .get_or_create_connection(&connection_string_clone)
-                .await
-            {
+            match db_service.get_or_create_connection(connection_id).await {
                 Ok(connection) => match connection.get_tables(schema_clone.as_deref()).await {
                     Ok(tables) => {
                         if let Some(sidebar) = sidebar_handle.upgrade() {
@@ -326,7 +247,7 @@ impl ConnectionSidebar {
                     Err(e) => {
                         log::error!(
                             "Failed to load tables for connection '{}': {}",
-                            connection_string_for_logging,
+                            connection_id,
                             e
                         );
                         if let Some(sidebar) = sidebar_handle.upgrade() {
@@ -338,11 +259,7 @@ impl ConnectionSidebar {
                     }
                 },
                 Err(e) => {
-                    log::error!(
-                        "Failed to get connection for '{}': {}",
-                        connection_string_for_logging,
-                        e
-                    );
+                    log::error!("Failed to get connection for '{}': {}", connection_id, e);
                 }
             }
         })
@@ -352,23 +269,16 @@ impl ConnectionSidebar {
     /// Load schemas for a connection using unified interface
     pub fn load_schemas_unified_async(
         &mut self,
-        connection_string: &str,
+        connection_id: i64,
         ui_update_callback: impl Fn(&mut Self, Vec<String>) + Send + Sync + 'static,
         error_callback: impl Fn(&mut Self, String) + Send + Sync + 'static,
         cx: &mut Context<Self>,
     ) {
-        let unified_manager = DbService::global(cx).unified_manager_handle();
-        let connection_string_clone = connection_string.to_string();
-        let connection_string_for_logging = connection_string_clone.clone();
+        let db_service = DbService::global(cx).clone();
 
-        cx.spawn(async move |sidebar_handle, mut cx| {
+        cx.spawn(async move |sidebar_handle, cx| {
             // Get connection and schemas in sequence using unified interface
-            match unified_manager
-                .read()
-                .await
-                .get_or_create_connection(&connection_string_clone)
-                .await
-            {
+            match db_service.get_or_create_connection(connection_id).await {
                 Ok(connection) => match connection.get_schemas().await {
                     Ok(schemas) => {
                         if let Some(sidebar) = sidebar_handle.upgrade() {
@@ -381,7 +291,7 @@ impl ConnectionSidebar {
                     Err(e) => {
                         log::error!(
                             "Failed to load schemas for connection '{}': {}",
-                            connection_string_for_logging,
+                            connection_id,
                             e
                         );
                         if let Some(sidebar) = sidebar_handle.upgrade() {
@@ -395,7 +305,7 @@ impl ConnectionSidebar {
                 Err(e) => {
                     log::error!(
                         "Failed to get connection for schemas '{}': {}",
-                        connection_string_for_logging,
+                        connection_id,
                         e
                     );
                 }
@@ -412,7 +322,7 @@ impl ConnectionSidebar {
 
             if !was_expanded && connection_info.expanded {
                 // Connection is being expanded - load schemas/tables
-                let connection_string = connection_info.connection_string.clone();
+                let connection_id = connection_info.connection_id;
                 let connection_key_clone = connection_key.to_string();
                 let connection_key_for_schemas_callbacks = connection_key_clone.clone();
                 let connection_key_for_schemas_logging =
@@ -420,7 +330,7 @@ impl ConnectionSidebar {
                 if connection_info.connection.supports_schemas() {
                     // Load schemas for connections that support them (e.g., PostgreSQL)
                     self.load_schemas_unified_async(
-                        &connection_string,
+                        connection_id,
                         move |sidebar, schemas| {
                             // Success callback - update schemas
                             if let Some(conn_info) =
@@ -467,7 +377,7 @@ impl ConnectionSidebar {
                     let connection_key_for_tables_error =
                         connection_key_for_tables_callbacks.clone();
                     self.load_tables_unified_async(
-                        &connection_string,
+                        connection_id,
                         None,
                         move |sidebar, tables| {
                             // Success callback - update tables
@@ -525,7 +435,7 @@ impl ConnectionSidebar {
 
                 if !was_expanded && schema.expanded && schema.tables.is_empty() {
                     // Schema is being expanded - load tables
-                    let connection_string = connection_info.connection_string.clone();
+                    let connection_id = connection_info.connection_id;
                     let connection_key_for_schema_tables_callbacks = connection_key.to_string();
                     let connection_key_for_schema_tables_logging =
                         connection_key_for_schema_tables_callbacks.clone();
@@ -536,7 +446,7 @@ impl ConnectionSidebar {
                     let schema_name_for_error = schema_name_for_callbacks.clone();
 
                     self.load_tables_unified_async(
-                        &connection_string,
+                        connection_id,
                         Some(schema_name),
                         move |sidebar, tables| {
                             // Success callback - update tables
@@ -609,7 +519,7 @@ impl Render for ConnectionSidebar {
                         for (connection_key, connection_info) in &self.unified_connections {
                             let connection_key_clone = connection_key.clone();
                             let display_name = connection_info.display_name.clone();
-                            let _connection_string = connection_info.connection_string.clone();
+                            let connection_id = connection_info.connection_id;
                             let was_expanded = connection_info.expanded;
                             let _connection_type = connection_info.connection.get_connection_type();
 
@@ -619,8 +529,8 @@ impl Render for ConnectionSidebar {
                                     .icon(match connection_info.connection.get_icon_name() {
                                         blanco_core::IconName::Sqlite => IconName::Sqlite,
                                         blanco_core::IconName::Postgres => IconName::Postgresql,
-                                        blanco_core::IconName::Database => IconName::SquareTerminal,
-                                        blanco_core::IconName::Table => IconName::SquareTerminal,
+                                        blanco_core::IconName::Database => IconName::Database,
+                                        blanco_core::IconName::Table => IconName::Sheet,
                                         blanco_core::IconName::Column => IconName::SquareTerminal,
                                         _ => IconName::SquareTerminal,
                                     })
@@ -629,7 +539,6 @@ impl Render for ConnectionSidebar {
                                     .context_menu({
                                         let display_name_for_menu = display_name.clone();
                                         let connection_key_for_menu = connection_key_clone.clone();
-                                        let connection_string_for_menu = _connection_string.clone();
                                         move |menu, _window, _cx| {
                                             log::info!(
                                                 "Creating context menu for unified connection: {}",
@@ -642,8 +551,7 @@ impl Render for ConnectionSidebar {
                                                         display_name: display_name_for_menu.clone(),
                                                         connection_key: connection_key_for_menu
                                                             .clone(),
-                                                        connection_string:
-                                                            connection_string_for_menu.clone(),
+                                                        connection_id: connection_id,
                                                     },
                                                 ),
                                             )
@@ -677,14 +585,12 @@ impl Render for ConnectionSidebar {
                                         .id(("unified-schema", schema_key.len() as u64))
                                         .context_menu({
                                             let schema_name_for_menu = schema_name.clone();
-                                            let connection_key_for_menu = connection_key.clone();
                                             move |menu, _window, _cx| {
                                                 menu.menu(
                                                     "New Query",
                                                     Box::new(
                                                         crate::app::NewQueryForUnifiedSchema {
-                                                            connection_key: connection_key_for_menu
-                                                                .clone(),
+                                                            connection_id: connection_id,
                                                             schema_name: schema_name_for_menu
                                                                 .clone(),
                                                         },

@@ -4,8 +4,8 @@
 //! and other components that need database access without depending on specific
 //! implementations.
 
-use async_trait::async_trait;
 use anyhow::Result;
+use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -15,39 +15,85 @@ use crate::Connection;
 #[async_trait]
 pub trait DatabaseService: Send + Sync {
     /// Get or create a database connection using the provided connection string
-    async fn get_or_create_connection(&self, connection_string: &str) -> Result<Arc<dyn Connection>>;
+    async fn get_or_create_connection(
+        &self,
+        connection_string: &str,
+    ) -> Result<Arc<dyn Connection>>;
+
+    /// Get or create a database connection using the provided connection ID
+    async fn get_or_create_connection_by_id(
+        &self,
+        _connection_id: i64,
+    ) -> Result<Arc<dyn Connection>> {
+        // Default implementation - resolve connection_id to connection_string
+        // This should be overridden by implementations that have access to the app database
+        Err(anyhow::anyhow!(
+            "get_or_create_connection_by_id not implemented - trait default only"
+        ))
+    }
 
     /// Execute a query using the provided connection string
-    async fn execute_query(&self, connection_string: &str, sql: &str) -> Result<crate::QueryResult> {
+    async fn execute_query(
+        &self,
+        connection_string: &str,
+        sql: &str,
+    ) -> Result<crate::QueryResult> {
         let connection = self.get_or_create_connection(connection_string).await?;
         connection.execute_query(sql).await
     }
 
-    /// Get database schema information as JSON
-    async fn get_database_schema(&self, connection_string: &str) -> Result<Value> {
-        self.get_database_schema_paginated(connection_string, None, Some(20), Some(0)).await
+    /// Execute a query using the provided connection ID
+    async fn execute_query_by_id(
+        &self,
+        connection_id: i64,
+        sql: &str,
+    ) -> Result<crate::QueryResult> {
+        let connection = self.get_or_create_connection_by_id(connection_id).await?;
+        connection.execute_query(sql).await
     }
 
     /// Get database schema information as JSON with pagination support
-    async fn get_database_schema_paginated(&self, connection_string: &str, table_names: Option<&str>, limit: Option<i64>, offset: Option<i64>) -> Result<Value> {
-        let connection = self.get_or_create_connection(connection_string).await?;
+    async fn get_database_schema_paginated(
+        &self,
+        connection_id: i64,
+        table_names: Option<&str>,
+        limit: Option<i64>,
+        offset: Option<i64>,
+    ) -> Result<Value> {
+        let connection = self.get_or_create_connection_by_id(connection_id).await?;
 
         // Get basic connection info
         let connection_type = connection.get_connection_type();
         let display_name = connection.get_display_name();
 
-        log::info!("Getting database schema for {} ({}) with limit={:?}, offset={:?}", display_name, connection_type, limit, offset);
+        log::info!(
+            "Getting database schema for {} ({}) with limit={:?}, offset={:?}",
+            display_name,
+            connection_type,
+            limit,
+            offset
+        );
 
         let limit = limit.unwrap_or(20).min(100); // Default 20, max 100
         let offset = offset.unwrap_or(0);
 
         let tables = match connection_type {
-            "PostgreSQL" => self.get_postgresql_schema_paginated(&connection, table_names, limit, offset).await?,
-            "SQLite" => self.get_sqlite_schema_paginated(&connection, table_names, limit, offset).await?,
+            "PostgreSQL" => {
+                self.get_postgresql_schema_paginated(&connection, table_names, limit, offset)
+                    .await?
+            }
+            "SQLite" => {
+                self.get_sqlite_schema_paginated(&connection, table_names, limit, offset)
+                    .await?
+            }
             _ => {
                 // Fallback to the original method for unknown database types
-                log::warn!("Using fallback method for unknown database type: {}", connection_type);
-                self.get_schema_fallback_paginated(&connection, table_names, limit, offset).await?
+                log::warn!(
+                    "Using fallback method for unknown database type: {}",
+                    connection_type
+                );
+                self.get_schema_fallback_paginated(&connection, table_names, limit, offset)
+                    .await?
             }
         };
 
@@ -65,18 +111,29 @@ pub trait DatabaseService: Send + Sync {
 
     /// Get PostgreSQL schema using optimized JSON aggregation queries
     async fn get_postgresql_schema(&self, connection: &Arc<dyn Connection>) -> Result<Vec<Value>> {
-        self.get_postgresql_schema_paginated(connection, None, 20, 0).await
+        self.get_postgresql_schema_paginated(connection, None, 20, 0)
+            .await
     }
 
     /// Get PostgreSQL schema using optimized JSON aggregation queries with pagination
-    async fn get_postgresql_schema_paginated(&self, connection: &Arc<dyn Connection>, table_names: Option<&str>, limit: i64, offset: i64) -> Result<Vec<Value>> {
+    async fn get_postgresql_schema_paginated(
+        &self,
+        connection: &Arc<dyn Connection>,
+        table_names: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Value>> {
         let where_clause = if let Some(names) = table_names {
-            format!(" AND t.table_name = ANY(ARRAY['{}'])", names.replace(',', "','"))
+            format!(
+                " AND t.table_name = ANY(ARRAY['{}'])",
+                names.replace(',', "','")
+            )
         } else {
             String::new()
         };
 
-        let query = format!(r#"
+        let query = format!(
+            r#"
             SELECT
                 json_build_object(
                     'name', t.table_name,
@@ -113,7 +170,9 @@ pub trait DatabaseService: Send + Sync {
             GROUP BY t.table_name, t.table_schema
             ORDER BY t.table_name
             LIMIT {} OFFSET {}
-        "#, where_clause, limit, offset);
+        "#,
+            where_clause, limit, offset
+        );
 
         let query_result = connection.execute_query(&query).await?;
 
@@ -126,27 +185,45 @@ pub trait DatabaseService: Send + Sync {
             }
         }
 
-        log::info!("PostgreSQL schema query completed: {} tables found", tables.len());
+        log::info!(
+            "PostgreSQL schema query completed: {} tables found",
+            tables.len()
+        );
         Ok(tables)
     }
 
     /// Get SQLite schema using optimized JSON aggregation queries
     async fn get_sqlite_schema(&self, connection: &Arc<dyn Connection>) -> Result<Vec<Value>> {
-        self.get_sqlite_schema_paginated(connection, None, 20, 0).await
+        self.get_sqlite_schema_paginated(connection, None, 20, 0)
+            .await
     }
 
     /// Get SQLite schema using optimized JSON aggregation queries with pagination
-    async fn get_sqlite_schema_paginated(&self, connection: &Arc<dyn Connection>, table_names: Option<&str>, limit: i64, offset: i64) -> Result<Vec<Value>> {
+    async fn get_sqlite_schema_paginated(
+        &self,
+        connection: &Arc<dyn Connection>,
+        table_names: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Value>> {
         // Build WHERE clause for table name filtering if provided
         let where_clause = if let Some(names) = table_names {
             let name_list: Vec<&str> = names.split(',').map(|s| s.trim()).collect();
-            format!(" AND name IN ({})", name_list.iter().map(|s| format!("'{}'", s)).collect::<Vec<_>>().join(","))
+            format!(
+                " AND name IN ({})",
+                name_list
+                    .iter()
+                    .map(|s| format!("'{}'", s))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
         } else {
             String::new()
         };
 
         // Get paginated tables first
-        let tables_query = format!(r#"
+        let tables_query = format!(
+            r#"
             SELECT name, 'main' as schema, 'TABLE' as object_type
             FROM sqlite_master
             WHERE type = 'table'
@@ -155,7 +232,9 @@ pub trait DatabaseService: Send + Sync {
                 {}
             ORDER BY name
             LIMIT {} OFFSET {}
-        "#, where_clause, limit, offset);
+        "#,
+            where_clause, limit, offset
+        );
 
         let tables_result = connection.execute_query(&tables_query).await?;
         let mut tables = Vec::new();
@@ -165,7 +244,8 @@ pub trait DatabaseService: Send + Sync {
                 let table_name = &table_row[0];
 
                 // Get column information for this table using JSON aggregation
-                let columns_query = format!(r#"
+                let columns_query = format!(
+                    r#"
                     SELECT json_group_array(
                         json_object(
                             'name', name,
@@ -177,15 +257,21 @@ pub trait DatabaseService: Send + Sync {
                     ) as columns,
                     COUNT(*) as column_count
                     FROM pragma_table_info('{}')
-                "#, table_name);
+                "#,
+                    table_name
+                );
 
                 let columns_result = connection.execute_query(&columns_query).await?;
 
-                let columns_json = columns_result.rows.get(0)
+                let columns_json = columns_result
+                    .rows
+                    .get(0)
                     .and_then(|row| row.get(0))
                     .map_or("[]".to_string(), |s| s.clone());
 
-                let column_count = columns_result.rows.get(0)
+                let column_count = columns_result
+                    .rows
+                    .get(0)
                     .and_then(|row| row.get(1))
                     .and_then(|count| count.parse::<i64>().ok())
                     .unwrap_or(0);
@@ -201,17 +287,27 @@ pub trait DatabaseService: Send + Sync {
             }
         }
 
-        log::info!("SQLite schema query completed: {} tables found", tables.len());
+        log::info!(
+            "SQLite schema query completed: {} tables found",
+            tables.len()
+        );
         Ok(tables)
     }
 
     /// Fallback method for unknown database types
     async fn get_schema_fallback(&self, connection: &Arc<dyn Connection>) -> Result<Vec<Value>> {
-        self.get_schema_fallback_paginated(connection, None, 20, 0).await
+        self.get_schema_fallback_paginated(connection, None, 20, 0)
+            .await
     }
 
     /// Fallback method for unknown database types with pagination
-    async fn get_schema_fallback_paginated(&self, connection: &Arc<dyn Connection>, table_names: Option<&str>, limit: i64, offset: i64) -> Result<Vec<Value>> {
+    async fn get_schema_fallback_paginated(
+        &self,
+        connection: &Arc<dyn Connection>,
+        table_names: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<Value>> {
         log::warn!("Using fallback schema method - making multiple queries");
 
         let mut tables = connection.get_tables(table_names).await?;

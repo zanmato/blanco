@@ -21,7 +21,7 @@ use crate::chat_provider_resolver::ChatProviderResolver;
 use crate::db_service::DbService;
 use crate::query_file::QueryFileManager;
 use crate::results_panel::ResultsPanel;
-use crate::settings::{Settings, load_settings};
+use crate::settings::{load_settings, Settings};
 use crate::sql_completion_provider::SqlCompletionProvider;
 use blanco_ui::SqlLog;
 use gpui_component::Icon;
@@ -48,7 +48,7 @@ pub struct QueryTab {
     #[allow(dead_code)]
     pub id: usize,
     pub title: String,
-    pub connection_string: String, // Unified connection string
+    pub connection_id: i64, // Connection ID from app database
     pub editor: Entity<InputState>,
     pub db_id: Option<i64>, // Database ID for persistence
     pub results_panel: Entity<crate::results_panel::ResultsPanel>, // Each tab has its own results
@@ -71,11 +71,14 @@ impl QueryTab {
         cx: &gpui::App,
     ) -> Option<std::sync::Arc<dyn blanco_core::Connection>> {
         let db_service = crate::db_service::DbService::global(cx);
-        let unified_manager = db_service.unified_manager().await;
-        let unified_manager_guard = unified_manager.read().await;
-        unified_manager_guard
-            .get_connection(&self.connection_string)
-            .await
+        if self.connection_id != 0 {
+            db_service
+                .get_or_create_connection(self.connection_id)
+                .await
+                .ok()
+        } else {
+            None
+        }
     }
 
     /// Get connection metadata without accessing fields directly
@@ -101,24 +104,18 @@ impl QueryTab {
     /// Get SQL context for the chat session
     pub fn get_sql_context(&self, cx: &mut gpui::App) -> SqlContext {
         let current_query = self.editor.read(cx).text().to_string();
-        let connection_string = if !self.connection_string.is_empty() {
-            Some(self.connection_string.clone())
+        let connection_id = if self.connection_id != 0 {
+            Some(self.connection_id)
         } else {
             None
         };
 
-        let database_type = if self.connection_string.starts_with("sqlite:") {
-            Some("SQLite".to_string())
-        } else if self.connection_string.starts_with("postgresql:")
-            || self.connection_string.starts_with("postgres:")
-        {
-            Some("PostgreSQL".to_string())
-        } else {
-            None
-        };
+        // Note: Resolving connection_type from connection_id would require async context
+        // For now, we leave database_type as None - the chat tools can resolve it when needed
+        let database_type = None;
 
         let mut context = SqlContext::with_query(current_query);
-        context.connection_string = connection_string;
+        context.connection_id = connection_id;
         context.database_type = database_type;
 
         // TODO: Add recent results when we implement a public method in ResultsPanel
@@ -222,7 +219,7 @@ struct TabCreationParams {
     title: String,
     content: String,
     db_id: Option<i64>,
-    connection_string: String,
+    connection_id: i64,
     #[allow(dead_code)]
     connection_type: String,
 }
@@ -278,18 +275,19 @@ impl EditorPanel {
         &mut self,
         window: &mut Window,
         display_name: String,
-        connection_string: String,
+        connection_id: i64,
         schema_name: Option<String>,
         cx: &mut Context<Self>,
     ) {
         log::debug!(
-            "Creating new tab with connection string: '{}', display_name: '{}'",
-            connection_string,
+            "Creating new tab with connection id: '{}', display_name: '{}'",
+            connection_id,
             display_name
         );
         let tab_id = self.next_tab_id;
         self.next_tab_id += 1;
 
+        // Resolve connection_string to connection_id
         let editor = cx.new(|cx| {
             let mut editor = InputState::new(window, cx)
                 .code_editor("sql".to_string())
@@ -301,10 +299,9 @@ impl EditorPanel {
                 .soft_wrap(true)
                 .placeholder("-- Enter your SQL query here...");
 
-            // Set up completion provider using connection string and DbService
+            // Set up completion provider using connection_id and DbService
             let db_service = DbService::global(cx).clone();
-            let completion_provider =
-                SqlCompletionProvider::new(connection_string.clone(), db_service);
+            let completion_provider = SqlCompletionProvider::new(connection_id, db_service); // Using connection_id from function context
             let completion_provider: Rc<dyn gpui_component::input::CompletionProvider> =
                 Rc::new(completion_provider);
             editor.lsp.completion_provider = Some(completion_provider);
@@ -321,11 +318,11 @@ impl EditorPanel {
             } else {
                 display_name.clone()
             },
-            connection_string: connection_string.clone(),
+            connection_id,
             editor,
             db_id: None,
             results_panel: cx.new(|cx| {
-                ResultsPanel::with_connection_string(Some(connection_string.clone()), window, cx)
+                ResultsPanel::new(window, cx) // TODO: Use with_connection_id when connection_id is available
             }),
             sql_log: cx.new(|cx| SqlLog::new(1000, cx.theme().highlight_theme.clone())), // Maximum 1000 lines in the log
             cached_diagnostics: Arc::new(Mutex::new(Vec::new())),
@@ -529,21 +526,10 @@ impl EditorPanel {
                     // Extract the tab data we need before starting async operations
                     let tab_index = self.active_tab_ix;
                     let content = query_tab.editor.read(cx).text().to_string();
-                    let connection_type = if query_tab.connection_string.starts_with("sqlite:") {
-                        Some("SQLite".to_string())
-                    } else if query_tab.connection_string.starts_with("postgresql:")
-                        || query_tab.connection_string.starts_with("postgres:")
-                    {
-                        Some("PostgreSQL".to_string())
-                    } else {
-                        None
-                    };
-                    let pg_connection_key =
-                        if connection_type.as_ref().is_some_and(|t| t == "PostgreSQL") {
-                            Some(query_tab.connection_string.clone())
-                        } else {
-                            None
-                        };
+                    // For now, we don't have the connection_string from connection_id
+                    // TODO: Resolve connection_string from connection_id if needed
+                    let connection_type = None;
+                    let pg_connection_key = None;
                     let tab_data = QueryTabData {
                         id: query_tab.db_id,
                         title: query_tab.title.clone(),
@@ -558,31 +544,18 @@ impl EditorPanel {
                     // Trigger the save operation in background
                     let db_service = DbService::global(cx).clone();
                     let app_db = db_service.app_db_handle();
-                    let connection_string = query_tab.connection_string.clone();
                     let _title = query_tab.title.clone();
                     let query_file_manager = self.query_file_manager.clone();
                     let connection_name = query_tab.title.clone();
+                    let connection_id = query_tab.connection_id;
 
                     cx.spawn(async move |_entity_handle, _cx| {
                         if let Some(app_db) = app_db.read().await.as_ref() {
-                            // Find or create the connection and get its ID
-                            let connection_id = if !connection_string.is_empty()
-                                && connection_string != "sqlite::memory:"
-                            {
-                                match app_db.find_or_create_connection(&connection_string).await {
-                                    Ok(id) => Some(id),
-                                    Err(e) => {
-                                        error!("Failed to find or create connection: {}", e);
-                                        return;
-                                    }
-                                }
-                            } else {
-                                None
-                            };
+                            // Use the existing connection_id from the query_tab
 
                             // Create the final tab data with connection_id
                             let mut final_tab_data = tab_data;
-                            final_tab_data.connection_id = connection_id;
+                            final_tab_data.connection_id = Some(connection_id);
 
                             // First save to get or create the database ID
                             let final_db_id = match app_db.save_query_tab(&final_tab_data).await {
@@ -644,8 +617,8 @@ impl EditorPanel {
                     })
                     .detach();
 
-                    // Use the unified connection string
-                    let connection_string = &query_tab.connection_string;
+                    // Use the connection_id to get the connection from db_service
+                    let connection_id = query_tab.connection_id;
 
                     // Get text and cursor position from editor
                     let editor = query_tab.editor.read(cx);
@@ -673,7 +646,7 @@ impl EditorPanel {
                     });
 
                     // Execute query directly using cx.spawn instead of async pipeline
-                    let connection_string_clone = connection_string.clone();
+                    let connection_id = connection_id;
                     let query_clone = query.clone();
                     let results_panel_clone = query_tab.results_panel.clone();
                     let sql_log_clone = query_tab.sql_log.clone();
@@ -683,17 +656,9 @@ impl EditorPanel {
                     cx.spawn(async move |editor_panel_entity, cx| {
                         let start_time = std::time::Instant::now();
 
-                        // Execute query using unified connection manager
-                        log::debug!(
-                            "Query execution - using connection string: '{}'",
-                            connection_string_clone
-                        );
-                        let unified_manager = db_service.unified_manager().await;
-                        let manager_guard = unified_manager.read().await;
-                        match manager_guard
-                            .get_or_create_connection(&connection_string_clone)
-                            .await
-                        {
+                        // Execute query using db_service with connection_id
+                        log::debug!("Query execution - using connection_id: '{}'", connection_id);
+                        match db_service.get_or_create_connection(connection_id).await {
                             Ok(connection) => {
                                 log::debug!(
                                     "Connection retrieved successfully, type: {}",
@@ -713,8 +678,7 @@ impl EditorPanel {
                                         result.query_text = Some(query_clone.clone());
                                         result.execution_time_ms = Some(duration_ms);
                                         result.is_error = false;
-                                        result.connection_string =
-                                            Some(connection_string_clone.clone());
+                                        result.connection_id = Some(connection_id);
 
                                         // Extract table metadata from the query
                                         let table_name = connection
@@ -748,7 +712,7 @@ impl EditorPanel {
                                         let _ = results_panel_clone.update(cx, |panel, cx| {
                                             panel.set_query_result(
                                                 result,
-                                                Some(connection_string_clone.clone()),
+                                                None, // TODO: Set connection_id when available
                                                 cx,
                                             );
                                         });
@@ -771,7 +735,7 @@ impl EditorPanel {
                                         editor_panel_entity
                                             .update(cx, |_, cx| {
                                                 cx.emit(AppEvent::QueryExecutionCompleted {
-                                                    connection_id: connection_string_clone.clone(),
+                                                    connection_id: Some(connection_id),
                                                     success: true,
                                                     execution_time: start_time.elapsed(),
                                                     rows_affected: Some(rows_affected),
@@ -799,7 +763,7 @@ impl EditorPanel {
                                         editor_panel_entity
                                             .update(cx, |_, cx| {
                                                 cx.emit(AppEvent::QueryExecutionCompleted {
-                                                    connection_id: connection_string_clone.clone(),
+                                                    connection_id: Some(connection_id),
                                                     success: false,
                                                     execution_time: start_time.elapsed(),
                                                     rows_affected: None,
@@ -813,7 +777,7 @@ impl EditorPanel {
                                                 cx.emit(AppEvent::ErrorOccurred {
                                                     context: format!(
                                                         "Query execution on {}",
-                                                        connection_string_clone
+                                                        format!("connection_id: {}", connection_id)
                                                     ),
                                                     error: e.to_string(),
                                                     severity:
@@ -831,7 +795,7 @@ impl EditorPanel {
                                         cx.emit(AppEvent::ErrorOccurred {
                                             context: format!(
                                                 "Connection setup for {}",
-                                                connection_string_clone
+                                                format!("connection_id: {}", connection_id)
                                             ),
                                             error: e.to_string(),
                                             severity: crate::app_events::ErrorSeverity::Error,
@@ -845,7 +809,7 @@ impl EditorPanel {
 
                     // Emit query execution started event
                     cx.emit(AppEvent::QueryExecutionStarted {
-                        connection_id: connection_string.clone(),
+                        connection_id: Some(connection_id),
                         query: query.clone(),
                     });
                 }
@@ -937,28 +901,17 @@ impl EditorPanel {
         for (pos, tab) in self.tabs.iter().enumerate() {
             if let TabType::Query(query_tab) = tab {
                 let content = query_tab.editor.read(cx).text().to_string();
-                let connection_type = if query_tab.connection_string.starts_with("sqlite:") {
-                    Some("SQLite".to_string())
-                } else if query_tab.connection_string.starts_with("postgresql:")
-                    || query_tab.connection_string.starts_with("postgres:")
-                {
-                    Some("PostgreSQL".to_string())
-                } else {
-                    None
-                };
-                let pg_connection_key =
-                    if connection_type.as_ref().is_some_and(|t| t == "PostgreSQL") {
-                        Some(query_tab.connection_string.clone())
-                    } else {
-                        None
-                    };
+                // Note: Getting connection type from connection_id would require async context
+                // For now, we leave connection_type as None - this can be resolved when needed
+                let connection_type = None;
+                let pg_connection_key = None;
                 tabs_data.push((
                     pos,
                     query_tab.db_id,
                     query_tab.title.clone(),
                     content,
                     pos as i32,
-                    None, // connection_id removed in unified structure
+                    query_tab.connection_id,
                     connection_type,
                     pg_connection_key,
                     query_tab.title.clone(),
@@ -991,7 +944,7 @@ impl EditorPanel {
                         title: title.clone(),
                         content: content.clone(),
                         position,
-                        connection_id,
+                        connection_id: Some(connection_id),
                         connection_type: connection_type.clone(),
                         pg_connection_key: pg_connection_key.clone(),
                         file_uri: None, // Will be updated after file creation
@@ -1041,7 +994,7 @@ impl EditorPanel {
                             title: title.clone(),
                             content: content.clone(),
                             position,
-                            connection_id,
+                            connection_id: Some(connection_id),
                             connection_type: connection_type.clone(),
                             pg_connection_key: pg_connection_key.clone(),
                             file_uri: Some(file_uri.clone()),
@@ -1225,13 +1178,13 @@ impl EditorPanel {
                     title: tab_title,
                     content: tab_content,
                     db_id: tab_db_id,
-                    connection_string,
+                    connection_id: _connection_id,
                     connection_type: tab_connection_type
                         .as_deref()
                         .unwrap_or("Unknown")
                         .to_string(),
                 };
-                self.create_and_add_tab_with_connection_string(window, params, cx);
+                self.create_and_add_tab_with_connection(window, params, cx);
                 restored_count += 1;
             } else {
                 debug!(
@@ -1248,8 +1201,8 @@ impl EditorPanel {
         Ok(())
     }
 
-    /// Helper to create a tab with a specific connection string
-    fn create_and_add_tab_with_connection_string(
+    /// Helper to create a tab with a specific connection
+    fn create_and_add_tab_with_connection(
         &mut self,
         window: &mut Window,
         params: TabCreationParams,
@@ -1269,10 +1222,9 @@ impl EditorPanel {
                 .soft_wrap(false)
                 .placeholder("Enter your SQL query here...");
 
-            // Set up completion provider using connection string and DbService
+            // Set up completion provider using connection_id and DbService
             let db_service = DbService::global(cx).clone();
-            let completion_provider =
-                SqlCompletionProvider::new(params.connection_string.clone(), db_service);
+            let completion_provider = SqlCompletionProvider::new(params.connection_id, db_service); // Using connection_id from params
             let completion_provider: Rc<dyn gpui_component::input::CompletionProvider> =
                 Rc::new(completion_provider);
             editor.lsp.completion_provider = Some(completion_provider);
@@ -1292,7 +1244,7 @@ impl EditorPanel {
         let query_tab = QueryTab {
             id: tab_id,
             title: params.title.clone(),
-            connection_string: params.connection_string,
+            connection_id: params.connection_id,
             editor,
             db_id: params.db_id,
             results_panel: cx.new(|cx| ResultsPanel::new(window, cx)),
@@ -1425,10 +1377,18 @@ impl EditorPanel {
                 // Create chat panel if it doesn't exist
                 let chat_panel = cx.new(|cx| {
                     // Try to create a chat panel with real provider
-                    match create_chat_panel_with_provider(query_tab.id, query_tab.connection_string.clone(), window, cx) {
+                    match create_chat_panel_with_provider(
+                        query_tab.id,
+                        query_tab.connection_id,
+                        window,
+                        cx,
+                    ) {
                         Ok(panel) => panel,
                         Err(e) => {
-                            log::error!("Failed to create chat provider: {}. Using mock provider.", e);
+                            log::error!(
+                                "Failed to create chat provider: {}. Using mock provider.",
+                                e
+                            );
                             ChatPanel::new(query_tab.id, None, window, cx)
                         }
                     }
@@ -1951,17 +1911,21 @@ impl Render for EditorPanel {
 /// Create a chat panel with a real provider based on current settings
 fn create_chat_panel_with_provider(
     tab_id: usize,
-    connection_string: String,
+    connection_id: i64,
     window: &mut Window,
     cx: &mut gpui::Context<ChatPanel>,
 ) -> anyhow::Result<ChatPanel> {
     // Load current settings
-    let settings = load_settings().map_err(|e| anyhow::anyhow!("Failed to load settings: {}", e))?;
+    let settings =
+        load_settings().map_err(|e| anyhow::anyhow!("Failed to load settings: {}", e))?;
 
     // Validate settings
     let validation_errors = ChatProviderResolver::validate_settings(&settings);
     if !validation_errors.is_empty() {
-        return Err(anyhow::anyhow!("Invalid chat settings: {}", validation_errors.join(", ")));
+        return Err(anyhow::anyhow!(
+            "Invalid chat settings: {}",
+            validation_errors.join(", ")
+        ));
     }
 
     // Create HTTP client using reqwest_client from zed
@@ -1972,7 +1936,7 @@ fn create_chat_panel_with_provider(
 
     // Create resolver and get provider
     let mut resolver = ChatProviderResolver::new(http_client, db_service);
-    resolver.set_connection_string(connection_string.clone());
+    resolver.set_connection_id(connection_id);
     let provider_info = resolver.get_provider(&settings)?;
 
     // Create chat panel with the provider
@@ -1982,7 +1946,7 @@ fn create_chat_panel_with_provider(
         provider_info.provider_name,
         provider_info.model_name,
         window,
-        cx
+        cx,
     );
 
     Ok(chat_panel)

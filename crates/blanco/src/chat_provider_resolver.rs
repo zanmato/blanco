@@ -8,8 +8,8 @@ use anyhow::Result;
 use http_client::HttpClient;
 use std::sync::Arc;
 
-use crate::settings::{ChatSettings, Settings};
 use crate::db_service::DbService;
+use crate::settings::{ChatSettings, Settings};
 use blanco_core::chat_provider::{ChatProvider, ProviderError};
 use blanco_core::{Connection, DatabaseService};
 
@@ -30,7 +30,7 @@ struct CachedProvider {
 pub struct ChatProviderResolver {
     http_client: Arc<dyn HttpClient>,
     db_service: DbService,
-    current_connection_string: Option<String>,
+    current_connection_id: Option<i64>,
     cached_provider: Option<CachedProvider>,
 }
 
@@ -40,14 +40,14 @@ impl ChatProviderResolver {
         Self {
             http_client,
             db_service,
-            current_connection_string: None,
+            current_connection_id: None,
             cached_provider: None,
         }
     }
 
-    /// Set the current connection string for tool execution
-    pub fn set_connection_string(&mut self, connection_string: String) {
-        self.current_connection_string = Some(connection_string);
+    /// Set the current connection ID for tool execution
+    pub fn set_connection_id(&mut self, connection_id: i64) {
+        self.current_connection_id = Some(connection_id);
     }
 
     /// Get a chat provider based on current settings
@@ -103,7 +103,7 @@ impl ChatProviderResolver {
             return Err(anyhow::anyhow!("OpenAI API key is required"));
         }
 
-        use blanco_openai::{OpenAIClient, OpenAIConfig, ToolExecutor, ListTablesTool};
+        use blanco_openai::{ListTablesTool, OpenAIClient, OpenAIConfig, ToolExecutor};
 
         let mut config = OpenAIConfig::new(&chat_settings.api_key)
             .with_model(&chat_settings.model)
@@ -111,7 +111,8 @@ impl ChatProviderResolver {
             .with_temperature(chat_settings.temperature);
 
         // Set base URL if it's not the default OpenAI URL
-        if !chat_settings.base_url.is_empty() && chat_settings.base_url != "https://api.openai.com" {
+        if !chat_settings.base_url.is_empty() && chat_settings.base_url != "https://api.openai.com"
+        {
             config = config.with_base_url(&chat_settings.base_url);
         }
 
@@ -120,18 +121,15 @@ impl ChatProviderResolver {
         let mut tool_executor = ToolExecutor::with_database_service(database_service);
 
         // Register the list-tables tool with connection resolver
-        let connection_string = self.current_connection_string.clone();
-        let list_tables_tool = Box::new(ListTablesTool::with_connection_resolver(move || {
-            // Use the connection string from the current query tab
-            connection_string.clone()
-        }));
+        let connection_id = self.current_connection_id;
+        let list_tables_tool = Box::new(ListTablesTool::with_connection_id(
+            connection_id.unwrap_or(0),
+        ));
         tool_executor.register_tool(list_tables_tool);
 
-        let client = OpenAIClient::with_tool_executor(
-            self.http_client.clone(),
-            config,
-            tool_executor
-        ).map_err(|e| anyhow::anyhow!("Failed to create OpenAI client: {}", e))?;
+        let client =
+            OpenAIClient::with_tool_executor(self.http_client.clone(), config, tool_executor)
+                .map_err(|e| anyhow::anyhow!("Failed to create OpenAI client: {}", e))?;
 
         Ok(ProviderInfo {
             provider: Arc::new(client),
@@ -219,7 +217,11 @@ async fn query_database_schema_with_connection(
     let connection_type = connection.get_connection_type();
     let display_name = connection.get_display_name();
 
-    log::info!("Connected to {} database: {}", connection_type, display_name);
+    log::info!(
+        "Connected to {} database: {}",
+        connection_type,
+        display_name
+    );
 
     let mut result = serde_json::json!({
         "connection_type": connection_type,
@@ -250,7 +252,7 @@ async fn query_database_schema_with_connection(
                             }));
                         }
 
-                                        tables_array.push(serde_json::json!({
+                        tables_array.push(serde_json::json!({
                             "name": table_name,
                             "schema": "public", // Default schema, could be enhanced for PostgreSQL
                             "object_type": "TABLE",
@@ -273,7 +275,10 @@ async fn query_database_schema_with_connection(
             }
 
             result["tables"] = serde_json::json!(tables_array);
-            log::info!("Schema query completed: {} tables found", tables_array.len());
+            log::info!(
+                "Schema query completed: {} tables found",
+                tables_array.len()
+            );
         }
         Err(e) => {
             log::error!("Failed to get tables: {}", e);
@@ -283,7 +288,6 @@ async fn query_database_schema_with_connection(
 
     result
 }
-
 
 /// Information about a chat provider instance
 #[derive(Clone)]

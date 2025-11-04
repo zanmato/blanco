@@ -93,9 +93,9 @@ impl MetadataCache {
 }
 
 /// Fetch table names using the DbService
-async fn fetch_tables(db_service: &DbService, connection_string: &str) -> Result<Vec<String>> {
+async fn fetch_tables(db_service: &DbService, connection_id: i64) -> Result<Vec<String>> {
     if let Ok(connection) = db_service
-        .get_or_create_unified_connection(connection_string)
+        .get_or_create_connection(connection_id)
         .await
     {
         connection.get_tables(None).await
@@ -107,11 +107,11 @@ async fn fetch_tables(db_service: &DbService, connection_string: &str) -> Result
 /// Fetch column names for a specific table using the DbService
 async fn fetch_columns(
     db_service: &DbService,
-    connection_string: &str,
+    connection_id: i64,
     table_name: &str,
 ) -> Result<Vec<String>> {
     if let Ok(connection) = db_service
-        .get_or_create_unified_connection(connection_string)
+        .get_or_create_connection(connection_id)
         .await
     {
         {
@@ -126,15 +126,15 @@ async fn fetch_columns(
 /// SQL Completion Provider that implements gpui-component's CompletionProvider trait
 #[derive(Clone)]
 pub struct SqlCompletionProvider {
-    connection_string: String,
+    connection_id: i64,
     db_service: DbService,
     cache: Arc<std::sync::Mutex<MetadataCache>>,
 }
 
 impl SqlCompletionProvider {
-    pub fn new(connection_string: String, db_service: DbService) -> Self {
+    pub fn new(connection_id: i64, db_service: DbService) -> Self {
         Self {
-            connection_string,
+            connection_id,
             db_service,
             cache: Arc::new(std::sync::Mutex::new(MetadataCache::new())),
         }
@@ -174,7 +174,7 @@ impl SqlCompletionProvider {
         } // Lock released here
 
         // No valid cache, fetch fresh data
-        let tables = fetch_tables(&self.db_service, &self.connection_string).await?;
+        let tables = fetch_tables(&self.db_service, self.connection_id).await?;
 
         // Update cache
         if let Ok(mut cache) = self.cache.lock() {
@@ -196,7 +196,7 @@ impl SqlCompletionProvider {
         } // Lock released here
 
         // No valid cache, fetch fresh data
-        let columns = fetch_columns(&self.db_service, &self.connection_string, table_name).await?;
+        let columns = fetch_columns(&self.db_service, self.connection_id, table_name).await?;
 
         // Update cache
         if let Ok(mut cache) = self.cache.lock() {
@@ -264,7 +264,7 @@ impl SqlCompletionProvider {
     async fn get_table_info(&self, table_name: &str) -> Result<String> {
         let columns = if let Ok(connection) = self
             .db_service
-            .get_or_create_unified_connection(&self.connection_string)
+            .get_or_create_connection(self.connection_id)
             .await
         {
             connection.get_columns_for_table(table_name, None).await?
@@ -294,7 +294,7 @@ impl SqlCompletionProvider {
     async fn get_column_info(&self, table_name: &str, column_name: &str) -> Result<String> {
         let columns = if let Ok(connection) = self
             .db_service
-            .get_or_create_unified_connection(&self.connection_string)
+            .get_or_create_connection(self.connection_id)
             .await
         {
             connection.get_columns_for_table(table_name, None).await?

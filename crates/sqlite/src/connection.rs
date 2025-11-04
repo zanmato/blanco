@@ -149,7 +149,7 @@ impl SqliteConnection {
                         is_error: false,
                         table_name: None,
                         primary_key_column: None,
-                        connection_string: None,
+                        connection_id: None,
                     });
                 }
 
@@ -214,7 +214,7 @@ impl SqliteConnection {
                     is_error: false,
                     table_name: None,
                     primary_key_column: None,
-                    connection_string: None,
+                    connection_id: None,
                 })
             }
             Err(_e) => {
@@ -230,7 +230,7 @@ impl SqliteConnection {
                     is_error: false,
                     table_name: None,
                     primary_key_column: None,
-                    connection_string: None,
+                    connection_id: None,
                 })
             }
         }
@@ -404,7 +404,7 @@ impl Connection for SqliteConnection {
                         is_error: false,
                         table_name: None,
                         primary_key_column: None,
-                        connection_string: None,
+                        connection_id: None,
                     });
                 }
 
@@ -469,7 +469,7 @@ impl Connection for SqliteConnection {
                     is_error: false,
                     table_name: None,
                     primary_key_column: None,
-                    connection_string: None,
+                    connection_id: None,
                 })
             }
             Err(_e) => {
@@ -490,7 +490,7 @@ impl Connection for SqliteConnection {
                     is_error: false,
                     table_name: None,
                     primary_key_column: None,
-                    connection_string: None,
+                    connection_id: None,
                 })
             }
         }

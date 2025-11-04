@@ -47,8 +47,8 @@ pub struct QueryResult {
     pub table_name: Option<String>,
     /// Primary key column detected for the table (if applicable)
     pub primary_key_column: Option<String>,
-    /// Connection string used for this query (for subsequent operations)
-    pub connection_string: Option<String>,
+    /// Connection ID used for this query (for subsequent operations)
+    pub connection_id: Option<i64>,
 }
 
 /// Information about a database column

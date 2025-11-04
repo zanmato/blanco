@@ -1,14 +1,14 @@
 use crate::app_database::AppDatabase;
-use async_std::sync::RwLock;
-use gpui::{App, Global};
-use std::sync::Arc;
-use std::collections::HashMap;
 use anyhow::Result;
+use async_std::sync::RwLock;
 use async_trait::async_trait;
 use blanco_core::{Connection, ConnectionFactory, ConnectionRegistry};
-use postgres::{PostgresConnection, PgConnectionKey};
+use gpui::{App, Global};
+use postgres::{PgConnectionKey, PostgresConnection};
 use sqlite::{SqliteConnection, SqliteConnectionKey};
 use sqlx;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// SQLite connection factory using the sqlite crate implementation
 pub struct SqliteConnectionFactory;
@@ -67,11 +67,17 @@ impl UnifiedConnectionManager {
     pub fn new() -> Self {
         let mut registry = ConnectionRegistry::new();
         registry.register_factory("SQLite".to_string(), Box::new(SqliteConnectionFactory));
-        registry.register_factory("PostgreSQL".to_string(), Box::new(PostgresConnectionFactory));
+        registry.register_factory(
+            "PostgreSQL".to_string(),
+            Box::new(PostgresConnectionFactory),
+        );
 
         let mut factories: HashMap<String, Arc<dyn ConnectionFactory>> = HashMap::new();
         factories.insert("SQLite".to_string(), Arc::new(SqliteConnectionFactory));
-        factories.insert("PostgreSQL".to_string(), Arc::new(PostgresConnectionFactory));
+        factories.insert(
+            "PostgreSQL".to_string(),
+            Arc::new(PostgresConnectionFactory),
+        );
 
         Self {
             registry: Arc::new(registry),
@@ -81,7 +87,10 @@ impl UnifiedConnectionManager {
     }
 
     /// Get or create a connection based on connection string
-    pub async fn get_or_create_connection(&self, connection_string: &str) -> Result<Arc<dyn Connection>, anyhow::Error> {
+    pub async fn get_or_create_connection(
+        &self,
+        connection_string: &str,
+    ) -> Result<Arc<dyn Connection>, anyhow::Error> {
         let connection_key = self.generate_connection_key(connection_string)?;
 
         {
@@ -92,7 +101,10 @@ impl UnifiedConnectionManager {
                     log::debug!("Using existing healthy connection: {}", connection_key);
                     return Ok(Arc::clone(existing_conn));
                 } else {
-                    log::info!("Existing connection is unhealthy, will recreate: {}", connection_key);
+                    log::info!(
+                        "Existing connection is unhealthy, will recreate: {}",
+                        connection_key
+                    );
                     // Drop the read lock before we try to get a write lock
                     drop(connections);
                 }
@@ -104,7 +116,10 @@ impl UnifiedConnectionManager {
 
         // Double-check in case another thread created it while we were waiting for the write lock
         if let Some(existing_conn) = connections.get(&connection_key) {
-            log::debug!("Found connection created by another thread: {}", connection_key);
+            log::debug!(
+                "Found connection created by another thread: {}",
+                connection_key
+            );
             return Ok(Arc::clone(existing_conn));
         }
 
@@ -112,11 +127,18 @@ impl UnifiedConnectionManager {
         let connection_type = self.detect_connection_type(connection_string)?;
 
         // Get the appropriate factory
-        let factory = self.connection_factories
+        let factory = self
+            .connection_factories
             .get(&connection_type)
-            .ok_or_else(|| anyhow::anyhow!("No factory found for connection type: {}", connection_type))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("No factory found for connection type: {}", connection_type)
+            })?;
 
-        log::info!("Creating new connection: {} (type: {})", connection_key, connection_type);
+        log::info!(
+            "Creating new connection: {} (type: {})",
+            connection_key,
+            connection_type
+        );
 
         // Create new connection
         let conn = factory.create_connection(connection_string).await?;
@@ -125,7 +147,10 @@ impl UnifiedConnectionManager {
         // Store the connection
         connections.insert(connection_key.clone(), conn_arc.clone());
 
-        log::info!("Successfully created and stored connection: {}", connection_key);
+        log::info!(
+            "Successfully created and stored connection: {}",
+            connection_key
+        );
         Ok(conn_arc)
     }
 
@@ -185,19 +210,24 @@ impl UnifiedConnectionManager {
         // Log the connection string and detected type for debugging
         log::debug!("Detecting connection type for: '{}'", connection_string);
 
-        if connection_lower.starts_with("postgres://") ||
-           connection_lower.starts_with("postgresql://") {
+        if connection_lower.starts_with("postgres://")
+            || connection_lower.starts_with("postgresql://")
+        {
             log::debug!("Detected PostgreSQL connection type");
             Ok("PostgreSQL".to_string())
-        } else if connection_lower.starts_with("sqlite:") ||
-                  connection_lower.contains(".db") ||
-                  connection_lower == ":memory:" ||
-                  connection_lower == "sqlite::memory:" {
+        } else if connection_lower.starts_with("sqlite:")
+            || connection_lower.contains(".db")
+            || connection_lower == ":memory:"
+            || connection_lower == "sqlite::memory:"
+        {
             log::debug!("Detected SQLite connection type");
             Ok("SQLite".to_string())
         } else {
             // Default to SQLite for unknown types
-            log::warn!("Unknown connection type for '{}', defaulting to SQLite", connection_string);
+            log::warn!(
+                "Unknown connection type for '{}', defaulting to SQLite",
+                connection_string
+            );
             Ok("SQLite".to_string())
         }
     }
@@ -207,9 +237,12 @@ impl UnifiedConnectionManager {
     pub async fn test_connection(&self, connection_string: &str) -> Result<bool> {
         let connection_type = self.detect_connection_type(connection_string)?;
 
-        let factory = self.connection_factories
+        let factory = self
+            .connection_factories
             .get(&connection_type)
-            .ok_or_else(|| anyhow::anyhow!("No factory found for connection type: {}", connection_type))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("No factory found for connection type: {}", connection_type)
+            })?;
 
         let conn = factory.create_connection(connection_string).await?;
         conn.test_connection().await
@@ -253,8 +286,43 @@ impl DbService {
         self.unified_manager.clone()
     }
 
-    /// Convenience method to get or create a connection
-    pub async fn get_or_create_unified_connection(
+    /// Primary method to get or create a connection by ID
+    pub async fn get_or_create_connection(
+        &self,
+        connection_id: i64,
+    ) -> Result<std::sync::Arc<dyn blanco_core::Connection>, anyhow::Error> {
+        // Get the app database
+        let app_db_lock = self.app_db.read().await;
+        let app_db = app_db_lock
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("App database not initialized"))?;
+
+        // Query the connections table to get the connection string
+        let connection_string: Option<String> = sqlx::query_scalar(
+            "SELECT CASE WHEN db_type = 'SQLite' THEN CONCAT('sqlite:',database_path) ELSE connection_string END FROM connections WHERE id = ? AND is_active = 1"
+        )
+        .bind(connection_id)
+        .fetch_one(app_db.pool())
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to query connection {}: {}", connection_id, e))?;
+
+        let connection_string = connection_string.ok_or_else(|| {
+            anyhow::anyhow!("Connection with id {} not found or inactive", connection_id)
+        })?;
+
+        log::debug!(
+            "Found connection string for id {}: {}",
+            connection_id,
+            connection_string
+        );
+
+        // Use the internal unified connection method
+        self.get_or_create_unified_connection_internal(&connection_string)
+            .await
+    }
+
+    /// Internal method to get or create a connection by connection string
+    async fn get_or_create_unified_connection_internal(
         &self,
         connection_string: &str,
     ) -> Result<std::sync::Arc<dyn blanco_core::Connection>, anyhow::Error> {
@@ -267,7 +335,21 @@ impl DbService {
         result
     }
 
-    /// Convenience method to execute a query
+    /// Execute a query by connection ID
+    pub async fn execute_query_by_id(
+        &self,
+        connection_id: i64,
+        sql: &str,
+    ) -> Result<blanco_core::QueryResult, anyhow::Error> {
+        // Get the connection by ID
+        let connection = self.get_or_create_connection(connection_id).await?;
+
+        // Execute the query
+        connection.execute_query(sql).await
+    }
+
+    /// Legacy method - use execute_query_by_id instead
+    #[allow(dead_code)]
     pub async fn execute_query_unified(
         &self,
         connection_string: &str,
@@ -480,32 +562,14 @@ impl DbService {
             .await
     }
 
-    /// Get or create a connection by connection_id from the app database
+    /// Legacy method - use get_or_create_connection(connection_id) instead
+    #[deprecated(note = "Use get_or_create_connection(connection_id) instead")]
+    #[allow(dead_code)]
     pub async fn get_or_create_connection_by_id(
         &self,
         connection_id: i64,
     ) -> Result<std::sync::Arc<dyn blanco_core::Connection>, anyhow::Error> {
-        // Get the app database
-        let app_db_lock = self.app_db.read().await;
-        let app_db = app_db_lock.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("App database not initialized"))?;
-
-        // Query the connections table to get the connection string
-        let connection_string: Option<String> = sqlx::query_scalar(
-            "SELECT connection_string FROM connections WHERE id = ? AND is_active = 1"
-        )
-        .bind(connection_id)
-        .fetch_one(app_db.pool())
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to query connection {}: {}", connection_id, e))?;
-
-        let connection_string = connection_string
-            .ok_or_else(|| anyhow::anyhow!("Connection with id {} not found or inactive", connection_id))?;
-
-        log::debug!("Found connection string for id {}: {}", connection_id, connection_string);
-
-        // Use the existing get_or_create_unified_connection method
-        self.get_or_create_unified_connection(&connection_string).await
+        self.get_or_create_connection(connection_id).await
     }
 }
 
@@ -516,7 +580,16 @@ impl blanco_core::DatabaseService for DbService {
         &self,
         connection_string: &str,
     ) -> Result<std::sync::Arc<dyn blanco_core::Connection>, anyhow::Error> {
-        self.get_or_create_unified_connection(connection_string)
+        // For the trait, keep the old interface but internally delegate to connection_id lookup
+        self.get_or_create_unified_connection_internal(connection_string)
             .await
+    }
+
+    async fn get_or_create_connection_by_id(
+        &self,
+        connection_id: i64,
+    ) -> Result<std::sync::Arc<dyn blanco_core::Connection>, anyhow::Error> {
+        // Use our primary method for connection_id lookup
+        self.get_or_create_connection(connection_id).await
     }
 }

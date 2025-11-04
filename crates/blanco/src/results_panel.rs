@@ -347,7 +347,7 @@ pub struct ResultsTableDelegate {
     table_name: Option<String>,
     primary_key_column: Option<String>,
     pending_edit_cell: Option<(usize, usize)>,
-    connection_string: Option<String>,
+    connection_id: Option<i64>,
 }
 
 impl ResultsTableDelegate {
@@ -366,9 +366,9 @@ impl ResultsTableDelegate {
             .and_then(|row_data| row_data.get_mut(col))
     }
 
-    /// Set the connection string for database operations
-    pub fn set_connection_string(&mut self, connection_string: String) {
-        self.connection_string = Some(connection_string);
+    /// Set the connection ID for database operations
+    pub fn set_connection_id(&mut self, connection_id: i64) {
+        self.connection_id = Some(connection_id);
     }
 
     /// Convert table changes to database-agnostic TableChangeOperations
@@ -1251,19 +1251,19 @@ pub struct ResultsPanel {
 
 impl ResultsPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::with_connection_string(None, window, cx)
+        Self::with_connection_id(None, window, cx)
     }
 
-    pub fn with_connection_string(
-        connection_string: Option<String>,
+    pub fn with_connection_id(
+        connection_id: Option<i64>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut delegate = ResultsTableDelegate::default();
 
-        // Set connection string on delegate if provided
-        if let Some(conn_str) = connection_string {
-            delegate.set_connection_string(conn_str);
+        // Set connection ID on delegate if provided
+        if let Some(conn_id) = connection_id {
+            delegate.set_connection_id(conn_id);
         }
 
         let table = cx.new(|cx| {
@@ -1288,13 +1288,13 @@ impl ResultsPanel {
     pub fn set_query_result(
         &mut self,
         result: QueryResult,
-        connection_string: Option<String>,
+        connection_id: Option<i64>,
         cx: &mut Context<Self>,
     ) {
-        // Set connection string on the delegate for table extraction
-        if let Some(conn_str) = connection_string {
+        // Set connection ID on the delegate for table extraction
+        if let Some(conn_id) = connection_id {
             self.table.update(cx, |table, _cx| {
-                table.delegate_mut().set_connection_string(conn_str);
+                table.delegate_mut().set_connection_id(conn_id);
             });
         }
 
@@ -1788,15 +1788,14 @@ impl ResultsPanel {
             change_operations.len()
         );
 
-        // Get connection string from delegate (use fallback if not available)
-        let connection_string = self
+        // Get connection id from delegate (use fallback if not available)
+        let connection_id = self
             .table
             .read(cx)
             .delegate()
-            .connection_string
-            .clone()
-            .unwrap_or_else(|| "sqlite::memory:".to_string());
-        // TODO: error here instead of fallback to sqlite::memory
+            .connection_id
+            .unwrap_or(0);
+        // TODO: error here instead of fallback to connection_id 0
 
         // Get table name for logging
         let table_name = self
@@ -1812,8 +1811,8 @@ impl ResultsPanel {
         let change_operations_for_logging = change_operations.clone();
         let table_name_for_logging = table_name.clone();
         let _table_name_for_event = table_name.clone();
-        let connection_string_for_pipeline = connection_string.clone();
-        let connection_string_for_event = connection_string.clone();
+        let connection_id_for_pipeline = connection_id;
+        let connection_id_for_event = connection_id;
 
         // Create response channel for table operations
         let (response_tx, response_rx) = async_std::channel::bounded(1);
@@ -1821,7 +1820,7 @@ impl ResultsPanel {
         // Send the table operations to the async pipeline
         let async_event_sender = cx.global::<crate::async_pipeline::AsyncEventSender>();
         match async_event_sender.try_send(AsyncEvent::ExecuteTableOperations {
-            connection_string: connection_string_for_pipeline.clone(),
+            connection_id: connection_id_for_pipeline,
             operations: change_operations_for_pipeline.clone(),
             response_tx,
             priority: TaskPriority::High,
@@ -1831,7 +1830,7 @@ impl ResultsPanel {
 
                 // Emit a query execution started event
                 cx.emit(AppEvent::QueryExecutionStarted {
-                    connection_id: connection_string_for_event.clone(),
+                    connection_id: Some(connection_id_for_event),
                     query: format!(
                         "Table operations on {} ({} operations)",
                         table_name_for_logging,
@@ -1898,7 +1897,7 @@ impl ResultsPanel {
                                 let _ = entity.update(cx, |_, cx| {
                                     cx.emit(AppEvent::TableOperationCompleted {
                                         table_name: response.table_name,
-                                        connection_id: response.connection_string,
+                                        connection_id: Some(response.connection_id),
                                         success: true,
                                         rows_affected: response.rows_affected,
                                         error_message: None,
@@ -1920,7 +1919,7 @@ impl ResultsPanel {
                                 let _ = entity.update(cx, |_, cx| {
                                     cx.emit(AppEvent::TableOperationCompleted {
                                         table_name: response.table_name,
-                                        connection_id: response.connection_string,
+                                        connection_id: Some(response.connection_id),
                                         success: false,
                                         rows_affected: None,
                                         error_message: response.error_message,
@@ -1980,13 +1979,11 @@ impl ResultsPanel {
             .table_name
             .clone()
             .unwrap_or_else(|| "unknown".to_string());
-        let connection_string = self
+        let connection_id = self
             .table
             .read(cx)
             .delegate()
-            .connection_string
-            .clone()
-            .unwrap_or_else(|| "sqlite::memory:".to_string());
+            .connection_id;
 
         // TODO: error here instead of fallback to sqlite::memory
 
@@ -2028,7 +2025,7 @@ impl ResultsPanel {
         let changes_count = changes.len();
         cx.emit(AppEvent::TableChangesRollback {
             table_name: table_name.clone(),
-            connection_id: connection_string,
+            connection_id,
             changes_count,
         });
 

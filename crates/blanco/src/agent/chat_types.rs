@@ -50,7 +50,7 @@ impl Default for MessageMetadata {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SqlContext {
     pub current_query: String,
-    pub connection_string: Option<String>,
+    pub connection_id: Option<i64>,
     pub database_type: Option<String>,
     pub recent_results: Option<QueryResults>,
     pub error_message: Option<String>,
@@ -242,7 +242,7 @@ impl SqlContext {
     pub fn empty() -> Self {
         Self {
             current_query: String::new(),
-            connection_string: None,
+            connection_id: None,
             database_type: None,
             recent_results: None,
             error_message: None,
