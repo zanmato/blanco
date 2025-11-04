@@ -1,5 +1,4 @@
 use gpui::{App, Entity, SharedString};
-use gpui_component::Icon;
 
 #[derive(Clone)]
 pub enum IconName {
@@ -197,14 +196,14 @@ impl IconName {
 }
 
 // Implement conversions to allow IconName to work seamlessly with gpui-component's Icon
-impl Into<SharedString> for IconName {
-    fn into(self) -> SharedString {
-        self.path()
+impl From<IconName> for SharedString {
+    fn from(val: IconName) -> Self {
+        val.path()
     }
 }
 
-impl Into<gpui_component::Icon> for IconName {
-    fn into(self) -> gpui_component::Icon {
-        gpui_component::Icon::empty().path(self.path())
+impl From<IconName> for gpui_component::Icon {
+    fn from(val: IconName) -> Self {
+        gpui_component::Icon::empty().path(val.path())
     }
 }
