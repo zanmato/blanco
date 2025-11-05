@@ -12,7 +12,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 uuid = { workspace = true }
-chrono = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 sqlx = { workspace = true }
@@ -24,6 +24,7 @@ blanco_ui = { path = "../ui", package = "blanco-ui" }
 blanco-core = { path = "../blanco-core" }
 postgres = { path = "../postgres" }
 sqlite = { path = "../sqlite" }
+blanco-openai = { path = "../openai" }
 
 # Additional dependencies
 env_logger = { workspace = true }
@@ -35,8 +36,19 @@ url = { workspace = true }
 crossbeam-channel = "0.5"
 async-trait = "0.1"
 lsp-types = { workspace = true }
+pulldown-cmark = { workspace = true }
 regex = { workspace = true }
 rust_decimal = "1.32"
+ropey = { workspace = true }
+
+# HTTP client for AI chat
+http_client = { workspace = true }
+reqwest_client = { workspace = true }
+async-stream = { workspace = true }
+tokio = { workspace = true }
+http = { workspace = true }
+futures = { workspace = true }
+
 
 [dev-dependencies]
 # Dependencies for integration tests

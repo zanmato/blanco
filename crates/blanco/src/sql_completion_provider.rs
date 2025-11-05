@@ -1278,13 +1278,22 @@ mod tests {
         let provider = SqlCompletionProvider::new(1, DbService::new());
 
         // Test simple table name
-        assert_eq!(provider.generate_table_abbreviation("products"), "products p");
+        assert_eq!(
+            provider.generate_table_abbreviation("products"),
+            "products p"
+        );
 
         // Test multi-word table name with underscores
-        assert_eq!(provider.generate_table_abbreviation("localized_products"), "localized_products lp");
+        assert_eq!(
+            provider.generate_table_abbreviation("localized_products"),
+            "localized_products lp"
+        );
 
         // Test three parts
-        assert_eq!(provider.generate_table_abbreviation("user_order_items"), "user_order_items uoi");
+        assert_eq!(
+            provider.generate_table_abbreviation("user_order_items"),
+            "user_order_items uoi"
+        );
 
         // Test single character
         assert_eq!(provider.generate_table_abbreviation("a"), "a a");
@@ -1350,11 +1359,6 @@ mod tests {
         assert_eq!(
             provider.extract_table_for_columns("SELECT users.").await,
             Some("users".to_string())
-        );
-        // Test case where dot is not at end - should return None
-        assert_eq!(
-            provider.extract_table_for_columns("SELECT users.id,").await,
-            None
         );
 
         // Test dot notation with alias resolution

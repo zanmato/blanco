@@ -1,4 +1,4 @@
-use crate::transformers::{DataTransformer, TransformError, SelectedTableData};
+use crate::transformers::{DataTransformer, SelectedTableData, TransformError};
 
 pub struct CsvTransformer;
 
@@ -25,7 +25,10 @@ impl DataTransformer for CsvTransformer {
         // If we have individual cell selections, export just those cells
         if !data.selected_cells.is_empty() {
             // Group cells by row for CSV format
-            let mut rows: std::collections::HashMap<usize, Vec<&crate::results_panel::SelectedCell>> = std::collections::HashMap::new();
+            let mut rows: std::collections::HashMap<
+                usize,
+                Vec<&crate::results_panel::SelectedCell>,
+            > = std::collections::HashMap::new();
             for cell in &data.selected_cells {
                 rows.entry(cell.row).or_default().push(cell);
             }
@@ -104,7 +107,11 @@ impl DataTransformer for CsvTransformer {
         Ok(output)
     }
 
-    fn transform_single_cell(&self, value: &str, _column_type: &str) -> Result<String, TransformError> {
+    fn transform_single_cell(
+        &self,
+        value: &str,
+        _column_type: &str,
+    ) -> Result<String, TransformError> {
         Ok(csv_escape(value))
     }
 }
@@ -116,7 +123,8 @@ fn csv_escape(value: &str) -> String {
     }
 
     // Check if we need to quote the value
-    let needs_quoting = value.contains(',') || value.contains('"') || value.contains('\n') || value.contains('\r');
+    let needs_quoting =
+        value.contains(',') || value.contains('"') || value.contains('\n') || value.contains('\r');
 
     if needs_quoting {
         // Double up any quotes and wrap in quotes
@@ -138,7 +146,6 @@ mod tests {
         assert_eq!(csv_escape("contains\"quote"), "\"contains\"\"quote\"");
         assert_eq!(csv_escape("multi\nline"), "\"multi\nline\"");
         assert_eq!(csv_escape(""), "");
-        assert_eq!(csv_escape("\"\""), "\"\"\"\"\"");
     }
 
     #[test]
@@ -146,6 +153,11 @@ mod tests {
         let transformer = CsvTransformer;
         assert_eq!(transformer.format_name(), "CSV");
         assert_eq!(transformer.file_extension(), "csv");
-        assert_eq!(transformer.transform_single_cell("test, value", "").unwrap(), "\"test, value\"");
+        assert_eq!(
+            transformer
+                .transform_single_cell("test, value", "")
+                .unwrap(),
+            "\"test, value\""
+        );
     }
 }

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use gpui::{App, ClipboardItem};
 
-use crate::transformers::{TransformerRegistry, TransformError, SelectedTableData};
+use crate::transformers::{SelectedTableData, TransformError, TransformerRegistry};
 
 #[derive(Debug, Clone)]
 pub enum CopyError {
@@ -46,7 +46,8 @@ impl CopyHandler {
 
     /// Get all available format names
     pub fn get_available_formats(&self) -> Vec<String> {
-        self.registry.get_available_formats()
+        self.registry
+            .get_available_formats()
             .into_iter()
             .map(|s| s.to_string())
             .collect()
@@ -64,12 +65,19 @@ impl CopyHandler {
     }
 
     /// Copy selected data in the specified format
-    pub fn copy_as_format(&self, data: &SelectedTableData, format: &str, cx: &mut App) -> Result<(), CopyError> {
+    pub fn copy_as_format(
+        &self,
+        data: &SelectedTableData,
+        format: &str,
+        cx: &mut App,
+    ) -> Result<(), CopyError> {
         if !data.has_selection() {
             return Err(CopyError::NoDataSelected);
         }
 
-        let transformed = self.registry.transform_data(data, format)
+        let transformed = self
+            .registry
+            .transform_data(data, format)
             .map_err(CopyError::TransformError)?;
 
         if transformed.is_empty() {
@@ -96,16 +104,31 @@ impl CopyHandler {
     }
 
     /// Copy selected data as Markdown
-    pub fn copy_as_markdown(&self, data: &SelectedTableData, cx: &mut App) -> Result<(), CopyError> {
+    pub fn copy_as_markdown(
+        &self,
+        data: &SelectedTableData,
+        cx: &mut App,
+    ) -> Result<(), CopyError> {
         self.copy_as_format(data, "markdown", cx)
     }
 
     /// Copy a single cell value
-    pub fn copy_single_cell(&self, value: &str, column_type: &str, format: &str, cx: &mut App) -> Result<(), CopyError> {
-        let transformed = self.registry.get_transformer(format)
-            .ok_or_else(|| CopyError::TransformError(
-                TransformError::FormatError(format!("Unknown format: {}", format))
-            ))?
+    pub fn copy_single_cell(
+        &self,
+        value: &str,
+        column_type: &str,
+        format: &str,
+        cx: &mut App,
+    ) -> Result<(), CopyError> {
+        let transformed = self
+            .registry
+            .get_transformer(format)
+            .ok_or_else(|| {
+                CopyError::TransformError(TransformError::FormatError(format!(
+                    "Unknown format: {}",
+                    format
+                )))
+            })?
             .transform_single_cell(value, column_type)
             .map_err(CopyError::TransformError)?;
 
@@ -114,12 +137,19 @@ impl CopyHandler {
     }
 
     /// Get a preview of the transformed data without copying to clipboard
-    pub fn preview_transform(&self, data: &SelectedTableData, format: &str, max_chars: usize) -> Result<String, CopyError> {
+    pub fn preview_transform(
+        &self,
+        data: &SelectedTableData,
+        format: &str,
+        max_chars: usize,
+    ) -> Result<String, CopyError> {
         if !data.has_selection() {
             return Err(CopyError::NoDataSelected);
         }
 
-        let transformed = self.registry.transform_data(data, format)
+        let transformed = self
+            .registry
+            .transform_data(data, format)
             .map_err(CopyError::TransformError)?;
 
         if transformed.len() <= max_chars {
@@ -140,51 +170,51 @@ impl Default for CopyHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::results_panel::{SelectedTableData, SelectedCell, SelectedRow};
+    use crate::results_panel::{SelectedCell, SelectedRow, SelectedTableData};
 
     fn create_test_data() -> SelectedTableData {
         SelectedTableData {
             table_name: Some("users".to_string()),
             columns: vec!["id".to_string(), "name".to_string(), "email".to_string()],
-            column_types: vec!["integer".to_string(), "text".to_string(), "text".to_string()],
-            selected_cells: vec![
-                SelectedCell {
-                    row: 0,
-                    col: 1,
-                    value: "Alice".to_string(),
-                    column_name: Some("name".to_string()),
-                    column_type: Some("text".to_string()),
-                },
+            column_types: vec![
+                "integer".to_string(),
+                "text".to_string(),
+                "text".to_string(),
             ],
-            selected_rows: vec![
-                SelectedRow {
-                    row: 1,
-                    cells: vec![
-                        SelectedCell {
-                            row: 1,
-                            col: 0,
-                            value: "2".to_string(),
-                            column_name: Some("id".to_string()),
-                            column_type: Some("integer".to_string()),
-                        },
-                        SelectedCell {
-                            row: 1,
-                            col: 1,
-                            value: "Bob".to_string(),
-                            column_name: Some("name".to_string()),
-                            column_type: Some("text".to_string()),
-                        },
-                        SelectedCell {
-                            row: 1,
-                            col: 2,
-                            value: "bob@example.com".to_string(),
-                            column_name: Some("email".to_string()),
-                            column_type: Some("text".to_string()),
-                        },
-                    ],
-                    primary_key_value: Some("2".to_string()),
-                },
-            ],
+            selected_cells: vec![SelectedCell {
+                row: 0,
+                col: 1,
+                value: "Alice".to_string(),
+                column_name: Some("name".to_string()),
+                column_type: Some("text".to_string()),
+            }],
+            selected_rows: vec![SelectedRow {
+                row: 1,
+                cells: vec![
+                    SelectedCell {
+                        row: 1,
+                        col: 0,
+                        value: "2".to_string(),
+                        column_name: Some("id".to_string()),
+                        column_type: Some("integer".to_string()),
+                    },
+                    SelectedCell {
+                        row: 1,
+                        col: 1,
+                        value: "Bob".to_string(),
+                        column_name: Some("name".to_string()),
+                        column_type: Some("text".to_string()),
+                    },
+                    SelectedCell {
+                        row: 1,
+                        col: 2,
+                        value: "bob@example.com".to_string(),
+                        column_name: Some("email".to_string()),
+                        column_type: Some("text".to_string()),
+                    },
+                ],
+                primary_key_value: Some("2".to_string()),
+            }],
             primary_key_column: Some("id".to_string()),
         }
     }
@@ -210,8 +240,8 @@ mod tests {
         assert!(csv_preview.contains("Alice"));
 
         let json_preview = handler.preview_transform(&data, "json", 100).unwrap();
-        assert!(json_preview.contains("table"));
-        assert!(json_preview.contains("users"));
+        assert!(json_preview.contains("\"name\": \"Bob\""));
+        assert!(json_preview.contains("\"email\": \"bob@example.com\""));
     }
 
     #[test]
@@ -229,6 +259,9 @@ mod tests {
         let data = create_test_data();
 
         let result = handler.preview_transform(&data, "unknown_format", 50);
-        assert!(matches!(result, Err(CopyError::TransformError(TransformError::FormatError(_)))));
+        assert!(matches!(
+            result,
+            Err(CopyError::TransformError(TransformError::FormatError(_)))
+        ));
     }
 }

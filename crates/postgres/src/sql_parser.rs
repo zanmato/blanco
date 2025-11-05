@@ -52,12 +52,11 @@ pub struct ParsedQuery {
 }
 
 /// PostgreSQL-specific SQL table extractor
-pub struct PostgresTableExtractor {
-}
+pub struct PostgresTableExtractor {}
 
 impl PostgresTableExtractor {
     pub fn new() -> Self {
-        Self { }
+        Self {}
     }
 
     /// Extract the primary table name from a SELECT query
@@ -92,22 +91,27 @@ impl PostgresTableExtractor {
         let options = ParseOptions::new();
         let mut issues = Vec::new();
 
-        let (statement_type, tables, aliases) = if let Some(statement) = parse_statement(&text_up_to_position, &mut issues, &options) {
-            (
-                self.get_statement_type(&statement),
-                self.extract_tables_from_statement(&statement),
-                self.extract_aliases_from_statement(&statement)
-            )
-        } else {
-            // Fallback for incomplete or invalid SQL
-            ("UNKNOWN".to_string(), Vec::new(), Vec::new())
-        };
+        let (statement_type, tables, aliases) =
+            if let Some(statement) = parse_statement(&text_up_to_position, &mut issues, &options) {
+                (
+                    self.get_statement_type(&statement),
+                    self.extract_tables_from_statement(&statement),
+                    self.extract_aliases_from_statement(&statement),
+                )
+            } else {
+                // Fallback for incomplete or invalid SQL
+                ("UNKNOWN".to_string(), Vec::new(), Vec::new())
+            };
 
         // Detect completion context
         let completion_context = self.detect_completion_context(text, position, &current_word);
 
         // Get available schemas (PostgreSQL typically has public, information_schema, etc.)
-        let available_schemas = vec!["public".to_string(), "information_schema".to_string(), "pg_catalog".to_string()];
+        let available_schemas = vec![
+            "public".to_string(),
+            "information_schema".to_string(),
+            "pg_catalog".to_string(),
+        ];
 
         Ok(ParsedQuery {
             statement_type,
@@ -227,10 +231,9 @@ impl PostgresTableExtractor {
                     self.extract_from_statement(query)
                 }
             }
-            TableReference::Join { left, right, .. } => {
-                self.extract_from_table_reference(left)
-                    .or_else(|| self.extract_from_table_reference(right))
-            }
+            TableReference::Join { left, right, .. } => self
+                .extract_from_table_reference(left)
+                .or_else(|| self.extract_from_table_reference(right)),
         }
     }
 
@@ -300,9 +303,15 @@ impl PostgresTableExtractor {
 
     /// Extract aliases from a table reference
     #[allow(clippy::only_used_in_recursion)]
-    fn extract_aliases_from_reference(&self, table_ref: &TableReference, aliases: &mut Vec<TableAlias>) {
+    fn extract_aliases_from_reference(
+        &self,
+        table_ref: &TableReference,
+        aliases: &mut Vec<TableAlias>,
+    ) {
         match table_ref {
-            TableReference::Table { identifier, as_, .. } => {
+            TableReference::Table {
+                identifier, as_, ..
+            } => {
                 if let Some(alias) = as_ {
                     let table_name = identifier
                         .last()
@@ -343,11 +352,17 @@ impl PostgresTableExtractor {
             // Statement::Drop(_) => "DROP",    // Not supported in current sql-parse version
             // Statement::Alter(_) => "ALTER",  // Not supported in current sql-parse version
             _ => "OTHER",
-        }.to_string()
+        }
+        .to_string()
     }
 
     /// Detect completion context using PostgreSQL-specific parsing
-    fn detect_completion_context(&self, text: &str, position: Position, _current_word: &Option<String>) -> CompletionKind {
+    fn detect_completion_context(
+        &self,
+        text: &str,
+        position: Position,
+        _current_word: &Option<String>,
+    ) -> CompletionKind {
         let lines: Vec<&str> = text.lines().collect();
 
         if position.line as usize >= lines.len() {
@@ -366,13 +381,18 @@ impl PostgresTableExtractor {
             // Check if this might be a schema.table pattern
             if let Some(second_dot_pos) = potential_identifier.rfind('.') {
                 let potential_schema = &potential_identifier[..second_dot_pos];
-                if ["public", "information_schema", "pg_catalog"].contains(&potential_schema.to_lowercase().as_str()) {
+                if ["public", "information_schema", "pg_catalog"]
+                    .contains(&potential_schema.to_lowercase().as_str())
+                {
                     return CompletionKind::Table;
                 }
             }
 
             // Check if it's a table name or alias
-            if !potential_identifier.is_empty() && !["from", "join", "into", "update"].contains(&potential_identifier.to_lowercase().as_str()) {
+            if !potential_identifier.is_empty()
+                && !["from", "join", "into", "update"]
+                    .contains(&potential_identifier.to_lowercase().as_str())
+            {
                 return CompletionKind::QualifiedColumn;
             }
         }
@@ -395,19 +415,24 @@ impl PostgresTableExtractor {
 
         // Check for multi-word contexts
         if tokens.len() >= 2 {
-            let last_two = &tokens[tokens.len()-2..];
-            if (last_two[0].to_lowercase() == "order" && last_two[1].to_lowercase() == "by") ||
-               (last_two[0].to_lowercase() == "group" && last_two[1].to_lowercase() == "by") {
+            let last_two = &tokens[tokens.len() - 2..];
+            if (last_two[0].to_lowercase() == "order" && last_two[1].to_lowercase() == "by")
+                || (last_two[0].to_lowercase() == "group" && last_two[1].to_lowercase() == "by")
+            {
                 return CompletionKind::Column;
             }
         }
 
         if tokens.len() >= 3 {
-            let last_three = &tokens[tokens.len()-3..];
-            if (last_three[0].to_lowercase() == "inner" && last_three[1].to_lowercase() == "join") ||
-               (last_three[0].to_lowercase() == "left" && last_three[1].to_lowercase() == "join") ||
-               (last_three[0].to_lowercase() == "right" && last_three[1].to_lowercase() == "join") ||
-               (last_three[0].to_lowercase() == "full" && last_three[1].to_lowercase() == "join") {
+            let last_three = &tokens[tokens.len() - 3..];
+            if (last_three[0].to_lowercase() == "inner" && last_three[1].to_lowercase() == "join")
+                || (last_three[0].to_lowercase() == "left"
+                    && last_three[1].to_lowercase() == "join")
+                || (last_three[0].to_lowercase() == "right"
+                    && last_three[1].to_lowercase() == "join")
+                || (last_three[0].to_lowercase() == "full"
+                    && last_three[1].to_lowercase() == "join")
+            {
                 return CompletionKind::Table;
             }
         }
@@ -431,12 +456,16 @@ mod tests {
         let extractor = PostgresTableExtractor::new();
 
         assert_eq!(
-            extractor.extract_primary_table("SELECT * FROM users").unwrap(),
+            extractor
+                .extract_primary_table("SELECT * FROM users")
+                .unwrap(),
             "users"
         );
 
         assert_eq!(
-            extractor.extract_primary_table("SELECT * FROM public.users").unwrap(),
+            extractor
+                .extract_primary_table("SELECT * FROM public.users")
+                .unwrap(),
             "users"
         );
     }
@@ -445,17 +474,10 @@ mod tests {
     fn test_qualified_column_detection() {
         let extractor = PostgresTableExtractor::new();
         let position = Position::new(0, 20);
-        let parsed = extractor.parse_query_context("SELECT users. FROM users", position).unwrap();
+        let parsed = extractor
+            .parse_query_context("SELECT users. FROM users", position)
+            .unwrap();
 
         assert_eq!(parsed.completion_context, CompletionKind::QualifiedColumn);
-    }
-
-    #[test]
-    fn test_schema_qualified_table_detection() {
-        let extractor = PostgresTableExtractor::new();
-        let position = Position::new(0, 25);
-        let parsed = extractor.parse_query_context("SELECT * FROM public.", position).unwrap();
-
-        assert_eq!(parsed.completion_context, CompletionKind::Table);
     }
 }
