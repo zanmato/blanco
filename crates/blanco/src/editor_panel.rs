@@ -19,7 +19,6 @@ use crate::app_database::QueryTabData;
 use crate::app_events::AppEvent;
 use crate::chat_provider_resolver::ChatProviderResolver;
 use crate::db_service::DbService;
-use crate::query_file::QueryFileManager;
 use crate::results_panel::ResultsPanel;
 use crate::settings::{load_settings, Settings};
 use crate::sql_completion_provider::SqlCompletionProvider;
@@ -55,7 +54,6 @@ pub struct QueryTab {
     pub sql_log: Entity<SqlLog>, // SQL log for this tab
     #[allow(dead_code)]
     pub cached_diagnostics: Arc<Mutex<Vec<Diagnostic>>>, // Store diagnostics for this tab
-    pub file_uri: Option<String>, // File URI for integration
     pub current_completions: Option<crate::sql_completion::CompletionResult>,
     pub selected_completion_index: usize,
     // Chat functionality
@@ -199,7 +197,6 @@ pub struct EditorPanel {
     next_tab_id: usize,
     sidebar_collapsed: bool,
     _subscriptions: Vec<gpui::Subscription>,
-    query_file_manager: Arc<QueryFileManager>,
     // Temporary storage for saved tabs that will be restored after connections are loaded
     pending_saved_tabs: Option<Vec<crate::app_database::QueryTabData>>,
     // Split pane state
@@ -237,16 +234,6 @@ impl EditorPanel {
         cx: &mut Context<Self>,
         sidebar_collapsed: bool,
     ) -> Self {
-        // Initialize QueryFileManager
-        let query_file_manager = Arc::new(
-            QueryFileManager::new()
-                .map_err(|e| {
-                    error!("Failed to initialize QueryFileManager: {}", e);
-                    e
-                })
-                .expect("Failed to create QueryFileManager"),
-        );
-
         Self {
             focus_handle: cx.focus_handle(),
             tabs: vec![], // Start with no tabs - tabs are created on demand
@@ -254,7 +241,6 @@ impl EditorPanel {
             next_tab_id: 1,
             sidebar_collapsed,
             _subscriptions: Vec::new(),
-            query_file_manager,
             pending_saved_tabs: None,
             // Initialize split pane state with reasonable defaults
             // 40% editor, 40% table, 20% log
@@ -326,7 +312,6 @@ impl EditorPanel {
             }),
             sql_log: cx.new(|cx| SqlLog::new(1000, cx.theme().highlight_theme.clone())), // Maximum 1000 lines in the log
             cached_diagnostics: Arc::new(Mutex::new(Vec::new())),
-            file_uri: None, // Will be set when file is created
             current_completions: None,
             selected_completion_index: 0,
             // Chat functionality
@@ -526,25 +511,21 @@ impl EditorPanel {
                     // Extract the tab data we need before starting async operations
                     let tab_index = self.active_tab_ix;
                     let content = query_tab.editor.read(cx).text().to_string();
-                    // For now, we don't have the connection_string from connection_id
-                    // TODO: Resolve connection_string from connection_id if needed
+
                     let connection_type = None;
                     let tab_data = QueryTabData {
                         id: query_tab.db_id,
                         title: query_tab.title.clone(),
                         content: content.clone(),
                         position: tab_index as i32,
-                        connection_id: None, // Will be set in async task
+                        connection_id: Some(query_tab.connection_id),
                         connection_type,
-                        file_uri: None, // Will be updated after file creation
                     };
 
                     // Trigger the save operation in background
                     let db_service = DbService::global(cx).clone();
                     let app_db = db_service.app_db_handle();
                     let _title = query_tab.title.clone();
-                    let query_file_manager = self.query_file_manager.clone();
-                    let connection_name = query_tab.title.clone();
                     let connection_id = query_tab.connection_id;
 
                     cx.spawn(async move |_entity_handle, _cx| {
@@ -556,7 +537,7 @@ impl EditorPanel {
                             final_tab_data.connection_id = Some(connection_id);
 
                             // First save to get or create the database ID
-                            let final_db_id = match app_db.save_query_tab(&final_tab_data).await {
+                            let _final_db_id = match app_db.save_query_tab(&final_tab_data).await {
                                 Ok(db_id) => {
                                     debug!("Tab saved successfully with db_id: {}", db_id);
                                     db_id
@@ -566,50 +547,6 @@ impl EditorPanel {
                                     return;
                                 }
                             };
-
-                            // Try to migrate the query file from legacy location if it exists
-                            if let Err(e) = query_file_manager
-                                .migrate_query_file(final_db_id, &connection_name)
-                                .await
-                            {
-                                debug!("Migration not needed or failed for tab: {}", e);
-                            }
-
-                            // Create/update the query file on disk
-                            let file_uri = match query_file_manager
-                                .create_query_file(final_db_id, &connection_name, &content)
-                                .await
-                            {
-                                Ok(_) => {
-                                    let uri = query_file_manager
-                                        .query_file_uri(final_db_id, &connection_name);
-                                    debug!("Created query file for tab with URI: {}", uri);
-                                    Some(uri)
-                                }
-                                Err(e) => {
-                                    error!("Failed to create query file: {}", e);
-                                    None
-                                }
-                            };
-
-                            // Update the database record with the file URI
-                            if let Some(ref file_uri) = file_uri {
-                                let updated_tab_data = QueryTabData {
-                                    id: Some(final_db_id),
-                                    title: final_tab_data.title.clone(),
-                                    content: final_tab_data.content.clone(),
-                                    position: final_tab_data.position,
-                                    connection_id: final_tab_data.connection_id,
-                                    connection_type: final_tab_data.connection_type.clone(),
-                                    file_uri: Some(file_uri.clone()),
-                                };
-
-                                if let Err(e) = app_db.save_query_tab(&updated_tab_data).await {
-                                    error!("Failed to update file URI: {}", e);
-                                } else {
-                                    debug!("Updated file URI: {}", file_uri);
-                                }
-                            }
                         }
                     })
                     .detach();
@@ -917,8 +854,7 @@ impl EditorPanel {
         info!("Saving {} query tabs on app quit", tabs_data.len());
 
         // Save tabs in background
-        let query_file_manager = self.query_file_manager.clone();
-        cx.spawn(async move |editor_panel_handle, cx| {
+        cx.spawn(async move |_, _| {
             let mut saved_ids = Vec::new();
             if let Some(app_db) = app_db.read().await.as_ref() {
                 for (
@@ -929,7 +865,7 @@ impl EditorPanel {
                     position,
                     connection_id,
                     connection_type,
-                    connection_name,
+                    _connection_name,
                 ) in tabs_data
                 {
                     // First save to get or create the database ID
@@ -940,7 +876,6 @@ impl EditorPanel {
                         position,
                         connection_id: Some(connection_id),
                         connection_type: connection_type.clone(),
-                        file_uri: None, // Will be updated after file creation
                     };
 
                     let final_db_id = match app_db.save_query_tab(&temp_tab_data).await {
@@ -954,82 +889,10 @@ impl EditorPanel {
                         }
                     };
 
-                    // Try to migrate the query file from legacy location if it exists
-                    // This ensures backward compatibility when switching to connection-specific directories
-                    if let Err(e) = query_file_manager
-                        .migrate_query_file(final_db_id, &connection_name)
-                        .await
-                    {
-                        debug!("Migration not needed or failed for tab '{}': {}", title, e);
-                    }
-
-                    // Create/update the query file on disk
-                    let file_uri = match query_file_manager
-                        .create_query_file(final_db_id, &connection_name, &content)
-                        .await
-                    {
-                        Ok(_) => {
-                            let uri =
-                                query_file_manager.query_file_uri(final_db_id, &connection_name);
-                            debug!("Created query file for tab '{}' with URI: {}", title, uri);
-                            Some(uri)
-                        }
-                        Err(e) => {
-                            error!("Failed to create query file for tab '{}': {}", title, e);
-                            None
-                        }
-                    };
-
-                    // Update the database record with the file URI
-                    if let Some(ref file_uri) = file_uri {
-                        let updated_tab_data = QueryTabData {
-                            id: Some(final_db_id),
-                            title: title.clone(),
-                            content: content.clone(),
-                            position,
-                            connection_id: Some(connection_id),
-                            connection_type: connection_type.clone(),
-                            file_uri: Some(file_uri.clone()),
-                        };
-
-                        if let Err(e) = app_db.save_query_tab(&updated_tab_data).await {
-                            error!("Failed to update file URI for tab '{}': {}", title, e);
-                        } else {
-                            debug!("Updated file URI for tab '{}': {}", title, file_uri);
-                        }
-                    }
-
                     saved_ids.push((tab_index, final_db_id));
                 }
             } else {
                 error!("App database not initialized");
-            }
-
-            if let Some(editor_panel) = editor_panel_handle.upgrade() {
-                let _ = editor_panel.update(cx, |panel, _cx| {
-                    for (tab_index, db_id) in saved_ids {
-                        if let Some(TabType::Query(query_tab)) = panel.tabs.get_mut(tab_index) {
-                            if query_tab.db_id.is_none() {
-                                query_tab.db_id = Some(db_id);
-                                // Set the file URI on the QueryTab
-                                if let Some(file_uri) = panel
-                                    .query_file_manager
-                                    .query_file_uri(db_id, &query_tab.title)
-                                    .into()
-                                {
-                                    let file_uri_debug = file_uri.clone();
-                                    query_tab.file_uri = Some(file_uri);
-                                    debug!(
-                                        "Updated tab with db_id: {} and file_uri: {}",
-                                        db_id, file_uri_debug
-                                    );
-                                } else {
-                                    debug!("Updated tab with db_id: {}", db_id);
-                                }
-                            }
-                        }
-                    }
-                });
             }
         })
         .detach();
@@ -1045,16 +908,6 @@ impl EditorPanel {
     ) -> Self {
         info!("Loading {} saved tabs", saved_tabs.len());
 
-        // Initialize QueryFileManager
-        let query_file_manager = Arc::new(
-            QueryFileManager::new()
-                .map_err(|e| {
-                    error!("Failed to initialize QueryFileManager: {}", e);
-                    e
-                })
-                .expect("Failed to create QueryFileManager"),
-        );
-
         let mut panel = Self {
             focus_handle: cx.focus_handle(),
             tabs: vec![],
@@ -1062,7 +915,6 @@ impl EditorPanel {
             next_tab_id: 0,
             sidebar_collapsed,
             _subscriptions: Vec::new(),
-            query_file_manager,
             pending_saved_tabs: None,
             // Initialize split pane state with reasonable defaults
             // 40% editor, 40% table, 20% log
@@ -1213,7 +1065,6 @@ impl EditorPanel {
             results_panel: cx.new(|cx| ResultsPanel::new(window, cx)),
             sql_log: cx.new(|cx| SqlLog::new(1000, cx.theme().highlight_theme.clone())),
             cached_diagnostics: Arc::new(Mutex::new(Vec::new())),
-            file_uri: None,
             current_completions: None,
             selected_completion_index: 0,
             // Chat functionality

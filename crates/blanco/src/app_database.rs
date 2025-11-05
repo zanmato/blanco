@@ -253,7 +253,7 @@ impl AppDatabase {
             sqlx::query(
                 r#"
                 UPDATE query_tabs
-                SET title = ?, content = ?, position = ?, connection_id = ?, connection_type = ?, file_uri = ?, updated_at = ?
+                SET title = ?, content = ?, position = ?, connection_id = ?, connection_type = ?, updated_at = ?
                 WHERE id = ?
                 "#,
             )
@@ -262,7 +262,6 @@ impl AppDatabase {
             .bind(tab.position)
             .bind(tab.connection_id)
             .bind(&tab.connection_type)
-            .bind(&tab.file_uri)
             .bind(now)
             .bind(id)
             .execute(&self.pool)
@@ -272,8 +271,8 @@ impl AppDatabase {
             // Insert new tab
             let result = sqlx::query(
                 r#"
-                INSERT INTO query_tabs (title, content, position, connection_id, connection_type, file_uri, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO query_tabs (title, content, position, connection_id, connection_type, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(&tab.title)
@@ -281,7 +280,6 @@ impl AppDatabase {
             .bind(tab.position)
             .bind(tab.connection_id)
             .bind(&tab.connection_type)
-            .bind(&tab.file_uri)
             .bind(now)
             .bind(now)
             .execute(&self.pool)
@@ -294,7 +292,7 @@ impl AppDatabase {
     pub async fn load_query_tabs(&self) -> Result<Vec<QueryTabData>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
-            SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type, file_uri
+            SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type
             FROM query_tabs qt
             INNER JOIN connections c ON c.id = qt.connection_id
             ORDER BY qt.position ASC
@@ -312,7 +310,6 @@ impl AppDatabase {
                 position: row.get(3),
                 connection_id: row.get(4),
                 connection_type: row.get(5),
-                file_uri: row.get(6),
             })
             .collect();
 
@@ -325,78 +322,6 @@ impl AppDatabase {
             .execute(&self.pool)
             .await?;
         Ok(())
-    }
-
-    /// Find tabs that need migration (no file_uri set)
-    pub async fn find_tabs_needing_migration(&self) -> Result<Vec<QueryTabData>, sqlx::Error> {
-        let rows = sqlx::query(
-            r#"
-            SELECT id, title, content, position, connection_id, connection_type,file_uri
-            FROM query_tabs
-            WHERE file_uri IS NULL
-            ORDER BY position ASC
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await?;
-
-        let tabs = rows
-            .into_iter()
-            .map(|row| QueryTabData {
-                id: Some(row.get::<i64, _>(0)),
-                title: row.get(1),
-                content: row.get(2),
-                position: row.get(3),
-                connection_id: row.get(4),
-                connection_type: row.get(5),
-                file_uri: row.get(7),
-            })
-            .collect();
-
-        Ok(tabs)
-    }
-
-    /// Update file_uri for a specific tab
-    pub async fn update_tab_file_uri(&self, id: i64, file_uri: &str) -> Result<(), sqlx::Error> {
-        let now = chrono::Utc::now().timestamp();
-
-        sqlx::query(
-            r#"
-            UPDATE query_tabs
-            SET file_uri = ?, updated_at = ?
-            WHERE id = ?
-            "#,
-        )
-        .bind(file_uri)
-        .bind(now)
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    // Query History
-    #[allow(dead_code)]
-    pub async fn save_query_history(&self, history: &QueryHistoryData) -> Result<i64, sqlx::Error> {
-        let result = sqlx::query(
-            r#"
-            INSERT INTO query_history
-            (query_text, executed_at, duration_ms, rows_affected, row_count, success, error_message)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            "#,
-        )
-        .bind(&history.query_text)
-        .bind(history.executed_at)
-        .bind(history.duration_ms)
-        .bind(history.rows_affected)
-        .bind(history.row_count)
-        .bind(if history.success { 1 } else { 0 })
-        .bind(&history.error_message)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(result.last_insert_rowid())
     }
 
     // Connections
@@ -513,7 +438,6 @@ pub struct QueryTabData {
     pub position: i32,
     pub connection_id: Option<i64>,
     pub connection_type: Option<String>,
-    pub file_uri: Option<String>,
 }
 
 #[derive(Debug, Clone)]

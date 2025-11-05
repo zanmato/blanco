@@ -6,20 +6,16 @@
 //! - Auto-completion for PostgreSQL queries (TODO)
 //! - Hover information for tables and columns (TODO)
 
-pub mod connection;
-pub mod sql_parser;
 pub mod completion;
-pub mod hover;
+pub mod connection;
 pub mod factory;
+pub mod hover;
+pub mod sql_parser;
 
 // Re-export main types for convenience
-pub use connection::{
-    PostgresConnection, PgConnectionKey
-};
+pub use connection::{PgConnectionKey, PostgresConnection};
 
-pub use sql_parser::{
-    PostgresTableExtractor, CompletionKind, ParsedQuery, TableAlias
-};
+pub use sql_parser::{CompletionKind, ParsedQuery, PostgresTableExtractor, TableAlias};
 
 pub use factory::PostgresConnectionFactory;
 
@@ -29,17 +25,21 @@ pub use factory::PostgresConnectionFactory;
 
 #[cfg(test)]
 mod tests {
-    use sqlx::{Row, postgres::PgPoolOptions};
-    use std::env;
     use blanco_core::Connection;
+    use sqlx::{postgres::PgPoolOptions, Row, ValueRef};
+    use std::env;
 
     #[async_std::test]
     async fn test_postgres_data_type_serialization() -> Result<(), Box<dyn std::error::Error>> {
         // Use environment variable for connection string or fallback to default
-        let connection_string = env::var("POSTGRES_CONNECTION_STRING")
-            .unwrap_or_else(|_| "postgres://manager:manager@localhost:5444/postgres?sslmode=disable".to_string());
+        let connection_string = env::var("POSTGRES_CONNECTION_STRING").unwrap_or_else(|_| {
+            "postgres://manager:manager@localhost:5444/postgres?sslmode=disable".to_string()
+        });
 
-        println!("Testing PostgreSQL data types with connection: {}", connection_string);
+        println!(
+            "Testing PostgreSQL data types with connection: {}",
+            connection_string
+        );
 
         // Connect to PostgreSQL (use postgres database to create test database)
         let pool = PgPoolOptions::new()
@@ -64,6 +64,20 @@ mod tests {
             .await?;
 
         println!("Successfully connected to PostgreSQL!");
+
+        sqlx::query("DROP TYPE IF EXISTS custom_enum CASCADE")
+            .execute(&test_pool)
+            .await
+            .ok();
+
+        let create_enum_sql = r#"
+            CREATE TYPE custom_enum AS ENUM (
+                'a',
+                'b'
+            );
+        "#;
+
+        sqlx::query(create_enum_sql).execute(&test_pool).await?;
 
         // Create simple test table with basic data types
         let create_table_sql = r#"
@@ -107,13 +121,19 @@ mod tests {
                 -- Array types
                 int_array_col INTEGER[],
                 text_array_col TEXT[],
-                uuid_array_col UUID[]
+                uuid_array_col UUID[],
+
+                -- Enum types
+                custom_enum custom_enum
             )
         "#;
 
         println!("Creating comprehensive test table...");
         // Drop table first to ensure we have the latest schema
-        sqlx::query("DROP TABLE IF EXISTS comprehensive_test").execute(&test_pool).await.ok();
+        sqlx::query("DROP TABLE IF EXISTS comprehensive_test")
+            .execute(&test_pool)
+            .await
+            .ok();
         sqlx::query(create_table_sql).execute(&test_pool).await?;
         println!("Table created successfully!");
 
@@ -124,7 +144,7 @@ mod tests {
                 real_col, double_precision_col, smallserial_col, serial_col, bigserial_col, money_col,
                 char_col, varchar_col, text_col, bool_col,
                 date_col, time_col, timestamp_col, timestamp_with_time_zone_col,
-                uuid_col, json_col, jsonb_col, int_array_col, text_array_col, uuid_array_col
+                uuid_col, json_col, jsonb_col, int_array_col, text_array_col, uuid_array_col, custom_enum
             ) VALUES (
                 32767, 2147483647, 9223372036854775807, 12345.67, 98765.43210,
                 123.456, 987654321.123456789, 100, 1000, 1000000, 12345.67,
@@ -135,14 +155,17 @@ mod tests {
                 '{"nested": {"array": [1,2,3], "text": "hello"}}',
                 ARRAY[1, 2, 3, 4, 5],
                 ARRAY['hello', 'world', 'test'],
-                ARRAY['550e8400-e29b-41d4-a716-446655440000'::uuid, '660e8400-e29b-41d4-a716-446655440001'::uuid]
+                ARRAY['550e8400-e29b-41d4-a716-446655440000'::uuid, '660e8400-e29b-41d4-a716-446655440001'::uuid], 'a'
             )
             ON CONFLICT DO NOTHING;
         "#;
 
         println!("Inserting test data...");
         let result = sqlx::query(insert_sql).execute(&test_pool).await?;
-        println!("Test data inserted successfully! Rows affected: {}", result.rows_affected());
+        println!(
+            "Test data inserted successfully! Rows affected: {}",
+            result.rows_affected()
+        );
 
         // Read the data back and verify serialization
         println!("\n=== Testing Data Type Serialization ===\n");
@@ -153,7 +176,8 @@ mod tests {
                 real_col, double_precision_col, smallserial_col, serial_col, bigserial_col, money_col,
                 char_col, varchar_col, text_col, bool_col,
                 date_col, time_col, timestamp_col, timestamp_with_time_zone_col,
-                uuid_col, json_col, jsonb_col, int_array_col, text_array_col, uuid_array_col
+                uuid_col, json_col, jsonb_col, int_array_col, text_array_col, uuid_array_col,
+                custom_enum::text
             FROM comprehensive_test
             WHERE id = (SELECT MAX(id) FROM comprehensive_test)
         "#;
@@ -161,21 +185,55 @@ mod tests {
         let row = sqlx::query(select_sql).fetch_one(&test_pool).await?;
 
         // Helper function to safely extract and print values
-        fn safe_print<T: std::fmt::Display + sqlx::Type<sqlx::Postgres> + for<'r> sqlx::Decode<'r, sqlx::Postgres>>(name: &str, row: &sqlx::postgres::PgRow, column: &str) -> Result<(), sqlx::Error> {
+        fn safe_print<
+            T: std::fmt::Display
+                + sqlx::Type<sqlx::Postgres>
+                + for<'r> sqlx::Decode<'r, sqlx::Postgres>,
+        >(
+            name: &str,
+            row: &sqlx::postgres::PgRow,
+            column: &str,
+        ) -> Result<(), sqlx::Error> {
             match row.try_get::<Option<T>, _>(column) {
-                Ok(Some(value)) => println!("{:<25}: {} ({})", name, value, std::any::type_name::<T>()),
+                Ok(Some(value)) => {
+                    println!("{:<25}: {} ({})", name, value, std::any::type_name::<T>())
+                }
                 Ok(None) => println!("{:<25}: NULL", name),
-                Err(e) => println!("{:<25}: ERROR - {} ({})", name, e, std::any::type_name::<T>()),
+                Err(e) => println!(
+                    "{:<25}: ERROR - {} ({})",
+                    name,
+                    e,
+                    std::any::type_name::<T>()
+                ),
             }
             Ok(())
         }
 
         // Helper function for array types that don't implement Display
-        fn safe_print_array<T: std::fmt::Debug + sqlx::Type<sqlx::Postgres> + for<'r> sqlx::Decode<'r, sqlx::Postgres> + sqlx::postgres::PgHasArrayType>(name: &str, row: &sqlx::postgres::PgRow, column: &str) -> Result<(), sqlx::Error> {
+        fn safe_print_array<
+            T: std::fmt::Debug
+                + sqlx::Type<sqlx::Postgres>
+                + for<'r> sqlx::Decode<'r, sqlx::Postgres>
+                + sqlx::postgres::PgHasArrayType,
+        >(
+            name: &str,
+            row: &sqlx::postgres::PgRow,
+            column: &str,
+        ) -> Result<(), sqlx::Error> {
             match row.try_get::<Option<Vec<T>>, _>(column) {
-                Ok(Some(arr)) => println!("{:<25}: {:?} ({})", name, arr, std::any::type_name::<Vec<T>>()),
+                Ok(Some(arr)) => println!(
+                    "{:<25}: {:?} ({})",
+                    name,
+                    arr,
+                    std::any::type_name::<Vec<T>>()
+                ),
                 Ok(None) => println!("{:<25}: NULL", name),
-                Err(e) => println!("{:<25}: ERROR - {} ({})", name, e, std::any::type_name::<Vec<T>>()),
+                Err(e) => println!(
+                    "{:<25}: ERROR - {} ({})",
+                    name,
+                    e,
+                    std::any::type_name::<Vec<T>>()
+                ),
             }
             Ok(())
         }
@@ -190,14 +248,29 @@ mod tests {
         safe_print::<rust_decimal::Decimal>("numeric_col", &row, "numeric_col")?;
         // Money type needs special handling - convert via string
         match row.try_get::<Option<rust_decimal::Decimal>, _>("money_col") {
-            Ok(Some(value)) => println!("{:<25}: ${} ({})", "money_col", value, std::any::type_name::<rust_decimal::Decimal>()),
+            Ok(Some(value)) => println!(
+                "{:<25}: ${} ({})",
+                "money_col",
+                value,
+                std::any::type_name::<rust_decimal::Decimal>()
+            ),
             Ok(None) => println!("{:<25}: NULL", "money_col"),
             Err(_) => {
                 // Fallback: try as string and parse
                 match row.try_get::<Option<String>, _>("money_col") {
-                    Ok(Some(value)) => println!("{:<25}: {} ({})", "money_col", value, std::any::type_name::<String>()),
+                    Ok(Some(value)) => println!(
+                        "{:<25}: {} ({})",
+                        "money_col",
+                        value,
+                        std::any::type_name::<String>()
+                    ),
                     Ok(None) => println!("{:<25}: NULL", "money_col"),
-                    Err(e) => println!("{:<25}: ERROR - {} ({})", "money_col", e, std::any::type_name::<String>()),
+                    Err(e) => println!(
+                        "{:<25}: ERROR - {} ({})",
+                        "money_col",
+                        e,
+                        std::any::type_name::<String>()
+                    ),
                 }
             }
         }
@@ -219,7 +292,11 @@ mod tests {
         safe_print::<chrono::NaiveDate>("date_col", &row, "date_col")?;
         safe_print::<chrono::NaiveTime>("time_col", &row, "time_col")?;
         safe_print::<chrono::NaiveDateTime>("timestamp_col", &row, "timestamp_col")?;
-        safe_print::<chrono::DateTime<chrono::Utc>>("timestamp_with_time_zone_col", &row, "timestamp_with_time_zone_col")?;
+        safe_print::<chrono::DateTime<chrono::Utc>>(
+            "timestamp_with_time_zone_col",
+            &row,
+            "timestamp_with_time_zone_col",
+        )?;
 
         println!("\n--- UUID Type ---");
         safe_print::<uuid::Uuid>("uuid_col", &row, "uuid_col")?;
@@ -235,10 +312,53 @@ mod tests {
         // Skip numeric array for now - requires Decimal type support
         // safe_print_array::<rust_decimal::Decimal>("numeric_array_col", &row, "numeric_array_col")?;
 
+        println!("\n--- Enum Types ---");
+        // Try to get the enum value using different approaches
+        let mut enum_handled = false;
+
+        // Try standard String conversion
+        if let Ok(val) = row.try_get::<Option<String>, _>("custom_enum") {
+            match val {
+                Some(value) => {
+                    println!("{:<25}: {} ({})", "custom_enum", value, "String");
+                    enum_handled = true;
+                }
+                None => {
+                    println!("{:<25}: NULL", "custom_enum");
+                    enum_handled = true;
+                }
+            }
+        }
+
+        // If String conversion failed, try using raw value access
+        if !enum_handled {
+            match row.try_get_raw("custom_enum") {
+                Ok(raw_value) => {
+                    if raw_value.is_null() {
+                        println!("{:<25}: NULL", "custom_enum");
+                    } else {
+                        // Try to get the raw bytes and convert to string
+                        match raw_value.as_str() {
+                            Ok(text_val) => {
+                                println!("{:<25}: {} (raw text)", "custom_enum", text_val);
+                            }
+                            Err(_) => {
+                                println!("{:<25}: ERROR - couldn't decode as raw text", "custom_enum");
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("{:<25}: ERROR - {}", "custom_enum", e);
+                }
+            }
+        }
+
         println!("\n=== Testing Blanco PostgreSQL Connection ===\n");
 
         // Test with Blanco's PostgreSQL connection
-        let mut postgres_connection = crate::PostgresConnection::from_connection_string(&test_connection_string)?;
+        let mut postgres_connection =
+            crate::PostgresConnection::from_connection_string(&test_connection_string)?;
 
         // Establish the actual database connection
         postgres_connection.connect(&test_connection_string).await?;
@@ -253,7 +373,11 @@ mod tests {
         if let Some(first_row) = query_result.rows.first() {
             println!("\n--- Blanco Serialization Results ---");
             for (i, value) in first_row.iter().enumerate() {
-                let column_name = query_result.columns.get(i).cloned().unwrap_or_else(|| "unknown".to_string());
+                let column_name = query_result
+                    .columns
+                    .get(i)
+                    .cloned()
+                    .unwrap_or_else(|| "unknown".to_string());
                 println!("{:<25}: {}", column_name, value);
             }
         }

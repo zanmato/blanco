@@ -94,10 +94,7 @@ impl MetadataCache {
 
 /// Fetch table names using the DbService
 async fn fetch_tables(db_service: &DbService, connection_id: i64) -> Result<Vec<String>> {
-    if let Ok(connection) = db_service
-        .get_or_create_connection(connection_id)
-        .await
-    {
+    if let Ok(connection) = db_service.get_or_create_connection(connection_id).await {
         connection.get_tables(None).await
     } else {
         Ok(Vec::new())
@@ -110,10 +107,7 @@ async fn fetch_columns(
     connection_id: i64,
     table_name: &str,
 ) -> Result<Vec<String>> {
-    if let Ok(connection) = db_service
-        .get_or_create_connection(connection_id)
-        .await
-    {
+    if let Ok(connection) = db_service.get_or_create_connection(connection_id).await {
         {
             let columns = connection.get_columns_for_table(table_name, None).await?;
             Ok(columns.into_iter().map(|col| col.name).collect())
@@ -515,7 +509,8 @@ impl SqlCompletionProvider {
                     // Stop if we hit a keyword that indicates end of table reference
                     let table_name_upper = table_name.to_uppercase();
                     if [
-                        "WHERE", "ON", "SET", "VALUES", "ORDER", "GROUP", "HAVING", "LIMIT", "UNION",
+                        "WHERE", "ON", "SET", "VALUES", "ORDER", "GROUP", "HAVING", "LIMIT",
+                        "UNION",
                     ]
                     .contains(&table_name_upper.as_str())
                     {
@@ -568,6 +563,23 @@ impl SqlCompletionProvider {
         None
     }
 
+    /// Generate table abbreviation from table name
+    /// Examples: "products" -> "products p", "localized_products" -> "localized_products lp"
+    fn generate_table_abbreviation(&self, table_name: &str) -> String {
+        // Split on underscores and take first letter of each part
+        let parts: Vec<&str> = table_name.split('_').collect();
+        let abbreviation: String = parts
+            .iter()
+            .map(|part| {
+                // Take first character of each part
+                part.chars().next().unwrap_or(' ')
+            })
+            .filter(|c| *c != ' ')
+            .collect();
+
+        format!("{} {}", table_name, abbreviation)
+    }
+
     /// Determine if we should show table completions based on context
     fn should_show_tables(&self, text_before_cursor: &str) -> bool {
         let context = self.parse_sql_context(text_before_cursor);
@@ -575,8 +587,14 @@ impl SqlCompletionProvider {
         // Show tables after FROM, JOIN, INTO, UPDATE keywords
         matches!(
             context.last_keyword.as_deref(),
-            Some("FROM") | Some("JOIN") | Some("INNER JOIN") | Some("LEFT JOIN")
-                | Some("RIGHT JOIN") | Some("OUTER JOIN") | Some("INTO") | Some("UPDATE")
+            Some("FROM")
+                | Some("JOIN")
+                | Some("INNER JOIN")
+                | Some("LEFT JOIN")
+                | Some("RIGHT JOIN")
+                | Some("OUTER JOIN")
+                | Some("INTO")
+                | Some("UPDATE")
         )
     }
 
@@ -592,7 +610,11 @@ impl SqlCompletionProvider {
         // Show columns after SELECT, WHERE, SET, ORDER BY, GROUP BY, HAVING
         matches!(
             context.last_keyword.as_deref(),
-            Some("SELECT") | Some("WHERE") | Some("SET") | Some("ORDER BY") | Some("GROUP BY")
+            Some("SELECT")
+                | Some("WHERE")
+                | Some("SET")
+                | Some("ORDER BY")
+                | Some("GROUP BY")
                 | Some("HAVING")
         )
     }
@@ -942,15 +964,16 @@ impl CompletionProvider for SqlCompletionProvider {
 
                         // Convert to LSP completion items
                         let completion_items = filtered_tables.into_iter().take(20).map(|table_name| {
+                            let insert_text_with_alias = provider_clone.generate_table_abbreviation(&table_name);
                             CompletionItem {
                                 label: table_name.clone(),
                                 kind: Some(CompletionItemKind::CLASS),
                                 text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
                                     lsp_types::Range::new(start_pos_clone, end_pos_clone),
-                                    table_name.clone(),
+                                    insert_text_with_alias.clone(),
                                 ))),
                                 detail: Some("Table".to_string()),
-                                insert_text: Some(table_name),
+                                insert_text: Some(insert_text_with_alias),
                                 ..Default::default()
                             }
                         }).collect::<Vec<_>>();
@@ -1147,7 +1170,7 @@ mod tests {
 
     #[test]
     fn test_find_last_keyword() {
-        let provider = SqlCompletionProvider::new("test_connection".to_string(), DbService::new());
+        let provider = SqlCompletionProvider::new(1, DbService::new());
 
         // Test basic keyword detection
         assert_eq!(
@@ -1197,7 +1220,7 @@ mod tests {
 
     #[test]
     fn test_extract_table_aliases() {
-        let provider = SqlCompletionProvider::new("test_connection".to_string(), DbService::new());
+        let provider = SqlCompletionProvider::new(1, DbService::new());
 
         // Test basic alias patterns
         let aliases = provider.extract_table_aliases("FROM users u");
@@ -1227,7 +1250,7 @@ mod tests {
 
     #[test]
     fn test_resolve_table_alias() {
-        let provider = SqlCompletionProvider::new("test_connection".to_string(), DbService::new());
+        let provider = SqlCompletionProvider::new(1, DbService::new());
         let aliases = vec![
             TableAlias {
                 table_name: "users".to_string(),
@@ -1250,9 +1273,29 @@ mod tests {
         assert_eq!(provider.resolve_table_alias(&aliases, "x"), None);
     }
 
+    #[test]
+    fn test_generate_table_abbreviation() {
+        let provider = SqlCompletionProvider::new(1, DbService::new());
+
+        // Test simple table name
+        assert_eq!(provider.generate_table_abbreviation("products"), "products p");
+
+        // Test multi-word table name with underscores
+        assert_eq!(provider.generate_table_abbreviation("localized_products"), "localized_products lp");
+
+        // Test three parts
+        assert_eq!(provider.generate_table_abbreviation("user_order_items"), "user_order_items uoi");
+
+        // Test single character
+        assert_eq!(provider.generate_table_abbreviation("a"), "a a");
+
+        // Test empty string (edge case)
+        assert_eq!(provider.generate_table_abbreviation(""), " ");
+    }
+
     #[async_std::test]
     async fn test_should_show_tables() {
-        let provider = SqlCompletionProvider::new("test_connection".to_string(), DbService::new());
+        let provider = SqlCompletionProvider::new(1, DbService::new());
 
         // Should show tables with FROM
         assert!(provider.should_show_tables("SELECT * FROM "));
@@ -1275,7 +1318,7 @@ mod tests {
 
     #[async_std::test]
     async fn test_should_show_columns() {
-        let provider = SqlCompletionProvider::new("test_connection".to_string(), DbService::new());
+        let provider = SqlCompletionProvider::new(1, DbService::new());
 
         // Should show columns with dot notation
         assert!(provider.should_show_columns("SELECT users."));
@@ -1301,7 +1344,7 @@ mod tests {
 
     #[async_std::test]
     async fn test_extract_table_for_columns() {
-        let provider = SqlCompletionProvider::new("test_connection".to_string(), DbService::new());
+        let provider = SqlCompletionProvider::new(1, DbService::new());
 
         // Test basic dot notation
         assert_eq!(
@@ -1375,7 +1418,7 @@ mod tests {
     // Test the 6 scenarios mentioned in the plan
     #[async_std::test]
     async fn test_six_scenarios() {
-        let provider = SqlCompletionProvider::new("test_connection".to_string(), DbService::new());
+        let provider = SqlCompletionProvider::new(1, DbService::new());
 
         // Scenario 1: Basic dot notation - "SELECT users." should show columns from users table
         assert!(provider.should_show_columns("SELECT users."));
