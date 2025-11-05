@@ -10,6 +10,7 @@ mod connection_modal;
 mod connection_sidebar;
 mod db_service;
 mod editor_panel;
+mod rename_form;
 mod results_panel;
 mod settings;
 mod sidebar;

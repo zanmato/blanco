@@ -80,6 +80,10 @@ pub enum AppEvent {
     TabChanged {
         tab_id: usize,
     },
+    RenameTabRequested {
+        tab_index: usize,
+        new_name: String,
+    },
 
     /// SQL completion events
     CompletionTriggered {

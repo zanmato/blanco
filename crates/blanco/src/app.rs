@@ -91,6 +91,13 @@ pub struct DoubleClickCell {
     pub col: usize,
 }
 
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct RenameTab {
+    pub tab_index: usize,
+    pub new_name: String,
+}
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 #[allow(dead_code)]
 pub enum ConnectionType {
@@ -239,6 +246,15 @@ impl BlancoApp {
                         // Update editor panel's sidebar state
                         editor_panel_for_events.update(cx, |panel, cx| {
                             panel.set_sidebar_collapsed(app.sidebar_collapsed, cx);
+                        });
+                }
+                AppEvent::RenameTabRequested { tab_index, new_name } => {
+                        log::info!("📝 RenameTabRequested event received: tab_index={}, new_name={}", tab_index, new_name);
+
+                        // Dispatch the RenameTab action to handle the rename
+                        cx.dispatch_action(&RenameTab {
+                            tab_index: *tab_index,
+                            new_name: new_name.clone(),
                         });
                 }
                 _ => {}
@@ -448,6 +464,24 @@ impl BlancoApp {
         });
         cx.notify();
     }
+
+    fn on_rename_tab(
+        &mut self,
+        action: &RenameTab,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        log::info!(
+            "on_rename_tab called: tab_index={}, new_name={}",
+            action.tab_index,
+            action.new_name
+        );
+        // Delegate tab renaming to the editor panel
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.rename_tab(action.tab_index, &action.new_name, cx);
+        });
+        cx.notify();
+    }
 }
 
 impl EventEmitter<AppEvent> for BlancoApp {}
@@ -480,6 +514,7 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_run_query))
             .on_action(cx.listener(Self::on_commit_changes))
             .on_action(cx.listener(Self::on_rollback_changes))
+            .on_action(cx.listener(Self::on_rename_tab))
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)

@@ -292,7 +292,7 @@ impl AppDatabase {
     pub async fn load_query_tabs(&self) -> Result<Vec<QueryTabData>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
-            SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type
+            SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type, c.name
             FROM query_tabs qt
             INNER JOIN connections c ON c.id = qt.connection_id
             ORDER BY qt.position ASC
@@ -303,17 +303,68 @@ impl AppDatabase {
 
         let tabs = rows
             .into_iter()
-            .map(|row| QueryTabData {
-                id: Some(row.get::<i64, _>(0)),
-                title: row.get(1),
-                content: row.get(2),
-                position: row.get(3),
-                connection_id: row.get(4),
-                connection_type: row.get(5),
+            .map(|row| {
+                let id = row.get::<i64, _>(0);
+                let title: String = row.get(1);
+
+                // Provide fallback name if title is empty
+                let title = if title.trim().is_empty() {
+                    format!("Query {}", id)
+                } else {
+                    title
+                };
+
+                QueryTabData {
+                    id: Some(id),
+                    title,
+                    content: row.get(2),
+                    position: row.get(3),
+                    connection_id: row.get(4),
+                    connection_type: row.get(5),
+                    connection_name: Some(row.get(6)),
+                }
             })
             .collect();
 
         Ok(tabs)
+    }
+
+    pub async fn load_query_tab_by_id(&self, id: i64) -> Result<Option<QueryTabData>, sqlx::Error> {
+        let row = sqlx::query(
+            r#"
+            SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type, c.name
+            FROM query_tabs qt
+            INNER JOIN connections c ON c.id = qt.connection_id
+            WHERE qt.id = ?
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(row) = row {
+            let tab_id = row.get::<i64, _>(0);
+            let title: String = row.get(1);
+
+            // Provide fallback name if title is empty
+            let title = if title.trim().is_empty() {
+                format!("Query {}", tab_id)
+            } else {
+                title
+            };
+
+            Ok(Some(QueryTabData {
+                id: Some(tab_id),
+                title,
+                content: row.get(2),
+                position: row.get(3),
+                connection_id: row.get(4),
+                connection_type: row.get(5),
+                connection_name: Some(row.get(6)),
+            }))
+        } else {
+            Ok(None)
+        }
     }
 
     pub async fn delete_query_tab(&self, id: i64) -> Result<(), sqlx::Error> {
@@ -438,6 +489,7 @@ pub struct QueryTabData {
     pub position: i32,
     pub connection_id: Option<i64>,
     pub connection_type: Option<String>,
+    pub connection_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]

@@ -1,13 +1,15 @@
 use gpui::{
-    div, prelude::FluentBuilder, px, App, AppContext, Axis, ClickEvent, Context, Entity,
+    div, prelude::FluentBuilder, px, App, AppContext, Axis, ClickEvent, Context, Corner, DismissEvent, Element, Entity,
     EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, Keystroke,
-    ParentElement, Pixels, Point, Render, Styled, Window,
+    MouseButton, ParentElement, Pixels, Point, Render, Styled, Window,
 };
 use gpui_component::{
     button::{Button, ButtonVariants},
+    form::form_field,
     h_flex,
     highlighter::Diagnostic,
     input::{InputState, TabSize, TextInput},
+    popover::{Popover, PopoverContent},
     tab::{Tab, TabBar},
     v_flex, ActiveTheme, ContextModal as _, IconName, Kbd, Sizable, StyledExt,
 };
@@ -15,8 +17,10 @@ use log::{debug, error, info};
 use std::rc::Rc;
 
 use crate::agent::{ChatPanel, SqlContext};
+use crate::app::{RenameTab};
 use crate::app_database::QueryTabData;
 use crate::app_events::AppEvent;
+use crate::rename_form::RenameTabForm;
 use crate::chat_provider_resolver::ChatProviderResolver;
 use crate::db_service::DbService;
 use crate::results_panel::ResultsPanel;
@@ -48,6 +52,7 @@ pub struct QueryTab {
     pub id: usize,
     pub title: String,
     pub connection_id: i64, // Connection ID from app database
+    pub connection_name: Option<String>, // Connection name from database
     pub editor: Entity<InputState>,
     pub db_id: Option<i64>, // Database ID for persistence
     pub results_panel: Entity<crate::results_panel::ResultsPanel>, // Each tab has its own results
@@ -219,6 +224,7 @@ struct TabCreationParams {
     connection_id: i64,
     #[allow(dead_code)]
     connection_type: String,
+    connection_name: Option<String>,
 }
 
 impl EditorPanel {
@@ -305,6 +311,7 @@ impl EditorPanel {
                 display_name.clone()
             },
             connection_id,
+            connection_name: None, // Will be set when loading from database
             editor,
             db_id: None,
             results_panel: cx.new(|cx| {
@@ -363,6 +370,44 @@ impl EditorPanel {
             }
 
             cx.notify();
+        }
+    }
+
+    pub fn rename_tab(&mut self, tab_index: usize, new_name: &str, cx: &mut Context<Self>) {
+        if tab_index < self.tabs.len() {
+            if let Some(TabType::Query(query_tab)) = self.tabs.get_mut(tab_index) {
+                let old_name = query_tab.title.clone();
+                query_tab.title = new_name.to_string();
+
+                // Update database if this tab has a db_id
+                if let Some(db_id) = query_tab.db_id {
+                    let db_service = DbService::global(cx).clone();
+                    let app_db = db_service.app_db_handle();
+                    let new_name = new_name.to_string(); // Convert to owned String
+
+                    cx.spawn(async move |_, _cx| {
+                        if let Some(app_db) = app_db.read().await.as_ref() {
+                            // Load existing tab data to preserve all fields
+                            if let Ok(Some(existing_tab)) = app_db.load_query_tab_by_id(db_id).await {
+                                let mut updated_tab = existing_tab;
+                                updated_tab.title = new_name;
+
+                                if let Err(e) = app_db.save_query_tab(&updated_tab).await {
+                                    log::error!("Failed to update tab name in database: {}", e);
+                                }
+                            } else {
+                                log::error!("Failed to load existing tab data for tab ID: {}", db_id);
+                            }
+                        } else {
+                            log::error!("App database not initialized for tab rename");
+                        }
+                    })
+                    .detach();
+                }
+
+                log::info!("Tab {} renamed from '{}' to '{}'", tab_index, old_name, new_name);
+                cx.notify();
+            }
         }
     }
 
@@ -520,6 +565,7 @@ impl EditorPanel {
                         position: tab_index as i32,
                         connection_id: Some(query_tab.connection_id),
                         connection_type,
+                        connection_name: query_tab.connection_name.clone(),
                     };
 
                     // Trigger the save operation in background
@@ -876,6 +922,7 @@ impl EditorPanel {
                         position,
                         connection_id: Some(connection_id),
                         connection_type: connection_type.clone(),
+                        connection_name: None, // Will be set when loading from database
                     };
 
                     let final_db_id = match app_db.save_query_tab(&temp_tab_data).await {
@@ -998,6 +1045,7 @@ impl EditorPanel {
                         .as_deref()
                         .unwrap_or("Unknown")
                         .to_string(),
+                    connection_name: tab_data.connection_name.clone(),
                 };
                 self.create_and_add_tab_with_connection(window, params, cx);
                 restored_count += 1;
@@ -1060,6 +1108,7 @@ impl EditorPanel {
             id: tab_id,
             title: params.title.clone(),
             connection_id: params.connection_id,
+            connection_name: params.connection_name.clone(),
             editor,
             db_id: params.db_id,
             results_panel: cx.new(|cx| ResultsPanel::new(window, cx)),
@@ -1311,7 +1360,55 @@ impl Render for EditorPanel {
                                 let show_close_button = self.tabs.len() > 1;
                                 let tab_index = ix;
 
-                                Tab::new(&query_tab.title)
+                                // Clone the tab title to avoid lifetime issues
+                                let tab_title = query_tab.title.clone();
+                                Tab::new(&tab_title)
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |_this, event: &gpui::MouseDownEvent, window, cx| {
+                                            // Check for double click (click_count == 2)
+                                            if event.click_count == 2 {
+                                                // Open rename modal on double click
+                                                let form = RenameTabForm::new(tab_index, tab_title.clone(), window, cx);
+                                                let form_for_modal = form.clone();
+
+                                                window.open_modal(cx, move |modal, window, cx| {
+                                                    let form_clone = form_for_modal.clone();
+                                                    let tab_index_clone = tab_index;
+                                                    modal
+                                                        .title("Rename Tab")
+                                                        .w(px(300.))
+                                                        .child(form_for_modal.clone())
+                                                        .footer({
+                                                            let form = form_clone.clone();
+                                                            move |ok, cancel, window, cx| {
+                                                                vec![cancel(window, cx), ok(window, cx)]
+                                                            }
+                                                        })
+                                                        .on_ok({
+                                                            let form = form_clone.clone();
+                                                            move |_modal, window, cx| {
+                                                                // Get the current value from the form
+                                                                let new_name = form.read(cx).get_value(cx);
+
+                                                                log::info!("Modal OK button clicked - tab_index={}, new_name='{}'", tab_index_clone, new_name);
+
+                                                                // Use the app's global action system instead of local context
+                                                                // Create a new RenameTab action and dispatch it through the app
+                                                                window.dispatch_action(Box::new(RenameTab {
+                                                                    tab_index: tab_index_clone,
+                                                                    new_name,
+                                                                }), cx);
+                                                                true
+                                                            }
+                                                        })
+                                                });
+                                            } else {
+                                                // Single click - activate the tab by setting active tab index
+                                                cx.emit(AppEvent::TabChanged { tab_id: tab_index });
+                                            }
+                                        })
+                                    )
                                     .suffix(
                                         h_flex()
                                             .gap_2()
@@ -1321,7 +1418,12 @@ impl Render for EditorPanel {
                                                     .pr_2()
                                                     .text_xs()
                                                     .text_color(cx.theme().muted_foreground)
-                                                    .child(query_tab.title.clone())
+                                                    .child(
+                                                        query_tab.connection_name
+                                                            .as_ref()
+                                                            .map(|name| name.clone())
+                                                            .unwrap_or_else(|| "No Connection".to_string())
+                                                    )
                                             )
                                             .when(show_close_button, |this| {
                                                 this.child(
