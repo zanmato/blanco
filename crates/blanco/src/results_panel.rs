@@ -8,8 +8,8 @@ use gpui::{
 };
 use gpui_component::{
     input::{InputEvent, InputState, TextInput},
+    legacytable::{Column, ColumnSort, Table, TableDelegate},
     popup_menu::PopupMenu,
-    table::{Column, ColumnSort, Table, TableDelegate},
     v_flex, ActiveTheme, Icon, IconName,
 };
 

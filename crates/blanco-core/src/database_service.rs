@@ -39,7 +39,7 @@ pub trait DatabaseService: Send + Sync {
         sql: &str,
     ) -> Result<crate::QueryResult> {
         let connection = self.get_or_create_connection(connection_string).await?;
-        connection.execute_query(sql).await
+        connection.execute_query(sql, None).await
     }
 
     /// Execute a query using the provided connection ID
@@ -49,7 +49,7 @@ pub trait DatabaseService: Send + Sync {
         sql: &str,
     ) -> Result<crate::QueryResult> {
         let connection = self.get_or_create_connection_by_id(connection_id).await?;
-        connection.execute_query(sql).await
+        connection.execute_query(sql, None).await
     }
 
     /// Get database schema information as JSON with pagination support
@@ -174,7 +174,7 @@ pub trait DatabaseService: Send + Sync {
             where_clause, limit, offset
         );
 
-        let query_result = connection.execute_query(&query).await?;
+        let query_result = connection.execute_query(&query, None).await?;
 
         let mut tables = Vec::new();
         for row in query_result.rows {
@@ -236,7 +236,7 @@ pub trait DatabaseService: Send + Sync {
             where_clause, limit, offset
         );
 
-        let tables_result = connection.execute_query(&tables_query).await?;
+        let tables_result = connection.execute_query(&tables_query, None).await?;
         let mut tables = Vec::new();
 
         for table_row in tables_result.rows {
@@ -261,7 +261,7 @@ pub trait DatabaseService: Send + Sync {
                     table_name
                 );
 
-                let columns_result = connection.execute_query(&columns_query).await?;
+                let columns_result = connection.execute_query(&columns_query, None).await?;
 
                 let columns_json = columns_result
                     .rows

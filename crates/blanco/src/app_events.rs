@@ -84,6 +84,53 @@ pub enum AppEvent {
         tab_index: usize,
         new_name: String,
     },
+    CreateNewQueryTab {
+        connection_id: i64,
+    },
+
+    /// Database, Schema and Table events
+    ConnectionSelected {
+        connection_id: Option<i64>,
+    },
+    DatabasesLoaded {
+        connection_id: Option<i64>,
+        databases: Vec<String>,
+    },
+    DatabaseSelected {
+        connection_id: Option<i64>,
+        database_name: String,
+    },
+    DatabaseExpanded {
+        connection_id: Option<i64>,
+        database_name: String,
+    },
+    SchemasLoaded {
+        connection_id: Option<i64>,
+        database_name: Option<String>,
+        schemas: Vec<String>,
+    },
+    TablesLoaded {
+        connection_id: Option<i64>,
+        database_name: Option<String>,
+        schema: Option<String>,
+        tables: Vec<String>,
+    },
+    SchemaSelected {
+        connection_id: Option<i64>,
+        database_name: String,
+        schema_name: String,
+    },
+    SchemaExpanded {
+        connection_id: Option<i64>,
+        database_name: String,
+        schema_name: String,
+    },
+    TableSelected {
+        connection_id: Option<i64>,
+        database_name: String,
+        schema_name: Option<String>,
+        table_name: String,
+    },
 
     /// SQL completion events
     CompletionTriggered {

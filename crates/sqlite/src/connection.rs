@@ -352,21 +352,7 @@ impl Connection for SqliteConnection {
         Ok(())
     }
 
-    async fn execute_query(&self, query: &str) -> Result<QueryResult> {
-        log::debug!("Executing SQLite query: {}", query);
-
-        let result = self
-            .execute_query_async(query)
-            .await
-            .map_err(|e| anyhow::anyhow!("SQLite query execution failed: {}", e))?;
-        log::debug!(
-            "Query executed successfully, {} rows returned",
-            result.row_count()
-        );
-
-        Ok(result)
-    }
-
+    
     async fn execute_prepared_query(
         &self,
         sql_template: &str,
@@ -507,12 +493,17 @@ impl Connection for SqliteConnection {
         Ok(vec![db_name])
     }
 
+    async fn execute_query(&self, query: &str, _database_name: Option<&str>) -> Result<QueryResult> {
+        // SQLite only has one database, so we ignore the database parameter and execute normally
+        self.execute_query_async(query).await
+    }
+
     async fn get_schemas(&self) -> Result<Vec<String>> {
         // SQLite has a main schema by default, plus any attached databases
         let mut schemas = vec!["main".to_string()];
 
         // Try to get attached databases
-        match self.execute_query("PRAGMA database_list").await {
+        match self.execute_query("PRAGMA database_list", None).await {
             Ok(result) => {
                 for row in &result.rows {
                     if let Some(schema_name) = row.get(1) {
@@ -537,7 +528,7 @@ impl Connection for SqliteConnection {
             schema_filter
         );
 
-        let result = self.execute_query(&query).await?;
+        let result = self.execute_query(&query, None).await?;
         let tables: Vec<String> = result
             .rows
             .into_iter()
@@ -560,7 +551,7 @@ impl Connection for SqliteConnection {
         // Query SQLite's table_info to get primary key information
         let query = format!("PRAGMA table_info({})", table_name);
 
-        match self.execute_query(&query).await {
+        match self.execute_query(&query, None).await {
             Ok(result) => {
                 // Find the column with pk > 0 (primary key)
                 for row in &result.rows {
@@ -603,7 +594,7 @@ impl Connection for SqliteConnection {
         // Use PRAGMA table_info to get column information
         let query = format!("PRAGMA table_info({})", table_name);
 
-        let result = self.execute_query(&query).await?;
+        let result = self.execute_query(&query, None).await?;
 
         let mut columns = Vec::new();
         for row in result.rows {

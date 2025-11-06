@@ -8,27 +8,46 @@ use blanco_core::{
 use sqlx::postgres::types::PgMoney;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Column, Row, TypeInfo, ValueRef};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 /// PostgreSQL connection implementation of the Connection trait
-/// This uses SQLX directly to provide a unified interface
+/// This uses SQLX directly to provide a unified interface with database-specific connection pools
 pub struct PostgresConnection {
-    pool: Option<sqlx::PgPool>,
-    connection_key: PgConnectionKey,
+    pools: Arc<Mutex<HashMap<String, sqlx::PgPool>>>, // database_name -> connection pool
+    server_key: PgServerKey,                          // Server-level connection key (no database)
     display_name: String,
-    connection_string: String,
+    server_connection_string: String, // Connection string without database
+    initial_database: Option<String>, // Original database from connection string
 }
 
 impl std::fmt::Debug for PostgresConnection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let pooled_databases = match self.pools.try_lock() {
+            Ok(pools) => pools.keys().cloned().collect::<Vec<_>>(),
+            Err(_) => vec!["[locked]".to_string()],
+        };
+
         f.debug_struct("PostgresConnection")
-            .field("connection_key", &self.connection_key)
+            .field("server_key", &self.server_key)
             .field("display_name", &self.display_name)
-            .field("connection_string", &"[REDACTED]")
+            .field("pooled_databases", &pooled_databases)
+            .field("server_connection_string", &"[REDACTED]")
             .finish()
     }
 }
 
-/// Connection key for PostgreSQL connections
+/// Server-level connection key for PostgreSQL connections (no database)
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct PgServerKey {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: Option<String>,
+}
+
+/// Connection key for PostgreSQL connections (legacy - kept for compatibility)
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct PgConnectionKey {
     pub host: String,
@@ -36,6 +55,43 @@ pub struct PgConnectionKey {
     pub database: String,
     pub username: String,
     pub password: Option<String>,
+}
+
+impl PgServerKey {
+    pub fn new(host: String, port: u16, username: String, password: Option<String>) -> Self {
+        Self {
+            host,
+            port,
+            username,
+            password,
+        }
+    }
+
+    /// Generate a server-level connection string (without database)
+    pub fn to_server_connection_string(&self) -> String {
+        let password_str = self.password.as_deref().unwrap_or("");
+        let mut url = format!("postgresql://{}:{}", self.username, password_str);
+
+        if !self.host.is_empty() && self.host != "localhost" {
+            url = format!("{}@{}:{}", url, self.host, self.port);
+        } else if self.host == "localhost" {
+            url = format!("{}@localhost:{}", url, self.port);
+        } else {
+            // No host specified - this is an error case
+            log::error!("No host specified in PostgreSQL connection string");
+            return format!("postgresql://{}@localhost:{}", self.username, self.port);
+        }
+
+        log::debug!("Generated server connection string: {}", url);
+        url
+    }
+
+    /// Generate connection string for a specific database
+    pub fn to_database_connection_string(&self, database: &str) -> String {
+        let conn_str = format!("{}/{}", self.to_server_connection_string(), database);
+        log::debug!("Generated database connection string: {}", conn_str);
+        conn_str
+    }
 }
 
 impl PgConnectionKey {
@@ -53,6 +109,16 @@ impl PgConnectionKey {
             username,
             password,
         }
+    }
+
+    /// Convert to server key (removing database)
+    pub fn to_server_key(&self) -> PgServerKey {
+        PgServerKey::new(
+            self.host.clone(),
+            self.port,
+            self.username.clone(),
+            self.password.clone(),
+        )
     }
 
     /// Extract connection key from a PostgreSQL connection string
@@ -116,53 +182,106 @@ impl PgConnectionKey {
 }
 
 impl PostgresConnection {
-    /// Create a new PostgreSQL connection
+    /// Create a new PostgreSQL connection for a specific database (legacy constructor for compatibility)
     pub fn new(
         host: String,
         port: u16,
-        database: String,
+        _database: String, // Database name not used in server-level architecture
         username: String,
         password: Option<String>,
     ) -> Self {
-        let connection_key = PgConnectionKey::new(host, port, database, username, password);
-        let display_name = Self::generate_display_name(&connection_key);
-        let connection_string = connection_key.to_connection_string();
+        let server_key = PgServerKey::new(host, port, username, password);
+        let display_name = Self::generate_server_display_name(&server_key);
+        let server_connection_string = server_key.to_server_connection_string();
 
         Self {
-            pool: None,
-            connection_key,
+            pools: Arc::new(Mutex::new(HashMap::new())),
+            server_key,
             display_name,
-            connection_string,
+            server_connection_string,
+            initial_database: None,
         }
     }
 
     /// Create a new PostgreSQL connection from a connection string
     pub fn from_connection_string(connection_string: &str) -> Result<Self> {
+        log::info!(
+            "🔗 Creating PostgreSQL connection from: {}",
+            connection_string
+        );
+
         let connection_key = PgConnectionKey::from_connection_string(connection_string)?;
-        let display_name = Self::generate_display_name(&connection_key);
+        log::info!("📋 Parsed connection key:");
+        log::info!("   - host: {}", connection_key.host);
+        log::info!("   - port: {}", connection_key.port);
+        log::info!("   - database: {}", connection_key.database);
+        log::info!("   - username: {}", connection_key.username);
+        log::info!(
+            "   - password: [{}]",
+            if connection_key.password.is_some() {
+                "present"
+            } else {
+                "none"
+            }
+        );
+
+        let server_key = connection_key.to_server_key();
+        let display_name = Self::generate_server_display_name(&server_key);
+        let server_connection_string = server_key.to_server_connection_string();
+
+        log::info!("🏢 Server key created:");
+        log::info!("   - host: {}", server_key.host);
+        log::info!("   - port: {}", server_key.port);
+        log::info!("   - username: {}", server_key.username);
+        log::info!("   - initial_database: {}", connection_key.database);
 
         Ok(Self {
-            pool: None,
-            connection_key,
+            pools: Arc::new(Mutex::new(HashMap::new())),
+            server_key,
             display_name,
-            connection_string: connection_string.to_string(),
+            server_connection_string,
+            initial_database: Some(connection_key.database.clone()),
         })
     }
 
     /// Create a new PostgreSQL connection from a PgConnectionKey
     pub fn from_key(connection_key: PgConnectionKey) -> Self {
-        let display_name = Self::generate_display_name(&connection_key);
-        let connection_string = connection_key.to_connection_string();
+        let server_key = connection_key.to_server_key();
+        let display_name = Self::generate_server_display_name(&server_key);
+        let server_connection_string = server_key.to_server_connection_string();
 
         Self {
-            pool: None,
-            connection_key,
+            pools: Arc::new(Mutex::new(HashMap::new())),
+            server_key,
             display_name,
-            connection_string,
+            server_connection_string,
+            initial_database: Some(connection_key.database.clone()),
         }
     }
 
-    /// Generate a human-readable display name for the connection
+    /// Create a new server-level PostgreSQL connection (preferred method for multi-database support)
+    pub fn from_server_key(server_key: PgServerKey) -> Self {
+        let display_name = Self::generate_server_display_name(&server_key);
+        let server_connection_string = server_key.to_server_connection_string();
+
+        Self {
+            pools: Arc::new(Mutex::new(HashMap::new())),
+            server_key,
+            display_name,
+            server_connection_string,
+            initial_database: None,
+        }
+    }
+
+    /// Generate a human-readable display name for server-level connections
+    fn generate_server_display_name(server_key: &PgServerKey) -> String {
+        format!(
+            "PostgreSQL - {}@{}:{}",
+            server_key.username, server_key.host, server_key.port
+        )
+    }
+
+    /// Generate a human-readable display name for the connection (legacy)
     fn generate_display_name(key: &PgConnectionKey) -> String {
         format!(
             "PostgreSQL - {}@{}:{}/{}",
@@ -170,14 +289,154 @@ impl PostgresConnection {
         )
     }
 
-    /// Get connection details
-    pub fn get_connection_details(&self) -> (&str, u16, &str, &str) {
+    /// Find an available database to connect to when no specific database is specified
+    async fn get_available_database(&self) -> Result<String> {
+        // Try the initial database from the connection string first
+        if let Some(ref initial_db) = self.initial_database {
+            log::debug!(
+                "Trying initial database '{}' from connection string",
+                initial_db
+            );
+            if self.try_connect_to_database(initial_db).await {
+                log::info!(
+                    "Using initial database '{}' for metadata queries",
+                    initial_db
+                );
+                return Ok(initial_db.clone());
+            } else {
+                log::warn!(
+                    "Initial database '{}' is not accessible, trying alternatives",
+                    initial_db
+                );
+            }
+        }
+
+        // Common PostgreSQL databases that are likely to exist and be accessible
+        let common_databases = ["postgres", "template1", "template0"];
+        log::debug!("Trying common databases: {}", common_databases.join(", "));
+
+        for &db_name in &common_databases {
+            if self.try_connect_to_database(db_name).await {
+                log::info!(
+                    "Successfully connected to common database '{}' for metadata queries",
+                    db_name
+                );
+                return Ok(db_name.to_string());
+            }
+        }
+
+        let mut tried_databases = Vec::new();
+        if let Some(ref initial_db) = self.initial_database {
+            tried_databases.push(initial_db.clone());
+        }
+        tried_databases.extend(common_databases.iter().map(|s| s.to_string()));
+
+        Err(anyhow::anyhow!(
+            "Could not connect to any database (tried: {})",
+            tried_databases.join(", ")
+        ))
+    }
+
+    /// Try to connect to a specific database and return true if successful
+    async fn try_connect_to_database(&self, database: &str) -> bool {
+        let database_connection_string = self.server_key.to_database_connection_string(database);
+        log::debug!(
+            "Trying to connect to database '{}' for metadata queries",
+            database
+        );
+        log::debug!("Connection string: {}", database_connection_string);
+
+        log::debug!("Attempting connection with 5-second timeout...");
+        match PgPoolOptions::new()
+            .max_connections(1) // Just for testing connectivity
+            .connect(&database_connection_string)
+            .await
+        {
+            Ok(pool) => {
+                log::debug!(
+                    "Connected to database '{}', testing query execution",
+                    database
+                );
+                // Test if we can actually execute queries
+                match sqlx::query("SELECT 1").fetch_one(&pool).await {
+                    Ok(_) => {
+                        log::info!(
+                            "✅ Successfully connected to database '{}' for metadata queries",
+                            database
+                        );
+                        // Pre-cache this pool for future use
+                        let mut pools = self.pools.lock().await;
+                        if !pools.contains_key(database) {
+                            pools.insert(database.to_string(), pool);
+                        }
+                        true
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "⚠️ Connected to database '{}' but query test failed: {}",
+                            database,
+                            e
+                        );
+                        false
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("❌ Failed to connect to database '{}': {}", database, e);
+                // Provide additional diagnostic info for common connection issues
+                let error_str = e.to_string().to_lowercase();
+                if error_str.contains("timeout") {
+                    log::warn!("   → Connection timeout - check network connectivity and firewall");
+                } else if error_str.contains("authentication") || error_str.contains("password") {
+                    log::warn!("   → Authentication failed - check username/password");
+                } else if error_str.contains("database") && error_str.contains("not exist") {
+                    log::warn!("   → Database does not exist");
+                } else if error_str.contains("connection") && error_str.contains("refused") {
+                    log::warn!("   → Connection refused - check if PostgreSQL is running and accepting connections");
+                }
+                false
+            }
+        }
+    }
+
+    /// Get or create a connection pool for a specific database
+    async fn get_or_create_pool(&self, database: &str) -> Result<sqlx::PgPool> {
+        let mut pools = self.pools.lock().await;
+
+        if let Some(pool) = pools.get(database) {
+            return Ok(pool.clone());
+        }
+
+        let database_connection_string = self.server_key.to_database_connection_string(database);
+        log::info!("Creating new connection pool for database: {}", database);
+
+        let pool = PgPoolOptions::new()
+            .max_connections(10)
+            .connect(&database_connection_string)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to connect to database '{}': {}", database, e))?;
+
+        pools.insert(database.to_string(), pool.clone());
+        log::info!(
+            "Successfully created connection pool for database: {}",
+            database
+        );
+
+        Ok(pool)
+    }
+
+    /// Get connection details (server-level)
+    pub fn get_connection_details(&self) -> (&str, u16, &str) {
         (
-            &self.connection_key.host,
-            self.connection_key.port,
-            &self.connection_key.database,
-            &self.connection_key.username,
+            &self.server_key.host,
+            self.server_key.port,
+            &self.server_key.username,
         )
+    }
+
+    /// Get the server key
+    pub fn get_server_key(&self) -> &PgServerKey {
+        &self.server_key
     }
 
     /// Helper method to connect asynchronously
@@ -191,12 +450,21 @@ impl PostgresConnection {
 
     /// Check if the database connection is healthy with a ping query
     async fn is_connection_healthy(&self) -> bool {
-        if let Some(pool) = &self.pool {
-            // Execute a simple ping query to check connection health
-            (sqlx::query("SELECT 1").fetch_one(pool).await).is_ok()
-        } else {
-            false
+        let pools = self.pools.lock().await;
+
+        // Check if we have any active pools
+        if pools.is_empty() {
+            return false;
         }
+
+        // Check health of all pools - if any are healthy, connection is considered healthy
+        for (_, pool) in pools.iter() {
+            if (sqlx::query("SELECT 1").fetch_one(pool).await).is_ok() {
+                return true;
+            }
+        }
+
+        false
     }
 
     /// Convert a PostgreSQL row value to string representation
@@ -280,7 +548,7 @@ impl PostgresConnection {
                 // For compact display, use regular to_string instead of pretty printing
                 v.to_string()
             })
-                .unwrap_or_else(|| "NULL".to_string())
+            .unwrap_or_else(|| "NULL".to_string())
         } else {
             // Try raw value access for unknown types (custom enums, domains, etc.)
             let column_type = column_types
@@ -426,13 +694,12 @@ impl PostgresConnection {
         }
     }
 
-    /// Execute a query asynchronously using SQLX directly
-    async fn execute_query_async(&self, query: &str) -> Result<QueryResult> {
-        let pool = self
-            .pool
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
-
+    /// Execute a query using a specific connection pool
+    async fn execute_query_with_pool(
+        &self,
+        pool: &sqlx::PgPool,
+        query: &str,
+    ) -> Result<QueryResult> {
         // Try to execute as a query that returns rows
         match sqlx::query(query).fetch_all(pool).await {
             Ok(rows) => {
@@ -479,7 +746,7 @@ impl PostgresConnection {
                     columns,
                     column_types,
                     rows: data_rows,
-                    rows_affected: 0,
+                    rows_affected: rows.len().try_into().unwrap_or(0),
                     query_text: None,
                     execution_time_ms: None,
                     is_error: false,
@@ -534,12 +801,10 @@ impl PostgresConnection {
 #[async_trait]
 impl Connection for PostgresConnection {
     fn get_connection_key_str(&self) -> String {
+        // Server-level connection key (no database)
         format!(
-            "postgres:{}@{}:{}/{}",
-            self.connection_key.username,
-            self.connection_key.host,
-            self.connection_key.port,
-            self.connection_key.database
+            "postgres:{}@{}:{}",
+            self.server_key.username, self.server_key.host, self.server_key.port
         )
     }
 
@@ -548,10 +813,12 @@ impl Connection for PostgresConnection {
     }
 
     fn get_icon_name(&self) -> IconName {
-        // Return DatabaseConnected when pool is Some (active connection), otherwise Database
-        match self.pool {
-            Some(_) => IconName::DatabaseConnected,
-            None => IconName::Database,
+        // Return DatabaseConnected when we have any active pools, otherwise Database
+        // Since this is a sync method, we use try_lock to avoid blocking
+        match self.pools.try_lock() {
+            Ok(pools) if !pools.is_empty() => IconName::DatabaseConnected,
+            Ok(_) => IconName::Database,
+            Err(_) => IconName::Database, // If locked, assume connected
         }
     }
 
@@ -565,40 +832,48 @@ impl Connection for PostgresConnection {
 
     async fn connect(&mut self, connection_string: &str) -> Result<()> {
         log::info!(
-            "Connecting to PostgreSQL database: {}@{}:{}/{}",
-            self.connection_key.username,
-            self.connection_key.host,
-            self.connection_key.port,
-            self.connection_key.database
+            "Connecting to PostgreSQL server: {}@{}:{}",
+            self.server_key.username,
+            self.server_key.host,
+            self.server_key.port
         );
 
-        // Parse and validate the connection string
+        // Parse and validate the connection string to extract server details
         let key = PgConnectionKey::from_connection_string(connection_string)?;
-        self.connection_key = key.clone();
-        self.display_name = Self::generate_display_name(&key);
-        self.connection_string = key.to_connection_string();
+        self.server_key = key.to_server_key();
+        self.display_name = Self::generate_server_display_name(&self.server_key);
+        self.server_connection_string = self.server_key.to_server_connection_string();
 
-        // Connect using SQLX directly
-        let connection_string = self.connection_string.clone();
-        let pool = self.connect_async(&connection_string).await?;
-        self.pool = Some(pool);
+        // Clear any existing pools (they will be recreated on demand)
+        let mut pools = self.pools.lock().await;
+        pools.clear();
+        drop(pools);
 
-        log::info!("Successfully connected to PostgreSQL database");
+        // With the new architecture, we don't connect immediately.
+        // Connections to specific databases are created on demand when queries are executed.
+        log::info!("PostgreSQL server connection configured (pools will be created on demand)");
         Ok(())
     }
 
     async fn disconnect(&mut self) {
         log::info!(
-            "Disconnecting from PostgreSQL database: {}",
+            "Disconnecting from PostgreSQL server: {}",
             self.display_name
         );
-        if let Some(pool) = self.pool.take() {
+
+        // Close all database connection pools
+        let mut pools = self.pools.lock().await;
+        for (_, pool) in pools.drain() {
             pool.close().await;
         }
     }
 
     fn is_connected(&self) -> bool {
-        self.pool.is_some()
+        // Check if we have any active connection pools
+        match self.pools.try_lock() {
+            Ok(pools) => !pools.is_empty(),
+            Err(_) => false, // If locked, assume not connected for safety
+        }
     }
 
     async fn ensure_connected(&mut self, connection_string: &str) -> Result<()> {
@@ -609,15 +884,43 @@ impl Connection for PostgresConnection {
         Ok(())
     }
 
-    async fn execute_query(&self, query: &str) -> Result<QueryResult> {
-        log::debug!("Executing PostgreSQL query: {}", query);
+    async fn execute_query(&self, query: &str, database_name: Option<&str>) -> Result<QueryResult> {
+        log::debug!(
+            "Executing PostgreSQL query: {} (database: {:?})",
+            query,
+            database_name
+        );
 
+        // If no database specified, we need to connect to a default database first
+        // to get the list of available databases. We'll try common default databases.
+        let target_database = if let Some(db) = database_name {
+            db.to_string()
+        } else {
+            // Try to find an available database by testing common defaults
+            self.get_available_database().await?
+        };
+
+        // Get or create connection pool for the specific database
+        let pool = self
+            .get_or_create_pool(&target_database)
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to get connection pool for database '{}': {}",
+                    target_database,
+                    e
+                )
+            })?;
+
+        // Execute the query using the database-specific pool
         let result = self
-            .execute_query_async(query)
+            .execute_query_with_pool(&pool, query)
             .await
             .map_err(|e| anyhow::anyhow!("PostgreSQL query execution failed: {}", e))?;
+
         log::debug!(
-            "Query executed successfully, {} rows returned",
+            "Query executed successfully on database '{}', {} rows returned",
+            target_database,
             result.row_count()
         );
 
@@ -634,10 +937,10 @@ impl Connection for PostgresConnection {
             parameters.len()
         );
 
-        let pool = self
-            .pool
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
+        // For prepared queries, we need to use a database. Default to 'postgres' database.
+        let pool = self.get_or_create_pool("postgres").await.map_err(|e| {
+            anyhow::anyhow!("Failed to get connection pool for prepared query: {}", e)
+        })?;
 
         // Build the query with parameter placeholders
         let mut query = sqlx::query(sql_template);
@@ -648,7 +951,7 @@ impl Connection for PostgresConnection {
         }
 
         // Try to execute as a query that returns rows
-        match query.fetch_all(pool).await {
+        match query.fetch_all(&pool).await {
             Ok(rows) => {
                 if rows.is_empty() {
                     return Ok(QueryResult {
@@ -666,7 +969,7 @@ impl Connection for PostgresConnection {
                 }
 
                 // Extract column names and types from the first row
-                let first_row = &rows[0];
+                let first_row: &sqlx::postgres::PgRow = &rows[0];
                 let columns: Vec<String> = first_row
                     .columns()
                     .iter()
@@ -709,7 +1012,7 @@ impl Connection for PostgresConnection {
                 for param in parameters {
                     statement_query = statement_query.bind(param);
                 }
-                let result = statement_query.execute(pool).await?;
+                let result = statement_query.execute(&pool).await?;
                 Ok(QueryResult {
                     columns: vec![],
                     column_types: vec![],
@@ -730,6 +1033,7 @@ impl Connection for PostgresConnection {
         let result = self
             .execute_query(
                 "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname",
+                None,
             )
             .await?;
         let databases: Vec<String> = result
@@ -744,6 +1048,7 @@ impl Connection for PostgresConnection {
         let result = self
             .execute_query(
                 "SELECT schema_name FROM information_schema.schemata ORDER BY schema_name",
+                None,
             )
             .await?;
         let schemas: Vec<String> = result
@@ -927,14 +1232,16 @@ impl Connection for PostgresConnection {
     }
 
     async fn get_database_name(&self) -> Result<Option<String>> {
-        Ok(Some(self.connection_key.database.clone()))
+        // For server-level connections, we don't have a specific database
+        // Return None to indicate server-level connection
+        Ok(None)
     }
 
     fn get_file_safe_name(&self) -> String {
-        // Create a file-safe name from PostgreSQL connection details
+        // Create a file-safe name from PostgreSQL server details
         let name = format!(
-            "{}_{}_{}",
-            self.connection_key.username, self.connection_key.host, self.connection_key.database
+            "pg_{}_{}_{}",
+            self.server_key.username, self.server_key.host, self.server_key.port
         );
 
         // Make it file-safe
@@ -973,10 +1280,11 @@ impl Connection for PostgresConnection {
 impl Clone for PostgresConnection {
     fn clone(&self) -> Self {
         Self {
-            pool: self.pool.clone(),
-            connection_key: self.connection_key.clone(),
+            pools: Arc::clone(&self.pools),
+            server_key: self.server_key.clone(),
             display_name: self.display_name.clone(),
-            connection_string: self.connection_string.clone(),
+            server_connection_string: self.server_connection_string.clone(),
+            initial_database: self.initial_database.clone(),
         }
     }
 }

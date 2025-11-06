@@ -104,6 +104,26 @@ impl AppDatabase {
         .await
         .ok(); // Ignore error if column already exists
 
+        // Add database_name column for database-aware query tabs
+        sqlx::query(
+            r#"
+            ALTER TABLE query_tabs ADD COLUMN database_name TEXT NOT NULL DEFAULT 'default'
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .ok(); // Ignore error if column already exists
+
+        // Add schema_name column for schema context
+        sqlx::query(
+            r#"
+            ALTER TABLE query_tabs ADD COLUMN schema_name TEXT
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .ok(); // Ignore error if column already exists
+
         // Query history table
         sqlx::query(
             r#"
@@ -253,7 +273,7 @@ impl AppDatabase {
             sqlx::query(
                 r#"
                 UPDATE query_tabs
-                SET title = ?, content = ?, position = ?, connection_id = ?, connection_type = ?, updated_at = ?
+                SET title = ?, content = ?, position = ?, connection_id = ?, connection_type = ?, database_name = ?, schema_name = ?, updated_at = ?
                 WHERE id = ?
                 "#,
             )
@@ -262,6 +282,8 @@ impl AppDatabase {
             .bind(tab.position)
             .bind(tab.connection_id)
             .bind(&tab.connection_type)
+            .bind(&tab.database_name)
+            .bind(&tab.schema_name)
             .bind(now)
             .bind(id)
             .execute(&self.pool)
@@ -271,8 +293,8 @@ impl AppDatabase {
             // Insert new tab
             let result = sqlx::query(
                 r#"
-                INSERT INTO query_tabs (title, content, position, connection_id, connection_type, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO query_tabs (title, content, position, connection_id, connection_type, database_name, schema_name, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(&tab.title)
@@ -280,6 +302,8 @@ impl AppDatabase {
             .bind(tab.position)
             .bind(tab.connection_id)
             .bind(&tab.connection_type)
+            .bind(&tab.database_name)
+            .bind(&tab.schema_name)
             .bind(now)
             .bind(now)
             .execute(&self.pool)
@@ -292,7 +316,7 @@ impl AppDatabase {
     pub async fn load_query_tabs(&self) -> Result<Vec<QueryTabData>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
-            SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type, c.name
+            SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type, c.name, qt.database_name, qt.schema_name
             FROM query_tabs qt
             INNER JOIN connections c ON c.id = qt.connection_id
             ORDER BY qt.position ASC
@@ -322,6 +346,8 @@ impl AppDatabase {
                     connection_id: row.get(4),
                     connection_type: row.get(5),
                     connection_name: Some(row.get(6)),
+                    database_name: Some(row.get(7)),
+                    schema_name: row.get(8),
                 }
             })
             .collect();
@@ -332,7 +358,7 @@ impl AppDatabase {
     pub async fn load_query_tab_by_id(&self, id: i64) -> Result<Option<QueryTabData>, sqlx::Error> {
         let row = sqlx::query(
             r#"
-            SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type, c.name
+            SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type, c.name, qt.database_name, qt.schema_name
             FROM query_tabs qt
             INNER JOIN connections c ON c.id = qt.connection_id
             WHERE qt.id = ?
@@ -361,6 +387,8 @@ impl AppDatabase {
                 connection_id: row.get(4),
                 connection_type: row.get(5),
                 connection_name: Some(row.get(6)),
+                database_name: Some(row.get(7)),
+                schema_name: row.get(8),
             }))
         } else {
             Ok(None)
@@ -490,6 +518,8 @@ pub struct QueryTabData {
     pub connection_id: Option<i64>,
     pub connection_type: Option<String>,
     pub connection_name: Option<String>,
+    pub database_name: Option<String>,
+    pub schema_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]

@@ -328,7 +328,7 @@ impl DbService {
         let connection = self.get_or_create_connection(connection_id).await?;
 
         // Execute the query
-        connection.execute_query(sql).await
+        connection.execute_query(sql, None).await
     }
 }
 

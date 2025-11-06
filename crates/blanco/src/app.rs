@@ -57,6 +57,30 @@ pub struct NewQueryForUnifiedSchema {
     pub schema_name: String,
 }
 
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct NewQueryForDatabase {
+    pub connection_id: i64,
+    pub database_name: String,
+}
+
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct NewQueryForSchema {
+    pub connection_id: i64,
+    pub database_name: String,
+    pub schema_name: String,
+}
+
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct NewQueryForTable {
+    pub connection_id: i64,
+    pub database_name: String,
+    pub schema_name: String,
+    pub table_name: String,
+}
+
 // Copy and selection actions
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
@@ -435,6 +459,7 @@ impl BlancoApp {
                 window,
                 action.display_name.clone(),
                 action.connection_id,
+                "default".to_string(), // Legacy connection - use default database
                 None,
                 cx,
             );
@@ -456,8 +481,9 @@ impl BlancoApp {
         self.editor_panel.update(cx, |panel, cx| {
             panel.add_new_tab_with_unified_connection(
                 window,
-                format!("Unified ({})", action.schema_name),
+                format!("Schema ({})", action.schema_name),
                 action.connection_id,
+                "default".to_string(), // Legacy schema - use default database
                 Some(action.schema_name.clone()),
                 cx,
             );
@@ -465,12 +491,87 @@ impl BlancoApp {
         cx.notify();
     }
 
-    fn on_rename_tab(
+    fn on_new_query_for_database(
         &mut self,
-        action: &RenameTab,
-        _window: &mut Window,
+        action: &NewQueryForDatabase,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        log::info!("on_new_query_for_database called: {}", action.database_name);
+        // Create a new query tab for the specified database
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.add_new_tab_with_unified_connection(
+                window,
+                action.database_name.clone(),
+                action.connection_id,
+                action.database_name.clone(),
+                None,
+                cx,
+            );
+        });
+        cx.notify();
+    }
+
+    fn on_new_query_for_schema(
+        &mut self,
+        action: &NewQueryForSchema,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        log::info!(
+            "on_new_query_for_schema called: {}.{}",
+            action.database_name,
+            action.schema_name
+        );
+        // Create a new query tab for the specified schema in a database
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.add_new_tab_with_unified_connection(
+                window,
+                format!("{}.{}", action.database_name, action.schema_name),
+                action.connection_id,
+                action.database_name.clone(),
+                Some(action.schema_name.clone()),
+                cx,
+            );
+        });
+        cx.notify();
+    }
+
+    fn on_new_query_for_table(
+        &mut self,
+        action: &NewQueryForTable,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        log::info!(
+            "on_new_query_for_table called: {}.{}.{}",
+            action.database_name,
+            action.schema_name,
+            action.table_name
+        );
+        // Create a new query tab for the specified table with a pre-filled SELECT query
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.add_new_tab_with_unified_connection(
+                window,
+                format!("{}.{}", action.schema_name, action.table_name),
+                action.connection_id,
+                action.database_name.clone(),
+                Some(action.schema_name.clone()),
+                cx,
+            );
+
+            // Pre-fill with a SELECT query for the table
+            panel.pre_fill_last_tab_with_select_query(
+                &action.schema_name,
+                &action.table_name,
+                window,
+                cx,
+            );
+        });
+        cx.notify();
+    }
+
+    fn on_rename_tab(&mut self, action: &RenameTab, _window: &mut Window, cx: &mut Context<Self>) {
         log::info!(
             "on_rename_tab called: tab_index={}, new_name={}",
             action.tab_index,
@@ -507,6 +608,9 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_about))
             .on_action(cx.listener(Self::on_new_query_for_unified_connection))
             .on_action(cx.listener(Self::on_new_query_for_unified_schema))
+            .on_action(cx.listener(Self::on_new_query_for_database))
+            .on_action(cx.listener(Self::on_new_query_for_schema))
+            .on_action(cx.listener(Self::on_new_query_for_table))
             .on_action(cx.listener(Self::on_open_connection))
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::on_settings))

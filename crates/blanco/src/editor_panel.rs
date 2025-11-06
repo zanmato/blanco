@@ -1,7 +1,7 @@
 use gpui::{
-    div, prelude::FluentBuilder, px, App, AppContext, Axis, ClickEvent, Context, Corner, DismissEvent, Element, Entity,
-    EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, Keystroke,
-    MouseButton, ParentElement, Pixels, Point, Render, Styled, Window,
+    div, prelude::FluentBuilder, px, App, AppContext, Axis, ClickEvent, Context, Corner,
+    DismissEvent, Element, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, Keystroke, MouseButton, ParentElement, Pixels, Point, Render, Styled, Window,
 };
 use gpui_component::{
     button::{Button, ButtonVariants},
@@ -17,12 +17,12 @@ use log::{debug, error, info};
 use std::rc::Rc;
 
 use crate::agent::{ChatPanel, SqlContext};
-use crate::app::{RenameTab};
+use crate::app::RenameTab;
 use crate::app_database::QueryTabData;
 use crate::app_events::AppEvent;
-use crate::rename_form::RenameTabForm;
 use crate::chat_provider_resolver::ChatProviderResolver;
 use crate::db_service::DbService;
+use crate::rename_form::RenameTabForm;
 use crate::results_panel::ResultsPanel;
 use crate::settings::{load_settings, Settings};
 use crate::sql_completion_provider::SqlCompletionProvider;
@@ -51,8 +51,10 @@ pub struct QueryTab {
     #[allow(dead_code)]
     pub id: usize,
     pub title: String,
-    pub connection_id: i64, // Connection ID from app database
+    pub connection_id: i64,              // Connection ID from app database
     pub connection_name: Option<String>, // Connection name from database
+    pub database_name: String,           // Database name this tab is connected to
+    pub schema_name: Option<String>,     // Optional schema name for context
     pub editor: Entity<InputState>,
     pub db_id: Option<i64>, // Database ID for persistence
     pub results_panel: Entity<crate::results_panel::ResultsPanel>, // Each tab has its own results
@@ -225,6 +227,8 @@ struct TabCreationParams {
     #[allow(dead_code)]
     connection_type: String,
     connection_name: Option<String>,
+    database_name: String,
+    schema_name: Option<String>,
 }
 
 impl EditorPanel {
@@ -268,6 +272,7 @@ impl EditorPanel {
         window: &mut Window,
         display_name: String,
         connection_id: i64,
+        database_name: String,
         schema_name: Option<String>,
         cx: &mut Context<Self>,
     ) {
@@ -305,13 +310,11 @@ impl EditorPanel {
         log::info!("🚀 Creating new query tab with ID {}", tab_id);
         let query_tab = QueryTab {
             id: tab_id,
-            title: if let Some(ref schema) = schema_name {
-                format!("{} - {}", display_name, schema)
-            } else {
-                display_name.clone()
-            },
+            title: display_name.clone(),
             connection_id,
             connection_name: None, // Will be set when loading from database
+            database_name,
+            schema_name,
             editor,
             db_id: None,
             results_panel: cx.new(|cx| {
@@ -388,7 +391,8 @@ impl EditorPanel {
                     cx.spawn(async move |_, _cx| {
                         if let Some(app_db) = app_db.read().await.as_ref() {
                             // Load existing tab data to preserve all fields
-                            if let Ok(Some(existing_tab)) = app_db.load_query_tab_by_id(db_id).await {
+                            if let Ok(Some(existing_tab)) = app_db.load_query_tab_by_id(db_id).await
+                            {
                                 let mut updated_tab = existing_tab;
                                 updated_tab.title = new_name;
 
@@ -396,7 +400,10 @@ impl EditorPanel {
                                     log::error!("Failed to update tab name in database: {}", e);
                                 }
                             } else {
-                                log::error!("Failed to load existing tab data for tab ID: {}", db_id);
+                                log::error!(
+                                    "Failed to load existing tab data for tab ID: {}",
+                                    db_id
+                                );
                             }
                         } else {
                             log::error!("App database not initialized for tab rename");
@@ -405,7 +412,12 @@ impl EditorPanel {
                     .detach();
                 }
 
-                log::info!("Tab {} renamed from '{}' to '{}'", tab_index, old_name, new_name);
+                log::info!(
+                    "Tab {} renamed from '{}' to '{}'",
+                    tab_index,
+                    old_name,
+                    new_name
+                );
                 cx.notify();
             }
         }
@@ -566,6 +578,8 @@ impl EditorPanel {
                         connection_id: Some(query_tab.connection_id),
                         connection_type,
                         connection_name: query_tab.connection_name.clone(),
+                        database_name: Some(query_tab.database_name.clone()),
+                        schema_name: query_tab.schema_name.clone(),
                     };
 
                     // Trigger the save operation in background
@@ -632,19 +646,27 @@ impl EditorPanel {
                     let sql_log_clone = query_tab.sql_log.clone();
                     let db_service = DbService::global(cx).clone();
                     let _app_db_handle = db_service.app_db_handle();
+                    let database_name = query_tab.database_name.clone();
 
                     cx.spawn(async move |editor_panel_entity, cx| {
                         let start_time = std::time::Instant::now();
 
                         // Execute query using db_service with connection_id
-                        log::debug!("Query execution - using connection_id: '{}'", connection_id);
+                        log::debug!(
+                            "Query execution - using connection_id: '{}', database: '{}'",
+                            connection_id,
+                            database_name
+                        );
                         match db_service.get_or_create_connection(connection_id).await {
                             Ok(connection) => {
                                 log::debug!(
                                     "Connection retrieved successfully, type: {}",
                                     connection.get_connection_type()
                                 );
-                                match connection.execute_query(&query_clone).await {
+                                match connection
+                                    .execute_query(&query_clone, Some(&database_name))
+                                    .await
+                                {
                                     Ok(mut result) => {
                                         let duration_ms = start_time.elapsed().as_millis() as i64;
 
@@ -690,11 +712,7 @@ impl EditorPanel {
 
                                         // Update results panel
                                         let _ = results_panel_clone.update(cx, |panel, cx| {
-                                            panel.set_query_result(
-                                                result,
-                                                None, // TODO: Set connection_id when available
-                                                cx,
-                                            );
+                                            panel.set_query_result(result, Some(connection_id), cx);
                                         });
 
                                         // Log execution result to SQL log
@@ -911,7 +929,7 @@ impl EditorPanel {
                     position,
                     connection_id,
                     connection_type,
-                    _connection_name,
+                    connection_name,
                 ) in tabs_data
                 {
                     // First save to get or create the database ID
@@ -922,7 +940,9 @@ impl EditorPanel {
                         position,
                         connection_id: Some(connection_id),
                         connection_type: connection_type.clone(),
-                        connection_name: None, // Will be set when loading from database
+                        connection_name: Some(connection_name.clone()),
+                        database_name: None, // TODO: This should be passed in or derived
+                        schema_name: None,   // TODO: This should be passed in or derived
                     };
 
                     let final_db_id = match app_db.save_query_tab(&temp_tab_data).await {
@@ -1046,6 +1066,11 @@ impl EditorPanel {
                         .unwrap_or("Unknown")
                         .to_string(),
                     connection_name: tab_data.connection_name.clone(),
+                    database_name: tab_data
+                        .database_name
+                        .clone()
+                        .unwrap_or_else(|| "default".to_string()),
+                    schema_name: None, // TODO: Load from database when schema is added
                 };
                 self.create_and_add_tab_with_connection(window, params, cx);
                 restored_count += 1;
@@ -1109,6 +1134,8 @@ impl EditorPanel {
             title: params.title.clone(),
             connection_id: params.connection_id,
             connection_name: params.connection_name.clone(),
+            database_name: params.database_name.clone(),
+            schema_name: params.schema_name.clone(),
             editor,
             db_id: params.db_id,
             results_panel: cx.new(|cx| ResultsPanel::new(window, cx)),
@@ -1129,6 +1156,22 @@ impl EditorPanel {
     pub fn execute_current_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Use the unified query execution method without requiring ClickEvent
         self.run_query_no_event(window, cx);
+    }
+
+    /// Pre-fill the last created tab with a SELECT query
+    pub fn pre_fill_last_tab_with_select_query(
+        &mut self,
+        schema_name: &str,
+        table_name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(TabType::Query(query_tab)) = self.tabs.last_mut() {
+            let select_query = format!("SELECT * FROM {}.{};\n", schema_name, table_name);
+            query_tab.editor.update(cx, |editor, cx| {
+                editor.replace(&select_query, window, cx);
+            });
+        }
     }
 
     /// Commit current changes in the active tab's results panel

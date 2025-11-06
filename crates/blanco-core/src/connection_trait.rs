@@ -151,7 +151,8 @@ pub trait Connection: Send + Sync + fmt::Debug {
     // === Query Execution ===
 
     /// Execute a SQL query and return the results
-    async fn execute_query(&self, query: &str) -> Result<QueryResult, anyhow::Error>;
+    /// If database_name is provided, the query will be executed in the context of that database
+    async fn execute_query(&self, query: &str, database_name: Option<&str>) -> Result<QueryResult, anyhow::Error>;
 
     /// Execute a parameterized query with prepared statements
     async fn execute_prepared_query(
@@ -221,7 +222,7 @@ pub trait Connection: Send + Sync + fmt::Debug {
         }
 
         // Try a simple query that should work on most databases
-        match self.execute_query("SELECT 1").await {
+        match self.execute_query("SELECT 1", None).await {
             Ok(_) => Ok(true),
             Err(_) => Ok(false),
         }
@@ -242,7 +243,7 @@ pub trait Connection: Send + Sync + fmt::Debug {
     async fn get_database_name(&self) -> Result<Option<String>, anyhow::Error> {
         // Default implementation - can be overridden by specific implementations
         match self
-            .execute_query("SELECT CURRENT_DATABASE() as db_name")
+            .execute_query("SELECT CURRENT_DATABASE() as db_name", None)
             .await
         {
             Ok(result) if !result.rows.is_empty() => Ok(Some(result.rows[0][0].clone())),

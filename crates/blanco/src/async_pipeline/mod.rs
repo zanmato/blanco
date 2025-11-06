@@ -489,7 +489,7 @@ impl AsyncEventProcessor {
 
         for operation in &operations {
             let sql_query = operation.to_sql_query();
-            match connection.execute_query(&sql_query).await {
+            match connection.execute_query(&sql_query, None).await {
                 Ok(result) => {
                     total_rows_affected += result.rows_affected;
                 }
@@ -517,7 +517,7 @@ impl AsyncEventProcessor {
         match db_service.get_or_create_connection(connection_id).await {
             Ok(connection) => {
                 // Simple health check - try to execute a basic query
-                match connection.execute_query("SELECT 1").await {
+                match connection.execute_query("SELECT 1", None).await {
                     Ok(_) => Ok(ConnectionHealth {
                         is_healthy: true,
                         last_check: Instant::now(),

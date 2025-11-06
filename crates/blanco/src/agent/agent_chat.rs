@@ -959,7 +959,7 @@ impl Render for ChatPanel {
                             )
                         }),
                     )
-                    /*// Messages
+                    // Messages
                     .children(self.messages.iter().enumerate().map(|(ix, message)| {
                         let is_user = message.role == MessageRole::User;
 
@@ -1083,7 +1083,7 @@ impl Render for ChatPanel {
                                         .child("Thinking..."),
                                 ),
                         )
-                    })*/
+                    })
             )
             // Input area
             .child(
