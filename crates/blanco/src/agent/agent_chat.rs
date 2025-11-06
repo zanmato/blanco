@@ -6,7 +6,7 @@ use gpui::{
 use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
-    input::{InputState, TextInput},
+    input::{InputState, Input},
     v_flex, ActiveTheme, Disableable, Icon, Sizable, StyledExt,
 };
 use ropey::Rope;
@@ -1111,7 +1111,7 @@ impl Render for ChatPanel {
                             .p_3()
                             .text_size(px(13.0)) // Smaller font size for the input text
                             .child(
-                                TextInput::new(&self.input_state)
+                                Input::new(&self.input_state)
                                     .disabled(self.is_loading)
                                     .bordered(false)
                                     .bg(cx

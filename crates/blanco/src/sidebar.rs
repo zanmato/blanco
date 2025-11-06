@@ -4,7 +4,7 @@ use gpui::{
     IntoElement, ParentElement, Render, SharedString, Styled, Window,
 };
 use gpui_component::{
-    button::Button, h_flex, v_flex, ActiveTheme, ContextModal as _, IconName as GCIconName, Side,
+    button::Button, h_flex, v_flex, ActiveTheme, IconName as GCIconName, Side, WindowExt as _,
 };
 use std::collections::HashMap;
 use std::sync::Arc;

@@ -8,10 +8,11 @@ use gpui_component::{
     form::form_field,
     h_flex,
     highlighter::Diagnostic,
-    input::{InputState, TabSize, TextInput},
+    input::{Input, InputState, TabSize},
+    kbd::Kbd,
     popover::{Popover, PopoverContent},
     tab::{Tab, TabBar},
-    v_flex, ActiveTheme, ContextModal as _, IconName, Kbd, Sizable, StyledExt,
+    v_flex, ActiveTheme, IconName, Sizable, StyledExt, WindowExt as _,
 };
 use log::{debug, error, info};
 use std::rc::Rc;
@@ -1556,7 +1557,7 @@ impl Render for EditorPanel {
                                                 .border_color(cx.theme().border)
                                                 .relative() // Make container relative for absolute popup positioning
                                                 .child(
-                                                    TextInput::new(&query_tab.editor)
+                                                    Input::new(&query_tab.editor)
                                                         .bordered(false)
                                                         .p_0()
                                                         .h_full()
@@ -1810,7 +1811,7 @@ impl Render for EditorPanel {
                                         .border_t_1()
                                         .border_color(cx.theme().border)
                                         .child(
-                                            TextInput::new(&settings_tab.editor)
+                                            Input::new(&settings_tab.editor)
                                                 .bordered(false)
                                                 .p_0()
                                                 .h_full()

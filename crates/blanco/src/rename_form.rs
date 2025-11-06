@@ -4,7 +4,7 @@ use gpui::{
 };
 use gpui_component::{
     form::form_field,
-    input::{InputState, TextInput},
+    input::{InputState, Input},
     v_flex, StyledExt,
 };
 use log::error;
@@ -100,7 +100,7 @@ impl Render for RenameTabForm {
         v_flex().gap_3().min_w(px(200.)).child(
             form_field()
                 .label("Name")
-                .child(TextInput::new(&self.input).w_full()),
+                .child(Input::new(&self.input).w_full()),
         )
     }
 }

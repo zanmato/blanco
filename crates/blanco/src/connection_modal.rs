@@ -3,9 +3,9 @@ use gpui::{
     IntoElement, ParentElement, Render, Styled, Window,
 };
 use gpui_component::{
-    dropdown::{Dropdown, DropdownState},
     h_flex,
-    input::{InputState, TextInput},
+    input::{Input, InputState},
+    select::{Select, SelectState},
     v_flex, ActiveTheme, Icon, IconName, IndexPath,
 };
 
@@ -47,7 +47,7 @@ impl SqliteForm {
         v_flex()
             .gap_2()
             .child(div().text_sm().child("File Path"))
-            .child(TextInput::new(&self.file_path_input))
+            .child(Input::new(&self.file_path_input))
             .into_any_element()
     }
 
@@ -138,33 +138,33 @@ impl PostgresForm {
                             .flex_1()
                             .gap_2()
                             .child(div().text_sm().child("Host"))
-                            .child(TextInput::new(&self.host_input)),
+                            .child(Input::new(&self.host_input)),
                     )
                     .child(
                         v_flex()
                             .w_32()
                             .gap_2()
                             .child(div().text_sm().child("Port"))
-                            .child(TextInput::new(&self.port_input)),
+                            .child(Input::new(&self.port_input)),
                     ),
             )
             .child(
                 v_flex()
                     .gap_2()
                     .child(div().text_sm().child("Database"))
-                    .child(TextInput::new(&self.database_input)),
+                    .child(Input::new(&self.database_input)),
             )
             .child(
                 v_flex()
                     .gap_2()
                     .child(div().text_sm().child("Username"))
-                    .child(TextInput::new(&self.username_input)),
+                    .child(Input::new(&self.username_input)),
             )
             .child(
                 v_flex()
                     .gap_2()
                     .child(div().text_sm().child("Password"))
-                    .child(TextInput::new(&self.password_input)),
+                    .child(Input::new(&self.password_input)),
             )
             .into_any_element()
     }
@@ -261,7 +261,7 @@ impl PostgresForm {
 pub struct NewConnectionModal {
     focus_handle: FocusHandle,
     name_input: Entity<InputState>,
-    db_type_dropdown: Entity<DropdownState<Vec<String>>>,
+    db_type_select: Entity<SelectState<Vec<String>>>,
     sqlite_form: SqliteForm,
     postgres_form: PostgresForm,
     test_result: Option<TestResult>,
@@ -271,8 +271,8 @@ impl NewConnectionModal {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let db_types = vec!["SQLite".to_string(), "PostgreSQL".to_string()];
         let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Connection Name"));
-        let db_type_dropdown =
-            cx.new(|cx| DropdownState::new(db_types.clone(), Some(IndexPath::new(0)), window, cx));
+        let db_type_select =
+            cx.new(|cx| SelectState::new(db_types.clone(), Some(IndexPath::new(0)), window, cx));
 
         // Create entities for SQLite form
         let sqlite_file_path =
@@ -291,7 +291,7 @@ impl NewConnectionModal {
         Self {
             focus_handle: cx.focus_handle(),
             name_input,
-            db_type_dropdown,
+            db_type_select,
             sqlite_form,
             postgres_form,
             test_result: None,
@@ -300,7 +300,7 @@ impl NewConnectionModal {
 
     fn get_selected_connector_type(&self, cx: &App) -> ConnectorType {
         let selected = self
-            .db_type_dropdown
+            .db_type_select
             .read(cx)
             .selected_value()
             .unwrap_or(&"SQLite".to_string())
@@ -351,13 +351,13 @@ impl Render for NewConnectionModal {
                 v_flex()
                     .gap_2()
                     .child(div().text_sm().child("Connection Name"))
-                    .child(TextInput::new(&self.name_input)),
+                    .child(Input::new(&self.name_input)),
             )
             .child(
                 v_flex()
                     .gap_2()
                     .child(div().text_sm().child("Database Type"))
-                    .child(Dropdown::new(&self.db_type_dropdown)),
+                    .child(Select::new(&self.db_type_select)),
             )
             // Render the appropriate form based on selected type
             .child(match connector_type {

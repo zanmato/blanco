@@ -7,9 +7,9 @@ use gpui::{
     InteractiveElement, IntoElement, MouseButton, ParentElement, Render, Styled, Window,
 };
 use gpui_component::{
-    input::{InputEvent, InputState, TextInput},
+    input::{Input, InputEvent, InputState},
     legacytable::{Column, ColumnSort, Table, TableDelegate},
-    popup_menu::PopupMenu,
+    menu::PopupMenu,
     v_flex, ActiveTheme, Icon, IconName,
 };
 
@@ -941,7 +941,7 @@ impl TableDelegate for ResultsTableDelegate {
         };
 
         if is_editing {
-            // Embed TextInput directly in the cell (not for row number column)
+            // Embed Input directly in the cell (not for row number column)
             if let Some(input) = self.edit_state.get_editing_input() {
                 div()
                     .font_family("Fira Code")
@@ -975,7 +975,7 @@ impl TableDelegate for ResultsTableDelegate {
                             .text_color(cx.theme().blue) // Blue color for arrays
                     })
                     .child(
-                        TextInput::new(&input)
+                        Input::new(&input)
                             .size_full()
                             .text_size(px(12.))
                             .border_0() // No border on the input

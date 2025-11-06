@@ -5,7 +5,7 @@ use gpui::{
     Styled,
 };
 
-use gpui_component::{h_flex, popup_menu::PopupMenuExt, ActiveTheme as _, Collapsible, Selectable};
+use gpui_component::{h_flex, ActiveTheme as _, Collapsible, Selectable};
 
 #[derive(IntoElement)]
 pub struct SidebarFooter {
@@ -61,7 +61,6 @@ impl InteractiveElement for SidebarFooter {
     }
 }
 
-impl PopupMenuExt for SidebarFooter {}
 impl RenderOnce for SidebarFooter {
     fn render(self, _: &mut gpui::Window, cx: &mut gpui::App) -> impl gpui::IntoElement {
         h_flex()
