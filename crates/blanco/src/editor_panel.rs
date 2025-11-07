@@ -1,16 +1,14 @@
 use gpui::{
-    div, prelude::FluentBuilder, px, App, AppContext, Axis, ClickEvent, Context, Corner,
-    DismissEvent, Element, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, Keystroke, MouseButton, ParentElement, Pixels, Point, Render, Styled, Window,
+    div, prelude::FluentBuilder, px, App, AppContext, Axis, ClickEvent, Context, Entity,
+    EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, Keystroke, MouseButton,
+    ParentElement, Render, Styled, Window,
 };
 use gpui_component::{
     button::{Button, ButtonVariants},
-    form::form_field,
     h_flex,
-    highlighter::Diagnostic,
     input::{Input, InputState, TabSize},
     kbd::Kbd,
-    popover::{Popover, PopoverContent},
+    resizable::{h_resizable, resizable_panel},
     tab::{Tab, TabBar},
     v_flex, ActiveTheme, IconName, Sizable, StyledExt, WindowExt as _,
 };
@@ -29,14 +27,7 @@ use crate::settings::{load_settings, Settings};
 use crate::sql_completion_provider::SqlCompletionProvider;
 use blanco_ui::SqlLog;
 use gpui_component::Icon;
-use std::sync::{Arc, Mutex};
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[allow(dead_code)]
-pub enum SplitType {
-    EditorTable,
-    TableLog,
-}
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub enum EditorPanelEvent {
@@ -60,8 +51,6 @@ pub struct QueryTab {
     pub db_id: Option<i64>, // Database ID for persistence
     pub results_panel: Entity<crate::results_panel::ResultsPanel>, // Each tab has its own results
     pub sql_log: Entity<SqlLog>, // SQL log for this tab
-    #[allow(dead_code)]
-    pub cached_diagnostics: Arc<Mutex<Vec<Diagnostic>>>, // Store diagnostics for this tab
     pub current_completions: Option<crate::sql_completion::CompletionResult>,
     pub selected_completion_index: usize,
     // Chat functionality
@@ -207,15 +196,6 @@ pub struct EditorPanel {
     _subscriptions: Vec<gpui::Subscription>,
     // Temporary storage for saved tabs that will be restored after connections are loaded
     pending_saved_tabs: Option<Vec<crate::app_database::QueryTabData>>,
-    // Split pane state
-    #[allow(dead_code)]
-    editor_table_split: f32, // Position between editor and table (0.0-1.0)
-    #[allow(dead_code)]
-    table_log_split: f32, // Position between table and log (0.0-1.0)
-    #[allow(dead_code)]
-    dragging_split: Option<SplitType>, // Which handle is being dragged
-    #[allow(dead_code)]
-    drag_start_position: Option<Point<f32>>, // Start position of drag
 }
 
 /// Parameters for creating a new tab with connection
@@ -253,12 +233,6 @@ impl EditorPanel {
             sidebar_collapsed,
             _subscriptions: Vec::new(),
             pending_saved_tabs: None,
-            // Initialize split pane state with reasonable defaults
-            // 40% editor, 40% table, 20% log
-            editor_table_split: 0.4,
-            table_log_split: 0.4,
-            dragging_split: None,
-            drag_start_position: None,
         }
     }
 
@@ -299,7 +273,11 @@ impl EditorPanel {
 
             // Set up completion provider using connection_id, database_name, and DbService
             let db_service = DbService::global(cx).clone();
-            let completion_provider = SqlCompletionProvider::new_with_database(connection_id, database_name.clone(), db_service);
+            let completion_provider = SqlCompletionProvider::new_with_database(
+                connection_id,
+                database_name.clone(),
+                db_service,
+            );
             let completion_provider: Rc<dyn gpui_component::input::CompletionProvider> =
                 Rc::new(completion_provider);
             editor.lsp.completion_provider = Some(completion_provider);
@@ -322,7 +300,6 @@ impl EditorPanel {
                 ResultsPanel::new(window, cx) // TODO: Use with_connection_id when connection_id is available
             }),
             sql_log: cx.new(|cx| SqlLog::new(1000, cx.theme().highlight_theme.clone())), // Maximum 1000 lines in the log
-            cached_diagnostics: Arc::new(Mutex::new(Vec::new())),
             current_completions: None,
             selected_completion_index: 0,
             // Chat functionality
@@ -984,12 +961,6 @@ impl EditorPanel {
             sidebar_collapsed,
             _subscriptions: Vec::new(),
             pending_saved_tabs: None,
-            // Initialize split pane state with reasonable defaults
-            // 40% editor, 40% table, 20% log
-            editor_table_split: 0.4,
-            table_log_split: 0.4,
-            dragging_split: None,
-            drag_start_position: None,
         };
 
         if saved_tabs.is_empty() {
@@ -1113,7 +1084,11 @@ impl EditorPanel {
 
             // Set up completion provider using connection_id, database_name, and DbService
             let db_service = DbService::global(cx).clone();
-            let completion_provider = SqlCompletionProvider::new_with_database(params.connection_id, params.database_name.clone(), db_service);
+            let completion_provider = SqlCompletionProvider::new_with_database(
+                params.connection_id,
+                params.database_name.clone(),
+                db_service,
+            );
             let completion_provider: Rc<dyn gpui_component::input::CompletionProvider> =
                 Rc::new(completion_provider);
             editor.lsp.completion_provider = Some(completion_provider);
@@ -1141,7 +1116,6 @@ impl EditorPanel {
             db_id: params.db_id,
             results_panel: cx.new(|cx| ResultsPanel::new(window, cx)),
             sql_log: cx.new(|cx| SqlLog::new(1000, cx.theme().highlight_theme.clone())),
-            cached_diagnostics: Arc::new(Mutex::new(Vec::new())),
             current_completions: None,
             selected_completion_index: 0,
             // Chat functionality
@@ -1205,60 +1179,6 @@ impl EditorPanel {
 
             window.push_notification("Changes rolled back", cx);
         }
-    }
-
-    // Split pane resize handling methods
-    #[allow(dead_code)]
-    fn start_split_drag(
-        &mut self,
-        split_type: SplitType,
-        position: Point<f32>,
-        cx: &mut Context<Self>,
-    ) {
-        self.dragging_split = Some(split_type);
-        self.drag_start_position = Some(position);
-        cx.notify();
-    }
-
-    #[allow(dead_code)]
-    fn handle_split_drag(
-        &mut self,
-        current_position: Point<f32>,
-        _window_bounds: gpui::Bounds<Pixels>,
-        cx: &mut Context<Self>,
-    ) {
-        if let (Some(split_type), Some(start_pos)) = (self.dragging_split, self.drag_start_position)
-        {
-            let delta_y = current_position.y - start_pos.y;
-            let delta_ratio = delta_y / 1000.0; // Simple ratio for now
-
-            match split_type {
-                SplitType::EditorTable => {
-                    let new_split = (self.editor_table_split + delta_ratio).clamp(0.2, 0.7); // Min 20%, Max 70%
-                    self.table_log_split -= new_split - self.editor_table_split; // Adjust log split
-                    self.editor_table_split = new_split;
-                }
-                SplitType::TableLog => {
-                    let new_split = (self.table_log_split + delta_ratio).clamp(0.1, 0.5); // Min 10%, Max 50%
-                    self.table_log_split = new_split;
-                }
-            }
-
-            cx.notify();
-        }
-    }
-
-    #[allow(dead_code)]
-    fn end_split_drag(&mut self, cx: &mut Context<Self>) {
-        self.dragging_split = None;
-        self.drag_start_position = None;
-        cx.notify();
-    }
-
-    // Helper method to create a resize handle (visual only for now)
-    #[allow(dead_code)]
-    fn resize_handle(&self, _split_type: SplitType, cx: &mut Context<Self>) -> impl IntoElement {
-        div().h_1().w_full().bg(cx.theme().border)
     }
 
     /// Update chat context for the active tab
@@ -1416,7 +1336,7 @@ impl Render for EditorPanel {
                                                 let form = RenameTabForm::new(tab_index, tab_title.clone(), window, cx);
                                                 let form_for_modal = form.clone();
 
-                                                window.open_modal(cx, move |modal, window, cx| {
+                                                window.open_modal(cx, move |modal, _window, _cx| {
                                                     let form_clone = form_for_modal.clone();
                                                     let tab_index_clone = tab_index;
                                                     modal
@@ -1539,260 +1459,261 @@ impl Render for EditorPanel {
                     TabType::Query(query_tab) => {
                         // Query tab: Layout with optional chat panel
                         this.child(
-                            h_flex()
-                                .flex_1()
-                                .h_full()
+                            h_resizable("editor-split")
                                 // Left side: Always show the main content (Editor + Button bar + Results)
                                 .child(
-                                    v_flex()
-                                        .flex_1()
-                                        .h_full()
-                                        .min_w_0()
-                                        // Editor
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .min_h_0()
-                                                .border_t_1()
-                                                .border_color(cx.theme().border)
-                                                .relative() // Make container relative for absolute popup positioning
-                                                .child(
-                                                    Input::new(&query_tab.editor)
-                                                        .bordered(false)
-                                                        .p_0()
-                                                        .h_full()
-                                                        .font_family("Fira Code")
-                                                        .text_size(px(14.))
-                                                        .focus_bordered(false)
-                                                )
-                                                // SQL Completion Popup
-                                                .when_some(query_tab.current_completions.as_ref(), |this, completions| {
-                                                    this.when(!completions.items.is_empty(), |this| {
-                                                        this.child(
-                                                            div()
-                                                                .absolute()
-                                                                .top(px(100.0)) // Position below the editor
-                                                                .left(px(50.0))  // Offset from left edge
-                                                                .border_1()
-                                                                .border_color(cx.theme().border)
-                                                                .bg(cx.theme().background)
-                                                                .rounded(px(4.0))
-                                                                .shadow_lg()
-                                                                .min_w(px(200.0))
-                                                                .max_w(px(400.0))
-                                                                .max_h(px(200.0))
-                                                                .child(
-                                                                    v_flex()
-                                                                        .children(
-                                                                            completions.items.iter().enumerate().map(|(index, item)| {
-                                                                                let is_selected = index == query_tab.selected_completion_index;
-                                                                                div()
-                                                                                    .id(("completion-item", index))
-                                                                                    .w_full()
-                                                                                    .px_3()
-                                                                                    .py_2()
-                                                                                    .when(is_selected, |div| {
-                                                                                        div.bg(cx.theme().primary.opacity(0.2))
-                                                                                    })
-                                                                                    .hover(|div| {
-                                                                                        div.bg(cx.theme().muted.opacity(0.5))
-                                                                                    })
-                                                                                    .cursor_pointer()
-                                                                                    .child(
-                                                                                h_flex()
-                                                                                    .items_center()
-                                                                                    .gap_2()
-                                                                                    .child(
-                                                                                        // Kind indicator
-                                                                                        div()
-                                                                                            .w(px(8.0))
-                                                                                            .h(px(8.0))
-                                                                                            .rounded(px(2.0))
-                                                                                            .bg(match item.kind {
-                                                                                                crate::sql_completion::CompletionItemKind::Table => cx.theme().blue,
-                                                                                                crate::sql_completion::CompletionItemKind::Column => cx.theme().green,
-                                                                                                crate::sql_completion::CompletionItemKind::Keyword => cx.theme().primary,
-                                                                                                crate::sql_completion::CompletionItemKind::Schema => cx.theme().blue,
-                                                                                                crate::sql_completion::CompletionItemKind::Function => cx.theme().primary,
-                                                                                                crate::sql_completion::CompletionItemKind::Alias => cx.theme().muted,
-                                                                                            })
-                                                                                    )
-                                                                                    .child(
-                                                                                        div()
-                                                                                            .text_sm()
-                                                                                            .text_color(cx.theme().foreground)
-                                                                                            .child(item.label.clone())
-                                                                                    )
-                                                                                    .when_some(item.detail.as_ref(), |this, detail| {
-                                                                                        this.child(
+                                    resizable_panel().child(
+                                        v_flex()
+                                            .flex_1()
+                                            .h_full()
+                                            .min_w_0()
+                                            // Editor
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .min_h_0()
+                                                    .border_t_1()
+                                                    .border_color(cx.theme().border)
+                                                    .relative() // Make container relative for absolute popup positioning
+                                                    .child(
+                                                        Input::new(&query_tab.editor)
+                                                            .bordered(false)
+                                                            .p_0()
+                                                            .h_full()
+                                                            .font_family("Fira Code")
+                                                            .text_size(px(14.))
+                                                            .focus_bordered(false)
+                                                    )
+                                                    // SQL Completion Popup
+                                                    .when_some(query_tab.current_completions.as_ref(), |this, completions| {
+                                                        this.when(!completions.items.is_empty(), |this| {
+                                                            this.child(
+                                                                div()
+                                                                    .absolute()
+                                                                    .top(px(100.0)) // Position below the editor
+                                                                    .left(px(50.0))  // Offset from left edge
+                                                                    .border_1()
+                                                                    .border_color(cx.theme().border)
+                                                                    .bg(cx.theme().background)
+                                                                    .rounded(px(4.0))
+                                                                    .shadow_lg()
+                                                                    .min_w(px(200.0))
+                                                                    .max_w(px(400.0))
+                                                                    .max_h(px(200.0))
+                                                                    .child(
+                                                                        v_flex()
+                                                                            .children(
+                                                                                completions.items.iter().enumerate().map(|(index, item)| {
+                                                                                    let is_selected = index == query_tab.selected_completion_index;
+                                                                                    div()
+                                                                                        .id(("completion-item", index))
+                                                                                        .w_full()
+                                                                                        .px_3()
+                                                                                        .py_2()
+                                                                                        .when(is_selected, |div| {
+                                                                                            div.bg(cx.theme().primary.opacity(0.2))
+                                                                                        })
+                                                                                        .hover(|div| {
+                                                                                            div.bg(cx.theme().muted.opacity(0.5))
+                                                                                        })
+                                                                                        .cursor_pointer()
+                                                                                        .child(
+                                                                                    h_flex()
+                                                                                        .items_center()
+                                                                                        .gap_2()
+                                                                                        .child(
+                                                                                            // Kind indicator
                                                                                             div()
-                                                                                                .text_xs()
-                                                                                                .text_color(cx.theme().muted_foreground)
-                                                                                                .child(detail.clone())
+                                                                                                .w(px(8.0))
+                                                                                                .h(px(8.0))
+                                                                                                .rounded(px(2.0))
+                                                                                                .bg(match item.kind {
+                                                                                                    crate::sql_completion::CompletionItemKind::Table => cx.theme().blue,
+                                                                                                    crate::sql_completion::CompletionItemKind::Column => cx.theme().green,
+                                                                                                    crate::sql_completion::CompletionItemKind::Keyword => cx.theme().primary,
+                                                                                                    crate::sql_completion::CompletionItemKind::Schema => cx.theme().blue,
+                                                                                                    crate::sql_completion::CompletionItemKind::Function => cx.theme().primary,
+                                                                                                    crate::sql_completion::CompletionItemKind::Alias => cx.theme().muted,
+                                                                                                })
                                                                                         )
-                                                                                    })
-                                                                                )
-                                                                            })
-                                                                        )
-                                                                )
-                                                        )
+                                                                                        .child(
+                                                                                            div()
+                                                                                                .text_sm()
+                                                                                                .text_color(cx.theme().foreground)
+                                                                                                .child(item.label.clone())
+                                                                                        )
+                                                                                        .when_some(item.detail.as_ref(), |this, detail| {
+                                                                                            this.child(
+                                                                                                div()
+                                                                                                    .text_xs()
+                                                                                                    .text_color(cx.theme().muted_foreground)
+                                                                                                    .child(detail.clone())
+                                                                                            )
+                                                                                        })
+                                                                                    )
+                                                                                })
+                                                                            )
+                                                                    )
+                                                            )
+                                                        })
                                                     })
-                                                })
-                                        )
-                                        // Button bar (between editor and results)
-                                        .child(
-                                            h_flex()
-                                                .px_3()
-                                                .py_1()
-                                                .gap_2()
-                                                .border_t_1()
-                                                .border_color(cx.theme().border)
-                                                .bg(cx.theme().muted.opacity(0.5))
-                                                .justify_end()
-                                                // Run button (always visible)
-                                                .child(
-                                                        Button::new("run-query")
+                                            )
+                                            // Button bar (between editor and results)
+                                            .child(
+                                                h_flex()
+                                                    .px_3()
+                                                    .py_1()
+                                                    .gap_2()
+                                                    .border_t_1()
+                                                    .border_color(cx.theme().border)
+                                                    .bg(cx.theme().muted.opacity(0.5))
+                                                    .justify_end()
+                                                    // Run button (always visible)
+                                                    .child(
+                                                            Button::new("run-query")
+                                                                .outline()
+                                                                .icon(IconName::Check)
+                                                                .label("Run Current")
+                                                                .children(vec![Kbd::new(Keystroke::parse("shift-enter").unwrap()).into_any_element()])
+                                                                .on_click(cx.listener(Self::run_query_unified)),
+                                                        )
+                                            )
+                                            // Results section: Results on top, SQL Log on bottom
+                                            .child(
+                                                v_flex()
+                                                    .flex_grow()
+                                                    .min_h(px(200.))
+                                                    // Results panel (top)
+                                                    .child(
+                                                        div()
+                                                            .flex_1()
+                                                            .child(query_tab.results_panel.clone())
+                                                    )
+                                                    // SQL Log panel (bottom)
+                                                    .child(
+                                                        div()
+                                                            .flex_1()
+                                                            .overflow_hidden()
+                                                            .bg(cx.theme().highlight_theme.style.editor_background.unwrap_or(cx.theme().background))
+                                                            .child(
+                                                                div()
+                                                                    .child(query_tab.sql_log.clone())
+                                                                    .scrollable(Axis::Vertical)
+                                                            )
+                                                    )
+                                            )
+                                            // Row operation buttons
+                                            .child(
+                                                h_flex()
+                                                    .p_3()
+                                                    .gap_2()
+                                                    .border_t_1()
+                                                    .border_color(cx.theme().border)
+                                                    .bg(cx.theme().muted.opacity(0.5))
+                                                    // Chat toggle button
+                                                    .child(
+                                                        Button::new("toggle-chat")
+                                                            .outline()
+                                                            .icon(if query_tab.chat_enabled {
+                                                                IconName::Bot
+                                                            } else {
+                                                                IconName::Plus
+                                                            })
+                                                            .label(if query_tab.chat_enabled {
+                                                                "Chat ON"
+                                                            } else {
+                                                                "Chat OFF"
+                                                            })
+                                                            .when(query_tab.chat_enabled, |btn| {
+                                                                btn.primary()
+                                                            })
+                                                            .on_click(cx.listener(|this, _, _window, cx| {
+                                                                // Toggle chat for the current query tab
+                                                                this.toggle_chat_for_active_tab(_window, cx);
+                                                            }))
+                                                    )
+                                                    .child(
+                                                        Button::new("add-row")
+                                                            .outline()
+                                                            .icon(IconName::Plus)
+                                                            .label("Add Row")
+                                                            .on_click(cx.listener(|this, _, _window, cx| {
+                                                                // Add a new row with empty values
+                                                                if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
+                                                                    query_tab.results_panel.update(cx, |results_panel, cx| {
+                                                                        results_panel.add_new_row(cx);
+                                                                    });
+                                                                }
+                                                            })),
+                                                    )
+                                                    .child(
+                                                        Button::new("duplicate-row")
+                                                            .outline()
+                                                            .icon(IconName::Copy)
+                                                            .label("Duplicate Row")
+                                                            // TODO: Disable when no row is selected
+                                                            .on_click(cx.listener(|this, _, _window, cx| {
+                                                                // Duplicate the first row (for now - later we'll implement row selection)
+                                                                if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
+                                                                    query_tab.results_panel.update(cx, |results_panel, cx| {
+                                                                        results_panel.duplicate_row(0, cx); // Duplicate first row for now
+                                                                    });
+                                                                }
+                                                            })),
+                                                    )
+                                                    // Commit and rollback buttons (always available)
+                                                    .child(
+                                                        Button::new("commit-changes")
                                                             .outline()
                                                             .icon(IconName::Check)
-                                                            .label("Run Current")
-                                                            .children(vec![Kbd::new(Keystroke::parse("shift-enter").unwrap()).into_any_element()])
-                                                            .on_click(cx.listener(Self::run_query_unified)),
+                                                            .label("Commit Changes")
+                                                            .children(vec![Kbd::new(Keystroke::parse("cmd-shift-c").unwrap()).into_any_element()])
+                                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                                if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
+                                                                    // Execute the actual commit in the results panel with SQL logging
+                                                                    query_tab.results_panel.update(cx, |panel, cx| {
+                                                                        panel.commit_changes_with_sql_log(window, &query_tab.sql_log, cx);
+                                                                    });
+                                                                }
+                                                            })),
                                                     )
-                                        )
-                                        // Results section: Results on top, SQL Log on bottom
-                                        .child(
-                                            v_flex()
-                                                .flex_grow()
-                                                .min_h(px(200.))
-                                                // Results panel (top)
-                                                .child(
-                                                    div()
-                                                        .flex_1()
-                                                        .child(query_tab.results_panel.clone())
-                                                )
-                                                // SQL Log panel (bottom)
-                                                .child(
-                                                    div()
-                                                        .flex_1()
-                                                        .overflow_hidden()
-                                                        .bg(cx.theme().highlight_theme.style.editor_background.unwrap_or(cx.theme().background))
-                                                        .child(
-                                                            div()
-                                                                .child(query_tab.sql_log.clone())
-                                                                .scrollable(Axis::Vertical)
-                                                        )
-                                                )
-                                        )
-                                        // Row operation buttons
-                                        .child(
-                                            h_flex()
-                                                .p_3()
-                                                .gap_2()
-                                                .border_t_1()
-                                                .border_color(cx.theme().border)
-                                                .bg(cx.theme().muted.opacity(0.5))
-                                                // Chat toggle button
-                                                .child(
-                                                    Button::new("toggle-chat")
-                                                        .outline()
-                                                        .icon(if query_tab.chat_enabled {
-                                                            IconName::Bot
-                                                        } else {
-                                                            IconName::Plus
-                                                        })
-                                                        .label(if query_tab.chat_enabled {
-                                                            "Chat ON"
-                                                        } else {
-                                                            "Chat OFF"
-                                                        })
-                                                        .when(query_tab.chat_enabled, |btn| {
-                                                            btn.primary()
-                                                        })
-                                                        .on_click(cx.listener(|this, _, _window, cx| {
-                                                            // Toggle chat for the current query tab
-                                                            this.toggle_chat_for_active_tab(_window, cx);
-                                                        }))
-                                                )
-                                                .child(
-                                                    Button::new("add-row")
-                                                        .outline()
-                                                        .icon(IconName::Plus)
-                                                        .label("Add Row")
-                                                        .on_click(cx.listener(|this, _, _window, cx| {
-                                                            // Add a new row with empty values
-                                                            if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
-                                                                query_tab.results_panel.update(cx, |results_panel, cx| {
-                                                                    results_panel.add_new_row(cx);
-                                                                });
-                                                            }
-                                                        })),
-                                                )
-                                                .child(
-                                                    Button::new("duplicate-row")
-                                                        .outline()
-                                                        .icon(IconName::Copy)
-                                                        .label("Duplicate Row")
-                                                        // TODO: Disable when no row is selected
-                                                        .on_click(cx.listener(|this, _, _window, cx| {
-                                                            // Duplicate the first row (for now - later we'll implement row selection)
-                                                            if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
-                                                                query_tab.results_panel.update(cx, |results_panel, cx| {
-                                                                    results_panel.duplicate_row(0, cx); // Duplicate first row for now
-                                                                });
-                                                            }
-                                                        })),
-                                                )
-                                                // Commit and rollback buttons (always available)
-                                                .child(
-                                                    Button::new("commit-changes")
-                                                        .outline()
-                                                        .icon(IconName::Check)
-                                                        .label("Commit Changes")
-                                                        .children(vec![Kbd::new(Keystroke::parse("cmd-shift-c").unwrap()).into_any_element()])
-                                                        .on_click(cx.listener(|this, _, window, cx| {
-                                                            if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
-                                                                // Execute the actual commit in the results panel with SQL logging
-                                                                query_tab.results_panel.update(cx, |panel, cx| {
-                                                                    panel.commit_changes_with_sql_log(window, &query_tab.sql_log, cx);
-                                                                });
-                                                            }
-                                                        })),
-                                                )
-                                                .child(
-                                                    Button::new("rollback-changes")
-                                                        .outline()
-                                                        .icon(IconName::CircleX)
-                                                        .label("Rollback")
-                                                        .children(vec![Kbd::new(Keystroke::parse("cmd-shift-r").unwrap()).into_any_element()])
-                                                        .on_click(cx.listener(|this, _, _window, cx| {
-                                                            if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
-                                                                query_tab.results_panel.update(cx, |panel, cx| {
-                                                                    panel.rollback_changes(_window, cx);
-                                                                });
-                                                            }
-                                                        })),
-                                                )
-                                                .child(div().flex_1())
-                                                .child(
-                                                    div()
-                                                        .text_sm()
-                                                        .text_color(cx.theme().muted_foreground)
-                                                        .child("Double-click cells to edit")
-                                                )
-                                )
+                                                    .child(
+                                                        Button::new("rollback-changes")
+                                                            .outline()
+                                                            .icon(IconName::CircleX)
+                                                            .label("Rollback")
+                                                            .children(vec![Kbd::new(Keystroke::parse("cmd-shift-r").unwrap()).into_any_element()])
+                                                            .on_click(cx.listener(|this, _, _window, cx| {
+                                                                if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
+                                                                    query_tab.results_panel.update(cx, |panel, cx| {
+                                                                        panel.rollback_changes(_window, cx);
+                                                                    });
+                                                                }
+                                                            })),
+                                                    )
+                                                    .child(div().flex_1())
+                                                    .child(
+                                                        div()
+                                                            .text_sm()
+                                                            .text_color(cx.theme().muted_foreground)
+                                                            .child("Double-click cells to edit")
+                                                    ),
+                                        ),
+                                    ),
                                 )
                                 // Right side: Chat panel (only when enabled)
                                 .when(
                                     query_tab.chat_enabled && query_tab.chat_panel.is_some(),
                                     |this| {
                                         this.child(
+                                            resizable_panel().child(
                                             div()
-                                                .h_full()
-                                                .w_80()
-                                                .min_w_0()
+                                                .size_full()
+                                                .min_w_80()
                                                 .border_l_1()
                                                 .border_color(cx.theme().border)
-                                                .child(query_tab.chat_panel.as_ref().unwrap().clone())
+                                                .child(query_tab.chat_panel.as_ref().unwrap().clone()),
+                                            ),
                                         )
                                     }
                                 )
@@ -1895,16 +1816,14 @@ fn create_chat_panel_with_provider(
     let db_service = DbService::global(cx).clone();
 
     // Create resolver and get provider
-    let mut resolver = ChatProviderResolver::new(http_client, db_service);
+    let mut resolver = ChatProviderResolver::new(http_client.clone(), db_service);
     resolver.set_connection_id(connection_id);
-    let provider_info = resolver.get_provider(&settings)?;
+    let _provider_info = resolver.get_provider(&settings)?;
 
     // Create chat panel with the provider
-    let chat_panel = ChatPanel::new_with_provider(
+    let chat_panel = ChatPanel::new(
         tab_id,
-        provider_info.provider,
-        provider_info.provider_name,
-        provider_info.model_name,
+        Some(http_client),
         window,
         cx,
     );
