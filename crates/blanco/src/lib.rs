@@ -1,4 +1,7 @@
+pub mod agent;
 pub mod app_database;
+pub mod app_events;
+pub mod sql_completion;
 pub mod ssh_tunnel;
 pub mod ssh_tunnel_manager;
 

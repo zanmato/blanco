@@ -96,11 +96,6 @@ pub enum ChatEvent {
         message: ChatMessage,
     },
     #[allow(dead_code)]
-    MessageUpdated {
-        message_id: String,
-        content: String,
-    },
-    #[allow(dead_code)]
     StreamStarted {
         message_id: String,
     },
@@ -279,14 +274,18 @@ impl SqlContext {
     }
 
     pub fn to_system_prompt(&self) -> String {
-        let mut prompt = "You are a helpful SQL assistant integrated into the Blanco SQL Editor. ".to_string();
+        let mut prompt =
+            "You are a helpful SQL assistant integrated into the Blanco SQL Editor. ".to_string();
 
         if let Some(database_type) = &self.database_type {
             prompt.push_str(&format!("The current database type is {}. ", database_type));
         }
 
         if !self.current_query.is_empty() {
-            prompt.push_str(&format!("Current SQL query:\n```\n{}\n```\n\n", self.current_query));
+            prompt.push_str(&format!(
+                "Current SQL query:\n```\n{}\n```\n\n",
+                self.current_query
+            ));
         }
 
         if let Some(error) = &self.error_message {
@@ -296,15 +295,15 @@ impl SqlContext {
         if let Some(results) = &self.recent_results {
             prompt.push_str(&format!(
                 "Recent query returned {} rows in {:?}.\n\n",
-                results.row_count,
-                results.execution_time
+                results.row_count, results.execution_time
             ));
         }
 
         if !self.tables.is_empty() {
             prompt.push_str("Available tables:\n");
             for table in &self.tables {
-                prompt.push_str(&format!("- {}.{} ({} columns)\n",
+                prompt.push_str(&format!(
+                    "- {}.{} ({} columns)\n",
                     table.schema.as_deref().unwrap_or("public"),
                     table.name,
                     table.columns.len()
