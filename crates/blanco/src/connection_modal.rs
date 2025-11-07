@@ -6,7 +6,7 @@ use gpui_component::{
     h_flex,
     input::{Input, InputState},
     select::{Select, SelectState},
-    v_flex, ActiveTheme, Icon, IconName, IndexPath,
+    v_flex, ActiveTheme, Icon, IconName, IndexPath, StyledExt,
 };
 
 use crate::app_database::ConnectionData;
@@ -108,6 +108,14 @@ struct PostgresForm {
     database_input: Entity<InputState>,
     username_input: Entity<InputState>,
     password_input: Entity<InputState>,
+    // SSH tunnel configuration
+    ssh_enabled: bool,
+    ssh_host_input: Entity<InputState>,
+    ssh_port_input: Entity<InputState>,
+    ssh_user_input: Entity<InputState>,
+    ssh_password_input: Entity<InputState>,
+    ssh_private_key_input: Entity<InputState>,
+    ssh_private_key_password_input: Entity<InputState>,
 }
 
 impl PostgresForm {
@@ -117,6 +125,12 @@ impl PostgresForm {
         database_input: Entity<InputState>,
         username_input: Entity<InputState>,
         password_input: Entity<InputState>,
+        ssh_host_input: Entity<InputState>,
+        ssh_port_input: Entity<InputState>,
+        ssh_user_input: Entity<InputState>,
+        ssh_password_input: Entity<InputState>,
+        ssh_private_key_input: Entity<InputState>,
+        ssh_private_key_password_input: Entity<InputState>,
     ) -> Self {
         Self {
             host_input,
@@ -124,10 +138,17 @@ impl PostgresForm {
             database_input,
             username_input,
             password_input,
+            ssh_enabled: false,
+            ssh_host_input,
+            ssh_port_input,
+            ssh_user_input,
+            ssh_password_input,
+            ssh_private_key_input,
+            ssh_private_key_password_input,
         }
     }
 
-    fn render(&self, _cx: &App) -> gpui::AnyElement {
+    fn render(&self, cx: &App) -> gpui::AnyElement {
         v_flex()
             .gap_4()
             .child(
@@ -165,6 +186,80 @@ impl PostgresForm {
                     .gap_2()
                     .child(div().text_sm().child("Password"))
                     .child(Input::new(&self.password_input)),
+            )
+            // SSH Tunnel Configuration Section
+            .child(
+                div()
+                    .mt_4()
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_semibold()
+                                    .child("SSH Tunnel Configuration")
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("(Optional - Connect through SSH bastion host)")
+                            ),
+                    )
+            )
+            .child(
+                v_flex()
+                    .gap_3()
+                    .child(
+                        h_flex()
+                            .gap_3()
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .gap_2()
+                                    .child(div().text_sm().child("SSH Host"))
+                                    .child(Input::new(&self.ssh_host_input)),
+                            )
+                            .child(
+                                v_flex()
+                                    .w_32()
+                                    .gap_2()
+                                    .child(div().text_sm().child("SSH Port"))
+                                    .child(Input::new(&self.ssh_port_input)),
+                            ),
+                    )
+                    .child(
+                        v_flex()
+                            .gap_2()
+                            .child(div().text_sm().child("SSH Username"))
+                            .child(Input::new(&self.ssh_user_input)),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_3()
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .gap_2()
+                                    .child(div().text_sm().child("SSH Password"))
+                                    .child(Input::new(&self.ssh_password_input)),
+                            )
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .gap_2()
+                                    .child(div().text_sm().child("Private Key Path"))
+                                    .child(Input::new(&self.ssh_private_key_input)),
+                            ),
+                    )
+                    .child(
+                        v_flex()
+                            .gap_2()
+                            .child(div().text_sm().child("Private Key Password"))
+                            .child(Input::new(&self.ssh_private_key_password_input)),
+                    ),
             )
             .into_any_element()
     }
@@ -212,9 +307,60 @@ impl PostgresForm {
 
         let port = port_str.parse::<i32>().ok()?;
 
-        Some(ConnectionData::new_postgres(
-            name, host, port, database, username, password,
-        ))
+        // Check if SSH configuration is provided
+        let ssh_host = self.ssh_host_input.read(cx).value();
+        let ssh_port_str = self.ssh_port_input.read(cx).value();
+        let ssh_user = self.ssh_user_input.read(cx).value();
+        let ssh_password = self.ssh_password_input.read(cx).value();
+        let ssh_private_key_path = self.ssh_private_key_input.read(cx).value();
+        let ssh_private_key_password = self.ssh_private_key_password_input.read(cx).value();
+
+        if !ssh_host.is_empty() && !ssh_user.is_empty() {
+            // SSH tunnel configuration is provided
+            let ssh_port = if ssh_port_str.is_empty() {
+                22
+            } else {
+                ssh_port_str.parse::<i32>().ok()?
+            };
+
+            let ssh_password = if ssh_password.is_empty() {
+                None
+            } else {
+                Some(ssh_password.to_string())
+            };
+
+            let ssh_private_key_path = if ssh_private_key_path.is_empty() {
+                None
+            } else {
+                Some(ssh_private_key_path.to_string())
+            };
+
+            let ssh_private_key_password = if ssh_private_key_password.is_empty() {
+                None
+            } else {
+                Some(ssh_private_key_password.to_string())
+            };
+
+            Some(ConnectionData::new_postgres_with_ssh(
+                name,
+                host,
+                port,
+                database,
+                username,
+                password,
+                ssh_host.to_string(),
+                ssh_port,
+                ssh_user.to_string(),
+                ssh_password,
+                ssh_private_key_path,
+                ssh_private_key_password,
+            ))
+        } else {
+            // No SSH configuration
+            Some(ConnectionData::new_postgres(
+                name, host, port, database, username, password,
+            ))
+        }
     }
 
     fn test_connection(&self, cx: &App) -> TestResult {
@@ -285,8 +431,19 @@ impl NewConnectionModal {
         let pg_database = cx.new(|cx| InputState::new(window, cx).placeholder("Database Name"));
         let pg_username = cx.new(|cx| InputState::new(window, cx).placeholder("postgres"));
         let pg_password = cx.new(|cx| InputState::new(window, cx).placeholder("Password"));
-        let postgres_form =
-            PostgresForm::new(pg_host, pg_port, pg_database, pg_username, pg_password);
+
+        // Create SSH tunnel input entities
+        let ssh_host = cx.new(|cx| InputState::new(window, cx).placeholder("SSH Host"));
+        let ssh_port = cx.new(|cx| InputState::new(window, cx).placeholder("22"));
+        let ssh_user = cx.new(|cx| InputState::new(window, cx).placeholder("SSH Username"));
+        let ssh_password = cx.new(|cx| InputState::new(window, cx).placeholder("SSH Password (optional)"));
+        let ssh_private_key = cx.new(|cx| InputState::new(window, cx).placeholder("Private Key Path (optional)"));
+        let ssh_private_key_password = cx.new(|cx| InputState::new(window, cx).placeholder("Private Key Password (optional)"));
+
+        let postgres_form = PostgresForm::new(
+            pg_host, pg_port, pg_database, pg_username, pg_password,
+            ssh_host, ssh_port, ssh_user, ssh_password, ssh_private_key, ssh_private_key_password,
+        );
 
         Self {
             focus_handle: cx.focus_handle(),

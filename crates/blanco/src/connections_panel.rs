@@ -254,7 +254,7 @@ impl ConnectionsPanel {
         let connection_id = connection.id.unwrap_or(0);
 
         let display_name = connection.display_name();
-        let subtitle = match connection.db_type.as_str() {
+        let base_subtitle = match connection.db_type.as_str() {
             "SQLite" => connection
                 .database_path
                 .as_ref()
@@ -274,6 +274,16 @@ impl ConnectionsPanel {
                 connection.database_name.as_deref().unwrap_or("")
             ),
             _ => connection.db_type.clone(),
+        };
+
+        let subtitle = if connection.uses_ssh_tunnel() {
+            if let Some(ssh_info) = connection.ssh_display_string() {
+                format!("{} • via SSH ({})", base_subtitle, ssh_info)
+            } else {
+                format!("{} • SSH (misconfigured)", base_subtitle)
+            }
+        } else {
+            base_subtitle
         };
 
         v_flex()
@@ -325,13 +335,52 @@ impl ConnectionsPanel {
                                 }.view(cx)
                             )
                             .child(
-                                Label::new(format!(
-                                    "{} {}",
-                                    if is_expanded { "▼" } else { "▶" },
-                                    display_name
-                                ))
-                                .text_sm()
-                                .font_semibold(),
+                                h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        Label::new(format!(
+                                            "{} {}",
+                                            if is_expanded { "▼" } else { "▶" },
+                                            display_name
+                                        ))
+                                        .text_sm()
+                                        .font_semibold(),
+                                    )
+                                    .when(connection.uses_ssh_tunnel(), |this| {
+                                        this.child(
+                                            h_flex()
+                                                .items_center()
+                                                .gap_1()
+                                                .child(
+                                                    // SSH configuration indicator
+                                                    if connection.has_valid_ssh_config() {
+                                                        IconName::Globe.view(cx) // Globe for SSH configured
+                                                    } else {
+                                                        IconName::TriangleAlert.view(cx) // Warning for invalid SSH config
+                                                    }
+                                                    .size_3()
+                                                    .text_color(if self.database_metadata.as_ref().map(|m| m.connection_id) == Some(Some(connection.id)) {
+                                                        cx.theme().accent_foreground.opacity(0.8)
+                                                    } else {
+                                                        cx.theme().foreground.opacity(0.6)
+                                                    })
+                                                )
+                                                .when(connection.has_valid_ssh_config(), |this| {
+                                                    this.child(
+                                                        Label::new("SSH")
+                                                            .text_xs()
+                                                            .font_medium()
+                                                            .text_color(if self.database_metadata.as_ref().map(|m| m.connection_id) == Some(Some(connection_id)) {
+                                                                cx.theme().accent_foreground.opacity(0.7)
+                                                            } else {
+                                                                cx.theme().foreground.opacity(0.5)
+                                                            })
+                                                            .whitespace_nowrap(),
+                                                    )
+                                                }),
+                                        )
+                                    }),
                             )
                             .child(
                                 Label::new(subtitle)

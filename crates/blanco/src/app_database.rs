@@ -1,6 +1,6 @@
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use sqlx::{ConnectOptions, Row};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::str::FromStr;
 
 /// Application database for persisting query tabs, history, and connections
@@ -258,6 +258,70 @@ impl AppDatabase {
         .await
         .ok(); // Ignore error if column already exists
 
+        // Add SSH tunnel support columns
+        sqlx::query(
+            r#"
+            ALTER TABLE connections ADD COLUMN ssh_host TEXT
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .ok(); // Ignore error if column already exists
+
+        sqlx::query(
+            r#"
+            ALTER TABLE connections ADD COLUMN ssh_port INTEGER
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .ok(); // Ignore error if column already exists
+
+        sqlx::query(
+            r#"
+            ALTER TABLE connections ADD COLUMN ssh_user TEXT
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .ok(); // Ignore error if column already exists
+
+        sqlx::query(
+            r#"
+            ALTER TABLE connections ADD COLUMN ssh_password TEXT
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .ok(); // Ignore error if column already exists
+
+        sqlx::query(
+            r#"
+            ALTER TABLE connections ADD COLUMN ssh_private_key_path TEXT
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .ok(); // Ignore error if column already exists
+
+        sqlx::query(
+            r#"
+            ALTER TABLE connections ADD COLUMN ssh_private_key_password TEXT
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .ok(); // Ignore error if column already exists
+
+        sqlx::query(
+            r#"
+            ALTER TABLE connections ADD COLUMN local_tunnel_port INTEGER
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .ok(); // Ignore error if column already exists
+
         // Note: database_path NOT NULL constraint has been manually fixed
         // The database schema now allows NULL database_path for PostgreSQL connections
 
@@ -414,7 +478,9 @@ impl AppDatabase {
                 UPDATE connections
                 SET name = ?, db_type = ?, host = ?, port = ?, database_name = ?,
                     username = ?, password = ?, database_path = ?, last_used_at = ?,
-                    connection_string = ?, is_active = ?, connection_params = ?
+                    connection_string = ?, is_active = ?, connection_params = ?,
+                    ssh_host = ?, ssh_port = ?, ssh_user = ?, ssh_password = ?,
+                    ssh_private_key_path = ?, ssh_private_key_password = ?, local_tunnel_port = ?
                 WHERE id = ?
                 "#,
             )
@@ -430,6 +496,13 @@ impl AppDatabase {
             .bind(&conn.connection_string)
             .bind(conn.is_active.map(|b| if b { 1 } else { 0 }))
             .bind(conn.connection_params.as_ref().map(|v| v.to_string()))
+            .bind(&conn.ssh_host)
+            .bind(conn.ssh_port)
+            .bind(&conn.ssh_user)
+            .bind(&conn.ssh_password)
+            .bind(&conn.ssh_private_key_path)
+            .bind(&conn.ssh_private_key_password)
+            .bind(conn.local_tunnel_port)
             .bind(id)
             .execute(&self.pool)
             .await?;
@@ -438,8 +511,8 @@ impl AppDatabase {
             // Insert new connection
             let result = sqlx::query(
                 r#"
-                INSERT INTO connections (name, db_type, host, port, database_name, username, password, database_path, last_used_at, created_at, connection_string, is_active, connection_params)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO connections (name, db_type, host, port, database_name, username, password, database_path, last_used_at, created_at, connection_string, is_active, connection_params, ssh_host, ssh_port, ssh_user, ssh_password, ssh_private_key_path, ssh_private_key_password, local_tunnel_port)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(&conn.name)
@@ -455,6 +528,13 @@ impl AppDatabase {
             .bind(&conn.connection_string)
             .bind(conn.is_active.map(|b| if b { 1 } else { 0 }))
             .bind(conn.connection_params.as_ref().map(|v| v.to_string()))
+            .bind(&conn.ssh_host)
+            .bind(conn.ssh_port)
+            .bind(&conn.ssh_user)
+            .bind(&conn.ssh_password)
+            .bind(&conn.ssh_private_key_path)
+            .bind(&conn.ssh_private_key_password)
+            .bind(conn.local_tunnel_port)
             .execute(&self.pool)
             .await?;
 
@@ -466,7 +546,7 @@ impl AppDatabase {
     pub async fn load_connections(&self) -> Result<Vec<ConnectionData>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
-            SELECT id, name, db_type, host, port, database_name, username, password, database_path, last_used_at, connection_string, is_active, connection_params
+            SELECT id, name, db_type, host, port, database_name, username, password, database_path, last_used_at, connection_string, is_active, connection_params, ssh_host, ssh_port, ssh_user, ssh_password, ssh_private_key_path, ssh_private_key_password, local_tunnel_port
             FROM connections
             ORDER BY name
             "#,
@@ -496,6 +576,13 @@ impl AppDatabase {
                     connection_string: row.get("connection_string"),
                     is_active: row.get::<Option<i32>, _>("is_active").map(|i| i == 1),
                     connection_params,
+                    ssh_host: row.get("ssh_host"),
+                    ssh_port: row.get("ssh_port"),
+                    ssh_user: row.get("ssh_user"),
+                    ssh_password: row.get("ssh_password"),
+                    ssh_private_key_path: row.get("ssh_private_key_path"),
+                    ssh_private_key_password: row.get("ssh_private_key_password"),
+                    local_tunnel_port: row.get("local_tunnel_port"),
                 }
             })
             .collect();
@@ -553,6 +640,14 @@ pub struct ConnectionData {
     pub connection_string: Option<String>,
     pub is_active: Option<bool>,
     pub connection_params: Option<serde_json::Value>, // For extensible parameters
+    // SSH tunnel configuration
+    pub ssh_host: Option<String>,
+    pub ssh_port: Option<i32>,
+    pub ssh_user: Option<String>,
+    pub ssh_password: Option<String>,
+    pub ssh_private_key_path: Option<String>,
+    pub ssh_private_key_password: Option<String>,
+    pub local_tunnel_port: Option<i32>, // Auto-assigned local port for the tunnel
 }
 
 impl ConnectionData {
@@ -574,6 +669,13 @@ impl ConnectionData {
                 "database_path": database_path
             })),
             last_used_at: None,
+            ssh_host: None,
+            ssh_port: None,
+            ssh_user: None,
+            ssh_password: None,
+            ssh_private_key_path: None,
+            ssh_private_key_password: None,
+            local_tunnel_port: None,
         }
     }
 
@@ -613,6 +715,97 @@ impl ConnectionData {
                 "username": username
             })),
             last_used_at: None,
+            ssh_host: None,
+            ssh_port: None,
+            ssh_user: None,
+            ssh_password: None,
+            ssh_private_key_path: None,
+            ssh_private_key_password: None,
+            local_tunnel_port: None,
+        }
+    }
+
+    pub fn new_postgres_with_ssh(
+        name: String,
+        host: String,
+        port: i32,
+        database: String,
+        username: String,
+        password: String,
+        ssh_host: String,
+        ssh_port: i32,
+        ssh_user: String,
+        ssh_password: Option<String>,
+        ssh_private_key_path: Option<String>,
+        ssh_private_key_password: Option<String>,
+    ) -> Self {
+        let connection_string = if password.is_empty() {
+            format!("postgresql://{}@localhost:{}/{}", username, 15432, database) // Will be updated with actual tunnel port
+        } else {
+            format!(
+                "postgresql://{}:{}@localhost:{}/{}",
+                username, password, 15432, database // Will be updated with actual tunnel port
+            )
+        };
+
+        Self {
+            id: None,
+            name,
+            db_type: "PostgreSQL".to_string(),
+            host: Some(host.clone()),
+            port: Some(port),
+            database_name: Some(database.clone()),
+            username: Some(username.clone()),
+            password: Some(password),
+            database_path: None,
+            connection_string: Some(connection_string),
+            is_active: Some(true),
+            connection_params: Some(serde_json::json!({
+                "host": host,
+                "port": port,
+                "database": database,
+                "username": username,
+                "ssh": {
+                    "ssh_host": ssh_host,
+                    "ssh_port": ssh_port,
+                    "ssh_user": ssh_user
+                }
+            })),
+            last_used_at: None,
+            ssh_host: Some(ssh_host),
+            ssh_port: Some(ssh_port),
+            ssh_user: Some(ssh_user),
+            ssh_password,
+            ssh_private_key_path,
+            ssh_private_key_password,
+            local_tunnel_port: Some(15432), // Default port, will be auto-assigned
+        }
+    }
+
+    /// Check if this connection uses SSH tunnel
+    pub fn uses_ssh_tunnel(&self) -> bool {
+        self.ssh_host.is_some() && !self.ssh_host.as_ref().unwrap().trim().is_empty()
+    }
+
+    /// Check if SSH tunnel is properly configured
+    pub fn has_valid_ssh_config(&self) -> bool {
+        if let (Some(host), Some(user)) = (&self.ssh_host, &self.ssh_user) {
+            !host.trim().is_empty() && !user.trim().is_empty()
+        } else {
+            false
+        }
+    }
+
+    /// Get SSH display string for UI
+    pub fn ssh_display_string(&self) -> Option<String> {
+        if let (Some(host), Some(port), Some(user)) = (&self.ssh_host, &self.ssh_port, &self.ssh_user) {
+            if self.has_valid_ssh_config() {
+                Some(format!("{}@{}:{}", user, host.trim(), port))
+            } else {
+                None
+            }
+        } else {
+            None
         }
     }
 }
@@ -627,7 +820,8 @@ impl AppDatabase {
         let row = sqlx::query(
             r#"
             SELECT id, name, db_type, host, port, database_name, username, password, database_path,
-                   last_used_at, connection_string, is_active, connection_params
+                   last_used_at, connection_string, is_active, connection_params, ssh_host, ssh_port,
+                   ssh_user, ssh_password, ssh_private_key_path, ssh_private_key_password, local_tunnel_port
             FROM connections
             WHERE id = ?
             "#,
@@ -651,6 +845,13 @@ impl AppDatabase {
                 connection_string: row.get(10),
                 is_active: Some(row.get::<i64, _>(11) != 0),
                 connection_params: row.get(12),
+                ssh_host: row.get(13),
+                ssh_port: row.get(14),
+                ssh_user: row.get(15),
+                ssh_password: row.get(16),
+                ssh_private_key_path: row.get(17),
+                ssh_private_key_password: row.get(18),
+                local_tunnel_port: row.get(19),
             };
             Ok(Some(connection_data))
         } else {

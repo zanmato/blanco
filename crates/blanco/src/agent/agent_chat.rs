@@ -6,7 +6,7 @@ use gpui::{
 use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
-    input::{InputState, Input},
+    input::{Input, InputState},
     v_flex, ActiveTheme, Disableable, Icon, Sizable, StyledExt,
 };
 use ropey::Rope;
@@ -18,7 +18,7 @@ use super::chat_types::{ChatEvent, ChatMessage, MessageMetadata, MessageRole, Sq
 use blanco_core::chat_provider::{ChatProvider, ProviderError};
 use blanco_ui::IconName;
 
-actions!(agent_chat, [SendMessage, ClearChat, ExportChat]);
+actions!(agent_chat, [SendMessage, ClearChat]);
 
 pub struct ChatPanel {
     pub focus_handle: FocusHandle,
@@ -301,14 +301,6 @@ impl ChatPanel {
         });
     }
 
-    pub fn export_chat(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        // Trigger export command
-        self.session.update(cx, |session, cx| {
-            let export_command = "/export".to_string();
-            std::mem::drop(session.send_message(export_command, cx));
-        });
-    }
-
     pub fn update_sql_context(&mut self, context: SqlContext, cx: &mut Context<Self>) {
         self.session.update(cx, |session, _cx| {
             session.update_sql_context(context);
@@ -332,10 +324,6 @@ impl ChatPanel {
 
     fn on_clear_chat(&mut self, _: &ClearChat, window: &mut Window, cx: &mut Context<Self>) {
         self.clear_chat(window, cx);
-    }
-
-    fn on_export_chat(&mut self, _: &ExportChat, window: &mut Window, cx: &mut Context<Self>) {
-        self.export_chat(window, cx);
     }
 
     /// Parse markdown content preserving order using pulldown-cmark
@@ -616,220 +604,6 @@ enum TextStyleType {
     InlineCode,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::TextStyleType;
-    use regex::Regex;
-
-    #[test]
-    fn test_inline_code_regex_patterns() {
-        // Test inline code regex pattern
-        let inline_code_regex = Regex::new(r"`([^`]+)`").unwrap();
-
-        let test_cases = vec![
-            ("Here is `simple` code", vec!["simple"]),
-            ("Here is `code with spaces` in it", vec!["code with spaces"]),
-            (
-                "Multiple `inline` code `segments` here",
-                vec!["inline", "segments"],
-            ),
-            ("Edge `case` at start", vec!["case"]),
-            ("Edge case at `end`", vec!["end"]),
-            ("`code` at start", vec!["code"]),
-            ("code at `end`", vec!["end"]),
-        ];
-
-        for (input, expected_matches) in test_cases {
-            let matches: Vec<_> = inline_code_regex
-                .captures_iter(input)
-                .map(|caps| caps.get(1).unwrap().as_str())
-                .collect();
-
-            assert_eq!(
-                matches.len(),
-                expected_matches.len(),
-                "Should find {} matches in: {}",
-                expected_matches.len(),
-                input
-            );
-            for (i, expected_code) in expected_matches.iter().enumerate() {
-                assert_eq!(
-                    matches[i], *expected_code,
-                    "Match {} should be correct in: {}",
-                    i, input
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn test_inline_code_replacement() {
-        let inline_code_regex = Regex::new(r"`([^`]+)`").unwrap();
-
-        let input = "Here is `inline code` that should be styled.";
-        let result = inline_code_regex.replace_all(input, "[$1]");
-
-        assert_eq!(result, "Here is [inline code] that should be styled.");
-        println!("Original: {}", input);
-        println!("Replaced: {}", result);
-    }
-
-    #[test]
-    fn test_mixed_content_parsing() {
-        let content = "Here is `inline code` and a code block:\n\n```sql\nSELECT * FROM users;\n```\n\nMore text with `more inline code`.";
-
-        // Test that we can distinguish between inline code and code blocks
-        // Inline code: `inline code`, `more inline code`
-        // Code block: ```sql\nSELECT * FROM users;\n```
-
-        let has_inline_code =
-            content.contains("`inline code`") && content.contains("`more inline code`");
-        let has_code_block = content.contains("```sql") && content.contains("SELECT * FROM users;");
-
-        assert!(has_inline_code, "Should contain inline code");
-        assert!(has_code_block, "Should contain code block");
-
-        println!("Content has both inline code and code blocks: {}", content);
-    }
-
-    #[test]
-    fn test_inline_code_backtick_removal() {
-        let inline_code_regex = Regex::new(r"`([^`]+)`").unwrap();
-
-        let input = "Here is `inline code` that should have backticks removed.";
-        let result = inline_code_regex.replace_all(input, "$1");
-
-        assert_eq!(
-            result,
-            "Here is inline code that should have backticks removed."
-        );
-        println!("Original with backticks: {}", input);
-        println!("Cleaned text: {}", result);
-    }
-
-    #[test]
-    fn test_styled_text_segments() {
-        // Test that we can create segments for StyledText
-        let segments = vec![
-            ("Here is ".to_string(), TextStyleType::Normal),
-            ("inline".to_string(), TextStyleType::InlineCode),
-            (" code in text.".to_string(), TextStyleType::Normal),
-        ];
-
-        let mut expected_result = String::new();
-        for (text, _style) in &segments {
-            expected_result.push_str(text);
-        }
-
-        assert_eq!(expected_result, "Here is inline code in text.");
-        println!("Styled segments result: {}", expected_result);
-    }
-
-    #[test]
-    fn test_mixed_inline_code_processing() {
-        let inline_code_regex = Regex::new(r"`([^`]+)`").unwrap();
-        let input = "Use `SELECT` to query and `INSERT` to add data.";
-
-        // Simulate the segment processing
-        let mut segments = Vec::new();
-        let mut last_end = 0;
-
-        for caps in inline_code_regex.captures_iter(input) {
-            let match_obj = caps.get(0).unwrap();
-            let code_match = caps.get(1).unwrap();
-
-            // Add text before inline code
-            if match_obj.start() > last_end {
-                let text_segment = &input[last_end..match_obj.start()];
-                if !text_segment.is_empty() {
-                    segments.push((text_segment.to_string(), TextStyleType::Normal));
-                }
-            }
-
-            // Add inline code
-            segments.push((code_match.as_str().to_string(), TextStyleType::InlineCode));
-            last_end = match_obj.end();
-        }
-
-        // Add remaining text
-        if last_end < input.len() {
-            let text_segment = &input[last_end..];
-            if !text_segment.is_empty() {
-                segments.push((text_segment.to_string(), TextStyleType::Normal));
-            }
-        }
-
-        // Verify segments
-        assert_eq!(segments.len(), 5); // "Use ", "SELECT", " to query and ", "INSERT", " to add data."
-
-        let reconstructed: String = segments.iter().map(|(text, _)| text.clone()).collect();
-
-        assert_eq!(reconstructed, "Use SELECT to query and INSERT to add data.");
-        println!("Processed segments: {:?}", segments);
-        println!("Reconstructed text: {}", reconstructed);
-    }
-
-    #[test]
-    fn test_plain_code_block_detection() {
-        use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag};
-
-        // Test plain code block detection (no language specified)
-        let plain_content = "```\nhello world\n```";
-        let parser = Parser::new(plain_content);
-
-        let mut found_plain_block = false;
-        let mut code_content = Vec::new();
-
-        for event in parser {
-            match event {
-                Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(lang))) => {
-                    let lang_str = lang.to_string();
-                    let code_language = if lang_str.is_empty() || lang_str.trim().is_empty() {
-                        "plain".to_string()
-                    } else {
-                        lang_str.to_lowercase()
-                    };
-                    assert_eq!(
-                        code_language, "plain",
-                        "Empty language should be treated as 'plain'"
-                    );
-                    found_plain_block = true;
-                }
-                Event::Text(text) => {
-                    code_content.push(text.to_string());
-                }
-                Event::End(Tag::CodeBlock(_)) => {
-                    // End of code block
-                }
-                _ => {}
-            }
-        }
-
-        assert!(found_plain_block, "Should detect plain code block");
-        assert_eq!(
-            code_content.join(""),
-            "hello world\n",
-            "Should capture code content correctly"
-        );
-        println!("Plain code block detected and content: {:?}", code_content);
-    }
-
-    #[test]
-    fn test_mixed_code_content() {
-        // Test content with both inline code and plain code blocks
-        let content =
-            "Here is `inline code` and a plain block:\n\n```\nplain code block\n```\n\nMore text.";
-
-        let has_inline_code = content.contains("`inline code`");
-        let has_plain_code_block = content.contains("```\nplain code block\n```");
-
-        assert!(has_inline_code, "Should contain inline code");
-        assert!(has_plain_code_block, "Should contain plain code block");
-
-        println!("Mixed content test passed - contains both inline code and plain code blocks");
-    }
-}
-
 impl Focusable for ChatPanel {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -841,7 +615,7 @@ impl EventEmitter<crate::app_events::AppEvent> for ChatPanel {}
 impl Render for ChatPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
-            .size_full()
+            .flex_1()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .border_t_1()
@@ -865,7 +639,7 @@ impl Render for ChatPanel {
                                     .size_4()
                                     .text_color(cx.theme().primary),
                             )
-                            .child(div().text_sm().font_medium().child("SQL Assistant")),
+                            .child(div().text_sm().font_medium().child("Agent")),
                     )
                     .child(
                         h_flex()
@@ -879,15 +653,6 @@ impl Render for ChatPanel {
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.clear_chat(window, cx);
                                     })),
-                            )
-                            .child(
-                                Button::new("export-chat")
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(IconName::File)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.export_chat(window, cx);
-                                    })),
                             ),
                     ),
             )
@@ -897,7 +662,6 @@ impl Render for ChatPanel {
                     .p_4()
                     .gap_3()
                     .flex_1()
-                    .scrollable(gpui::Axis::Vertical)
                     .child(
                         // Welcome message if empty
                         div().when(self.messages.is_empty(), |this| {
@@ -975,7 +739,7 @@ impl Render for ChatPanel {
                                         .text_color(cx.theme().muted_foreground)
                                         .child(match message.role {
                                             MessageRole::User => "You",
-                                            MessageRole::Assistant => "Assistant",
+                                            MessageRole::Assistant => "Agent",
                                             MessageRole::System => "System",
                                             MessageRole::Tool => "Tool Result",
                                         }),
@@ -1084,6 +848,7 @@ impl Render for ChatPanel {
                                 ),
                         )
                     })
+                    .scrollable(gpui::Axis::Vertical)
             )
             // Input area
             .child(

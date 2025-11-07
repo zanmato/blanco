@@ -93,10 +93,14 @@ impl MetadataCache {
 }
 
 /// Fetch table names using the DbService
-async fn fetch_tables(db_service: &DbService, connection_id: i64) -> Result<Vec<String>> {
-    if let Ok(connection) = db_service.get_or_create_connection(connection_id).await {
-        connection.get_tables(None).await
+async fn fetch_tables(db_service: &DbService, connection_id: i64, database_name: &str) -> Result<Vec<String>> {
+    log::debug!("Fetching tables for database '{}'", database_name);
+    if let Ok(connection) = db_service.get_or_create_connection_with_database(connection_id, Some(database_name)).await {
+        let tables = connection.get_tables(None).await?;
+        log::debug!("Found {} tables for database '{}': {:?}", tables.len(), database_name, tables);
+        Ok(tables)
     } else {
+        log::warn!("Failed to get connection for fetching tables from database '{}'", database_name);
         Ok(Vec::new())
     }
 }
@@ -106,13 +110,16 @@ async fn fetch_columns(
     db_service: &DbService,
     connection_id: i64,
     table_name: &str,
+    database_name: &str,
 ) -> Result<Vec<String>> {
-    if let Ok(connection) = db_service.get_or_create_connection(connection_id).await {
-        {
-            let columns = connection.get_columns_for_table(table_name, None).await?;
-            Ok(columns.into_iter().map(|col| col.name).collect())
-        }
+    log::debug!("Fetching columns for table '{}', database '{}'", table_name, database_name);
+    if let Ok(connection) = db_service.get_or_create_connection_with_database(connection_id, Some(database_name)).await {
+        let columns = connection.get_columns_for_table(table_name, None).await?;
+        let column_names: Vec<String> = columns.into_iter().map(|col| col.name).collect();
+        log::debug!("Found {} columns for table '{}': {:?}", column_names.len(), table_name, column_names);
+        Ok(column_names)
     } else {
+        log::warn!("Failed to get connection for fetching columns from table '{}', database '{}'", table_name, database_name);
         Ok(Vec::new())
     }
 }
@@ -121,6 +128,7 @@ async fn fetch_columns(
 #[derive(Clone)]
 pub struct SqlCompletionProvider {
     connection_id: i64,
+    database_name: String,
     db_service: DbService,
     cache: Arc<std::sync::Mutex<MetadataCache>>,
 }
@@ -129,6 +137,16 @@ impl SqlCompletionProvider {
     pub fn new(connection_id: i64, db_service: DbService) -> Self {
         Self {
             connection_id,
+            database_name: "default".to_string(), // Fallback to default database
+            db_service,
+            cache: Arc::new(std::sync::Mutex::new(MetadataCache::new())),
+        }
+    }
+
+    pub fn new_with_database(connection_id: i64, database_name: String, db_service: DbService) -> Self {
+        Self {
+            connection_id,
+            database_name,
             db_service,
             cache: Arc::new(std::sync::Mutex::new(MetadataCache::new())),
         }
@@ -162,13 +180,15 @@ impl SqlCompletionProvider {
         if let Ok(cache) = self.cache.lock() {
             if let Some(cached_tables) = &cache.tables {
                 if !cached_tables.is_expired(Self::CACHE_TTL_SECONDS) {
+                    log::debug!("Using cached tables for database '{}'", self.database_name);
                     return Ok(cached_tables.data.clone());
                 }
             }
         } // Lock released here
 
         // No valid cache, fetch fresh data
-        let tables = fetch_tables(&self.db_service, self.connection_id).await?;
+        log::debug!("Fetching fresh tables for database '{}'", self.database_name);
+        let tables = fetch_tables(&self.db_service, self.connection_id, &self.database_name).await?;
 
         // Update cache
         if let Ok(mut cache) = self.cache.lock() {
@@ -184,13 +204,15 @@ impl SqlCompletionProvider {
         if let Ok(cache) = self.cache.lock() {
             if let Some(cached_columns) = cache.columns.get(table_name) {
                 if !cached_columns.is_expired(Self::CACHE_TTL_SECONDS) {
+                    log::debug!("Using cached columns for table '{}', database '{}'", table_name, self.database_name);
                     return Ok(cached_columns.data.clone());
                 }
             }
         } // Lock released here
 
         // No valid cache, fetch fresh data
-        let columns = fetch_columns(&self.db_service, self.connection_id, table_name).await?;
+        log::debug!("Fetching fresh columns for table '{}', database '{}'", table_name, self.database_name);
+        let columns = fetch_columns(&self.db_service, self.connection_id, table_name, &self.database_name).await?;
 
         // Update cache
         if let Ok(mut cache) = self.cache.lock() {
@@ -204,18 +226,20 @@ impl SqlCompletionProvider {
 
     /// Get cached table info or fetch it if not cached/expired
     async fn get_cached_table_info(&self, table_name: &str) -> Result<String> {
-        let cache_key = table_name.to_string();
+        let cache_key = format!("{}:{}", self.database_name, table_name);
 
         // First, check if we have valid cached data
         if let Ok(cache) = self.cache.lock() {
             if let Some(cached_info) = cache.table_info.get(&cache_key) {
                 if !cached_info.is_expired(Self::CACHE_TTL_SECONDS) {
+                    log::debug!("Using cached table info for '{}' in database '{}'", table_name, self.database_name);
                     return Ok(cached_info.data.clone());
                 }
             }
         } // Lock released here
 
         // No valid cache, fetch fresh data using connection trait
+        log::debug!("Fetching fresh table info for '{}' in database '{}'", table_name, self.database_name);
         let info = self.get_table_info(table_name).await?;
 
         // Update cache
@@ -230,18 +254,20 @@ impl SqlCompletionProvider {
 
     /// Get cached column info or fetch it if not cached/expired
     async fn get_cached_column_info(&self, table_name: &str, column_name: &str) -> Result<String> {
-        let cache_key = format!("{}.{}", table_name, column_name);
+        let cache_key = format!("{}:{}.{}", self.database_name, table_name, column_name);
 
         // First, check if we have valid cached data
         if let Ok(cache) = self.cache.lock() {
             if let Some(cached_info) = cache.column_info.get(&cache_key) {
                 if !cached_info.is_expired(Self::CACHE_TTL_SECONDS) {
+                    log::debug!("Using cached column info for '{}.{}' in database '{}'", table_name, column_name, self.database_name);
                     return Ok(cached_info.data.clone());
                 }
             }
         } // Lock released here
 
         // No valid cache, fetch fresh data using connection trait
+        log::debug!("Fetching fresh column info for '{}.{}' in database '{}'", table_name, column_name, self.database_name);
         let info = self.get_column_info(table_name, column_name).await?;
 
         // Update cache
@@ -258,7 +284,7 @@ impl SqlCompletionProvider {
     async fn get_table_info(&self, table_name: &str) -> Result<String> {
         let columns = if let Ok(connection) = self
             .db_service
-            .get_or_create_connection(self.connection_id)
+            .get_or_create_connection_with_database(self.connection_id, Some(&self.database_name))
             .await
         {
             connection.get_columns_for_table(table_name, None).await?
@@ -288,7 +314,7 @@ impl SqlCompletionProvider {
     async fn get_column_info(&self, table_name: &str, column_name: &str) -> Result<String> {
         let columns = if let Ok(connection) = self
             .db_service
-            .get_or_create_connection(self.connection_id)
+            .get_or_create_connection_with_database(self.connection_id, Some(&self.database_name))
             .await
         {
             connection.get_columns_for_table(table_name, None).await?
@@ -1170,7 +1196,7 @@ mod tests {
 
     #[test]
     fn test_find_last_keyword() {
-        let provider = SqlCompletionProvider::new(1, DbService::new());
+        let provider = SqlCompletionProvider::new_with_database(1, "test_db".to_string(), DbService::new());
 
         // Test basic keyword detection
         assert_eq!(
@@ -1220,7 +1246,7 @@ mod tests {
 
     #[test]
     fn test_extract_table_aliases() {
-        let provider = SqlCompletionProvider::new(1, DbService::new());
+        let provider = SqlCompletionProvider::new_with_database(1, "test_db".to_string(), DbService::new());
 
         // Test basic alias patterns
         let aliases = provider.extract_table_aliases("FROM users u");
@@ -1250,7 +1276,7 @@ mod tests {
 
     #[test]
     fn test_resolve_table_alias() {
-        let provider = SqlCompletionProvider::new(1, DbService::new());
+        let provider = SqlCompletionProvider::new_with_database(1, "test_db".to_string(), DbService::new());
         let aliases = vec![
             TableAlias {
                 table_name: "users".to_string(),
@@ -1275,7 +1301,7 @@ mod tests {
 
     #[test]
     fn test_generate_table_abbreviation() {
-        let provider = SqlCompletionProvider::new(1, DbService::new());
+        let provider = SqlCompletionProvider::new_with_database(1, "test_db".to_string(), DbService::new());
 
         // Test simple table name
         assert_eq!(
@@ -1304,7 +1330,7 @@ mod tests {
 
     #[async_std::test]
     async fn test_should_show_tables() {
-        let provider = SqlCompletionProvider::new(1, DbService::new());
+        let provider = SqlCompletionProvider::new_with_database(1, "test_db".to_string(), DbService::new());
 
         // Should show tables with FROM
         assert!(provider.should_show_tables("SELECT * FROM "));
@@ -1327,7 +1353,7 @@ mod tests {
 
     #[async_std::test]
     async fn test_should_show_columns() {
-        let provider = SqlCompletionProvider::new(1, DbService::new());
+        let provider = SqlCompletionProvider::new_with_database(1, "test_db".to_string(), DbService::new());
 
         // Should show columns with dot notation
         assert!(provider.should_show_columns("SELECT users."));
@@ -1353,7 +1379,7 @@ mod tests {
 
     #[async_std::test]
     async fn test_extract_table_for_columns() {
-        let provider = SqlCompletionProvider::new(1, DbService::new());
+        let provider = SqlCompletionProvider::new_with_database(1, "test_db".to_string(), DbService::new());
 
         // Test basic dot notation
         assert_eq!(
@@ -1422,7 +1448,7 @@ mod tests {
     // Test the 6 scenarios mentioned in the plan
     #[async_std::test]
     async fn test_six_scenarios() {
-        let provider = SqlCompletionProvider::new(1, DbService::new());
+        let provider = SqlCompletionProvider::new_with_database(1, "test_db".to_string(), DbService::new());
 
         // Scenario 1: Basic dot notation - "SELECT users." should show columns from users table
         assert!(provider.should_show_columns("SELECT users."));

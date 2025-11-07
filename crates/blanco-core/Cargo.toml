@@ -24,3 +24,8 @@ log = { workspace = true }
 
 # For position and range handling
 ropey = { workspace = true }
+
+# SSH tunnel support
+russh = { workspace = true }
+russh-keys = { workspace = true }
+tokio-util = "0.7"

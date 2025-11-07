@@ -297,9 +297,9 @@ impl EditorPanel {
                 .soft_wrap(true)
                 .placeholder("-- Enter your SQL query here...");
 
-            // Set up completion provider using connection_id and DbService
+            // Set up completion provider using connection_id, database_name, and DbService
             let db_service = DbService::global(cx).clone();
-            let completion_provider = SqlCompletionProvider::new(connection_id, db_service); // Using connection_id from function context
+            let completion_provider = SqlCompletionProvider::new_with_database(connection_id, database_name.clone(), db_service);
             let completion_provider: Rc<dyn gpui_component::input::CompletionProvider> =
                 Rc::new(completion_provider);
             editor.lsp.completion_provider = Some(completion_provider);
@@ -1111,9 +1111,9 @@ impl EditorPanel {
                 .soft_wrap(false)
                 .placeholder("Enter your SQL query here...");
 
-            // Set up completion provider using connection_id and DbService
+            // Set up completion provider using connection_id, database_name, and DbService
             let db_service = DbService::global(cx).clone();
-            let completion_provider = SqlCompletionProvider::new(params.connection_id, db_service); // Using connection_id from params
+            let completion_provider = SqlCompletionProvider::new_with_database(params.connection_id, params.database_name.clone(), db_service);
             let completion_provider: Rc<dyn gpui_component::input::CompletionProvider> =
                 Rc::new(completion_provider);
             editor.lsp.completion_provider = Some(completion_provider);

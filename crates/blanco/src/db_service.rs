@@ -4,11 +4,36 @@ use async_std::sync::RwLock;
 use async_trait::async_trait;
 use blanco_core::{Connection, ConnectionFactory, ConnectionRegistry};
 use gpui::{App, Global};
-use postgres::{PgConnectionKey, PostgresConnection};
+use postgres::{PgConnectionKey, PostgresConnection, connection::PostgresSshConfig};
 use sqlite::{SqliteConnection, SqliteConnectionKey};
-use sqlx;
+use sqlx::Row;
 use std::collections::HashMap;
 use std::sync::Arc;
+use url::Url;
+
+/// Replace the database name in a PostgreSQL connection string
+fn replace_database_in_postgres_connection_string(connection_string: &str, new_database: &str) -> String {
+    if let Ok(mut url) = Url::parse(connection_string) {
+        // Set the new database path
+        url.set_path(&format!("/{}", new_database));
+        url.to_string()
+    } else {
+        // If URL parsing fails, try a simple string replacement for postgresql:// URLs
+        if connection_string.starts_with("postgresql://") {
+            // Find the database part (last segment after the last /)
+            if let Some(last_slash_pos) = connection_string.rfind('/') {
+                let before_db = &connection_string[..last_slash_pos];
+                format!("{}/{}", before_db, new_database)
+            } else {
+                // No slash found, append the database
+                format!("{}/{}", connection_string, new_database)
+            }
+        } else {
+            // Not a PostgreSQL URL, return as-is
+            connection_string.to_string()
+        }
+    }
+}
 
 /// SQLite connection factory using the sqlite crate implementation
 pub struct SqliteConnectionFactory;
@@ -32,15 +57,59 @@ impl ConnectionFactory for SqliteConnectionFactory {
 }
 
 /// PostgreSQL connection factory using the postgres crate implementation
-pub struct PostgresConnectionFactory;
+pub struct PostgresConnectionFactory {
+    // Store SSH configuration for connections
+    ssh_configs: Arc<async_std::sync::Mutex<std::collections::HashMap<i64, PostgresSshConfig>>>,
+}
+
+impl PostgresConnectionFactory {
+    pub fn new() -> Self {
+        Self {
+            ssh_configs: Arc::new(async_std::sync::Mutex::new(std::collections::HashMap::new())),
+        }
+    }
+
+    /// Set SSH configuration for a connection ID
+    pub async fn set_ssh_config(&self, connection_id: i64, ssh_config: PostgresSshConfig) {
+        let mut configs = self.ssh_configs.lock().await;
+        configs.insert(connection_id, ssh_config);
+    }
+
+    /// Get SSH configuration for a connection ID
+    pub async fn get_ssh_config(&self, connection_id: i64) -> Option<PostgresSshConfig> {
+        let configs = self.ssh_configs.lock().await;
+        configs.get(&connection_id).cloned()
+    }
+
+    /// Create PostgreSQL connection with optional SSH configuration
+    async fn create_postgres_connection(
+        &self,
+        connection_string: &str,
+        ssh_config: Option<PostgresSshConfig>,
+    ) -> Result<Box<dyn Connection>> {
+        let key = PgConnectionKey::from_connection_string(connection_string)?;
+
+        let mut conn = if let Some(ssh_cfg) = ssh_config {
+            PostgresConnection::from_key_with_ssh(key, ssh_cfg)
+        } else {
+            PostgresConnection::from_key(key)
+        };
+
+        Connection::connect(&mut conn, connection_string).await?;
+        Ok(Box::new(conn))
+    }
+}
+
+impl Default for PostgresConnectionFactory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[async_trait]
 impl ConnectionFactory for PostgresConnectionFactory {
     async fn create_connection(&self, connection_string: &str) -> Result<Box<dyn Connection>> {
-        let key = PgConnectionKey::from_connection_string(connection_string)?;
-        let mut conn = PostgresConnection::from_key(key);
-        Connection::connect(&mut conn, connection_string).await?;
-        Ok(Box::new(conn))
+        self.create_postgres_connection(connection_string, None).await
     }
 
     fn parse_connection_string(&self, connection_string: &str) -> Result<String> {
@@ -60,29 +129,31 @@ pub struct UnifiedConnectionManager {
     registry: Arc<ConnectionRegistry>,
     connections: Arc<RwLock<HashMap<String, Arc<dyn Connection>>>>,
     connection_factories: Arc<HashMap<String, Arc<dyn ConnectionFactory>>>,
+    postgres_factory: Arc<PostgresConnectionFactory>,
 }
 
 impl UnifiedConnectionManager {
     /// Create a new unified connection manager with default connection factories
     pub fn new() -> Self {
+        let postgres_factory = PostgresConnectionFactory::new();
+        let postgres_factory_arc: Arc<PostgresConnectionFactory> = Arc::new(postgres_factory);
+
         let mut registry = ConnectionRegistry::new();
         registry.register_factory("SQLite".to_string(), Box::new(SqliteConnectionFactory));
         registry.register_factory(
             "PostgreSQL".to_string(),
-            Box::new(PostgresConnectionFactory),
+            Box::new(SqliteConnectionFactory), // Use a simple factory for the registry
         );
 
         let mut factories: HashMap<String, Arc<dyn ConnectionFactory>> = HashMap::new();
         factories.insert("SQLite".to_string(), Arc::new(SqliteConnectionFactory));
-        factories.insert(
-            "PostgreSQL".to_string(),
-            Arc::new(PostgresConnectionFactory),
-        );
+        factories.insert("PostgreSQL".to_string(), postgres_factory_arc.clone());
 
         Self {
             registry: Arc::new(registry),
             connections: Arc::new(RwLock::new(HashMap::new())),
             connection_factories: Arc::new(factories),
+            postgres_factory: postgres_factory_arc,
         }
     }
 
@@ -230,6 +301,37 @@ impl UnifiedConnectionManager {
         let conn = factory.create_connection(connection_string).await?;
         conn.test_connection().await
     }
+
+    /// Get or create a connection with SSH support for a PostgreSQL connection
+    pub async fn get_or_create_postgres_connection_with_ssh(
+        &self,
+        connection_string: &str,
+        ssh_config: Option<PostgresSshConfig>,
+    ) -> Result<Arc<dyn Connection>, anyhow::Error> {
+        let connection_key = self.generate_connection_key(connection_string)?;
+
+        // Check for existing connection
+        {
+            let connections = self.connections.read().await;
+            if let Some(existing_conn) = connections.get(&connection_key) {
+                if existing_conn.test_connection().await.unwrap_or(false) {
+                    log::debug!("Using existing healthy SSH connection: {}", connection_key);
+                    return Ok(Arc::clone(existing_conn));
+                }
+            }
+        }
+
+        // Create new connection with SSH support
+        let mut connections = self.connections.write().await;
+        let conn = self.postgres_factory.create_postgres_connection(connection_string, ssh_config).await?;
+        let conn_arc: Arc<dyn Connection> = Arc::from(conn);
+
+        // Store the connection
+        connections.insert(connection_key.clone(), conn_arc.clone());
+        log::info!("Created new PostgreSQL connection with SSH: {}", connection_key);
+
+        Ok(conn_arc)
+    }
 }
 
 /// Global database service that holds app database and unified connection manager
@@ -274,32 +376,96 @@ impl DbService {
         &self,
         connection_id: i64,
     ) -> Result<std::sync::Arc<dyn blanco_core::Connection>, anyhow::Error> {
+        self.get_or_create_connection_with_database(connection_id, None).await
+    }
+
+    /// Get or create a connection with optional database override
+    pub async fn get_or_create_connection_with_database(
+        &self,
+        connection_id: i64,
+        database_name: Option<&str>,
+    ) -> Result<std::sync::Arc<dyn blanco_core::Connection>, anyhow::Error> {
         // Get the app database
         let app_db_lock = self.app_db.read().await;
         let app_db = app_db_lock
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("App database not initialized"))?;
 
-        // Query the connections table to get the connection string
-        let connection_string: Option<String> = sqlx::query_scalar(
-            "SELECT CASE WHEN db_type = 'SQLite' THEN CONCAT('sqlite:',database_path) ELSE connection_string END FROM connections WHERE id = ? AND is_active = 1"
+        // Query the connections table to get connection data including SSH configuration
+        let connection_row = sqlx::query(
+            r#"
+            SELECT
+                CASE
+                    WHEN db_type = 'SQLite' THEN CONCAT('sqlite:',database_path)
+                    ELSE connection_string
+                END as connection_string,
+                db_type,
+                ssh_host, ssh_port, ssh_user, ssh_password,
+                ssh_private_key_path, ssh_private_key_password
+            FROM connections
+            WHERE id = ? AND is_active = 1
+            "#
         )
         .bind(connection_id)
         .fetch_one(app_db.pool())
         .await
         .map_err(|e| anyhow::anyhow!("Failed to query connection {}: {}", connection_id, e))?;
 
-        let connection_string = connection_string.ok_or_else(|| {
-            anyhow::anyhow!("Connection with id {} not found or inactive", connection_id)
-        })?;
+        let mut connection_string: String = connection_row.try_get("connection_string")?;
+        let db_type: String = connection_row.try_get("db_type")?;
+
+        // Apply database override for PostgreSQL connections
+        if db_type == "PostgreSQL" && database_name.is_some() {
+            connection_string = replace_database_in_postgres_connection_string(&connection_string, database_name.unwrap());
+            log::debug!("Applied database override '{}' to connection string: {}", database_name.unwrap(), connection_string);
+        }
 
         log::debug!(
-            "Found connection string for id {}: {}",
+            "Found connection data for id {}: type={}, string={}",
             connection_id,
+            db_type,
             connection_string
         );
 
-        // Use the internal unified connection method
+        // Check if this is a PostgreSQL connection with SSH configuration
+        if db_type == "PostgreSQL" {
+            let ssh_host: Option<String> = connection_row.try_get("ssh_host").ok();
+
+            if let Some(host) = ssh_host {
+                // SSH configuration exists
+                let ssh_user: Option<String> = connection_row.try_get("ssh_user").ok();
+                if let Some(user) = ssh_user {
+                    // Validate that SSH host and user are not empty
+                    if !host.trim().is_empty() && !user.trim().is_empty() {
+                        let ssh_port: i32 = connection_row.try_get("ssh_port").unwrap_or(22);
+                        let ssh_password: Option<String> = connection_row.try_get("ssh_password").ok();
+                        let ssh_private_key_path: Option<String> = connection_row.try_get("ssh_private_key_path").ok();
+                        let ssh_private_key_password: Option<String> = connection_row.try_get("ssh_private_key_password").ok();
+
+                        let ssh_config = PostgresSshConfig {
+                            ssh_host: host.trim().to_string(),
+                            ssh_port: ssh_port as u16,
+                            ssh_user: user.trim().to_string(),
+                            ssh_password,
+                            ssh_private_key_path,
+                            ssh_private_key_password,
+                        };
+
+                        log::info!("Creating PostgreSQL connection with SSH tunnel to {}:{} for connection ID {}", ssh_config.ssh_host, ssh_config.ssh_port, connection_id);
+                        let unified_manager = self.unified_manager().await;
+                        return unified_manager
+                            .read()
+                            .await
+                            .get_or_create_postgres_connection_with_ssh(&connection_string, Some(ssh_config))
+                            .await;
+                    } else {
+                        log::warn!("SSH configuration has empty host or user for connection ID {}, ignoring SSH tunnel", connection_id);
+                    }
+                }
+            }
+        }
+
+        // No SSH configuration or not PostgreSQL, use standard connection
         self.get_or_create_unified_connection_internal(&connection_string)
             .await
     }

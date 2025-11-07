@@ -687,7 +687,7 @@ impl Render for ConnectionSidebar {
         v_flex().h_full().track_focus(&self.focus_handle).child(
             div().flex_1().min_h_0().overflow_hidden().child(
                 Sidebar::new(Side::Left).collapsed(self.collapsed).child(
-                    SidebarGroup::new("Databases").child(SidebarMenu::new().children({
+                    SidebarGroup::new("Connections").child(SidebarMenu::new().children({
                         let mut menu_items = Vec::new();
 
                         // Add connections
