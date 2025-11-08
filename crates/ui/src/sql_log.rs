@@ -107,21 +107,6 @@ impl SqlLog {
 
 impl Render for SqlLog {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let line_count = self.text.len_lines(LineType::LF);
-
-        if line_count == 0 {
-            return div()
-                .w_full()
-                .h_full()
-                .bg(cx.theme().highlight_theme.style.editor_background.unwrap_or(cx.theme().background))
-                .border_1()
-                .border_color(cx.theme().border)
-                .rounded(cx.theme().radius)
-                .p_4()
-                .text_color(cx.theme().muted_foreground)
-                .child("No SQL log entries");
-        }
-
         // Get the full text content as a SharedString
         let text_content = self.text.to_string();
         let shared_text = SharedString::from(text_content);
@@ -138,7 +123,12 @@ impl Render for SqlLog {
         div()
             .w_full()
             .h_full()
-            .bg(cx.theme().highlight_theme.style.editor_background.unwrap_or(cx.theme().background))
+            .bg(cx
+                .theme()
+                .highlight_theme
+                .style
+                .editor_background
+                .unwrap_or(cx.theme().background))
             .p_4()
             .font_family("Fira Code")
             .text_size(px(12.))

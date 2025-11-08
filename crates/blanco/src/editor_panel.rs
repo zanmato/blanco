@@ -51,51 +51,12 @@ pub struct QueryTab {
     pub db_id: Option<i64>, // Database ID for persistence
     pub results_panel: Entity<crate::results_panel::ResultsPanel>, // Each tab has its own results
     pub sql_log: Entity<SqlLog>, // SQL log for this tab
-    pub current_completions: Option<crate::sql_completion::CompletionResult>,
-    pub selected_completion_index: usize,
     // Chat functionality
     pub chat_enabled: bool,
     pub chat_panel: Option<Entity<ChatPanel>>,
 }
 
 impl QueryTab {
-    /// Get connection instance from unified connection manager
-    #[allow(dead_code)]
-    pub async fn get_connection(
-        &self,
-        cx: &gpui::App,
-    ) -> Option<std::sync::Arc<dyn blanco_core::Connection>> {
-        let db_service = crate::db_service::DbService::global(cx);
-        if self.connection_id != 0 {
-            db_service
-                .get_or_create_connection(self.connection_id)
-                .await
-                .ok()
-        } else {
-            None
-        }
-    }
-
-    /// Get connection metadata without accessing fields directly
-    #[allow(dead_code)]
-    pub async fn get_ui_metadata(
-        &self,
-        cx: &gpui::App,
-    ) -> Option<blanco_core::ConnectionUIMetadata> {
-        self.get_connection(cx)
-            .await
-            .map(|conn| conn.get_ui_metadata())
-    }
-
-    /// Get display name from connection
-    #[allow(dead_code)]
-    pub async fn get_display_name(&self, cx: &gpui::App) -> String {
-        self.get_ui_metadata(cx)
-            .await
-            .map(|metadata| metadata.display_name)
-            .unwrap_or_else(|| "Unknown Connection".to_string())
-    }
-
     /// Get SQL context for the chat session
     pub fn get_sql_context(&self, cx: &mut gpui::App) -> SqlContext {
         let current_query = self.editor.read(cx).text().to_string();
@@ -117,60 +78,6 @@ impl QueryTab {
         // For now, we'll leave recent_results as None
 
         context
-    }
-
-    /// Update chat context with current query state
-    #[allow(dead_code)]
-    pub fn update_chat_context(&self, cx: &mut Context<Self>) {
-        if let Some(ref chat_panel) = self.chat_panel {
-            let sql_context = self.get_sql_context(cx);
-            chat_panel.update(cx, |panel, cx| {
-                panel.update_sql_context(sql_context, cx);
-            });
-        }
-    }
-
-    /// Update chat context when query is executed
-    #[allow(dead_code)]
-    pub fn update_chat_context_on_query_execution(&self, cx: &mut Context<Self>) {
-        if self.chat_enabled {
-            self.update_chat_context(cx);
-        }
-    }
-
-    /// Get icon name from connection
-    #[allow(dead_code)]
-    pub async fn get_icon_name(&self, cx: &gpui::App) -> blanco_ui::IconName {
-        self.get_ui_metadata(cx)
-            .await
-            .map(|metadata| match metadata.icon_name {
-                blanco_core::IconName::Sqlite => blanco_ui::IconName::Sqlite,
-                blanco_core::IconName::Postgres => blanco_ui::IconName::Postgresql,
-                blanco_core::IconName::Database => blanco_ui::IconName::SquareTerminal,
-                blanco_core::IconName::Table => blanco_ui::IconName::SquareTerminal,
-                blanco_core::IconName::Column => blanco_ui::IconName::SquareTerminal,
-                _ => blanco_ui::IconName::SquareTerminal,
-            })
-            .unwrap_or(blanco_ui::IconName::SquareTerminal)
-    }
-
-    /// Get file-safe name from connection
-    #[allow(dead_code)]
-    pub async fn get_file_safe_name(&self, cx: &gpui::App) -> String {
-        self.get_ui_metadata(cx)
-            .await
-            .map(|metadata| metadata.display_name.replace(['/', '\\'], "-"))
-            .unwrap_or_else(|| "unknown".to_string())
-    }
-
-    /// Check if connection supports schemas
-    #[allow(dead_code)]
-    pub async fn supports_schemas(&self, cx: &gpui::App) -> bool {
-        if let Some(conn) = self.get_connection(cx).await {
-            conn.supports_schemas()
-        } else {
-            false
-        }
     }
 }
 
@@ -200,16 +107,16 @@ pub struct EditorPanel {
 
 /// Parameters for creating a new tab with connection
 #[derive(Clone)]
-struct TabCreationParams {
-    title: String,
-    content: String,
-    db_id: Option<i64>,
-    connection_id: i64,
+pub struct TabCreationParams {
+    pub title: String,
+    pub content: Option<String>,
+    pub db_id: Option<i64>,
+    pub connection_id: i64,
     #[allow(dead_code)]
-    connection_type: String,
-    connection_name: Option<String>,
-    database_name: String,
-    schema_name: Option<String>,
+    pub connection_type: String,
+    pub connection_name: Option<String>,
+    pub database_name: String,
+    pub schema_name: Option<String>,
 }
 
 impl EditorPanel {
@@ -239,80 +146,6 @@ impl EditorPanel {
     pub fn set_sidebar_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
         self.sidebar_collapsed = collapsed;
         cx.notify();
-    }
-
-    /// Add a new query tab using the unified connection interface
-    pub fn add_new_tab_with_unified_connection(
-        &mut self,
-        window: &mut Window,
-        display_name: String,
-        connection_id: i64,
-        database_name: String,
-        schema_name: Option<String>,
-        cx: &mut Context<Self>,
-    ) {
-        log::debug!(
-            "Creating new tab with connection id: '{}', display_name: '{}'",
-            connection_id,
-            display_name
-        );
-        let tab_id = self.next_tab_id;
-        self.next_tab_id += 1;
-
-        // Resolve connection_string to connection_id
-        let editor = cx.new(|cx| {
-            let mut editor = InputState::new(window, cx)
-                .code_editor("sql".to_string())
-                .line_number(true)
-                .tab_size(TabSize {
-                    tab_size: 4,
-                    hard_tabs: false,
-                })
-                .soft_wrap(true)
-                .placeholder("-- Enter your SQL query here...");
-
-            // Set up completion provider using connection_id, database_name, and DbService
-            let db_service = DbService::global(cx).clone();
-            let completion_provider = SqlCompletionProvider::new_with_database(
-                connection_id,
-                database_name.clone(),
-                db_service,
-            );
-            let completion_provider: Rc<dyn gpui_component::input::CompletionProvider> =
-                Rc::new(completion_provider);
-            editor.lsp.completion_provider = Some(completion_provider);
-
-            editor
-        });
-
-        // Create unified query tab with connection string
-        log::info!("🚀 Creating new query tab with ID {}", tab_id);
-        let query_tab = QueryTab {
-            id: tab_id,
-            title: display_name.clone(),
-            connection_id,
-            connection_name: None, // Will be set when loading from database
-            database_name,
-            schema_name,
-            editor,
-            db_id: None,
-            results_panel: cx.new(|cx| {
-                ResultsPanel::new(window, cx) // TODO: Use with_connection_id when connection_id is available
-            }),
-            sql_log: cx.new(|cx| SqlLog::new(1000, cx.theme().highlight_theme.clone())), // Maximum 1000 lines in the log
-            current_completions: None,
-            selected_completion_index: 0,
-            // Chat functionality
-            chat_enabled: false,
-            chat_panel: None,
-        };
-
-        self.tabs.push(TabType::Query(query_tab));
-        self.active_tab_ix = self.tabs.len() - 1;
-        cx.notify();
-
-        // Note: Completion provider will be set up when connection is available
-        // The connection-based completion provider requires an actual database connection
     }
 
     fn close_tab(&mut self, tab_index: usize, cx: &mut Context<Self>) {
@@ -532,13 +365,8 @@ impl EditorPanel {
             .to_string()
     }
 
-    /// Run query using the unified connection interface
-    fn run_query_unified(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        self.run_query_unified_internal(_window, cx)
-    }
-
-    /// Internal method for unified query execution (without ClickEvent requirement)
-    fn run_query_unified_internal(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    /// Run query through the async pipeline
+    pub fn run_query(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(tab) = self.tabs.get(self.active_tab_ix) {
             match tab {
                 TabType::Query(query_tab) => {
@@ -796,17 +624,6 @@ impl EditorPanel {
         }
     }
 
-    #[allow(dead_code)]
-    fn run_query(&mut self, event: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
-        // For backward compatibility, call the unified method
-        self.run_query_unified(event, window, cx)
-    }
-
-    /// Run query without requiring a ClickEvent (for action handlers)
-    fn run_query_no_event(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Call unified method without ClickEvent
-        self.run_query_unified_internal(window, cx)
-    }
     fn save_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(TabType::Settings(settings_tab)) = self.tabs.get_mut(self.active_tab_ix) {
             let json_text = settings_tab.editor.read(cx).text().to_string();
@@ -852,95 +669,6 @@ impl EditorPanel {
         // For now, we'll just log the settings
         // In a real implementation, this would update the theme, editor settings, etc.
         println!("Applied settings: {:?}", settings);
-    }
-
-    #[allow(dead_code)]
-    fn current_editor(&self) -> Option<&Entity<InputState>> {
-        self.tabs.get(self.active_tab_ix).map(|tab| match tab {
-            TabType::Query(query_tab) => &query_tab.editor,
-            TabType::Settings(settings_tab) => &settings_tab.editor,
-        })
-    }
-
-    #[allow(dead_code)]
-    fn is_settings_tab(&self, tab: &TabType) -> bool {
-        matches!(tab, TabType::Settings(_))
-    }
-
-    /// Save all query tabs to the app database
-    pub fn save_tabs(&mut self, cx: &mut Context<Self>) {
-        let db_service = DbService::global(cx).clone();
-        let app_db = db_service.app_db_handle();
-
-        // Collect tab data with indices
-        let mut tabs_data = Vec::new();
-        for (pos, tab) in self.tabs.iter().enumerate() {
-            if let TabType::Query(query_tab) = tab {
-                let content = query_tab.editor.read(cx).text().to_string();
-                // Note: Getting connection type from connection_id would require async context
-                // For now, we leave connection_type as None - this can be resolved when needed
-                let connection_type = None;
-                tabs_data.push((
-                    pos,
-                    query_tab.db_id,
-                    query_tab.title.clone(),
-                    content,
-                    pos as i32,
-                    query_tab.connection_id,
-                    connection_type,
-                    query_tab.title.clone(),
-                ));
-            }
-        }
-
-        info!("Saving {} query tabs on app quit", tabs_data.len());
-
-        // Save tabs in background
-        cx.spawn(async move |_, _| {
-            let mut saved_ids = Vec::new();
-            if let Some(app_db) = app_db.read().await.as_ref() {
-                for (
-                    tab_index,
-                    db_id,
-                    title,
-                    content,
-                    position,
-                    connection_id,
-                    connection_type,
-                    connection_name,
-                ) in tabs_data
-                {
-                    // First save to get or create the database ID
-                    let temp_tab_data = QueryTabData {
-                        id: db_id,
-                        title: title.clone(),
-                        content: content.clone(),
-                        position,
-                        connection_id: Some(connection_id),
-                        connection_type: connection_type.clone(),
-                        connection_name: Some(connection_name.clone()),
-                        database_name: None, // TODO: This should be passed in or derived
-                        schema_name: None,   // TODO: This should be passed in or derived
-                    };
-
-                    let final_db_id = match app_db.save_query_tab(&temp_tab_data).await {
-                        Ok(saved_id) => {
-                            debug!("Tab '{}' saved with db_id: {}", title, saved_id);
-                            saved_id
-                        }
-                        Err(e) => {
-                            error!("Failed to save tab '{}': {}", title, e);
-                            continue;
-                        }
-                    };
-
-                    saved_ids.push((tab_index, final_db_id));
-                }
-            } else {
-                error!("App database not initialized");
-            }
-        })
-        .detach();
     }
 
     /// Load saved query tabs from the app database
@@ -1030,7 +758,7 @@ impl EditorPanel {
 
                 let params = TabCreationParams {
                     title: tab_title,
-                    content: tab_content,
+                    content: Some(tab_content),
                     db_id: tab_db_id,
                     connection_id: _connection_id,
                     connection_type: tab_connection_type
@@ -1062,7 +790,7 @@ impl EditorPanel {
     }
 
     /// Helper to create a tab with a specific connection
-    fn create_and_add_tab_with_connection(
+    pub fn create_and_add_tab_with_connection(
         &mut self,
         window: &mut Window,
         params: TabCreationParams,
@@ -1097,10 +825,9 @@ impl EditorPanel {
         });
 
         // Set content if provided
-        if !params.content.is_empty() {
-            let content_owned = params.content.clone();
+        if let Some(content) = params.content {
             editor.update(cx, |state, cx| {
-                state.replace(&content_owned, window, cx);
+                state.replace(&content, window, cx);
             });
         }
 
@@ -1116,8 +843,6 @@ impl EditorPanel {
             db_id: params.db_id,
             results_panel: cx.new(|cx| ResultsPanel::new(window, cx)),
             sql_log: cx.new(|cx| SqlLog::new(1000, cx.theme().highlight_theme.clone())),
-            current_completions: None,
-            selected_completion_index: 0,
             // Chat functionality
             chat_enabled: false,
             chat_panel: None,
@@ -1125,28 +850,6 @@ impl EditorPanel {
 
         self.tabs.push(TabType::Query(query_tab));
         cx.notify();
-    }
-
-    /// Execute the current query in the active tab using unified connection system
-    pub fn execute_current_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Use the unified query execution method without requiring ClickEvent
-        self.run_query_no_event(window, cx);
-    }
-
-    /// Pre-fill the last created tab with a SELECT query
-    pub fn pre_fill_last_tab_with_select_query(
-        &mut self,
-        schema_name: &str,
-        table_name: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(TabType::Query(query_tab)) = self.tabs.last_mut() {
-            let select_query = format!("SELECT * FROM {}.{};\n", schema_name, table_name);
-            query_tab.editor.update(cx, |editor, cx| {
-                editor.replace(&select_query, window, cx);
-            });
-        }
     }
 
     /// Commit current changes in the active tab's results panel
@@ -1248,23 +951,6 @@ impl EditorPanel {
             }
 
             cx.notify();
-        }
-    }
-
-    /// Update chat context for all tabs that have chat enabled
-    #[allow(dead_code)]
-    pub fn update_chat_context_for_all_tabs(&mut self, cx: &mut Context<Self>) {
-        for tab in &mut self.tabs {
-            if let TabType::Query(query_tab) = tab {
-                if query_tab.chat_enabled {
-                    if let Some(ref chat_panel) = query_tab.chat_panel {
-                        let sql_context = query_tab.get_sql_context(cx);
-                        chat_panel.update(cx, |panel, cx| {
-                            panel.update_sql_context(sql_context, cx);
-                        });
-                    }
-                }
-            }
         }
     }
 }
@@ -1484,79 +1170,6 @@ impl Render for EditorPanel {
                                                             .text_size(px(14.))
                                                             .focus_bordered(false)
                                                     )
-                                                    // SQL Completion Popup
-                                                    .when_some(query_tab.current_completions.as_ref(), |this, completions| {
-                                                        this.when(!completions.items.is_empty(), |this| {
-                                                            this.child(
-                                                                div()
-                                                                    .absolute()
-                                                                    .top(px(100.0)) // Position below the editor
-                                                                    .left(px(50.0))  // Offset from left edge
-                                                                    .border_1()
-                                                                    .border_color(cx.theme().border)
-                                                                    .bg(cx.theme().background)
-                                                                    .rounded(px(4.0))
-                                                                    .shadow_lg()
-                                                                    .min_w(px(200.0))
-                                                                    .max_w(px(400.0))
-                                                                    .max_h(px(200.0))
-                                                                    .child(
-                                                                        v_flex()
-                                                                            .children(
-                                                                                completions.items.iter().enumerate().map(|(index, item)| {
-                                                                                    let is_selected = index == query_tab.selected_completion_index;
-                                                                                    div()
-                                                                                        .id(("completion-item", index))
-                                                                                        .w_full()
-                                                                                        .px_3()
-                                                                                        .py_2()
-                                                                                        .when(is_selected, |div| {
-                                                                                            div.bg(cx.theme().primary.opacity(0.2))
-                                                                                        })
-                                                                                        .hover(|div| {
-                                                                                            div.bg(cx.theme().muted.opacity(0.5))
-                                                                                        })
-                                                                                        .cursor_pointer()
-                                                                                        .child(
-                                                                                    h_flex()
-                                                                                        .items_center()
-                                                                                        .gap_2()
-                                                                                        .child(
-                                                                                            // Kind indicator
-                                                                                            div()
-                                                                                                .w(px(8.0))
-                                                                                                .h(px(8.0))
-                                                                                                .rounded(px(2.0))
-                                                                                                .bg(match item.kind {
-                                                                                                    crate::sql_completion::CompletionItemKind::Table => cx.theme().blue,
-                                                                                                    crate::sql_completion::CompletionItemKind::Column => cx.theme().green,
-                                                                                                    crate::sql_completion::CompletionItemKind::Keyword => cx.theme().primary,
-                                                                                                    crate::sql_completion::CompletionItemKind::Schema => cx.theme().blue,
-                                                                                                    crate::sql_completion::CompletionItemKind::Function => cx.theme().primary,
-                                                                                                    crate::sql_completion::CompletionItemKind::Alias => cx.theme().muted,
-                                                                                                })
-                                                                                        )
-                                                                                        .child(
-                                                                                            div()
-                                                                                                .text_sm()
-                                                                                                .text_color(cx.theme().foreground)
-                                                                                                .child(item.label.clone())
-                                                                                        )
-                                                                                        .when_some(item.detail.as_ref(), |this, detail| {
-                                                                                            this.child(
-                                                                                                div()
-                                                                                                    .text_xs()
-                                                                                                    .text_color(cx.theme().muted_foreground)
-                                                                                                    .child(detail.clone())
-                                                                                            )
-                                                                                        })
-                                                                                    )
-                                                                                })
-                                                                            )
-                                                                    )
-                                                            )
-                                                        })
-                                                    })
                                             )
                                             // Button bar (between editor and results)
                                             .child(
@@ -1575,7 +1188,7 @@ impl Render for EditorPanel {
                                                                 .icon(IconName::Check)
                                                                 .label("Run Current")
                                                                 .children(vec![Kbd::new(Keystroke::parse("shift-enter").unwrap()).into_any_element()])
-                                                                .on_click(cx.listener(Self::run_query_unified)),
+                                                                .on_click(cx.listener(|panel, _, window, cx| panel.run_query(window, cx))),
                                                         )
                                             )
                                             // Results section: Results on top, SQL Log on bottom
@@ -1821,12 +1434,7 @@ fn create_chat_panel_with_provider(
     let _provider_info = resolver.get_provider(&settings)?;
 
     // Create chat panel with the provider
-    let chat_panel = ChatPanel::new(
-        tab_id,
-        Some(http_client),
-        window,
-        cx,
-    );
+    let chat_panel = ChatPanel::new(tab_id, Some(http_client), window, cx);
 
     Ok(chat_panel)
 }

@@ -1,7 +1,7 @@
 use gpui::{
     actions, div, prelude::FluentBuilder, px, App, AppContext, Context, Entity, EventEmitter,
-    FocusHandle, Focusable, IntoElement, ParentElement, Render, SharedString,
-    Styled, Subscription, Window,
+    FocusHandle, Focusable, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
+    Window,
 };
 use gpui_component::{
     button::{Button, ButtonVariants},
@@ -18,7 +18,6 @@ use super::chat_session::ChatSession;
 use super::chat_types::{ChatEvent, ChatMessage, MessageRole, SqlContext};
 use blanco_core::chat_provider::{ChatProvider, ProviderError};
 use blanco_ui::IconName;
-
 
 actions!(agent_chat, [SendMessage, ClearChat]);
 
@@ -57,7 +56,8 @@ impl ChatPanel {
             cx.subscribe_in(&session, window, |panel, _session, event, window, cx| {
                 match event {
                     ChatEvent::MessageAdded { message } => {
-                        let message_view = ChatMessageView::new(&message.content, message.role.clone());
+                        let message_view =
+                            ChatMessageView::new(&message.content, message.role.clone());
                         panel.messages.push(message_view);
                         panel.scroll_to_bottom(cx);
 
@@ -221,7 +221,7 @@ impl Render for ChatPanel {
                             Button::new("clear-chat")
                                 .ghost()
                                 .xsmall()
-                                .icon(IconName::Delete)
+                                .icon(IconName::Close)
                                 .on_click(cx.listener(|this, _event, window, cx| {
                                     this.on_clear_chat(&ClearChat, window, cx)
                                 })),
@@ -237,9 +237,9 @@ impl Render for ChatPanel {
                     .gap_4()
                     // Messages
                     .children(
-                        self.messages.iter().map(|message_view| {
-                            message_view.clone().into_any_element()
-                        })
+                        self.messages
+                            .iter()
+                            .map(|message_view| message_view.clone().into_any_element()),
                     )
                     // Loading indicator
                     .when(self.is_loading, |this| {
@@ -263,22 +263,50 @@ impl Render for ChatPanel {
             // Input area
             .child(
                 v_flex()
-                    .px_4()
-                    .py_3()
-                    .border_t_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().background)
+                    .p_2()
+                    .bg(cx
+                        .theme()
+                        .highlight_theme
+                        .style
+                        .editor_background
+                        .unwrap_or(cx.theme().background))
+                    .gap_3()
                     .child(
-                        h_flex()
-                            .gap_2()
-                            .child(div().flex_1().child(self.input_state.clone()))
+                        // Text input container with no borders
+                        div()
+                            .relative()
+                            .bg(cx
+                                .theme()
+                                .highlight_theme
+                                .style
+                                .editor_background
+                                .unwrap_or(cx.theme().background))
+                            .rounded_lg()
+                            .border_0()
+                            .text_size(px(13.0)) // Smaller font size for the input text
                             .child(
-                                Button::new("send-message")
-                                    .compact()
-                                    .icon(IconName::Plus)
-                                    .on_click(cx.listener(|this, _event, window, cx| {
-                                        this.send_message(window, cx);
-                                    })),
+                                Input::new(&self.input_state)
+                                    .disabled(self.is_loading)
+                                    .bordered(false)
+                                    .bg(cx
+                                        .theme()
+                                        .highlight_theme
+                                        .style
+                                        .editor_background
+                                        .unwrap_or(cx.theme().background)),
+                            )
+                            // Send button positioned further to bottom right corner
+                            .child(
+                                div().absolute().bottom_1().right_1().child(
+                                    Button::new("send-message")
+                                        .icon(IconName::ArrowUp)
+                                        .primary()
+                                        .xsmall()
+                                        .disabled(self.is_loading)
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.send_message(window, cx);
+                                        })),
+                                ),
                             ),
                     ),
             )

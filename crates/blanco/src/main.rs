@@ -3,7 +3,6 @@ mod app;
 mod app_database;
 mod app_events;
 mod assets;
-mod async_pipeline;
 mod chat_provider_resolver;
 mod connection;
 mod connection_modal;
@@ -16,7 +15,6 @@ mod settings;
 mod sidebar;
 mod sql_completion;
 mod sql_completion_provider;
-mod test_db;
 mod theme_loader;
 mod time_format;
 mod transformers;
@@ -98,34 +96,8 @@ fn main() {
             log::error!("Critical: Failed to initialize database: {}", e);
         }
 
-        // Initialize test database
-        cx.spawn(async move |_cx| match test_db::init_test_database().await {
-            Ok(_) => {
-                log::info!("Connected to test database");
-                Ok(())
-            }
-            Err(e) => {
-                log::error!("Failed to initialize test database: {}", e);
-                Err(anyhow::anyhow!("Test database init failed: {}", e))
-            }
-        })
-        .detach();
-
-        // Initialize async event processor
-        let (mut async_processor, async_event_tx) =
-            async_pipeline::AsyncEventProcessor::new(db_service.clone());
-
-        // Start the async processor
-        cx.spawn(async move |_cx| {
-            if let Err(e) = async_processor.start().await {
-                log::error!("Failed to start async event processor: {}", e);
-            }
-        })
-        .detach();
-
         // Store the async event sender globally for components to use
         cx.set_global(db_service);
-        cx.set_global(async_event_tx);
         cx.activate(true);
 
         let window_bounds = gpui::Bounds::centered(None, size(px(1400.), px(900.)), cx);

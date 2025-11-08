@@ -14,8 +14,11 @@ use blanco_ui::IconName;
 use gpui_component::Icon;
 
 use crate::{
-    app_events::AppEvent, connection_modal::NewConnectionModal, db_service::DbService,
-    editor_panel::EditorPanel, sidebar::ConnectionSidebar,
+    app_events::AppEvent,
+    connection_modal::NewConnectionModal,
+    db_service::DbService,
+    editor_panel::{EditorPanel, TabCreationParams},
+    sidebar::ConnectionSidebar,
 };
 
 actions!(
@@ -41,21 +44,6 @@ actions!(
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
 #[action(namespace = blanco_app, no_json)]
 pub struct ToggleSidebar;
-
-#[derive(Action, Clone, PartialEq, Eq)]
-#[action(namespace = blanco_app, no_json)]
-pub struct NewQueryForUnifiedConnection {
-    pub connection_key: String,
-    pub connection_id: i64,
-    pub display_name: String,
-}
-
-#[derive(Action, Clone, PartialEq, Eq)]
-#[action(namespace = blanco_app, no_json)]
-pub struct NewQueryForUnifiedSchema {
-    pub connection_id: i64,
-    pub schema_name: String,
-}
 
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
@@ -297,13 +285,6 @@ impl BlancoApp {
     }
 
     fn on_quit(&mut self, _: &Quit, _window: &mut Window, cx: &mut Context<Self>) {
-        // Save tabs before quitting
-        self.editor_panel.update(cx, |panel, cx| {
-            panel.save_tabs(cx);
-        });
-
-        // Give a moment for operations to complete
-        std::thread::sleep(std::time::Duration::from_millis(200));
         cx.quit();
     }
 
@@ -415,7 +396,7 @@ impl BlancoApp {
     fn on_run_query(&mut self, _: &RunQuery, window: &mut Window, cx: &mut Context<Self>) {
         // Delegate query execution to the editor panel
         self.editor_panel.update(cx, |panel, cx| {
-            panel.execute_current_query(window, cx);
+            panel.run_query(window, cx);
         });
     }
 
@@ -443,54 +424,6 @@ impl BlancoApp {
         });
     }
 
-    fn on_new_query_for_unified_connection(
-        &mut self,
-        action: &NewQueryForUnifiedConnection,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        log::info!(
-            "on_new_query_for_unified_connection called: {}",
-            action.display_name
-        );
-        // Create a new query tab for the specified unified connection
-        self.editor_panel.update(cx, |panel, cx| {
-            panel.add_new_tab_with_unified_connection(
-                window,
-                action.display_name.clone(),
-                action.connection_id,
-                "default".to_string(), // Legacy connection - use default database
-                None,
-                cx,
-            );
-        });
-        cx.notify();
-    }
-
-    fn on_new_query_for_unified_schema(
-        &mut self,
-        action: &NewQueryForUnifiedSchema,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        log::info!(
-            "on_new_query_for_unified_schema called: {}",
-            action.schema_name
-        );
-        // Create a new query tab for the specified unified schema
-        self.editor_panel.update(cx, |panel, cx| {
-            panel.add_new_tab_with_unified_connection(
-                window,
-                format!("Schema ({})", action.schema_name),
-                action.connection_id,
-                "default".to_string(), // Legacy schema - use default database
-                Some(action.schema_name.clone()),
-                cx,
-            );
-        });
-        cx.notify();
-    }
-
     fn on_new_query_for_database(
         &mut self,
         action: &NewQueryForDatabase,
@@ -500,12 +433,18 @@ impl BlancoApp {
         log::info!("on_new_query_for_database called: {}", action.database_name);
         // Create a new query tab for the specified database
         self.editor_panel.update(cx, |panel, cx| {
-            panel.add_new_tab_with_unified_connection(
+            panel.create_and_add_tab_with_connection(
                 window,
-                action.database_name.clone(),
-                action.connection_id,
-                action.database_name.clone(),
-                None,
+                TabCreationParams {
+                    title: action.database_name.clone(),
+                    content: None,
+                    db_id: None,
+                    connection_id: action.connection_id,
+                    connection_type: "".to_owned(),
+                    connection_name: None,
+                    database_name: action.database_name.clone(),
+                    schema_name: None,
+                },
                 cx,
             );
         });
@@ -525,12 +464,18 @@ impl BlancoApp {
         );
         // Create a new query tab for the specified schema in a database
         self.editor_panel.update(cx, |panel, cx| {
-            panel.add_new_tab_with_unified_connection(
+            panel.create_and_add_tab_with_connection(
                 window,
-                format!("{}.{}", action.database_name, action.schema_name),
-                action.connection_id,
-                action.database_name.clone(),
-                Some(action.schema_name.clone()),
+                TabCreationParams {
+                    title: action.database_name.clone(),
+                    content: None,
+                    db_id: None,
+                    connection_id: action.connection_id,
+                    connection_type: "".to_owned(),
+                    connection_name: None,
+                    database_name: action.database_name.clone(),
+                    schema_name: Some(action.schema_name.clone()),
+                },
                 cx,
             );
         });
@@ -551,20 +496,18 @@ impl BlancoApp {
         );
         // Create a new query tab for the specified table with a pre-filled SELECT query
         self.editor_panel.update(cx, |panel, cx| {
-            panel.add_new_tab_with_unified_connection(
+            panel.create_and_add_tab_with_connection(
                 window,
-                format!("{}.{}", action.schema_name, action.table_name),
-                action.connection_id,
-                action.database_name.clone(),
-                Some(action.schema_name.clone()),
-                cx,
-            );
-
-            // Pre-fill with a SELECT query for the table
-            panel.pre_fill_last_tab_with_select_query(
-                &action.schema_name,
-                &action.table_name,
-                window,
+                TabCreationParams {
+                    title: action.database_name.clone(),
+                    content: Some(format!("SELECT * FROM {}", action.table_name)),
+                    db_id: None,
+                    connection_id: action.connection_id,
+                    connection_type: "".to_owned(),
+                    connection_name: None,
+                    database_name: action.database_name.clone(),
+                    schema_name: Some(action.schema_name.clone()),
+                },
                 cx,
             );
         });
@@ -606,8 +549,6 @@ impl Render for BlancoApp {
         v_flex()
             .on_action(cx.listener(Self::on_quit))
             .on_action(cx.listener(Self::on_about))
-            .on_action(cx.listener(Self::on_new_query_for_unified_connection))
-            .on_action(cx.listener(Self::on_new_query_for_unified_schema))
             .on_action(cx.listener(Self::on_new_query_for_database))
             .on_action(cx.listener(Self::on_new_query_for_schema))
             .on_action(cx.listener(Self::on_new_query_for_table))

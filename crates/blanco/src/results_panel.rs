@@ -15,8 +15,19 @@ use gpui_component::{
 
 use crate::app::{ClearSelection, CopyCell, SelectRow}; // Import the action types
 use crate::app_events::AppEvent;
-use crate::async_pipeline::{AsyncEvent, TaskPriority};
+use crate::db_service::DbService;
 use crate::transformers::CopyHandler;
+
+// Response structure for table operations
+#[derive(Debug, Clone)]
+pub struct TableOperationResponse {
+    pub table_name: String,
+    pub connection_id: i64,
+    pub success: bool,
+    pub rows_affected: Option<u64>,
+    pub error_message: Option<String>,
+    pub operations_executed: usize,
+}
 use blanco_core::table_operations::TableChangeOperation;
 use blanco_core::ColumnChange;
 use blanco_core::QueryResult;
@@ -1177,7 +1188,7 @@ impl TableDelegate for ResultsTableDelegate {
     ) -> impl IntoElement {
         // Add extra space to ensure all columns are scrollable
         // This compensates for any viewport calculation issues
-        div().w(px(300.0)).h_full().flex_shrink_0()
+        div().w(px(30.0)).h_full().flex_shrink_0()
     }
 
     fn context_menu(
@@ -1810,150 +1821,197 @@ impl ResultsPanel {
         // Create response channel for table operations
         let (response_tx, response_rx) = async_std::channel::bounded(1);
 
-        // Send the table operations to the async pipeline
-        let async_event_sender = cx.global::<crate::async_pipeline::AsyncEventSender>();
-        match async_event_sender.try_send(AsyncEvent::ExecuteTableOperations {
-            connection_id: connection_id_for_pipeline,
-            operations: change_operations_for_pipeline.clone(),
-            response_tx,
-            priority: TaskPriority::High,
-        }) {
-            Ok(_) => {
-                log::info!("Commit Changes: Operations sent to async pipeline");
+        // Emit a query execution started event
+        cx.emit(AppEvent::QueryExecutionStarted {
+            connection_id: Some(connection_id_for_event),
+            query: format!(
+                "Table operations on {} ({} operations)",
+                table_name_for_logging,
+                change_operations_for_logging.len()
+            ),
+        });
 
-                // Emit a query execution started event
-                cx.emit(AppEvent::QueryExecutionStarted {
-                    connection_id: Some(connection_id_for_event),
-                    query: format!(
-                        "Table operations on {} ({} operations)",
-                        table_name_for_logging,
-                        change_operations_for_logging.len()
-                    ),
-                });
+        log::info!("Commit Changes: Starting table operations execution");
 
-                log::info!("Commit Changes: Table operations event sent, waiting for TableOperationCompleted event");
-
-                // Log the operations to SQL log if available
-                if let Some(sql_log) = sql_log {
-                    for operation in &change_operations_for_logging {
-                        let sql_query = operation.to_sql_query();
-                        sql_log.update(cx, |log, cx| {
-                            log.append_text(&blanco_ui::SqlLogMessage::SqlStatement(sql_query), cx);
-                            log.append_text(
-                                &blanco_ui::SqlLogMessage::Comment(
-                                    "Table operation sent to async pipeline".to_string(),
-                                ),
-                                cx,
-                            );
-                        });
-                    }
-
-                    // Log summary
-                    let summary = format!(
-                        "Sent {} table operations to async pipeline",
-                        change_operations_for_logging.len()
+        // Log the operations to SQL log if available
+        if let Some(sql_log) = sql_log {
+            for operation in &change_operations_for_logging {
+                let sql_query = operation.to_sql_query();
+                sql_log.update(cx, |log, cx| {
+                    log.append_text(&blanco_ui::SqlLogMessage::SqlStatement(sql_query), cx);
+                    log.append_text(
+                        &blanco_ui::SqlLogMessage::Comment("Executing table operation".to_string()),
+                        cx,
                     );
-                    sql_log.update(cx, |log, cx| {
-                        log.append_text(&blanco_ui::SqlLogMessage::Comment(summary), cx);
-                    });
+                });
+            }
 
-                    // Spawn async task to handle the response
-                    let _table_entity = self.table.clone();
-                    let sql_log_entity: Entity<blanco_ui::SqlLog> = sql_log.clone();
-                    cx.spawn(async move |entity, cx| {
-                    match response_rx.recv().await {
-                        Ok(response) => {
-                            log::info!("Received table operation response: success={}, rows_affected={:?}",
-                                response.success, response.rows_affected);
+            // Log summary
+            let summary = format!(
+                "Executing {} table operations",
+                change_operations_for_logging.len()
+            );
+            sql_log.update(cx, |log, cx| {
+                log.append_text(&blanco_ui::SqlLogMessage::Comment(summary), cx);
+            });
+        }
 
-                            // Handle successful operations
-                            if response.success {
-                                // Clear edits and refresh the table
-                                let _ = entity.update(cx, |panel, cx| {
-                                    panel.table.update(cx, |table, cx| {
-                                        table.delegate_mut().edit_state.clear_edits();
-                                        table.refresh(cx);
-                                    });
+        // Spawn background task to execute table operations
+        let db_service = cx.global::<DbService>().clone();
+        let table_entity = self.table.clone();
+        let sql_log_entity: Option<Entity<blanco_ui::SqlLog>> = sql_log.cloned();
 
-                                    // Update SQL log with success message
-                                    sql_log_entity.update(cx, |log, cx| {
-                                        let success_msg = format!(
-                                            "✓ Table operations completed successfully\n-- {} operations executed, {} rows affected",
-                                            response.operations_executed,
-                                            response.rows_affected.unwrap_or(0)
-                                        );
-                                        log.append_text(&blanco_ui::SqlLogMessage::Comment(success_msg), cx);
-                                    });
-                                });
+        cx.background_spawn(async move {
+            let start_time = std::time::Instant::now();
 
-                                // Emit table operation completed event
-                                let _ = entity.update(cx, |_, cx| {
-                                    cx.emit(AppEvent::TableOperationCompleted {
-                                        table_name: response.table_name,
-                                        connection_id: Some(response.connection_id),
-                                        success: true,
-                                        rows_affected: response.rows_affected,
-                                        error_message: None,
-                                        operations_executed: response.operations_executed,
-                                    });
-                                });
-                            } else {
-                                // Handle failed operations - show error but keep edits for retry
-                                let error_message_clone = response.error_message.clone();
-                                let _ = sql_log_entity.update(cx, |log, cx| {
-                                    let error_msg = format!(
-                                        "✗ Table operations failed: {}",
-                                        error_message_clone.unwrap_or_else(|| "Unknown error".to_string())
-                                    );
-                                    log.append_text(&blanco_ui::SqlLogMessage::Comment(error_msg), cx);
-                                });
+            // Execute table operations using DbService
+            let result = match db_service
+                .get_or_create_connection(connection_id_for_pipeline)
+                .await
+            {
+                Ok(connection) => {
+                    log::info!("Got connection for table operations");
 
-                                // Emit table operation completed event with failure
-                                let _ = entity.update(cx, |_, cx| {
-                                    cx.emit(AppEvent::TableOperationCompleted {
-                                        table_name: response.table_name,
-                                        connection_id: Some(response.connection_id),
-                                        success: false,
-                                        rows_affected: None,
-                                        error_message: response.error_message,
-                                        operations_executed: response.operations_executed,
-                                    });
-                                });
+                    // Convert table operations to SQL and execute them
+                    let mut total_rows_affected = 0u64;
+                    let mut operations_executed = 0;
+                    let mut error_message = None;
+                    let mut success = true;
+
+                    for operation in &change_operations_for_pipeline {
+                        let sql_query = operation.to_sql_query();
+                        match connection.execute_query(&sql_query, None).await {
+                            Ok(query_result) => {
+                                total_rows_affected += query_result.rows_affected;
+                                operations_executed += 1;
+                                log::debug!("Successfully executed operation: {}", sql_query);
+                            }
+                            Err(e) => {
+                                log::error!("Failed to execute operation '{}': {}", sql_query, e);
+                                success = false;
+                                error_message = Some(e.to_string());
+                                break;
                             }
                         }
-                        Err(e) => {
-                            log::error!("Failed to receive table operation response: {}", e);
+                    }
 
-                            // Update SQL log with error
-                            let _ = sql_log_entity.update(cx, |log, cx| {
-                                let error_msg = format!("✗ Failed to get operation response: {}", e);
+                    TableOperationResponse {
+                        table_name: table_name_for_logging.clone(),
+                        connection_id: connection_id_for_pipeline,
+                        success,
+                        rows_affected: Some(total_rows_affected),
+                        error_message,
+                        operations_executed,
+                    }
+                }
+                Err(e) => {
+                    log::error!("Failed to get connection for table operations: {}", e);
+                    TableOperationResponse {
+                        table_name: table_name_for_logging.clone(),
+                        connection_id: connection_id_for_pipeline,
+                        success: false,
+                        rows_affected: None,
+                        error_message: Some(format!("Connection error: {}", e)),
+                        operations_executed: 0,
+                    }
+                }
+            };
+
+            log::info!(
+                "Table operations completed in {:?}, success: {}",
+                start_time.elapsed(),
+                result.success
+            );
+
+            // Send response back through the channel
+            if let Err(e) = response_tx.send(result.clone()).await {
+                log::error!("Failed to send table operation response: {}", e);
+            }
+
+            result
+        })
+        .detach();
+
+        // Spawn async task to handle the response
+        let sql_log_response_entity: Option<Entity<blanco_ui::SqlLog>> = sql_log.cloned();
+        cx.spawn(async move |entity, cx| {
+            match response_rx.recv().await {
+                Ok(response) => {
+                    log::info!("Received table operation response: success={}, rows_affected={:?}",
+                        response.success, response.rows_affected);
+
+                    // Handle successful operations
+                    if response.success {
+                        // Clear edits and refresh the table
+                        let _ = entity.update(cx, |panel, cx| {
+                            panel.table.update(cx, |table, cx| {
+                                table.delegate_mut().edit_state.clear_edits();
+                                table.refresh(cx);
+                            });
+
+                            // Update SQL log with success message
+                            if let Some(sql_log) = sql_log_response_entity {
+                                sql_log.update(cx, |log, cx| {
+                                    let success_msg = format!(
+                                        "✓ Table operations completed successfully\n-- {} operations executed, {} rows affected",
+                                        response.operations_executed,
+                                        response.rows_affected.unwrap_or(0)
+                                    );
+                                    log.append_text(&blanco_ui::SqlLogMessage::Comment(success_msg), cx);
+                                });
+                            }
+                        });
+
+                        // Emit table operation completed event
+                        let _ = entity.update(cx, |_, cx| {
+                            cx.emit(AppEvent::TableOperationCompleted {
+                                table_name: response.table_name,
+                                connection_id: Some(response.connection_id),
+                                success: true,
+                                rows_affected: response.rows_affected,
+                                error_message: None,
+                                operations_executed: response.operations_executed,
+                            });
+                        });
+                    } else {
+                        // Handle failed operations - show error but keep edits for retry
+                        if let Some(sql_log) = sql_log_response_entity {
+                            let error_message_clone = response.error_message.clone();
+                            let _ = sql_log.update(cx, |log, cx| {
+                                let error_msg = format!(
+                                    "✗ Table operations failed: {}",
+                                    error_message_clone.unwrap_or_else(|| "Unknown error".to_string())
+                                );
                                 log.append_text(&blanco_ui::SqlLogMessage::Comment(error_msg), cx);
                             });
                         }
-                    }
-                }).detach();
-                } // Close the if let Some(sql_log) block
-            }
-            Err(e) => {
-                log::error!(
-                    "Commit Changes: Failed to send operations to async pipeline: {}",
-                    e
-                );
 
-                // Fallback to logging error
-                if let Some(sql_log) = sql_log {
-                    sql_log.update(cx, |log, cx| {
-                        log.append_text(
-                            &blanco_ui::SqlLogMessage::Comment(format!(
-                                "Error: Failed to process operations - {}",
-                                e
-                            )),
-                            cx,
-                        );
-                    });
+                        // Emit table operation completed event with failure
+                        let _ = entity.update(cx, |_, cx| {
+                            cx.emit(AppEvent::TableOperationCompleted {
+                                table_name: response.table_name,
+                                connection_id: Some(response.connection_id),
+                                success: false,
+                                rows_affected: None,
+                                error_message: response.error_message,
+                                operations_executed: response.operations_executed,
+                            });
+                        });
+                    }
+                }
+                Err(e) => {
+                    log::error!("Failed to receive table operation response: {}", e);
+
+                    // Update SQL log with error
+                    if let Some(sql_log) = sql_log_response_entity {
+                        let _ = sql_log.update(cx, |log, cx| {
+                            let error_msg = format!("✗ Failed to get operation response: {}", e);
+                            log.append_text(&blanco_ui::SqlLogMessage::Comment(error_msg), cx);
+                        });
+                    }
                 }
             }
-        }
+        }).detach();
     }
 
     /// Rollback all pending changes
