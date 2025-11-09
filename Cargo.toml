@@ -2,16 +2,21 @@
 resolver = "2"
 members = [
     "crates/blanco",
-    "crates/postgres-lsp",
     "crates/ui",
+    "crates/blanco-core",
+    "crates/postgres",
+    "crates/sqlite",
+    "crates/openai",
 ]
 
 [workspace.dependencies]
 # Core GPUI dependencies
-gpui = "0.2.0"
-gpui-macros = "0.2.0"
-gpui-component = { path = "vendor/gpui-component/crates/ui", features = ["tree-sitter-languages"] }
-gpui-component-macros = { path = "vendor/gpui-component/crates/macros", version = "0.3.0-preview1" }
+gpui = { version = "0.2.2", features = ["test-support"] }
+gpui-macros = "0.2.2"
+gpui-component = { path = "vendor/gpui-component/crates/ui", features = [
+    "tree-sitter-languages",
+] }
+gpui-component-macros = { path = "vendor/gpui-component/crates/macros", version = "0.4.0-preview1" }
 
 # Additional dependencies for gpui-component compatibility
 notify = "7.0.0"
@@ -22,29 +27,49 @@ serde_repr = "0.1"
 smallvec = "1"
 sum-tree = { version = "0.2.0", package = "zed-sum-tree" }
 
-# LSP dependencies
+# LSP dependencies (needed by gpui-component)
 lsp-types = "0.97.0"
 
 # Common dependencies
 anyhow = { version = "1", features = ["backtrace"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "process", "io-util"] }
 log = "0.4"
 uuid = { version = "1.0", features = ["v4"] }
 chrono = "0.4"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 thiserror = "1.0"
+regex = "1.10"
+
+# SSH tunnel support
+russh = "0.44"
+russh-keys = "0.44"
 
 # Database dependencies
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "postgres", "uuid", "chrono", "json", "bigdecimal"] }
+sqlx = { version = "0.8", features = [
+    "runtime-async-std",
+    "sqlite",
+    "postgres",
+    "uuid",
+    "chrono",
+    "json",
+    "bigdecimal",
+] }
+async-std = { version = "1.13", features = ["attributes"] }
+async-trait = "0.1"
 
 # SQL parsing
 sql-parse = "0.2"
 
+# Markdown parser
+pulldown-cmark = "0.9"
+
 # HTTP client for downloading
 reqwest = { version = "0.11", features = ["json"] }
+http_client = { path = "../zed/crates/http_client" }
+reqwest_client = { path = "../zed/crates/reqwest_client" }
+http = "1.0"
 tempfile = "3.8"
 dirs = "5"
 
@@ -58,7 +83,12 @@ url = "2.5"
 flate2 = "1.0"
 tar = "0.4"
 futures = "0.3"
-ropey = { version = "=2.0.0-beta.1", features = ["metric_lines_lf", "metric_utf16"] }
+ropey = { version = "=2.0.0-beta.1", features = [
+    "metric_lines_lf",
+    "metric_utf16",
+] }
+async-stream = "0.3"
+tokio = { version = "1.0", features = ["full"] }
 
 [workspace.lints.clippy]
 almost_complete_range = "allow"
@@ -75,3 +105,6 @@ single_range_in_vec_init = "allow"
 style = { level = "allow", priority = -1 }
 todo = "deny"
 type_complexity = "allow"
+
+[profile.release]
+opt-level = 3

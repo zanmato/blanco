@@ -49,6 +49,10 @@ tokio = { workspace = true }
 http = { workspace = true }
 futures = { workspace = true }
 
+# SSH tunnel support
+russh = { workspace = true }
+russh-keys = { workspace = true }
+
 
 [dev-dependencies]
 # Dependencies for integration tests
