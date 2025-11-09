@@ -1070,7 +1070,7 @@ impl Connection for PostgresConnection {
         );
 
         // For prepared queries, use the initial database or 'postgres' as fallback
-        let database_name = self.initial_database.as_ref().map(|s| s.as_str()).unwrap_or("postgres");
+        let database_name = self.initial_database.as_deref().unwrap_or("postgres");
         let pool = self.get_or_create_pool(database_name).await.map_err(|e| {
             anyhow::anyhow!("Failed to get connection pool for prepared query: {}", e)
         })?;

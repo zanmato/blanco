@@ -79,8 +79,11 @@ impl ChatSession {
         self.model_name = model_name;
     }
 
-    pub fn add_message(&mut self, message: ChatMessage) {
-        self.messages.push(message);
+    pub fn add_message(&mut self, message: ChatMessage, cx: &mut Context<Self>) {
+        self.messages.push(message.clone());
+
+        // Emit message added event
+        cx.emit(ChatEvent::MessageAdded { message });
     }
 
     pub fn clear_messages(&mut self) {
@@ -102,10 +105,7 @@ impl ChatSession {
         cx: &mut Context<Self>,
     ) -> Task<Result<String>> {
         let message = ChatMessage::user(user_message.clone());
-        self.add_message(message.clone());
-
-        // Emit message added event
-        cx.emit(ChatEvent::MessageAdded { message });
+        self.add_message(message.clone(), cx);
 
         // Check if this is a command
         if let Some(command) = ChatCommand::parse(&user_message) {
@@ -116,8 +116,7 @@ impl ChatSession {
         if let Some(provider) = &self.provider {
             self.send_provider_message(provider.clone(), &user_message, cx)
         } else {
-            // Fallback to mock if no provider
-            self.send_mock_message(&user_message, cx)
+            Task::ready(Err(anyhow::anyhow!("no provider")))
         }
     }
 
@@ -230,60 +229,10 @@ Would you like me to help you implement any of these optimizations?",
         };
 
         let message = ChatMessage::assistant(response.clone(), self.model_name.clone());
-        self.add_message(message.clone());
+        self.add_message(message.clone(), cx);
         cx.emit(ChatEvent::MessageAdded { message });
 
         Task::ready(Ok(response))
-    }
-
-    fn send_mock_message(
-        &mut self,
-        user_message: &str,
-        cx: &mut Context<Self>,
-    ) -> Task<Result<String>> {
-        let sql_context = self.sql_context.clone();
-        let user_message = user_message.to_string();
-
-        cx.spawn(async move |_, _cx| {
-            // Simulate thinking time
-            sleep(Duration::from_millis(1000)).await;
-
-            let response = if !sql_context.current_query.is_empty() &&
-                (user_message.contains("query") || user_message.contains("sql")) {
-                format!(
-                    "I can see you have a SQL query:\n\n```\n{}\n```\n\nThis looks like a good query! Here are some thoughts:\n\n* The syntax appears to be correct\n* Consider if you need to add a WHERE clause for filtering\n* Think about adding ORDER BY for consistent results\n* Make sure you have proper indexes on join columns\n\nIs there something specific about this query you'd like me to help with?",
-                    sql_context.current_query
-                )
-            } else if let Some(error) = &sql_context.error_message {
-                format!(
-                    "I notice there was an error:\n\n```\n{}\n```\n\nLet me help you debug this. Common issues include:\n\n1. **Syntax errors** - Check for missing keywords or punctuation\n2. **Table names** - Make sure tables and columns exist\n3. **Data types** - Ensure type compatibility\n4. **Permissions** - Check if you have access to the tables\n\nCould you share the exact query that's causing this error?",
-                    error
-                )
-            } else {
-                "Hello! I'm your SQL assistant. I can help you with:\n\n• **Writing SQL queries** - I'll help you craft the right query\n• **Debugging errors** - Show me your error messages and I'll help fix them\n• **Optimization** - I can suggest performance improvements\n• **Schema questions** - Ask me about your database structure\n\nI can see you're connected to a database. Try running a query or ask me anything about SQL! For quick commands, use:\n• `/explain` - Explain your current query\n• `/optimize` - Get optimization suggestions\n• `/fix` - Help with recent errors\n• `/help` - Show all available commands".to_string()
-            };
-
-            // Simulate streaming by sending chunks
-            let words: Vec<&str> = response.split(' ').collect();
-            let mut accumulated = String::new();
-
-            for (i, word) in words.into_iter().enumerate() {
-                accumulated.push_str(word);
-                accumulated.push(' ');
-
-                // Update UI with partial content - commented out for now
-                // cx.update(|_cx| {
-                //     // This would emit stream events in a real implementation
-                // }).ok();
-
-                // Small delay between chunks
-                if i % 3 == 0 {
-                    sleep(Duration::from_millis(50)).await;
-                }
-            }
-
-            Ok(accumulated)
-        })
     }
 
     fn send_provider_message(
@@ -411,8 +360,7 @@ Would you like me to help you implement any of these optimizations?",
 
                             // Update state via the weak handle
                             if let Ok(_) = chat_session_handle.update(async_cx, |chat_session, cx| {
-                                chat_session.add_message(assistant_message.clone());
-                                cx.emit(ChatEvent::MessageAdded { message: assistant_message });
+                                chat_session.add_message(assistant_message.clone(), cx);
                             }) {
                                 // State updated successfully
                             }
@@ -437,8 +385,7 @@ Would you like me to help you implement any of these optimizations?",
 
                                 // Update state via the weak handle
                                 if let Ok(_) = chat_session_handle.update(async_cx, |chat_session, cx| {
-                                    chat_session.add_message(tool_message.clone());
-                                    cx.emit(ChatEvent::MessageAdded { message: tool_message });
+                                    chat_session.add_message(tool_message.clone(), cx);
                                 }) {
                                     // State updated successfully
                                 }
@@ -519,8 +466,7 @@ Would you like me to help you implement any of these optimizations?",
 
                                                 // Update state via the weak handle
                                                 if let Ok(_) = chat_session_handle.update(async_cx, |chat_session, cx| {
-                                                    chat_session.add_message(tool_message.clone());
-                                                    cx.emit(ChatEvent::MessageAdded { message: tool_message });
+                                                    chat_session.add_message(tool_message.clone(), cx);
                                                 }) {
                                                     // State updated successfully
                                                 }

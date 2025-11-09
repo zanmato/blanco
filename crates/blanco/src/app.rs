@@ -1,5 +1,5 @@
 use gpui::{
-    actions, div, prelude::FluentBuilder, px, Action, App, AppContext, Context, Entity,
+    actions, div, prelude::FluentBuilder, px, rgb, Action, App, AppContext, Context, Entity,
     EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, Menu, MenuItem,
     ParentElement, Render, Styled, Subscription, Window,
 };
@@ -546,7 +546,9 @@ impl Render for BlancoApp {
 
         let window_bounds = window.bounds();
 
-        v_flex()
+        div()
+            .flex()
+            .flex_col()
             .on_action(cx.listener(Self::on_quit))
             .on_action(cx.listener(Self::on_about))
             .on_action(cx.listener(Self::on_new_query_for_database))
@@ -576,21 +578,23 @@ impl Render for BlancoApp {
             )
             // Main content area
             .child(
-                h_flex()
+                div()
+                    .flex()
                     .flex_1()
+                    .w_full()
                     // Sidebar (always visible, handles its own collapsed state)
                     .items_start()
                     .child({
                         let window_height = window_bounds.size.height;
 
                         div()
-                            .h(window_height - TITLE_BAR_HEIGHT - px(24.))
+                            .h(window_height - TITLE_BAR_HEIGHT - px(25.))
                             .overflow_hidden()
                             .when(self.sidebar_collapsed, |div| {
                                 div.w(px(48.)) // Collapsed width
                             })
                             .when(!self.sidebar_collapsed, |div| {
-                                div.w(px(280.)) // Expanded width
+                                div.w(px(256.)) // Expanded width
                             })
                             .border_r_1()
                             .border_color(cx.theme().border)
@@ -598,19 +602,17 @@ impl Render for BlancoApp {
                     })
                     // Main panel
                     .child({
-                        // Get window bounds to calculate available width
-                        let window_width = window_bounds.size.width;
-                        let sidebar_width = if self.sidebar_collapsed {
-                            px(48.)
-                        } else {
-                            px(280.)
-                        };
-                        let available_width = window_width - sidebar_width;
-
-                        div().size_full().max_w(available_width).child(
-                            // Editor panel (now contains everything - tabs, editor, results)
-                            self.editor_panel.clone(),
-                        )
+                        let window_height = window_bounds.size.height;
+                        div()
+                            .flex()
+                            .flex_1()
+                            .h(window_height - TITLE_BAR_HEIGHT - px(25.))
+                            .bg(rgb(0xffffff))
+                            .overflow_hidden()
+                            .child(
+                                // Editor panel (now contains everything - tabs, editor, results)
+                                self.editor_panel.clone(),
+                            )
                     }),
             )
             .children(sheet_layer)

@@ -1,13 +1,11 @@
 use gpui::{
-    actions, div, prelude::FluentBuilder, px, App, AppContext, Context, Entity, EventEmitter,
-    FocusHandle, Focusable, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
-    Window,
+    actions, div, prelude::FluentBuilder, px, App, AppContext, Axis, Context, Entity, FocusHandle,
+    Focusable, IntoElement, ParentElement, Render, Styled, Subscription, Window,
 };
 use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputState},
-    text::TextView,
     v_flex, ActiveTheme, Disableable, Icon, Sizable, StyledExt as _,
 };
 use std::sync::Arc;
@@ -15,7 +13,7 @@ use std::time::Duration;
 
 use super::chat_message_view::ChatMessageView;
 use super::chat_session::ChatSession;
-use super::chat_types::{ChatEvent, ChatMessage, MessageRole, SqlContext};
+use super::chat_types::{ChatEvent, ChatMessage, SqlContext};
 use blanco_core::chat_provider::{ChatProvider, ProviderError};
 use blanco_ui::IconName;
 
@@ -34,12 +32,13 @@ pub struct ChatPanel {
 impl ChatPanel {
     pub fn new(
         tab_id: usize,
-        _http_client: Option<Arc<dyn http_client::HttpClient>>,
+        provider: Arc<dyn ChatProvider<Error = ProviderError>>,
+        provider_name: String,
+        model_name: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        // Create chat session with empty session for now
-        let session = cx.new(|_cx| ChatSession::new_empty());
+        let session = cx.new(|_cx| ChatSession::new(provider, provider_name, model_name));
 
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
@@ -52,55 +51,58 @@ impl ChatPanel {
         let mut subscriptions = Vec::new();
 
         // Subscribe to session events
-        let subscription =
-            cx.subscribe_in(&session, window, |panel, _session, event, window, cx| {
-                match event {
-                    ChatEvent::MessageAdded { message } => {
-                        let message_view =
-                            ChatMessageView::new(&message.content, message.role.clone());
-                        panel.messages.push(message_view);
-                        panel.scroll_to_bottom(cx);
+        let subscription = cx.subscribe(&session, |panel, _session, event, cx| {
+            match event {
+                ChatEvent::MessageAdded { message } => {
+                    let message = message.clone();
+                    let message_view = ChatMessageView::new(
+                        panel.messages.len(),
+                        message.content,
+                        message.role.clone(),
+                    );
+                    panel.messages.push(message_view);
+                    panel.scroll_to_bottom(cx);
 
-                        cx.notify();
-                    }
-                    ChatEvent::StreamStarted { message_id } => {
-                        // Handle stream start
-                        log::debug!("Chat stream started: {}", message_id);
-                        panel.is_loading = true;
-                        cx.notify();
-                    }
-                    ChatEvent::StreamUpdate {
-                        message_id: _,
-                        content: _,
-                    } => {
-                        // Handle stream updates - scroll to show new content
-                        panel.scroll_to_bottom(cx);
-                        cx.notify();
-                    }
-                    ChatEvent::StreamCompleted {
-                        message_id: _,
-                        final_content: _,
-                    } => {
-                        // Handle stream completion
-                        panel.is_loading = false;
-                        panel.scroll_to_bottom(cx);
-                        cx.notify();
-                    }
-                    ChatEvent::Error { message } => {
-                        log::error!("Chat error: {}", message);
-                        panel.is_loading = false;
-                        cx.notify();
-                    }
-                    ChatEvent::SessionStarted { provider, model } => {
-                        log::info!("Chat session started: {} ({})", provider, model);
-                        cx.notify();
-                    }
-                    ChatEvent::SessionCleared => {
-                        panel.messages.clear();
-                        cx.notify();
-                    }
+                    cx.notify();
                 }
-            });
+                ChatEvent::StreamStarted { message_id } => {
+                    // Handle stream start
+                    log::debug!("Chat stream started: {}", message_id);
+                    panel.is_loading = true;
+                    cx.notify();
+                }
+                ChatEvent::StreamUpdate {
+                    message_id: _,
+                    content: _,
+                } => {
+                    // Handle stream updates - scroll to show new content
+                    panel.scroll_to_bottom(cx);
+                    cx.notify();
+                }
+                ChatEvent::StreamCompleted {
+                    message_id: _,
+                    final_content: _,
+                } => {
+                    // Handle stream completion
+                    panel.is_loading = false;
+                    panel.scroll_to_bottom(cx);
+                    cx.notify();
+                }
+                ChatEvent::Error { message } => {
+                    log::error!("Chat error: {}", message);
+                    panel.is_loading = false;
+                    cx.notify();
+                }
+                ChatEvent::SessionStarted { provider, model } => {
+                    log::info!("Chat session started: {} ({})", provider, model);
+                    cx.notify();
+                }
+                ChatEvent::SessionCleared => {
+                    panel.messages.clear();
+                    cx.notify();
+                }
+            }
+        });
 
         subscriptions.push(subscription);
 
@@ -132,8 +134,8 @@ impl ChatPanel {
         });
 
         // Add user message to session
-        self.session.update(cx, |session, _cx| {
-            session.add_message(user_message.clone());
+        self.session.update(cx, |session, cx| {
+            session.add_message(user_message.clone(), cx);
         });
 
         // For now, just add a simple assistant response
@@ -143,8 +145,8 @@ impl ChatPanel {
             ChatMessage::assistant(assistant_response, "mock-model".to_string());
 
         // Add assistant message to session
-        self.session.update(cx, |session, _cx| {
-            session.add_message(assistant_message);
+        self.session.update(cx, |session, cx| {
+            session.add_message(assistant_message, cx);
         });
     }
 
@@ -191,6 +193,7 @@ impl Render for ChatPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .size_full()
+            .min_h_0()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .border_t_1()
@@ -198,8 +201,7 @@ impl Render for ChatPanel {
             // Header
             .child(
                 h_flex()
-                    .px_4()
-                    .py_2()
+                    .p_3()
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .bg(cx.theme().muted.opacity(0.3))
@@ -230,40 +232,36 @@ impl Render for ChatPanel {
             )
             // Messages area
             .child(
-                v_flex()
+                div()
                     .flex_1()
-                    .px_4()
-                    .py_4()
-                    .gap_4()
-                    // Messages
-                    .children(
-                        self.messages
-                            .iter()
-                            .map(|message_view| message_view.clone().into_any_element()),
-                    )
-                    // Loading indicator
-                    .when(self.is_loading, |this| {
-                        this.child(
-                            div()
-                                .px_3()
-                                .py_2()
-                                .rounded_lg()
-                                .bg(cx.theme().muted)
-                                .border_1()
-                                .border_color(cx.theme().border)
-                                .child(
+                    .min_h_0()
+                    .child(
+                        v_flex()
+                            .p_3()
+                            .gap_4()
+                            .size_full()
+                            // Messages
+                            .children(
+                                self.messages
+                                    .iter()
+                                    .map(|message_view| message_view.clone().into_any_element()),
+                            )
+                            // Loading indicator
+                            .when(self.is_loading, |this| {
+                                this.child(
                                     div()
                                         .text_sm()
                                         .text_color(cx.theme().muted_foreground)
                                         .child("Thinking..."),
-                                ),
-                        )
-                    }),
+                                )
+                            })
+                            .scrollable(Axis::Vertical),
+                    ),
             )
             // Input area
             .child(
                 v_flex()
-                    .p_2()
+                    .p_3()
                     .bg(cx
                         .theme()
                         .highlight_theme
@@ -288,6 +286,7 @@ impl Render for ChatPanel {
                                 Input::new(&self.input_state)
                                     .disabled(self.is_loading)
                                     .bordered(false)
+                                    .p_0()
                                     .bg(cx
                                         .theme()
                                         .highlight_theme

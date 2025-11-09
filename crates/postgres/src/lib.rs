@@ -364,7 +364,7 @@ mod tests {
         postgres_connection.connect(&test_connection_string).await?;
 
         // Test a simple query to make sure Blanco can handle the data
-        let query_result = postgres_connection.execute_query("SELECT * FROM comprehensive_test WHERE id = (SELECT MAX(id) FROM comprehensive_test)").await?;
+        let query_result = postgres_connection.execute_query("SELECT * FROM comprehensive_test WHERE id = (SELECT MAX(id) FROM comprehensive_test)", None).await?;
 
         println!("Blanco PostgreSQL connection test successful!");
         println!("Columns returned: {}", query_result.columns.len());

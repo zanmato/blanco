@@ -202,6 +202,12 @@ pub struct ListTablesTool {
     connection_id_resolver: Option<Box<dyn Fn() -> Option<i64> + Send + Sync>>,
 }
 
+impl Default for ListTablesTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ListTablesTool {
     /// Create a new list-tables tool
     pub fn new() -> Self {

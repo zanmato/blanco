@@ -1,20 +1,20 @@
-use gpui::{
-    div, App, IntoElement, ParentElement, RenderOnce, Styled, Window,
-};
-use gpui_component::{v_flex, ActiveTheme, StyledExt as _, text::TextView};
+use gpui::{div, px, App, IntoElement, ParentElement, RenderOnce, Styled, Window};
+use gpui_component::{h_flex, text::TextView, v_flex, ActiveTheme, Icon, IconName, StyledExt as _};
 
 use super::chat_types::MessageRole;
 
 #[derive(IntoElement, Clone)]
 pub struct ChatMessageView {
+    pub id: usize,
     pub message: String,
     pub role: MessageRole,
 }
 
 impl ChatMessageView {
-    pub fn new(message: &str, role: MessageRole) -> Self {
+    pub fn new(id: usize, message: String, role: MessageRole) -> Self {
         Self {
-            message: message.to_owned(),
+            id,
+            message: message.clone(),
             role,
         }
     }
@@ -22,45 +22,75 @@ impl ChatMessageView {
 
 impl RenderOnce for ChatMessageView {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        v_flex()
-            .w_full()
-            .gap_1()
-            .child(
-                div()
-                    .text_xs()
-                    .font_medium()
+        v_flex().w_full().child(match self.role {
+            MessageRole::Assistant => {
+                // Assistant: No padding, no background, just markdown content
+                div().child(TextView::markdown(
+                    ("chat-message-content", self.id),
+                    self.message,
+                    window,
+                    cx,
+                ))
+            }
+            MessageRole::Tool => {
+                // Tool: No padding, no background, icon + text (no markdown), muted colors
+                h_flex()
+                    .gap_2()
                     .text_color(cx.theme().muted_foreground)
-                    .child(match self.role {
-                        MessageRole::User => "You",
-                        MessageRole::Assistant => "Agent",
-                        MessageRole::System => "System",
-                        MessageRole::Tool => "Tool Result",
-                    }),
-            )
-            .child(
-                div()
-                    .px_3()
-                    .py_2()
-                    .rounded_lg()
-                    .bg(match self.role {
-                        MessageRole::User => cx.theme().primary,
-                        MessageRole::Tool => cx.theme().accent.opacity(0.1),
-                        _ => cx.theme().muted,
-                    })
-                    .text_color(match self.role {
-                        MessageRole::User => cx.theme().primary_foreground,
-                        MessageRole::Tool => cx.theme().foreground,
-                        _ => cx.theme().foreground,
-                    })
                     .child(
-                        // Use TextView::markdown for proper markdown rendering
-                        TextView::markdown(
-                            "chat-message-content", // Unique ID
-                            self.message,
-                            window,
-                            cx,
-                        )
-                    ),
-            )
+                        Icon::new(IconName::Info)
+                            .text_color(cx.theme().muted_foreground)
+                            .size(px(16.)),
+                    )
+                    .child(div().text_sm().child(self.message))
+            }
+            MessageRole::User => {
+                // User: Padding, background, border, less rounding, markdown content
+                div()
+                    .p_3()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx
+                        .theme()
+                        .highlight_theme
+                        .style
+                        .editor_background
+                        .unwrap_or(cx.theme().background))
+                    .text_color(cx.theme().foreground)
+                    .child(TextView::markdown(
+                        ("chat-message-content", self.id),
+                        self.message,
+                        window,
+                        cx,
+                    ))
+            }
+            MessageRole::System => {
+                // System: Default styling (can be customized if needed)
+                v_flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_medium()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("System"),
+                    )
+                    .child(
+                        div()
+                            .px_3()
+                            .py_2()
+                            .rounded_lg()
+                            .bg(cx.theme().muted)
+                            .text_color(cx.theme().foreground)
+                            .child(TextView::markdown(
+                                ("chat-message-content", self.id),
+                                self.message,
+                                window,
+                                cx,
+                            )),
+                    )
+            }
+        })
     }
 }

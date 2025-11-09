@@ -1,11 +1,11 @@
 use gpui::{
-    div, px, App, AppContext, Context, DismissEvent, Entity, EventEmitter, IntoElement,
+    px, App, AppContext, Context, DismissEvent, Entity, EventEmitter, IntoElement,
     ParentElement, Render, Styled, Window,
 };
 use gpui_component::{
     form::form_field,
     input::{InputState, Input},
-    v_flex, StyledExt,
+    v_flex,
 };
 use log::error;
 
@@ -58,7 +58,7 @@ impl RenameTabForm {
         None
     }
 
-    pub fn rename_tab(&self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn rename_tab(&self, _window: &mut Window, cx: &mut Context<Self>) {
         let current_value = self.get_value(cx);
         log::info!(
             "RenameTabForm::rename_tab called - tab_index={}, current_value='{}'",
@@ -96,7 +96,7 @@ impl EventEmitter<DismissEvent> for RenameTabForm {}
 impl EventEmitter<AppEvent> for RenameTabForm {}
 
 impl Render for RenameTabForm {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         v_flex().gap_3().min_w(px(200.)).child(
             form_field()
                 .label("Name")

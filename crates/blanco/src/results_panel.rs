@@ -1858,8 +1858,8 @@ impl ResultsPanel {
 
         // Spawn background task to execute table operations
         let db_service = cx.global::<DbService>().clone();
-        let table_entity = self.table.clone();
-        let sql_log_entity: Option<Entity<blanco_ui::SqlLog>> = sql_log.cloned();
+        let _table_entity = self.table.clone();
+        let _sql_log_entity: Option<Entity<blanco_ui::SqlLog>> = sql_log.cloned();
 
         cx.background_spawn(async move {
             let start_time = std::time::Instant::now();

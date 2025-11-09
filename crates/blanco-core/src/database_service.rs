@@ -265,13 +265,13 @@ pub trait DatabaseService: Send + Sync {
 
                 let columns_json = columns_result
                     .rows
-                    .get(0)
-                    .and_then(|row| row.get(0))
+                    .first()
+                    .and_then(|row| row.first())
                     .map_or("[]".to_string(), |s| s.clone());
 
                 let column_count = columns_result
                     .rows
-                    .get(0)
+                    .first()
                     .and_then(|row| row.get(1))
                     .and_then(|count| count.parse::<i64>().ok())
                     .unwrap_or(0);

@@ -1,7 +1,7 @@
 use gpui::{
-    div, prelude::FluentBuilder, px, App, AppContext, Axis, ClickEvent, Context, Entity,
-    EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, Keystroke, MouseButton,
-    ParentElement, Render, Styled, Window,
+    div, prelude::FluentBuilder, px, rgb, App, AppContext, Axis, Context, Entity, EventEmitter,
+    FocusHandle, Focusable, InteractiveElement, IntoElement, Keystroke, MouseButton, ParentElement,
+    Render, StatefulInteractiveElement, Styled, Window,
 };
 use gpui_component::{
     button::{Button, ButtonVariants},
@@ -14,6 +14,7 @@ use gpui_component::{
 };
 use log::{debug, error, info};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::agent::{ChatPanel, SqlContext};
 use crate::app::RenameTab;
@@ -25,9 +26,9 @@ use crate::rename_form::RenameTabForm;
 use crate::results_panel::ResultsPanel;
 use crate::settings::{load_settings, Settings};
 use crate::sql_completion_provider::SqlCompletionProvider;
+use blanco_core::chat_provider::{ChatProvider, ProviderError};
 use blanco_ui::SqlLog;
 use gpui_component::Icon;
-use std::sync::Arc;
 
 #[derive(Clone)]
 pub enum EditorPanelEvent {
@@ -904,33 +905,37 @@ impl EditorPanel {
             query_tab.chat_enabled = !query_tab.chat_enabled;
 
             if query_tab.chat_enabled && query_tab.chat_panel.is_none() {
-                // Create chat panel if it doesn't exist
-                let chat_panel = cx.new(|cx| {
-                    // Try to create a chat panel with real provider
-                    match create_chat_panel_with_provider(
-                        query_tab.id,
-                        query_tab.connection_id,
-                        window,
-                        cx,
-                    ) {
-                        Ok(panel) => panel,
-                        Err(e) => {
-                            log::error!(
-                                "Failed to create chat provider: {}. Using mock provider.",
-                                e
-                            );
-                            ChatPanel::new(query_tab.id, None, window, cx)
-                        }
-                    }
-                });
-                query_tab.chat_panel = Some(chat_panel);
+                // Create chat provider info first
+                match create_chat_provider_info(query_tab.connection_id, cx) {
+                    Ok(provider_info) => {
+                        // Create chat panel with the provider info
+                        let chat_panel = cx.new(|cx| {
+                            ChatPanel::new(
+                                query_tab.id,
+                                provider_info.provider,
+                                provider_info.provider_name.clone(),
+                                provider_info.model_name.clone(),
+                                window,
+                                cx,
+                            )
+                        });
+                        query_tab.chat_panel = Some(chat_panel);
 
-                // Emit chat session started event
-                cx.emit(crate::app_events::AppEvent::ChatSessionStarted {
-                    tab_id: query_tab.id,
-                    provider: "Mock".to_string(),
-                    model: "mock-gpt-4".to_string(),
-                });
+                        // Emit chat session started event
+                        cx.emit(crate::app_events::AppEvent::ChatSessionStarted {
+                            tab_id: query_tab.id,
+                            provider: provider_info.provider_name,
+                            model: provider_info.model_name,
+                        });
+                    }
+                    Err(e) => {
+                        log::error!(
+                            "Failed to create chat provider: {}. Not creating chat panel.",
+                            e
+                        );
+                        query_tab.chat_enabled = false; // Disable chat if creation failed
+                    }
+                }
             } else if !query_tab.chat_enabled {
                 // Emit chat session ended event
                 cx.emit(crate::app_events::AppEvent::ChatSessionEnded {
@@ -977,8 +982,12 @@ impl Render for EditorPanel {
 
         let current_tab = self.tabs.get(self.active_tab_ix);
 
-        v_flex()
-            .size_full()
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .h_full()
+            .overflow_hidden()
             .child(
                 // Tab bar
                 TabBar::new("editor-tabs")
@@ -1030,7 +1039,7 @@ impl Render for EditorPanel {
                                                         .w(px(300.))
                                                         .child(form_for_modal.clone())
                                                         .footer({
-                                                            let form = form_clone.clone();
+                                                            let _form = form_clone.clone();
                                                             move |ok, cancel, window, cx| {
                                                                 vec![cancel(window, cx), ok(window, cx)]
                                                             }
@@ -1140,7 +1149,11 @@ impl Render for EditorPanel {
                     ),
             )
             // Render the active tab's complete view
-            .when_some(current_tab, |this, tab| {
+            .child(
+                div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .when_some(current_tab, |this, tab| {
                 match tab {
                     TabType::Query(query_tab) => {
                         // Query tab: Layout with optional chat panel
@@ -1150,8 +1163,9 @@ impl Render for EditorPanel {
                                 .child(
                                     resizable_panel().child(
                                         v_flex()
-                                            .flex_1()
                                             .h_full()
+                                            .w_full()
+                                            .overflow_hidden()
                                             .min_w_0()
                                             // Editor
                                             .child(
@@ -1166,6 +1180,7 @@ impl Render for EditorPanel {
                                                             .bordered(false)
                                                             .p_0()
                                                             .h_full()
+                                                            .rounded_none()
                                                             .font_family("Fira Code")
                                                             .text_size(px(14.))
                                                             .focus_bordered(false)
@@ -1222,6 +1237,7 @@ impl Render for EditorPanel {
                                                     .gap_2()
                                                     .border_t_1()
                                                     .border_color(cx.theme().border)
+                                                    .flex_wrap()
                                                     .bg(cx.theme().muted.opacity(0.5))
                                                     // Chat toggle button
                                                     .child(
@@ -1320,12 +1336,14 @@ impl Render for EditorPanel {
                                     |this| {
                                         this.child(
                                             resizable_panel().child(
-                                            div()
-                                                .size_full()
-                                                .min_w_80()
-                                                .border_l_1()
-                                                .border_color(cx.theme().border)
-                                                .child(query_tab.chat_panel.as_ref().unwrap().clone()),
+                                                div()
+                                                    .border_l_1()
+                                                    .border_color(cx.theme().border)
+                                                    .size_full()
+                                                    .min_h_0()
+                                                    .child(
+                                                        query_tab.chat_panel.as_ref().unwrap().clone(),
+                                                    ),
                                             ),
                                         )
                                     }
@@ -1398,17 +1416,18 @@ impl Render for EditorPanel {
                         )
                     }
                 }
-            })
+            }))
     }
 }
 
 /// Create a chat panel with a real provider based on current settings
-fn create_chat_panel_with_provider(
-    tab_id: usize,
-    connection_id: i64,
-    window: &mut Window,
-    cx: &mut gpui::Context<ChatPanel>,
-) -> anyhow::Result<ChatPanel> {
+struct ChatProviderInfo {
+    provider: Arc<dyn ChatProvider<Error = ProviderError>>,
+    provider_name: String,
+    model_name: String,
+}
+
+fn create_chat_provider_info(connection_id: i64, cx: &mut App) -> anyhow::Result<ChatProviderInfo> {
     // Load current settings
     let settings =
         load_settings().map_err(|e| anyhow::anyhow!("Failed to load settings: {}", e))?;
@@ -1428,13 +1447,14 @@ fn create_chat_panel_with_provider(
     // Get db_service
     let db_service = DbService::global(cx).clone();
 
-    // Create resolver and get provider
+    // Create chat provider
     let mut resolver = ChatProviderResolver::new(http_client.clone(), db_service);
     resolver.set_connection_id(connection_id);
-    let _provider_info = resolver.get_provider(&settings)?;
+    let provider_info = resolver.get_provider(&settings)?;
 
-    // Create chat panel with the provider
-    let chat_panel = ChatPanel::new(tab_id, Some(http_client), window, cx);
-
-    Ok(chat_panel)
+    Ok(ChatProviderInfo {
+        provider: provider_info.provider,
+        provider_name: provider_info.provider_name,
+        model_name: provider_info.model_name,
+    })
 }

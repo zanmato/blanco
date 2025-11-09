@@ -1,16 +1,15 @@
 use crate::connection_sidebar::{Sidebar, SidebarGroup, SidebarMenu, SidebarMenuItem};
 use gpui::{
-    div, App, AppContext, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement,
+    div, App, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement,
     IntoElement, ParentElement, Render, SharedString, Styled, Window,
 };
 use gpui_component::{
-    button::Button, h_flex, v_flex, ActiveTheme, IconName as GCIconName, Side, WindowExt as _,
+    v_flex, Side,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::app_events::AppEvent;
-use crate::connection_modal::NewConnectionModal;
 use crate::db_service::DbService;
 use blanco_ui::IconName;
 use log::info;
@@ -445,7 +444,7 @@ impl ConnectionSidebar {
                         {
                             conn_info.databases.clear();
                             for database_name in &databases {
-                                let mut database = DatabaseNode::new(database_name.clone());
+                                let database = DatabaseNode::new(database_name.clone());
                                 conn_info.databases.push(database);
                             }
                         }
