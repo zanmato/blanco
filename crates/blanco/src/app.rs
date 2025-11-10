@@ -607,7 +607,6 @@ impl Render for BlancoApp {
                             .flex()
                             .flex_1()
                             .h(window_height - TITLE_BAR_HEIGHT - px(25.))
-                            .bg(rgb(0xffffff))
                             .overflow_hidden()
                             .child(
                                 // Editor panel (now contains everything - tabs, editor, results)

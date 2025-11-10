@@ -10,7 +10,7 @@ use gpui_component::{
     kbd::Kbd,
     resizable::{h_resizable, resizable_panel},
     tab::{Tab, TabBar},
-    v_flex, ActiveTheme, IconName, Sizable, StyledExt, WindowExt as _,
+    v_flex, ActiveTheme, Sizable, StyledExt, WindowExt as _,
 };
 use log::{debug, error, info};
 use std::rc::Rc;
@@ -27,7 +27,7 @@ use crate::results_panel::ResultsPanel;
 use crate::settings::{load_settings, Settings};
 use crate::sql_completion_provider::SqlCompletionProvider;
 use blanco_core::chat_provider::{ChatProvider, ProviderError};
-use blanco_ui::SqlLog;
+use blanco_ui::{IconName, SqlLog};
 use gpui_component::Icon;
 
 #[derive(Clone)]
@@ -1243,11 +1243,7 @@ impl Render for EditorPanel {
                                                     .child(
                                                         Button::new("toggle-chat")
                                                             .outline()
-                                                            .icon(if query_tab.chat_enabled {
-                                                                IconName::Bot
-                                                            } else {
-                                                                IconName::Plus
-                                                            })
+                                                            .icon(IconName::Sparkles)
                                                             .label(if query_tab.chat_enabled {
                                                                 "Chat ON"
                                                             } else {
@@ -1320,13 +1316,6 @@ impl Render for EditorPanel {
                                                                 }
                                                             })),
                                                     )
-                                                    .child(div().flex_1())
-                                                    .child(
-                                                        div()
-                                                            .text_sm()
-                                                            .text_color(cx.theme().muted_foreground)
-                                                            .child("Double-click cells to edit")
-                                                    ),
                                         ),
                                     ),
                                 )

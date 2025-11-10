@@ -519,6 +519,19 @@ Would you like me to help you implement any of these optimizations?",
 
                                             if let Some(final_choice) = final_follow_up_response.choices.first() {
                                                 log::debug!("Final follow-up finish reason: {:?}", final_choice.finish_reason);
+                                                // Create result message
+                                                let result_message = ChatMessage::assistant(
+                                                    final_choice.message.content.clone(),
+                                                    model_name_for_tools.clone()
+                                                );
+
+                                                // Update state via the weak handle
+                                                if let Ok(_) = chat_session_handle.update(async_cx, |chat_session, cx| {
+                                                    chat_session.add_message(result_message.clone(), cx);
+                                                }) {
+                                                    // State updated successfully
+                                                }
+                                                
                                                 Ok(final_choice.message.content.clone())
                                             } else {
                                                 Err(anyhow::anyhow!("No final follow-up response content received"))
@@ -528,6 +541,19 @@ Would you like me to help you implement any of these optimizations?",
                                         }
                                     }
                                     _ => {
+                                        // Create result message
+                                        let result_message = ChatMessage::assistant(
+                                            follow_up_choice.message.content.clone(),
+                                            model_name_for_tools.clone()
+                                        );
+
+                                         // Update state via the weak handle
+                                        if let Ok(_) = chat_session_handle.update(async_cx, |chat_session, cx| {
+                                            chat_session.add_message(result_message.clone(), cx);
+                                        }) {
+                                            // State updated successfully
+                                        }
+
                                         // Normal response, return content
                                         Ok(follow_up_choice.message.content.clone())
                                     }
@@ -540,6 +566,19 @@ Would you like me to help you implement any of these optimizations?",
                         }
                     }
                     _ => {
+                        // Create result message
+                        let result_message = ChatMessage::assistant(
+                            choice.message.content.clone(),
+                            model_name_for_tools.clone()
+                        );
+
+                            // Update state via the weak handle
+                        if let Ok(_) = chat_session_handle.update(async_cx, |chat_session, cx| {
+                            chat_session.add_message(result_message.clone(), cx);
+                        }) {
+                            // State updated successfully
+                        }
+
                         // Handle normal responses
                         Ok(choice.message.content.clone())
                     }

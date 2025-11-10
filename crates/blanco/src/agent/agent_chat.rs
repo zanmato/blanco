@@ -11,6 +11,8 @@ use gpui_component::{
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::agent::chat_types::MessageRole;
+
 use super::chat_message_view::ChatMessageView;
 use super::chat_session::ChatSession;
 use super::chat_types::{ChatEvent, ChatMessage, SqlContext};
@@ -54,10 +56,14 @@ impl ChatPanel {
         let subscription = cx.subscribe(&session, |panel, _session, event, cx| {
             match event {
                 ChatEvent::MessageAdded { message } => {
+                    log::info!("Message added! {:?}", message);
                     let message = message.clone();
                     let message_view = ChatMessageView::new(
                         panel.messages.len(),
-                        message.content,
+                        match message.role {
+                            MessageRole::Tool => message.tool_call_id.unwrap_or("tool".to_owned()),
+                            _ => message.content,
+                        },
                         message.role.clone(),
                     );
                     panel.messages.push(message_view);
@@ -125,9 +131,6 @@ impl ChatPanel {
             return;
         }
 
-        // Create user message
-        let user_message = ChatMessage::user(input_text.clone());
-
         // Clear the input
         self.input_state.update(cx, |input, cx| {
             input.set_value("", window, cx);
@@ -135,18 +138,7 @@ impl ChatPanel {
 
         // Add user message to session
         self.session.update(cx, |session, cx| {
-            session.add_message(user_message.clone(), cx);
-        });
-
-        // For now, just add a simple assistant response
-        // In a real implementation, this would call the chat provider
-        let assistant_response = format!("I received your message: '{}'", input_text);
-        let assistant_message =
-            ChatMessage::assistant(assistant_response, "mock-model".to_string());
-
-        // Add assistant message to session
-        self.session.update(cx, |session, cx| {
-            session.add_message(assistant_message, cx);
+            session.send_message(input_text.clone(), cx).detach();
         });
     }
 
@@ -232,31 +224,28 @@ impl Render for ChatPanel {
             )
             // Messages area
             .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .child(
-                        v_flex()
-                            .p_3()
-                            .gap_4()
-                            .size_full()
-                            // Messages
-                            .children(
-                                self.messages
-                                    .iter()
-                                    .map(|message_view| message_view.clone().into_any_element()),
+                div().flex_1().min_h_0().child(
+                    v_flex()
+                        .p_3()
+                        .gap_4()
+                        .size_full()
+                        // Messages
+                        .children(
+                            self.messages
+                                .iter()
+                                .map(|message_view| message_view.clone().into_any_element()),
+                        )
+                        // Loading indicator
+                        .when(self.is_loading, |this| {
+                            this.child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("Thinking..."),
                             )
-                            // Loading indicator
-                            .when(self.is_loading, |this| {
-                                this.child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child("Thinking..."),
-                                )
-                            })
-                            .scrollable(Axis::Vertical),
-                    ),
+                        })
+                        .scrollable(Axis::Vertical),
+                ),
             )
             // Input area
             .child(
