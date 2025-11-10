@@ -1,6 +1,6 @@
 use gpui::{
-    div, prelude::FluentBuilder, App, AppContext, Context, Entity, FocusHandle, Focusable,
-    IntoElement, ParentElement, Render, Styled, Window,
+    div, prelude::FluentBuilder, px, App, AppContext, Axis, Context, Entity, FocusHandle,
+    Focusable, IntoElement, ParentElement, Render, Styled, Window,
 };
 use gpui_component::{
     h_flex,
@@ -189,25 +189,23 @@ impl PostgresForm {
             )
             // SSH Tunnel Configuration Section
             .child(
-                div()
-                    .mt_4()
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .items_center()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_semibold()
-                                    .child("SSH Tunnel Configuration")
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child("(Optional - Connect through SSH bastion host)")
-                            ),
-                    )
+                div().mt_4().child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_semibold()
+                                .child("SSH Tunnel Configuration"),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("(Optional - Connect through SSH bastion host)"),
+                        ),
+                ),
             )
             .child(
                 v_flex()
@@ -436,13 +434,25 @@ impl NewConnectionModal {
         let ssh_host = cx.new(|cx| InputState::new(window, cx).placeholder("SSH Host"));
         let ssh_port = cx.new(|cx| InputState::new(window, cx).placeholder("22"));
         let ssh_user = cx.new(|cx| InputState::new(window, cx).placeholder("SSH Username"));
-        let ssh_password = cx.new(|cx| InputState::new(window, cx).placeholder("SSH Password (optional)"));
-        let ssh_private_key = cx.new(|cx| InputState::new(window, cx).placeholder("Private Key Path (optional)"));
-        let ssh_private_key_password = cx.new(|cx| InputState::new(window, cx).placeholder("Private Key Password (optional)"));
+        let ssh_password =
+            cx.new(|cx| InputState::new(window, cx).placeholder("SSH Password (optional)"));
+        let ssh_private_key =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Private Key Path (optional)"));
+        let ssh_private_key_password =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Private Key Password (optional)"));
 
         let postgres_form = PostgresForm::new(
-            pg_host, pg_port, pg_database, pg_username, pg_password,
-            ssh_host, ssh_port, ssh_user, ssh_password, ssh_private_key, ssh_private_key_password,
+            pg_host,
+            pg_port,
+            pg_database,
+            pg_username,
+            pg_password,
+            ssh_host,
+            ssh_port,
+            ssh_user,
+            ssh_password,
+            ssh_private_key,
+            ssh_private_key_password,
         );
 
         Self {
@@ -502,45 +512,47 @@ impl Render for NewConnectionModal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let connector_type = self.get_selected_connector_type(cx);
 
-        v_flex()
-            .gap_4()
-            .child(
-                v_flex()
-                    .gap_2()
-                    .child(div().text_sm().child("Connection Name"))
-                    .child(Input::new(&self.name_input)),
-            )
-            .child(
-                v_flex()
-                    .gap_2()
-                    .child(div().text_sm().child("Database Type"))
-                    .child(Select::new(&self.db_type_select)),
-            )
-            // Render the appropriate form based on selected type
-            .child(match connector_type {
-                ConnectorType::SQLite => self.sqlite_form.render(cx),
-                ConnectorType::PostgreSQL => self.postgres_form.render(cx),
-            })
-            // Test result display
-            .when_some(self.test_result.clone(), |this, result| {
-                this.child(
-                    h_flex()
-                        .items_center()
+        v_flex().gap_4().max_h(px(600.0)).child(
+            v_flex()
+                .child(
+                    v_flex()
                         .gap_2()
-                        .p_3()
-                        .rounded(cx.theme().radius)
-                        .when(result.success, |this| {
-                            this.bg(cx.theme().green.opacity(0.1))
-                                .text_color(cx.theme().green)
-                                .child(Icon::new(IconName::CircleCheck).size_4())
-                        })
-                        .when(!result.success, |this| {
-                            this.bg(cx.theme().red.opacity(0.1))
-                                .text_color(cx.theme().red)
-                                .child(Icon::new(IconName::CircleX).size_4())
-                        })
-                        .child(div().text_sm().child(result.message)),
+                        .child(div().text_sm().child("Connection Name"))
+                        .child(Input::new(&self.name_input)),
                 )
-            })
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .child(div().text_sm().child("Database Type"))
+                        .child(Select::new(&self.db_type_select)),
+                )
+                // Render the appropriate form based on selected type
+                .child(match connector_type {
+                    ConnectorType::SQLite => self.sqlite_form.render(cx),
+                    ConnectorType::PostgreSQL => self.postgres_form.render(cx),
+                })
+                // Test result display
+                .when_some(self.test_result.clone(), |this, result| {
+                    this.child(
+                        h_flex()
+                            .items_center()
+                            .gap_2()
+                            .p_3()
+                            .rounded(cx.theme().radius)
+                            .when(result.success, |this| {
+                                this.bg(cx.theme().green.opacity(0.1))
+                                    .text_color(cx.theme().green)
+                                    .child(Icon::new(IconName::CircleCheck).size_4())
+                            })
+                            .when(!result.success, |this| {
+                                this.bg(cx.theme().red.opacity(0.1))
+                                    .text_color(cx.theme().red)
+                                    .child(Icon::new(IconName::CircleX).size_4())
+                            })
+                            .child(div().text_sm().child(result.message)),
+                    )
+                })
+                .scrollable(Axis::Vertical),
+        )
     }
 }
