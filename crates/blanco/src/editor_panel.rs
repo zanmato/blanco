@@ -8,7 +8,7 @@ use gpui_component::{
     h_flex,
     input::{Input, InputState, TabSize},
     kbd::Kbd,
-    resizable::{h_resizable, resizable_panel},
+    resizable::{h_resizable, resizable_panel, v_resizable},
     tab::{Tab, TabBar},
     v_flex, ActiveTheme, Sizable, StyledExt, WindowExt as _,
 };
@@ -840,7 +840,7 @@ impl EditorPanel {
             connection_name: params.connection_name.clone(),
             database_name: params.database_name.clone(),
             schema_name: params.schema_name.clone(),
-            editor,
+            editor: editor.clone(),
             db_id: params.db_id,
             results_panel: cx.new(|cx| ResultsPanel::new(window, cx)),
             sql_log: cx.new(|cx| SqlLog::new(1000, cx.theme().highlight_theme.clone())),
@@ -848,6 +848,30 @@ impl EditorPanel {
             chat_enabled: false,
             chat_panel: None,
         };
+
+        // Set up subscription to listen for InputEvent from the editor
+        let editor_subscription = cx.subscribe_in(&editor, window, {
+            let tab_id = query_tab.id;
+            move |editor_panel: &mut EditorPanel, _editor, event, window, cx| {
+                // Only handle events from the active tab
+                if let Some(active_tab) = editor_panel.tabs.get(editor_panel.active_tab_ix) {
+                    if let TabType::Query(active_query_tab) = active_tab {
+                        if active_query_tab.id == tab_id {
+                            if let gpui_component::input::InputEvent::PressEnter {
+                                secondary: false,
+                            } = event
+                            {
+                                // Ctrl/Cmd+Enter was pressed, run the query
+                                editor_panel.run_query(window, cx);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // Store the subscription
+        self._subscriptions.push(editor_subscription);
 
         self.tabs.push(TabType::Query(query_tab));
         cx.notify();
@@ -1158,164 +1182,176 @@ impl Render for EditorPanel {
                     TabType::Query(query_tab) => {
                         // Query tab: Layout with optional chat panel
                         this.child(
-                            h_resizable("editor-split")
+                            h_resizable(("editor-split", query_tab.id))
                                 // Left side: Always show the main content (Editor + Button bar + Results)
                                 .child(
                                     resizable_panel().child(
-                                        v_flex()
-                                            .h_full()
-                                            .w_full()
-                                            .overflow_hidden()
-                                            .min_w_0()
-                                            // Editor
+                                        v_resizable(("editor-results-split", query_tab.id))
                                             .child(
-                                                div()
-                                                    .flex_1()
-                                                    .min_h_0()
-                                                    .border_t_1()
-                                                    .border_color(cx.theme().border)
-                                                    .relative() // Make container relative for absolute popup positioning
-                                                    .child(
-                                                        Input::new(&query_tab.editor)
-                                                            .bordered(false)
-                                                            .p_0()
-                                                            .h_full()
-                                                            .rounded_none()
-                                                            .font_family("Fira Code")
-                                                            .text_size(px(14.))
-                                                            .focus_bordered(false)
-                                                    )
-                                            )
-                                            // Button bar (between editor and results)
-                                            .child(
-                                                h_flex()
-                                                    .px_3()
-                                                    .py_1()
-                                                    .gap_2()
-                                                    .border_t_1()
-                                                    .border_color(cx.theme().border)
-                                                    .bg(cx.theme().muted.opacity(0.5))
-                                                    .justify_end()
-                                                    // Run button (always visible)
-                                                    .child(
-                                                            Button::new("run-query")
-                                                                .outline()
-                                                                .icon(IconName::Check)
-                                                                .label("Run Current")
-                                                                .children(vec![Kbd::new(Keystroke::parse("shift-enter").unwrap()).into_any_element()])
-                                                                .on_click(cx.listener(|panel, _, window, cx| panel.run_query(window, cx))),
+                                                resizable_panel().size(200.).child(
+                                                    v_flex()
+                                                        .h_full()
+                                                        .w_full()
+                                                        .overflow_hidden()
+                                                        .min_w_0()
+                                                        // Editor
+                                                        .child(
+                                                            div()
+                                                                .flex_1()
+                                                                .min_h_0()
+                                                                .border_t_1()
+                                                                .border_color(cx.theme().border)
+                                                                .relative() // Make container relative for absolute popup positioning
+                                                                .child(
+                                                                    Input::new(&query_tab.editor)
+                                                                        .bordered(false)
+                                                                        .p_0()
+                                                                        .h_full()
+                                                                        .rounded_none()
+                                                                        .font_family("Fira Code")
+                                                                        .text_size(px(14.))
+                                                                        .focus_bordered(false)
+                                                                )
                                                         )
-                                            )
-                                            // Results section: Results on top, SQL Log on bottom
-                                            .child(
-                                                v_flex()
-                                                    .flex_grow()
-                                                    .min_h(px(200.))
-                                                    // Results panel (top)
-                                                    .child(
-                                                        div()
-                                                            .flex_1()
-                                                            .child(query_tab.results_panel.clone())
-                                                    )
-                                                    // SQL Log panel (bottom)
-                                                    .child(
-                                                        div()
-                                                            .flex_1()
-                                                            .overflow_hidden()
-                                                            .bg(cx.theme().highlight_theme.style.editor_background.unwrap_or(cx.theme().background))
-                                                            .child(
-                                                                div()
-                                                                    .child(query_tab.sql_log.clone())
-                                                                    .scrollable(Axis::Vertical)
-                                                            )
-                                                    )
-                                            )
-                                            // Row operation buttons
-                                            .child(
-                                                h_flex()
-                                                    .p_3()
-                                                    .gap_2()
-                                                    .border_t_1()
-                                                    .border_color(cx.theme().border)
-                                                    .flex_wrap()
-                                                    .bg(cx.theme().muted.opacity(0.5))
-                                                    // Chat toggle button
-                                                    .child(
-                                                        Button::new("toggle-chat")
-                                                            .outline()
-                                                            .icon(IconName::Sparkles)
-                                                            .label(if query_tab.chat_enabled {
-                                                                "Chat ON"
-                                                            } else {
-                                                                "Chat OFF"
-                                                            })
-                                                            .when(query_tab.chat_enabled, |btn| {
-                                                                btn.primary()
-                                                            })
-                                                            .on_click(cx.listener(|this, _, _window, cx| {
-                                                                // Toggle chat for the current query tab
-                                                                this.toggle_chat_for_active_tab(_window, cx);
-                                                            }))
-                                                    )
-                                                    .child(
-                                                        Button::new("add-row")
-                                                            .outline()
-                                                            .icon(IconName::Plus)
-                                                            .label("Add Row")
-                                                            .on_click(cx.listener(|this, _, _window, cx| {
-                                                                // Add a new row with empty values
-                                                                if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
-                                                                    query_tab.results_panel.update(cx, |results_panel, cx| {
-                                                                        results_panel.add_new_row(cx);
-                                                                    });
-                                                                }
-                                                            })),
-                                                    )
-                                                    .child(
-                                                        Button::new("duplicate-row")
-                                                            .outline()
-                                                            .icon(IconName::Copy)
-                                                            .label("Duplicate Row")
-                                                            // TODO: Disable when no row is selected
-                                                            .on_click(cx.listener(|this, _, _window, cx| {
-                                                                // Duplicate the first row (for now - later we'll implement row selection)
-                                                                if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
-                                                                    query_tab.results_panel.update(cx, |results_panel, cx| {
-                                                                        results_panel.duplicate_row(0, cx); // Duplicate first row for now
-                                                                    });
-                                                                }
-                                                            })),
-                                                    )
-                                                    // Commit and rollback buttons (always available)
-                                                    .child(
-                                                        Button::new("commit-changes")
-                                                            .outline()
-                                                            .icon(IconName::Check)
-                                                            .label("Commit Changes")
-                                                            .children(vec![Kbd::new(Keystroke::parse("cmd-shift-c").unwrap()).into_any_element()])
-                                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                                if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
-                                                                    // Execute the actual commit in the results panel with SQL logging
-                                                                    query_tab.results_panel.update(cx, |panel, cx| {
-                                                                        panel.commit_changes_with_sql_log(window, &query_tab.sql_log, cx);
-                                                                    });
-                                                                }
-                                                            })),
-                                                    )
-                                                    .child(
-                                                        Button::new("rollback-changes")
-                                                            .outline()
-                                                            .icon(IconName::CircleX)
-                                                            .label("Rollback")
-                                                            .children(vec![Kbd::new(Keystroke::parse("cmd-shift-r").unwrap()).into_any_element()])
-                                                            .on_click(cx.listener(|this, _, _window, cx| {
-                                                                if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
-                                                                    query_tab.results_panel.update(cx, |panel, cx| {
-                                                                        panel.rollback_changes(_window, cx);
-                                                                    });
-                                                                }
-                                                            })),
-                                                    )
+                                                )
+                                            ).child(
+                                                resizable_panel().size(200.).child(
+                                                    v_flex()
+                                                        .h_full()
+                                                        .w_full()
+                                                        .overflow_hidden()
+                                                        .min_w_0()
+                                                        // Button bar (between editor and results)
+                                                        .child(
+                                                            h_flex()
+                                                                .px_3()
+                                                                .py_1()
+                                                                .gap_2()
+                                                                .border_t_1()
+                                                                .border_color(cx.theme().border)
+                                                                .bg(cx.theme().muted.opacity(0.5))
+                                                                .justify_end()
+                                                                // Run button (always visible)
+                                                                .child(
+                                                                        Button::new("run-query")
+                                                                            .outline()
+                                                                            .label("Run Current")
+                                                                            .children(vec![Kbd::new(Keystroke::parse("shift-enter").unwrap()).into_any_element()])
+                                                                            .on_click(cx.listener(|panel, _, window, cx| panel.run_query(window, cx))),
+                                                                    )
+                                                        )
+                                                        // Results section: Results on top, SQL Log on bottom
+                                                        .child(
+                                                            v_flex()
+                                                                .flex_grow()
+                                                                .min_h(px(200.))
+                                                                // Results panel (top)
+                                                                .child(
+                                                                    div()
+                                                                        .flex_1()
+                                                                        .child(query_tab.results_panel.clone())
+                                                                )
+                                                                // SQL Log panel (bottom)
+                                                                .child(
+                                                                    div()
+                                                                        .flex_1()
+                                                                        .overflow_hidden()
+                                                                        .bg(cx.theme().highlight_theme.style.editor_background.unwrap_or(cx.theme().background))
+                                                                        .child(
+                                                                            div()
+                                                                                .child(query_tab.sql_log.clone())
+                                                                                .scrollable(Axis::Vertical)
+                                                                        )
+                                                                )
+                                                        )
+                                                        // Row operation buttons
+                                                        .child(
+                                                            h_flex()
+                                                                .p_3()
+                                                                .gap_2()
+                                                                .border_t_1()
+                                                                .border_color(cx.theme().border)
+                                                                .flex_wrap()
+                                                                .bg(cx.theme().muted.opacity(0.5))
+                                                                // Chat toggle button
+                                                                .child(
+                                                                    Button::new("toggle-chat")
+                                                                        .outline()
+                                                                        .icon(IconName::Sparkles)
+                                                                        .label(if query_tab.chat_enabled {
+                                                                            "Chat ON"
+                                                                        } else {
+                                                                            "Chat OFF"
+                                                                        })
+                                                                        .when(query_tab.chat_enabled, |btn| {
+                                                                            btn.primary()
+                                                                        })
+                                                                        .on_click(cx.listener(|this, _, _window, cx| {
+                                                                            // Toggle chat for the current query tab
+                                                                            this.toggle_chat_for_active_tab(_window, cx);
+                                                                        }))
+                                                                )
+                                                                .child(
+                                                                    Button::new("add-row")
+                                                                        .outline()
+                                                                        .icon(IconName::Plus)
+                                                                        .label("Add Row")
+                                                                        .on_click(cx.listener(|this, _, _window, cx| {
+                                                                            // Add a new row with empty values
+                                                                            if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
+                                                                                query_tab.results_panel.update(cx, |results_panel, cx| {
+                                                                                    results_panel.add_new_row(cx);
+                                                                                });
+                                                                            }
+                                                                        })),
+                                                                )
+                                                                .child(
+                                                                    Button::new("duplicate-row")
+                                                                        .outline()
+                                                                        .icon(IconName::Copy)
+                                                                        .label("Duplicate Row")
+                                                                        // TODO: Disable when no row is selected
+                                                                        .on_click(cx.listener(|this, _, _window, cx| {
+                                                                            // Duplicate the first row (for now - later we'll implement row selection)
+                                                                            if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
+                                                                                query_tab.results_panel.update(cx, |results_panel, cx| {
+                                                                                    results_panel.duplicate_row(0, cx); // Duplicate first row for now
+                                                                                });
+                                                                            }
+                                                                        })),
+                                                                )
+                                                                // Commit and rollback buttons (always available)
+                                                                .child(
+                                                                    Button::new("commit-changes")
+                                                                        .outline()
+                                                                        .icon(IconName::Check)
+                                                                        .label("Commit Changes")
+                                                                        .children(vec![Kbd::new(Keystroke::parse("cmd-shift-c").unwrap()).into_any_element()])
+                                                                        .on_click(cx.listener(|this, _, window, cx| {
+                                                                            if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
+                                                                                // Execute the actual commit in the results panel with SQL logging
+                                                                                query_tab.results_panel.update(cx, |panel, cx| {
+                                                                                    panel.commit_changes_with_sql_log(window, &query_tab.sql_log, cx);
+                                                                                });
+                                                                            }
+                                                                        })),
+                                                                )
+                                                                .child(
+                                                                    Button::new("rollback-changes")
+                                                                        .outline()
+                                                                        .icon(IconName::CircleX)
+                                                                        .label("Rollback")
+                                                                        .children(vec![Kbd::new(Keystroke::parse("cmd-shift-r").unwrap()).into_any_element()])
+                                                                        .on_click(cx.listener(|this, _, _window, cx| {
+                                                                            if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
+                                                                                query_tab.results_panel.update(cx, |panel, cx| {
+                                                                                    panel.rollback_changes(_window, cx);
+                                                                                });
+                                                                            }
+                                                                        })),
+                                                                ),
+                                                            ),
+                                                        ),
                                         ),
                                     ),
                                 )
@@ -1344,13 +1380,16 @@ impl Render for EditorPanel {
                         this.child(
                             v_flex()
                                 .flex_1()
+                                .h_full()
                                 .overflow_hidden()
                                 // Editor
                                 .child(
-                                    v_flex()
+                                    div()
                                         .flex_1()
+                                        .min_h_0()
                                         .border_t_1()
                                         .border_color(cx.theme().border)
+                                        .relative()
                                         .child(
                                             Input::new(&settings_tab.editor)
                                                 .bordered(false)

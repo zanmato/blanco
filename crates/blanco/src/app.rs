@@ -26,7 +26,6 @@ actions!(
     [
         Quit,
         About,
-        NewQuery,
         OpenConnection,
         OpenSettings,
         OpenNewConnectionModal,
@@ -47,26 +46,12 @@ pub struct ToggleSidebar;
 
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
-pub struct NewQueryForDatabase {
+pub struct NewQuery {
     pub connection_id: i64,
     pub database_name: String,
-}
-
-#[derive(Action, Clone, PartialEq, Eq)]
-#[action(namespace = blanco_app, no_json)]
-pub struct NewQueryForSchema {
-    pub connection_id: i64,
-    pub database_name: String,
-    pub schema_name: String,
-}
-
-#[derive(Action, Clone, PartialEq, Eq)]
-#[action(namespace = blanco_app, no_json)]
-pub struct NewQueryForTable {
-    pub connection_id: i64,
-    pub database_name: String,
-    pub schema_name: String,
-    pub table_name: String,
+    pub schema_name: Option<String>,
+    pub table_name: Option<String>,
+    pub content: Option<String>,
 }
 
 // Copy and selection actions
@@ -424,89 +409,53 @@ impl BlancoApp {
         });
     }
 
-    fn on_new_query_for_database(
+    fn on_new_query(
         &mut self,
-        action: &NewQueryForDatabase,
+        action: &NewQuery,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        log::info!("on_new_query_for_database called: {}", action.database_name);
-        // Create a new query tab for the specified database
-        self.editor_panel.update(cx, |panel, cx| {
-            panel.create_and_add_tab_with_connection(
-                window,
-                TabCreationParams {
-                    title: action.database_name.clone(),
-                    content: None,
-                    db_id: None,
-                    connection_id: action.connection_id,
-                    connection_type: "".to_owned(),
-                    connection_name: None,
-                    database_name: action.database_name.clone(),
-                    schema_name: None,
-                },
-                cx,
-            );
-        });
-        cx.notify();
-    }
+        // Generate appropriate title based on provided parameters
+        let title = match (&action.schema_name, &action.table_name) {
+            (None, None) => action.database_name.clone(),
+            (Some(schema), None) => format!("{}.{}", action.database_name, schema),
+            (Some(schema), Some(table)) => format!("{}.{}.{}", action.database_name, schema, table),
+            (None, Some(_)) => {
+                // This shouldn't happen in normal usage, but handle gracefully
+                action.database_name.clone()
+            }
+        };
 
-    fn on_new_query_for_schema(
-        &mut self,
-        action: &NewQueryForSchema,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        log::info!(
-            "on_new_query_for_schema called: {}.{}",
-            action.database_name,
-            action.schema_name
-        );
-        // Create a new query tab for the specified schema in a database
-        self.editor_panel.update(cx, |panel, cx| {
-            panel.create_and_add_tab_with_connection(
-                window,
-                TabCreationParams {
-                    title: action.database_name.clone(),
-                    content: None,
-                    db_id: None,
-                    connection_id: action.connection_id,
-                    connection_type: "".to_owned(),
-                    connection_name: None,
-                    database_name: action.database_name.clone(),
-                    schema_name: Some(action.schema_name.clone()),
-                },
-                cx,
-            );
+        // Generate content for table queries if not provided
+        let content = action.content.clone().or_else(|| {
+            action.table_name.as_ref().map(|table| {
+                match &action.schema_name {
+                    Some(schema) => format!("SELECT * FROM {}.{}", schema, table),
+                    None => format!("SELECT * FROM {}", table),
+                }
+            })
         });
-        cx.notify();
-    }
 
-    fn on_new_query_for_table(
-        &mut self,
-        action: &NewQueryForTable,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
         log::info!(
-            "on_new_query_for_table called: {}.{}.{}",
-            action.database_name,
+            "on_new_query called: {} (schema: {:?}, table: {:?})",
+            title,
             action.schema_name,
             action.table_name
         );
-        // Create a new query tab for the specified table with a pre-filled SELECT query
+
+        // Create a new query tab with the specified parameters
         self.editor_panel.update(cx, |panel, cx| {
             panel.create_and_add_tab_with_connection(
                 window,
                 TabCreationParams {
-                    title: action.database_name.clone(),
-                    content: Some(format!("SELECT * FROM {}", action.table_name)),
+                    title,
+                    content,
                     db_id: None,
                     connection_id: action.connection_id,
                     connection_type: "".to_owned(),
                     connection_name: None,
                     database_name: action.database_name.clone(),
-                    schema_name: Some(action.schema_name.clone()),
+                    schema_name: action.schema_name.clone(),
                 },
                 cx,
             );
@@ -551,9 +500,7 @@ impl Render for BlancoApp {
             .flex_col()
             .on_action(cx.listener(Self::on_quit))
             .on_action(cx.listener(Self::on_about))
-            .on_action(cx.listener(Self::on_new_query_for_database))
-            .on_action(cx.listener(Self::on_new_query_for_schema))
-            .on_action(cx.listener(Self::on_new_query_for_table))
+            .on_action(cx.listener(Self::on_new_query))
             .on_action(cx.listener(Self::on_open_connection))
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::on_settings))
@@ -625,9 +572,7 @@ fn init_menus(cx: &mut App) {
     cx.bind_keys([
         gpui::KeyBinding::new("cmd-,", OpenSettings, None),
         gpui::KeyBinding::new("ctrl-,", OpenSettings, None),
-        // Register keyboard shortcuts for query execution and commit operations
-        gpui::KeyBinding::new("cmd-enter", RunQuery, None),
-        gpui::KeyBinding::new("ctrl-enter", RunQuery, None),
+        // Register keyboard shortcuts for commit operations
         gpui::KeyBinding::new("cmd-shift-c", CommitChanges, None),
         gpui::KeyBinding::new("ctrl-shift-c", CommitChanges, None),
         gpui::KeyBinding::new("cmd-shift-r", RollbackChanges, None),
@@ -637,8 +582,6 @@ fn init_menus(cx: &mut App) {
         Menu {
             name: "File".into(),
             items: vec![
-                MenuItem::action("New Query", NewQuery),
-                MenuItem::Separator,
                 MenuItem::action("New Connection", OpenNewConnectionModal),
                 MenuItem::action("Open Connection", OpenConnection),
                 MenuItem::action("Preferences...", OpenSettings),
@@ -660,19 +603,6 @@ fn init_menus(cx: &mut App) {
                 MenuItem::separator(),
                 MenuItem::action("Select All", gpui_component::input::SelectAll),
             ],
-        },
-        Menu {
-            name: "Query".into(),
-            items: vec![
-                MenuItem::action("Run Query", RunQuery),
-                MenuItem::separator(),
-                MenuItem::action("Commit Changes", CommitChanges),
-                MenuItem::action("Rollback Changes", RollbackChanges),
-            ],
-        },
-        Menu {
-            name: "View".into(),
-            items: vec![MenuItem::action("Toggle Sidebar", ToggleSidebar)],
         },
     ]);
 }

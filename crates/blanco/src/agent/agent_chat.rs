@@ -13,9 +13,9 @@ use std::time::Duration;
 
 use crate::agent::chat_types::MessageRole;
 
-use super::chat_message_view::ChatMessageView;
+use super::chat_message_view::ChatMessageState;
 use super::chat_session::ChatSession;
-use super::chat_types::{ChatEvent, ChatMessage, SqlContext};
+use super::chat_types::{ChatEvent, SqlContext};
 use blanco_core::chat_provider::{ChatProvider, ProviderError};
 use blanco_ui::IconName;
 
@@ -25,7 +25,7 @@ pub struct ChatPanel {
     pub focus_handle: FocusHandle,
     pub session: Entity<ChatSession>,
     pub input_state: Entity<InputState>,
-    pub messages: Vec<ChatMessageView>,
+    pub messages: Vec<Entity<ChatMessageState>>,
     pub _subscriptions: Vec<Subscription>,
     pub is_loading: bool,
     pub tab_id: usize,
@@ -58,15 +58,16 @@ impl ChatPanel {
                 ChatEvent::MessageAdded { message } => {
                     log::info!("Message added! {:?}", message);
                     let message = message.clone();
-                    let message_view = ChatMessageView::new(
+                    let message_state = cx.new(|cx| ChatMessageState::new(
                         panel.messages.len(),
                         match message.role {
                             MessageRole::Tool => message.tool_call_id.unwrap_or("tool".to_owned()),
                             _ => message.content,
                         },
                         message.role.clone(),
-                    );
-                    panel.messages.push(message_view);
+                        cx,
+                    ));
+                    panel.messages.push(message_state);
                     panel.scroll_to_bottom(cx);
 
                     cx.notify();
@@ -233,7 +234,7 @@ impl Render for ChatPanel {
                         .children(
                             self.messages
                                 .iter()
-                                .map(|message_view| message_view.clone().into_any_element()),
+                                .map(|message_state| message_state.clone()),
                         )
                         // Loading indicator
                         .when(self.is_loading, |this| {

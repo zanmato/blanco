@@ -735,9 +735,12 @@ impl Render for ConnectionSidebar {
                                         move |menu, _window, _cx| {
                                             menu.menu(
                                                 "New Query",
-                                                Box::new(crate::app::NewQueryForDatabase {
+                                                Box::new(crate::app::NewQuery {
                                                     connection_id: connection_id,
                                                     database_name: database_name_for_menu.clone(),
+                                                    schema_name: None,
+                                                    table_name: None,
+                                                    content: None,
                                                 }),
                                             )
                                         }
@@ -780,12 +783,14 @@ impl Render for ConnectionSidebar {
                                                 move |menu, _window, _cx| {
                                                     menu.menu(
                                                         "New Query",
-                                                        Box::new(crate::app::NewQueryForSchema {
+                                                        Box::new(crate::app::NewQuery {
                                                             connection_id: connection_id,
                                                             database_name: database_name_for_menu
                                                                 .clone(),
-                                                            schema_name: schema_name_for_menu
-                                                                .clone(),
+                                                            schema_name: Some(schema_name_for_menu
+                                                                .clone()),
+                                                            table_name: None,
+                                                            content: None,
                                                         }),
                                                     )
                                                 }
@@ -838,18 +843,19 @@ impl Render for ConnectionSidebar {
                                                             menu.menu(
                                                                 "New Query",
                                                                 Box::new(
-                                                                    crate::app::NewQueryForTable {
+                                                                    crate::app::NewQuery {
                                                                         connection_id:
                                                                             connection_id,
                                                                         database_name:
                                                                             database_name_for_menu
                                                                                 .clone(),
                                                                         schema_name:
-                                                                            schema_name_for_menu
-                                                                                .clone(),
+                                                                            Some(schema_name_for_menu
+                                                                                .clone()),
                                                                         table_name:
-                                                                            table_name_for_menu
-                                                                                .clone(),
+                                                                            Some(table_name_for_menu
+                                                                                .clone()),
+                                                                        content: None, // Will be auto-generated in handler
                                                                     },
                                                                 ),
                                                             )

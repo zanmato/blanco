@@ -1,36 +1,49 @@
-use gpui::{div, px, App, IntoElement, ParentElement, RenderOnce, Styled, Window};
+use gpui::{
+    div, px, Context, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
+    Window,
+};
 use gpui_component::{h_flex, text::TextView, v_flex, ActiveTheme, Icon, IconName, StyledExt as _};
 
 use super::chat_types::MessageRole;
 
-#[derive(IntoElement, Clone)]
-pub struct ChatMessageView {
+pub struct ChatMessageState {
     pub id: usize,
-    pub message: String,
+    pub message: SharedString,
     pub role: MessageRole,
+    _subscriptions: Vec<Subscription>,
 }
 
-impl ChatMessageView {
-    pub fn new(id: usize, message: String, role: MessageRole) -> Self {
+impl ChatMessageState {
+    pub fn new(id: usize, message: String, role: MessageRole, _cx: &mut Context<Self>) -> Self {
         Self {
             id,
-            message: message.clone(),
+            message: message.into(),
             role,
+            _subscriptions: Vec::new(),
         }
+    }
+
+    pub fn update_content(&mut self, message: String, cx: &mut Context<Self>) {
+        self.message = message.into();
+        cx.notify();
     }
 }
 
-impl RenderOnce for ChatMessageView {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+impl Render for ChatMessageState {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex().w_full().child(match self.role {
             MessageRole::Assistant => {
                 // Assistant: No padding, no background, just markdown content
-                div().child(TextView::markdown(
-                    ("chat-message-content", self.id),
-                    self.message,
-                    window,
-                    cx,
-                ))
+                div().child(
+                    TextView::markdown(
+                        ("chat-message-content", self.id),
+                        self.message.clone(),
+                        window,
+                        cx,
+                    )
+                    .scrollable(false)
+                    .selectable(true),
+                )
             }
             MessageRole::Tool => {
                 // Tool: No padding, no background, icon + text (no markdown), muted colors
@@ -42,7 +55,7 @@ impl RenderOnce for ChatMessageView {
                             .text_color(cx.theme().muted_foreground)
                             .size(px(16.)),
                     )
-                    .child(div().text_sm().child(self.message))
+                    .child(div().text_sm().child(self.message.clone()))
             }
             MessageRole::User => {
                 // User: Padding, background, border, less rounding, markdown content
@@ -58,12 +71,16 @@ impl RenderOnce for ChatMessageView {
                         .editor_background
                         .unwrap_or(cx.theme().background))
                     .text_color(cx.theme().foreground)
-                    .child(TextView::markdown(
-                        ("chat-message-content", self.id),
-                        self.message,
-                        window,
-                        cx,
-                    ))
+                    .child(
+                        TextView::markdown(
+                            ("chat-message-content", self.id),
+                            self.message.clone(),
+                            window,
+                            cx,
+                        )
+                        .scrollable(false)
+                        .selectable(true),
+                    )
             }
             MessageRole::System => {
                 // System: Default styling (can be customized if needed)
@@ -83,12 +100,16 @@ impl RenderOnce for ChatMessageView {
                             .rounded_lg()
                             .bg(cx.theme().muted)
                             .text_color(cx.theme().foreground)
-                            .child(TextView::markdown(
-                                ("chat-message-content", self.id),
-                                self.message,
-                                window,
-                                cx,
-                            )),
+                            .child(
+                                TextView::markdown(
+                                    ("chat-message-content", self.id),
+                                    self.message.clone(),
+                                    window,
+                                    cx,
+                                )
+                                .scrollable(false)
+                                .selectable(true),
+                            ),
                     )
             }
         })

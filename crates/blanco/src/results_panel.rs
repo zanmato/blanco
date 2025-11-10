@@ -470,7 +470,7 @@ impl ResultsTableDelegate {
             .iter()
             .enumerate()
             .map(|(i, col_name)| {
-                let mut max_width = col_name.len() as f32 * 7.0; // Smaller font size = smaller multiplier
+                let mut max_width = col_name.len() as f32 * 9.0; // Smaller font size = smaller multiplier
 
                 // Check some sample rows to determine content width
                 for row in result.rows.iter().take(20) {
@@ -552,63 +552,11 @@ impl ResultsTableDelegate {
         }
 
         // Use primary key from QueryResult if available, otherwise fall back to heuristic
-        let old_pk = self.primary_key_column.clone();
         self.primary_key_column = result.primary_key_column.clone().or_else(|| {
             self.table_name
                 .as_ref()
                 .and_then(|table_name| self.detect_primary_key_simple(table_name))
         });
-
-        // Debug: Log table setup details
-        if let Some(table_name) = &self.table_name {
-            log::info!(
-                "Table setup complete - name: '{}', pk_column: {:?}, columns: {}, rows: {}",
-                table_name,
-                self.primary_key_column,
-                self.columns.len(),
-                self.rows.len()
-            );
-
-            // Log primary key detection results
-            match (&old_pk, &self.primary_key_column) {
-                (Some(old), Some(new)) => {
-                    if old != new {
-                        log::info!("Primary key changed from '{}' to '{}'", old, new);
-                    } else {
-                        log::debug!("Primary key unchanged: '{}'", new);
-                    }
-                }
-                (None, Some(new)) => {
-                    if result.primary_key_column.is_some() {
-                        log::info!("Primary key from metadata: '{}'", new);
-                    } else {
-                        log::info!("Primary key detected by heuristic: '{}'", new);
-                    }
-                }
-                (Some(old), None) => {
-                    log::info!("Primary key cleared: '{}' (was Some before)", old);
-                }
-                (None, None) => {
-                    log::debug!("Primary key remains None");
-                }
-            }
-        }
-
-        // Additional debug: Log column names for primary key detection
-        if let Some(table_name) = &self.table_name {
-            let column_names: Vec<String> = self
-                .columns
-                .iter()
-                .map(|col| col.name.to_string())
-                .collect();
-            log::debug!(
-                "Available columns for table '{}': {:?}",
-                table_name,
-                column_names
-            );
-        } else {
-            log::warn!("No table name could be extracted - table will not be editable");
-        }
     }
 
     /// Simple heuristic method to detect primary key column (fallback)
