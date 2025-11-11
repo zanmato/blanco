@@ -8,6 +8,10 @@
       "is_default": false,
       "name": "One Dark - Darkened",
       "mode": "dark",
+      "fonts": {
+        "family": "Ubuntu Sans",
+        "mono": "Fira Code"
+      },
       "colors": {
         "accent.background": "#2b3038ff",
         "accent.foreground": "#74ade8ff",

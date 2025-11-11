@@ -240,7 +240,7 @@ pub trait DatabaseService: Send + Sync {
         let mut tables = Vec::new();
 
         for table_row in tables_result.rows {
-            if table_row.len() >= 1 {
+            if !table_row.is_empty() {
                 let table_name = &table_row[0];
 
                 // Get column information for this table using JSON aggregation
