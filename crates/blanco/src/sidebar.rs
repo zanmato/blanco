@@ -1,11 +1,9 @@
 use crate::connection_sidebar::{Sidebar, SidebarGroup, SidebarMenu, SidebarMenuItem};
 use gpui::{
-    div, App, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, SharedString, Styled, Window,
+    div, App, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, Styled, Window,
 };
-use gpui_component::{
-    v_flex, Side,
-};
+use gpui_component::{v_flex, Side};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -59,7 +57,6 @@ pub struct UnifiedConnectionInfo {
     pub expanded: bool,
     pub databases: Vec<DatabaseNode>,
     pub display_name: String,
-    pub default_database: Option<String>,
 }
 
 pub struct ConnectionSidebar {
@@ -161,7 +158,6 @@ impl ConnectionSidebar {
                                                     expanded: false,
                                                     databases: Vec::new(),
                                                     display_name: conn_name.clone(),
-                                                    default_database: None,
                                                 };
                                                 sidebar.unified_connections.insert(connection_key, unified_info);
                                                 log::info!("Added connection to unified system: {} -> {}", conn_name, conn_id);
@@ -736,7 +732,7 @@ impl Render for ConnectionSidebar {
                                             menu.menu(
                                                 "New Query",
                                                 Box::new(crate::app::NewQuery {
-                                                    connection_id: connection_id,
+                                                    connection_id,
                                                     database_name: database_name_for_menu.clone(),
                                                     schema_name: None,
                                                     table_name: None,
@@ -784,11 +780,12 @@ impl Render for ConnectionSidebar {
                                                     menu.menu(
                                                         "New Query",
                                                         Box::new(crate::app::NewQuery {
-                                                            connection_id: connection_id,
+                                                            connection_id,
                                                             database_name: database_name_for_menu
                                                                 .clone(),
-                                                            schema_name: Some(schema_name_for_menu
-                                                                .clone()),
+                                                            schema_name: Some(
+                                                                schema_name_for_menu.clone(),
+                                                            ),
                                                             table_name: None,
                                                             content: None,
                                                         }),
@@ -842,22 +839,20 @@ impl Render for ConnectionSidebar {
                                                         move |menu, _window, _cx| {
                                                             menu.menu(
                                                                 "New Query",
-                                                                Box::new(
-                                                                    crate::app::NewQuery {
-                                                                        connection_id:
-                                                                            connection_id,
-                                                                        database_name:
-                                                                            database_name_for_menu
-                                                                                .clone(),
-                                                                        schema_name:
-                                                                            Some(schema_name_for_menu
-                                                                                .clone()),
-                                                                        table_name:
-                                                                            Some(table_name_for_menu
-                                                                                .clone()),
-                                                                        content: None, // Will be auto-generated in handler
-                                                                    },
-                                                                ),
+                                                                Box::new(crate::app::NewQuery {
+                                                                    connection_id,
+                                                                    database_name:
+                                                                        database_name_for_menu
+                                                                            .clone(),
+                                                                    schema_name: Some(
+                                                                        schema_name_for_menu
+                                                                            .clone(),
+                                                                    ),
+                                                                    table_name: Some(
+                                                                        table_name_for_menu.clone(),
+                                                                    ),
+                                                                    content: None, // Will be auto-generated in handler
+                                                                }),
                                                             )
                                                         }
                                                     });

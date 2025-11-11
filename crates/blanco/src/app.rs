@@ -320,6 +320,10 @@ impl BlancoApp {
         let modal_content = cx.new(|cx| NewConnectionModal::new(window, cx));
         let content_for_focus = modal_content.clone();
 
+        // Capture a weak reference to the app entity for event emission
+        // The app implements EventEmitter<AppEvent>, so it can emit events
+        let app_entity = cx.entity().downgrade();
+
         window.open_modal(cx, move |modal, _window, _cx| {
             let content_clone = modal_content.clone();
 
@@ -347,22 +351,45 @@ impl BlancoApp {
                 })
                 .on_ok({
                     let content = content_clone.clone();
+                    let app_entity_ref = app_entity.clone();
                     move |_, window, cx| {
                         if let Some(conn_data) = content.read(cx).get_connection_data(cx) {
+                            // Capture connection data for the event
+                            let conn_type = conn_data.db_type.clone();
+                            let db_name = conn_data.database_name.clone();
+
                             // Save connection to database
                             let db_service = DbService::global(cx).clone();
                             let app_db = db_service.app_db_handle();
 
+                            // Start the async save operation
                             cx.spawn(async move |_cx| {
                                 if let Some(db) = app_db.read().await.as_ref() {
-                                    db.save_connection(&conn_data).await.map_err(|e| {
-                                        anyhow::anyhow!("Failed to save connection: {}", e)
-                                    })
+                                    match db.save_connection(&conn_data).await {
+                                        Ok(connection_id) => {
+                                            log::info!("Connection saved with ID: {}", connection_id);
+                                        }
+                                        Err(e) => {
+                                            log::error!("Failed to save connection: {}", e);
+                                        }
+                                    }
                                 } else {
-                                    Err(anyhow::anyhow!("App database not initialized"))
+                                    log::error!("App database not initialized");
                                 }
                             })
                             .detach();
+
+                            // Emit the event immediately after starting the save
+                            // We'll emit optimistically since the modal was validated
+                            if let Some(app) = app_entity_ref.upgrade() {
+                                app.update(cx, |_app, cx| {
+                                    cx.emit(AppEvent::ConnectionEstablished {
+                                        connection_id: None, // We don't know the ID yet
+                                        connection_type: conn_type,
+                                        database_name: db_name,
+                                    });
+                                });
+                            }
 
                             window.push_notification("Connection saved successfully", cx);
                             true
@@ -409,12 +436,7 @@ impl BlancoApp {
         });
     }
 
-    fn on_new_query(
-        &mut self,
-        action: &NewQuery,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn on_new_query(&mut self, action: &NewQuery, window: &mut Window, cx: &mut Context<Self>) {
         // Generate appropriate title based on provided parameters
         let title = match (&action.schema_name, &action.table_name) {
             (None, None) => action.database_name.clone(),
@@ -428,12 +450,13 @@ impl BlancoApp {
 
         // Generate content for table queries if not provided
         let content = action.content.clone().or_else(|| {
-            action.table_name.as_ref().map(|table| {
-                match &action.schema_name {
+            action
+                .table_name
+                .as_ref()
+                .map(|table| match &action.schema_name {
                     Some(schema) => format!("SELECT * FROM {}.{}", schema, table),
                     None => format!("SELECT * FROM {}", table),
-                }
-            })
+                })
         });
 
         log::info!(

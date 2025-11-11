@@ -1,7 +1,7 @@
 use gpui::{
-    div, prelude::FluentBuilder, px, rgb, App, AppContext, Axis, Context, Entity, EventEmitter,
+    div, prelude::FluentBuilder, px, App, AppContext, Axis, Context, Entity, EventEmitter,
     FocusHandle, Focusable, InteractiveElement, IntoElement, Keystroke, MouseButton, ParentElement,
-    Render, StatefulInteractiveElement, Styled, Window,
+    Render, Styled, Window,
 };
 use gpui_component::{
     button::{Button, ButtonVariants},
@@ -447,7 +447,6 @@ impl EditorPanel {
                     });
 
                     // Execute query directly using cx.spawn instead of async pipeline
-                    let connection_id = connection_id;
                     let query_clone = query.clone();
                     let results_panel_clone = query_tab.results_panel.clone();
                     let sql_log_clone = query_tab.sql_log.clone();
@@ -581,8 +580,8 @@ impl EditorPanel {
                                             .update(cx, |_, cx| {
                                                 cx.emit(AppEvent::ErrorOccurred {
                                                     context: format!(
-                                                        "Query execution on {}",
-                                                        format!("connection_id: {}", connection_id)
+                                                        "Query execution on connection_id: {}",
+                                                        connection_id,
                                                     ),
                                                     error: e.to_string(),
                                                     severity:
@@ -599,8 +598,8 @@ impl EditorPanel {
                                     .update(cx, |_, cx| {
                                         cx.emit(AppEvent::ErrorOccurred {
                                             context: format!(
-                                                "Connection setup for {}",
-                                                format!("connection_id: {}", connection_id)
+                                                "Connection setup for connection_id: {}",
+                                                connection_id,
                                             ),
                                             error: e.to_string(),
                                             severity: crate::app_events::ErrorSeverity::Error,
@@ -1102,9 +1101,7 @@ impl Render for EditorPanel {
                                                     .text_xs()
                                                     .text_color(cx.theme().muted_foreground)
                                                     .child(
-                                                        query_tab.connection_name
-                                                            .as_ref()
-                                                            .map(|name| name.clone())
+                                                        query_tab.connection_name.clone()
                                                             .unwrap_or_else(|| "No Connection".to_string())
                                                     )
                                             )

@@ -1,10 +1,10 @@
 use gpui::{
-    px, App, AppContext, Context, DismissEvent, Entity, EventEmitter, IntoElement,
-    ParentElement, Render, Styled, Window,
+    px, App, AppContext, Context, DismissEvent, Entity, EventEmitter, IntoElement, ParentElement,
+    Render, Styled, Window,
 };
 use gpui_component::{
     form::form_field,
-    input::{InputState, Input},
+    input::{Input, InputState},
     v_flex,
 };
 use log::error;

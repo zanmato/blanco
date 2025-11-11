@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use crate::app_database::ConnectionData;
-use crate::ssh_tunnel::{SshTunnelManager, TunnelStatus, TunnelInfo};
+use crate::ssh_tunnel::{SshTunnelManager, TunnelInfo, TunnelStatus};
 
 /// SSH tunnel operations manager with GPUI integration
 pub struct SshTunnelOperations {
@@ -100,9 +100,7 @@ impl SshTunnelOperations {
         // Get the tunnel info and extract the local port
         let tunnel_key = self.create_tunnel_key(conn);
         let tunnels = self.manager.tunnels.lock().unwrap();
-        tunnels
-            .get(&tunnel_key)
-            .map(|info| info.config.local_port)
+        tunnels.get(&tunnel_key).map(|info| info.config.local_port)
     }
 
     /// Check if connection uses SSH tunnel
@@ -131,7 +129,7 @@ static SSH_TUNNEL_OPERATIONS: std::sync::OnceLock<SshTunnelOperations> = std::sy
 
 /// Get the global SSH tunnel operations instance
 pub fn ssh_tunnel_operations() -> &'static SshTunnelOperations {
-    SSH_TUNNEL_OPERATIONS.get_or_init(|| SshTunnelOperations::new())
+    SSH_TUNNEL_OPERATIONS.get_or_init(SshTunnelOperations::new)
 }
 
 /// Helper function to get connection string with SSH tunnel port
@@ -142,17 +140,32 @@ pub fn get_connection_string_with_tunnel(conn: &ConnectionData) -> Result<String
         if let Some(local_port) = operations.get_local_tunnel_port(conn) {
             // Use the local tunnel port in the connection string
             let host = "127.0.0.1";
-            let database = conn.database_name.as_ref().ok_or_else(|| anyhow::anyhow!("Database name required"))?;
-            let username = conn.username.as_ref().ok_or_else(|| anyhow::anyhow!("Username required"))?;
+            let database = conn
+                .database_name
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Database name required"))?;
+            let username = conn
+                .username
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Username required"))?;
 
             let connection_string = if let Some(password) = &conn.password {
                 if password.is_empty() {
-                    format!("postgresql://{}@{}:{}/{}", username, host, local_port, database)
+                    format!(
+                        "postgresql://{}@{}:{}/{}",
+                        username, host, local_port, database
+                    )
                 } else {
-                    format!("postgresql://{}:{}@{}:{}/{}", username, password, host, local_port, database)
+                    format!(
+                        "postgresql://{}:{}@{}:{}/{}",
+                        username, password, host, local_port, database
+                    )
                 }
             } else {
-                format!("postgresql://{}@{}:{}/{}", username, host, local_port, database)
+                format!(
+                    "postgresql://{}@{}:{}/{}",
+                    username, host, local_port, database
+                )
             };
 
             return Ok(connection_string);
@@ -160,7 +173,8 @@ pub fn get_connection_string_with_tunnel(conn: &ConnectionData) -> Result<String
     }
 
     // Fall back to the original connection string
-    conn.connection_string.clone()
+    conn.connection_string
+        .clone()
         .ok_or_else(|| anyhow::anyhow!("No connection string available"))
 }
 
@@ -171,7 +185,10 @@ mod tests {
     #[test]
     fn test_ssh_tunnel_operations_creation() {
         let operations = SshTunnelOperations::new();
-        assert!(!operations.list_active_tunnels().iter().any(|(_, info)| matches!(info.status, TunnelStatus::Connected)));
+        assert!(!operations
+            .list_active_tunnels()
+            .iter()
+            .any(|(_, info)| matches!(info.status, TunnelStatus::Connected)));
     }
 
     #[test]

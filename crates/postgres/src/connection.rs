@@ -1,5 +1,7 @@
 use crate::sql_parser::PostgresTableExtractor;
 use anyhow::Result;
+use async_std::sync::RwLock;
+use async_std::task::sleep;
 use async_trait::async_trait;
 use blanco_core::{
     ColumnInfo, Connection, ConnectionUIMetadata, IconName, QueryResult, TableChangeOperation,
@@ -10,20 +12,18 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::{Column, Row, TypeInfo, ValueRef};
 use std::collections::HashMap;
 use std::sync::Arc;
-use async_std::sync::RwLock;
-use async_std::task::sleep;
 use std::time::Duration;
 
 /// PostgreSQL connection implementation of the Connection trait
 /// This uses SQLX directly to provide a unified interface with database-specific connection pools
 pub struct PostgresConnection {
     pools: Arc<RwLock<HashMap<String, sqlx::PgPool>>>, // database_name -> connection pool
-    server_key: PgServerKey,                          // Server-level connection key (no database)
+    server_key: PgServerKey,                           // Server-level connection key (no database)
     display_name: String,
     server_connection_string: String, // Connection string without database
     initial_database: Option<String>, // Original database from connection string
     ssh_config: Option<PostgresSshConfig>, // SSH tunnel configuration
-    local_tunnel_port: Option<u16>, // Local port for SSH tunnel (if configured)
+    local_tunnel_port: Option<u16>,   // Local port for SSH tunnel (if configured)
 }
 
 /// SSH configuration for PostgreSQL connections
@@ -119,9 +119,20 @@ impl PgServerKey {
     }
 
     /// Generate connection string for a specific database using SSH tunnel
-    pub fn to_database_connection_string_with_tunnel(&self, database: &str, local_tunnel_port: u16) -> String {
-        let conn_str = format!("{}/{}", self.to_server_connection_string_with_tunnel(local_tunnel_port), database);
-        log::debug!("Generated SSH tunnel database connection string: {}", conn_str);
+    pub fn to_database_connection_string_with_tunnel(
+        &self,
+        database: &str,
+        local_tunnel_port: u16,
+    ) -> String {
+        let conn_str = format!(
+            "{}/{}",
+            self.to_server_connection_string_with_tunnel(local_tunnel_port),
+            database
+        );
+        log::debug!(
+            "Generated SSH tunnel database connection string: {}",
+            conn_str
+        );
         conn_str
     }
 }
@@ -355,13 +366,21 @@ impl PostgresConnection {
         if let Some(ref ssh_config) = self.ssh_config {
             // Validate SSH configuration before setting up tunnel
             if ssh_config.ssh_host.is_empty() || ssh_config.ssh_user.is_empty() {
-                log::warn!("SSH tunnel configuration is invalid: host='{}', user='{}'", ssh_config.ssh_host, ssh_config.ssh_user);
+                log::warn!(
+                    "SSH tunnel configuration is invalid: host='{}', user='{}'",
+                    ssh_config.ssh_host,
+                    ssh_config.ssh_user
+                );
                 // Fall back to direct connection
                 self.server_connection_string = self.server_key.to_server_connection_string();
                 return Ok(self.server_key.port);
             }
 
-            log::info!("Setting up SSH tunnel to {}:{}", ssh_config.ssh_host, ssh_config.ssh_port);
+            log::info!(
+                "Setting up SSH tunnel to {}:{}",
+                ssh_config.ssh_host,
+                ssh_config.ssh_port
+            );
 
             // Simulate SSH tunnel creation (in real implementation, this would use russh)
             sleep(Duration::from_millis(100)).await;
@@ -370,7 +389,9 @@ impl PostgresConnection {
             let local_port = 15432; // This would be dynamically assigned
 
             // Update the server connection string to use the tunnel
-            self.server_connection_string = self.server_key.to_server_connection_string_with_tunnel(local_port);
+            self.server_connection_string = self
+                .server_key
+                .to_server_connection_string_with_tunnel(local_port);
             self.local_tunnel_port = Some(local_port);
 
             log::info!("SSH tunnel established on local port {}", local_port);
@@ -390,20 +411,19 @@ impl PostgresConnection {
         )
     }
 
-    /// Generate a human-readable display name for the connection (legacy)
-    fn generate_display_name(key: &PgConnectionKey) -> String {
-        format!(
-            "PostgreSQL - {}@{}:{}/{}",
-            key.username, key.host, key.port, key.database
-        )
-    }
-
     /// Generate a human-readable display name for SSH connections
-    fn generate_server_display_name_with_ssh(server_key: &PgServerKey, ssh_config: &PostgresSshConfig) -> String {
+    fn generate_server_display_name_with_ssh(
+        server_key: &PgServerKey,
+        ssh_config: &PostgresSshConfig,
+    ) -> String {
         format!(
             "PostgreSQL (via SSH) - {}@{}:{} → {}@{}:{}",
-            ssh_config.ssh_user, ssh_config.ssh_host, ssh_config.ssh_port,
-            server_key.username, server_key.host, server_key.port
+            ssh_config.ssh_user,
+            ssh_config.ssh_host,
+            ssh_config.ssh_port,
+            server_key.username,
+            server_key.host,
+            server_key.port
         )
     }
 
@@ -458,7 +478,8 @@ impl PostgresConnection {
     /// Try to connect to a specific database and return true if successful
     async fn try_connect_to_database(&self, database: &str) -> bool {
         let database_connection_string = if let Some(local_port) = self.local_tunnel_port {
-            self.server_key.to_database_connection_string_with_tunnel(database, local_port)
+            self.server_key
+                .to_database_connection_string_with_tunnel(database, local_port)
         } else {
             self.server_key.to_database_connection_string(database)
         };
@@ -530,7 +551,8 @@ impl PostgresConnection {
         }
 
         let database_connection_string = if let Some(local_port) = self.local_tunnel_port {
-            self.server_key.to_database_connection_string_with_tunnel(database, local_port)
+            self.server_key
+                .to_database_connection_string_with_tunnel(database, local_port)
         } else {
             self.server_key.to_database_connection_string(database)
         };
@@ -563,15 +585,6 @@ impl PostgresConnection {
     /// Get the server key
     pub fn get_server_key(&self) -> &PgServerKey {
         &self.server_key
-    }
-
-    /// Helper method to connect asynchronously
-    async fn connect_async(&mut self, connection_string: &str) -> Result<sqlx::PgPool> {
-        let pool = PgPoolOptions::new()
-            .max_connections(5)
-            .connect(connection_string)
-            .await?;
-        Ok(pool)
     }
 
     /// Check if the database connection is healthy with a ping query
@@ -971,7 +984,7 @@ impl Connection for PostgresConnection {
         if self.ssh_config.is_some() {
             self.display_name = Self::generate_server_display_name_with_ssh(
                 &self.server_key,
-                self.ssh_config.as_ref().unwrap()
+                self.ssh_config.as_ref().unwrap(),
             );
         } else {
             self.display_name = Self::generate_server_display_name(&self.server_key);
@@ -984,7 +997,10 @@ impl Connection for PostgresConnection {
 
         log::info!("PostgreSQL server connection configured (pools will be created on demand)");
         if self.ssh_config.is_some() {
-            log::info!("Connection will use SSH tunnel on local port {}", local_port);
+            log::info!(
+                "Connection will use SSH tunnel on local port {}",
+                local_port
+            );
         }
         Ok(())
     }

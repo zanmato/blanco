@@ -21,9 +21,6 @@ mod transformers;
 
 pub use sidebar::ConnectionSidebar;
 
-// Integration test modules for unified connection interface
-// pub mod integration_test; // Disabled for now
-
 use assets::Assets;
 use db_service::DbService;
 use gpui::{px, size, AppContext, Application, WindowBounds, WindowOptions};

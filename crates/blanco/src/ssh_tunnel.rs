@@ -19,7 +19,10 @@ pub struct SshTunnelConfig {
 }
 
 impl SshTunnelConfig {
-    pub fn from_connection_data(conn: &crate::app_database::ConnectionData, assigned_local_port: u16) -> Result<Self> {
+    pub fn from_connection_data(
+        conn: &crate::app_database::ConnectionData,
+        assigned_local_port: u16,
+    ) -> Result<Self> {
         if conn.ssh_host.is_none() || conn.ssh_user.is_none() {
             anyhow::bail!("SSH configuration is incomplete");
         }
@@ -150,7 +153,10 @@ impl SshTunnelManager {
     }
 
     /// Test SSH connection configuration
-    pub async fn test_ssh_connection(&self, conn: &crate::app_database::ConnectionData) -> Result<bool> {
+    pub async fn test_ssh_connection(
+        &self,
+        conn: &crate::app_database::ConnectionData,
+    ) -> Result<bool> {
         if conn.ssh_host.is_none() || conn.ssh_user.is_none() {
             return Ok(false);
         }
@@ -166,7 +172,7 @@ impl SshTunnelManager {
         conn: &crate::app_database::ConnectionData,
     ) -> Result<u16> {
         // Simplified GPUI integration - will be expanded later
-        self.create_tunnel(&conn).await
+        self.create_tunnel(conn).await
     }
 }
 

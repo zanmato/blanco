@@ -725,6 +725,7 @@ impl ConnectionData {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_postgres_with_ssh(
         name: String,
         host: String,
@@ -740,11 +741,15 @@ impl ConnectionData {
         ssh_private_key_password: Option<String>,
     ) -> Self {
         let connection_string = if password.is_empty() {
-            format!("postgresql://{}@localhost:{}/{}", username, 15432, database) // Will be updated with actual tunnel port
+            format!("postgresql://{}@localhost:{}/{}", username, 15432, database)
+        // Will be updated with actual tunnel port
         } else {
             format!(
                 "postgresql://{}:{}@localhost:{}/{}",
-                username, password, 15432, database // Will be updated with actual tunnel port
+                username,
+                password,
+                15432,
+                database // Will be updated with actual tunnel port
             )
         };
 
@@ -798,7 +803,9 @@ impl ConnectionData {
 
     /// Get SSH display string for UI
     pub fn ssh_display_string(&self) -> Option<String> {
-        if let (Some(host), Some(port), Some(user)) = (&self.ssh_host, &self.ssh_port, &self.ssh_user) {
+        if let (Some(host), Some(port), Some(user)) =
+            (&self.ssh_host, &self.ssh_port, &self.ssh_user)
+        {
             if self.has_valid_ssh_config() {
                 Some(format!("{}@{}:{}", user, host.trim(), port))
             } else {

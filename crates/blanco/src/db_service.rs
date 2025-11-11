@@ -4,7 +4,7 @@ use async_std::sync::RwLock;
 use async_trait::async_trait;
 use blanco_core::{Connection, ConnectionFactory, ConnectionRegistry};
 use gpui::{App, Global};
-use postgres::{PgConnectionKey, PostgresConnection, connection::PostgresSshConfig};
+use postgres::{connection::PostgresSshConfig, PgConnectionKey, PostgresConnection};
 use sqlite::{SqliteConnection, SqliteConnectionKey};
 use sqlx::Row;
 use std::collections::HashMap;
@@ -12,7 +12,10 @@ use std::sync::Arc;
 use url::Url;
 
 /// Replace the database name in a PostgreSQL connection string
-fn replace_database_in_postgres_connection_string(connection_string: &str, new_database: &str) -> String {
+fn replace_database_in_postgres_connection_string(
+    connection_string: &str,
+    new_database: &str,
+) -> String {
     if let Ok(mut url) = Url::parse(connection_string) {
         // Set the new database path
         url.set_path(&format!("/{}", new_database));
@@ -109,7 +112,8 @@ impl Default for PostgresConnectionFactory {
 #[async_trait]
 impl ConnectionFactory for PostgresConnectionFactory {
     async fn create_connection(&self, connection_string: &str) -> Result<Box<dyn Connection>> {
-        self.create_postgres_connection(connection_string, None).await
+        self.create_postgres_connection(connection_string, None)
+            .await
     }
 
     fn parse_connection_string(&self, connection_string: &str) -> Result<String> {
@@ -323,12 +327,18 @@ impl UnifiedConnectionManager {
 
         // Create new connection with SSH support
         let mut connections = self.connections.write().await;
-        let conn = self.postgres_factory.create_postgres_connection(connection_string, ssh_config).await?;
+        let conn = self
+            .postgres_factory
+            .create_postgres_connection(connection_string, ssh_config)
+            .await?;
         let conn_arc: Arc<dyn Connection> = Arc::from(conn);
 
         // Store the connection
         connections.insert(connection_key.clone(), conn_arc.clone());
-        log::info!("Created new PostgreSQL connection with SSH: {}", connection_key);
+        log::info!(
+            "Created new PostgreSQL connection with SSH: {}",
+            connection_key
+        );
 
         Ok(conn_arc)
     }
@@ -376,7 +386,8 @@ impl DbService {
         &self,
         connection_id: i64,
     ) -> Result<std::sync::Arc<dyn blanco_core::Connection>, anyhow::Error> {
-        self.get_or_create_connection_with_database(connection_id, None).await
+        self.get_or_create_connection_with_database(connection_id, None)
+            .await
     }
 
     /// Get or create a connection with optional database override
@@ -404,7 +415,7 @@ impl DbService {
                 ssh_private_key_path, ssh_private_key_password
             FROM connections
             WHERE id = ? AND is_active = 1
-            "#
+            "#,
         )
         .bind(connection_id)
         .fetch_one(app_db.pool())
@@ -416,8 +427,15 @@ impl DbService {
 
         // Apply database override for PostgreSQL connections
         if db_type == "PostgreSQL" && database_name.is_some() {
-            connection_string = replace_database_in_postgres_connection_string(&connection_string, database_name.unwrap());
-            log::debug!("Applied database override '{}' to connection string: {}", database_name.unwrap(), connection_string);
+            connection_string = replace_database_in_postgres_connection_string(
+                &connection_string,
+                database_name.unwrap(),
+            );
+            log::debug!(
+                "Applied database override '{}' to connection string: {}",
+                database_name.unwrap(),
+                connection_string
+            );
         }
 
         log::debug!(
@@ -438,9 +456,12 @@ impl DbService {
                     // Validate that SSH host and user are not empty
                     if !host.trim().is_empty() && !user.trim().is_empty() {
                         let ssh_port: i32 = connection_row.try_get("ssh_port").unwrap_or(22);
-                        let ssh_password: Option<String> = connection_row.try_get("ssh_password").ok();
-                        let ssh_private_key_path: Option<String> = connection_row.try_get("ssh_private_key_path").ok();
-                        let ssh_private_key_password: Option<String> = connection_row.try_get("ssh_private_key_password").ok();
+                        let ssh_password: Option<String> =
+                            connection_row.try_get("ssh_password").ok();
+                        let ssh_private_key_path: Option<String> =
+                            connection_row.try_get("ssh_private_key_path").ok();
+                        let ssh_private_key_password: Option<String> =
+                            connection_row.try_get("ssh_private_key_password").ok();
 
                         let ssh_config = PostgresSshConfig {
                             ssh_host: host.trim().to_string(),
@@ -456,7 +477,10 @@ impl DbService {
                         return unified_manager
                             .read()
                             .await
-                            .get_or_create_postgres_connection_with_ssh(&connection_string, Some(ssh_config))
+                            .get_or_create_postgres_connection_with_ssh(
+                                &connection_string,
+                                Some(ssh_config),
+                            )
                             .await;
                     } else {
                         log::warn!("SSH configuration has empty host or user for connection ID {}, ignoring SSH tunnel", connection_id);
@@ -485,6 +509,7 @@ impl DbService {
     }
 
     /// Execute a query by connection ID
+    #[allow(dead_code)]
     pub async fn execute_query_by_id(
         &self,
         connection_id: i64,
