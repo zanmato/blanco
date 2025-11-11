@@ -6,6 +6,7 @@ use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputState},
+    spinner::Spinner,
     v_flex, ActiveTheme, Disableable, Icon, Sizable, StyledExt as _,
 };
 use std::sync::Arc;
@@ -58,17 +59,25 @@ impl ChatPanel {
                 ChatEvent::MessageAdded { message } => {
                     log::info!("Message added! {:?}", message);
                     let message = message.clone();
-                    let message_state = cx.new(|cx| ChatMessageState::new(
-                        panel.messages.len(),
-                        match message.role {
-                            MessageRole::Tool => message.tool_call_id.unwrap_or("tool".to_owned()),
-                            _ => message.content,
-                        },
-                        message.role.clone(),
-                        cx,
-                    ));
+                    let message_state = cx.new(|cx| {
+                        ChatMessageState::new(
+                            panel.messages.len(),
+                            match message.role {
+                                MessageRole::Tool => {
+                                    message.tool_call_id.unwrap_or("tool".to_owned())
+                                }
+                                _ => message.content,
+                            },
+                            message.role.clone(),
+                            cx,
+                        )
+                    });
                     panel.messages.push(message_state);
                     panel.scroll_to_bottom(cx);
+
+                    if message.role != MessageRole::User {
+                        panel.is_loading = false;
+                    }
 
                     cx.notify();
                 }
@@ -138,6 +147,8 @@ impl ChatPanel {
         });
 
         // Add user message to session
+        self.is_loading = true;
+        cx.notify();
         self.session.update(cx, |session, cx| {
             session.send_message(input_text.clone(), cx).detach();
         });
@@ -165,10 +176,6 @@ impl ChatPanel {
             // self.scroll_handle.scroll_to(ScrollPosition { offset: px(f32::MAX), anchor: Anchor::End });
         })
         .detach();
-    }
-
-    fn on_send_message(&mut self, _: &SendMessage, window: &mut Window, cx: &mut Context<Self>) {
-        self.send_message(window, cx);
     }
 
     fn on_clear_chat(&mut self, _: &ClearChat, window: &mut Window, cx: &mut Context<Self>) {
@@ -233,16 +240,24 @@ impl Render for ChatPanel {
                         // Messages
                         .children(
                             self.messages
-                                .iter()
-                                .map(|message_state| message_state.clone()),
+                                .iter().cloned(),
                         )
                         // Loading indicator
                         .when(self.is_loading, |this| {
                             this.child(
                                 div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
                                     .text_sm()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child("Thinking..."),
+                                    .child("Thinking")
+                                    .child(
+                                        Spinner::new()
+                                            .icon(IconName::LoaderCircle)
+                                            .small()
+                                            .color(cx.theme().muted_foreground),
+                                    ),
                             )
                         })
                         .scrollable(Axis::Vertical),

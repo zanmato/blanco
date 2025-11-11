@@ -1,12 +1,12 @@
 use anyhow::Result;
-use async_std::task::sleep;
 use gpui::{Context, EventEmitter, Task};
 use std::sync::Arc;
-use std::time::Duration;
+use async_std::channel::Sender;
+use futures::StreamExt;
 
 use super::chat_types::{ChatCommand, ChatEvent, ChatMessage, MessageRole, SqlContext};
 use blanco_core::chat_provider::{
-    ChatCompletionRequest, ChatProvider, Message as ProviderMessage, ProviderError,
+    ChatCompletionRequest, ChatProvider, ProviderError,
 };
 
 #[derive(Clone)]
@@ -245,83 +245,78 @@ Would you like me to help you implement any of these optimizations?",
         let messages = self.messages.clone();
         let model_name = self.model_name.clone();
         let user_message = user_message.to_string();
+        let provider_clone = provider.clone();
 
         cx.spawn(async move |chat_session_handle, async_cx| {
-            // Clone model_name for use in the async closure
-            let model_name_for_tools = model_name.clone();
+            // Create an async channel for real-time UI updates
+            let (tx, mut rx) = async_std::channel::unbounded::<ChatMessage>();
 
-            // Build the request using the provider
-            let mut request_messages = vec![
-                ProviderMessage {
-                    role: "system".to_string(),
-                    content: system_prompt,
-                    tool_call_id: None,
-                    tool_calls: None,
-                    additional_data: None,
-                },
-            ];
+            // Spawn a task to listen for UI updates
+            let handle_clone = chat_session_handle.clone();
+            async_cx.spawn(async move |cx| {
+                while let Some(message) = rx.next().await {
+                    if let Ok(_) = handle_clone.update(cx, |chat_session, cx| {
+                        chat_session.add_message(message.clone(), cx);
+                    }) {
+                        // State updated successfully
+                    }
+                }
+            }).detach();
 
-            // Add conversation history
-            for message in &messages {
-                let provider_message = match message.role {
-                    MessageRole::User => ProviderMessage {
-                        role: "user".to_string(),
-                        content: message.content.clone(),
-                        tool_call_id: None,
-                        tool_calls: None,
-                        additional_data: None,
-                    },
-                    MessageRole::Assistant => ProviderMessage {
-                        role: "assistant".to_string(),
-                        content: message.content.clone(),
-                        tool_call_id: None,
-                        tool_calls: None,
-                        additional_data: None,
-                    },
-                    MessageRole::System => ProviderMessage {
-                        role: "system".to_string(),
-                        content: message.content.clone(),
-                        tool_call_id: None,
-                        tool_calls: None,
-                        additional_data: None,
-                    },
-                    MessageRole::Tool => ProviderMessage {
-                        role: "tool".to_string(),
-                        content: "".to_string(), // message.content.clone(),
-                        tool_call_id: message.tool_call_id.clone(),
-                        tool_calls: None,
-                        additional_data: None,
-                    },
-                };
-                request_messages.push(provider_message);
+            // Process the message loop with real-time UI updates
+            let response = Self::process_message_loop_with_realtime_ui(
+                provider_clone,
+                system_prompt,
+                messages,
+                model_name.clone(),
+                user_message,
+                tx,
+            ).await?;
+
+            Ok(response)
+        })
+    }
+
+    /// Process messages in a loop to handle dynamic tool call sequences with real-time UI updates
+    async fn process_message_loop_with_realtime_ui(
+        provider: Arc<dyn ChatProvider<Error = ProviderError>>,
+        system_prompt: String,
+        initial_messages: Vec<ChatMessage>,
+        model_name: String,
+        user_message: String,
+        ui_sender: Sender<ChatMessage>,
+    ) -> Result<String>
+    {
+        // Build initial request messages with conversation history
+        let mut request_messages = Self::build_request_messages(
+            &system_prompt,
+            &initial_messages,
+            &user_message,
+        );
+
+        let mut loop_count = 0;
+        const MAX_LOOP_ITERATIONS: usize = 10; // Prevent infinite loops
+
+        loop {
+            // Safety check to prevent infinite loops
+            if loop_count >= MAX_LOOP_ITERATIONS {
+                return Err(anyhow::anyhow!(
+                    "Maximum tool call iterations ({}) exceeded. This may indicate a loop in tool calls.",
+                    MAX_LOOP_ITERATIONS
+                ));
             }
+            loop_count += 1;
 
-            // Add the current user message
-            request_messages.push(ProviderMessage {
-                role: "user".to_string(),
-                content: user_message,
-                tool_call_id: None,
-                tool_calls: None,
-                additional_data: None,
-            });
+            log::debug!("Starting message loop iteration {}", loop_count);
 
-            // Get tools from the provider if available
-            let tools = provider.get_tools();
-
-            // Clone values for potential follow-up requests
-            let model_name_clone = model_name.clone();
-            let model_name_clone2 = model_name.clone();
-            let request_messages_clone = request_messages.clone();
-            let request_messages_clone2 = request_messages.clone();
-            let provider_clone = provider.clone();
-
+            // Create and send request
             let request = ChatCompletionRequest {
-                model: model_name,
-                messages: request_messages,
+                model: model_name.clone(),
+                messages: request_messages.clone(),
                 stream: false,
                 temperature: 0.7,
                 max_tokens: Some(2048),
-                tools,
+                tools: provider.get_tools(),
                 tool_choice: None,
                 top_p: None,
                 frequency_penalty: None,
@@ -329,264 +324,266 @@ Would you like me to help you implement any of these optimizations?",
                 additional_params: None,
             };
 
-            // Send the request using the provider
-            let response = provider_clone.chat_completion(request).await
-                .map_err(|e| anyhow::anyhow!("Chat completion failed: {}", e))?;
+            let response = provider.chat_completion(request).await
+                .map_err(|e| anyhow::anyhow!("Chat completion failed on iteration {}: {}", loop_count, e))?;
 
-            if let Some(choice) = response.choices.first() {
-                // Handle tool calls
-                match choice.finish_reason {
-                    blanco_core::chat_provider::FinishReason::ToolCalls => {
-                        log::debug!("Tool calls detected, processing {} tool calls",
-                                   choice.message.tool_calls.as_ref().map(|t| t.len()).unwrap_or(0));
+            let choice = response.choices.first()
+                .ok_or_else(|| anyhow::anyhow!("No response content received on iteration {}", loop_count))?;
 
-                        // Handle tool calls
-                        if let Some(tool_calls) = &choice.message.tool_calls {
-                            // Create tool call data for UI display
-                            let tool_call_data: Vec<crate::agent::chat_types::ToolCallData> = tool_calls.iter().map(|tc| {
-                                crate::agent::chat_types::ToolCallData {
-                                    id: tc.id.clone(),
-                                    tool_name: tc.function.name.clone(),
-                                    arguments: tc.function.arguments.clone(),
-                                    result: None, // Will be filled after execution
-                                }
-                            }).collect();
+            log::debug!("Response received on iteration {}, finish reason: {:?}",
+                       loop_count, choice.finish_reason);
 
-                            // Add assistant message with tool calls to the chat
-                            let assistant_message = ChatMessage::assistant(
-                                choice.message.content.clone(),
-                                model_name_clone.clone()
-                            ).with_tool_calls(tool_call_data.clone());
+            // Check if we need to process tool calls
+            match choice.finish_reason {
+                blanco_core::chat_provider::FinishReason::ToolCalls => {
+                    let tool_calls_count = choice.message.tool_calls.as_ref()
+                        .map(|t| t.len())
+                        .unwrap_or(0);
 
-                            // Update state via the weak handle
-                            if let Ok(_) = chat_session_handle.update(async_cx, |chat_session, cx| {
-                                chat_session.add_message(assistant_message.clone(), cx);
-                            }) {
-                                // State updated successfully
-                            }
+                    log::debug!("Tool calls detected on iteration {}, processing {} tool calls",
+                               loop_count, tool_calls_count);
 
-                            // Execute each tool call
-                            let mut tool_results = Vec::new();
-                            for tool_call in tool_calls {
-                                // Tool call execution without connection injection for now
-                                let tool_call = tool_call.clone();
-
-                                log::debug!("Executing tool call: {} with args: {}", tool_call.function.name, tool_call.function.arguments);
-                                let result = provider_clone.call_tool(tool_call).await
-                                    .map_err(|e| anyhow::anyhow!("Tool call failed: {}", e))?;
-                                log::debug!("Tool call result - success: {}, content length: {}", result.success, result.content.len());
-
-                                // Create tool result message
-                                let tool_message = ChatMessage::tool(
-                                    result.content.clone(),
-                                    result.tool_call_id.clone(),
-                                    model_name_clone.clone()
-                                );
-
-                                // Update state via the weak handle
-                                if let Ok(_) = chat_session_handle.update(async_cx, |chat_session, cx| {
-                                    chat_session.add_message(tool_message.clone(), cx);
-                                }) {
-                                    // State updated successfully
-                                }
-
-                                tool_results.push(result);
-                            }
-
-                            // Create a new request with the assistant message and tool results
-                            let mut follow_up_messages = request_messages_clone2;
-
-                            // Add the assistant's tool call message
-                            follow_up_messages.push(blanco_core::chat_provider::Message {
-                                role: "assistant".to_string(),
-                                content: choice.message.content.clone(),
-                                tool_call_id: None,
-                                tool_calls: Some(tool_calls.clone()),
-                                additional_data: None,
-                            });
-
-                            // Add each tool result as a message
-                            for tool_result in tool_results {
-                                follow_up_messages.push(blanco_core::chat_provider::Message {
-                                    role: "tool".to_string(),
-                                    content: tool_result.content,
-                                    tool_call_id: Some(tool_result.tool_call_id),
-                                    tool_calls: None,
-                                    additional_data: None,
-                                });
-                            }
-
-                            log::debug!("Sending follow-up request with {} messages (including tool results)", follow_up_messages.len());
-
-                            // Send a follow-up request to get the final response
-                            let follow_up_request = blanco_core::chat_provider::ChatCompletionRequest {
-                                model: model_name_clone,
-                                messages: follow_up_messages,
-                                stream: false,
-                                temperature: 0.7,
-                                max_tokens: Some(2048),
-                                tools: provider_clone.get_tools(),
-                                tool_choice: None,
-                                top_p: None,
-                                frequency_penalty: None,
-                                presence_penalty: None,
-                                additional_params: None,
-                            };
-
-                            let follow_up_response = provider.chat_completion(follow_up_request).await
-                                .map_err(|e| anyhow::anyhow!("Follow-up chat completion failed: {}", e))?;
-
-                            log::debug!("Follow-up response received, choices: {}", follow_up_response.choices.len());
-
-                            if let Some(follow_up_choice) = follow_up_response.choices.first() {
-                                log::debug!("Follow-up finish reason: {:?}", follow_up_choice.finish_reason);
-
-                                // Handle the case where follow-up response also contains tool calls
-                                match follow_up_choice.finish_reason {
-                                    blanco_core::chat_provider::FinishReason::ToolCalls => {
-                                        log::debug!("Follow-up also contains tool calls, processing them...");
-
-                                        if let Some(follow_up_tool_calls) = &follow_up_choice.message.tool_calls {
-                                            // Process the new tool calls
-                                            let mut follow_up_tool_results = Vec::new();
-                                            for tool_call in follow_up_tool_calls {
-                                                let tool_call = tool_call.clone();
-
-                                                log::debug!("Executing follow-up tool call: {} with args: {}", tool_call.function.name, tool_call.function.arguments);
-                                                let result = provider_clone.call_tool(tool_call).await
-                                                    .map_err(|e| anyhow::anyhow!("Follow-up tool call failed: {}", e))?;
-                                                log::debug!("Follow-up tool call result - success: {}, content length: {}", result.success, result.content.len());
-
-                                                // Create tool result message
-                                                let tool_message = ChatMessage::tool(
-                                                    result.content.clone(),
-                                                    result.tool_call_id.clone(),
-                                                    model_name_for_tools.clone()
-                                                );
-
-                                                // Update state via the weak handle
-                                                if let Ok(_) = chat_session_handle.update(async_cx, |chat_session, cx| {
-                                                    chat_session.add_message(tool_message.clone(), cx);
-                                                }) {
-                                                    // State updated successfully
-                                                }
-
-                                                follow_up_tool_results.push(result);
-                                            }
-
-                                            // Create another follow-up request with the new tool results
-                                            let mut final_follow_up_messages = request_messages_clone.clone();
-
-                                            // Add the assistant's follow-up tool call message
-                                            final_follow_up_messages.push(blanco_core::chat_provider::Message {
-                                                role: "assistant".to_string(),
-                                                content: follow_up_choice.message.content.clone(),
-                                                tool_call_id: None,
-                                                tool_calls: Some(follow_up_tool_calls.clone()),
-                                                additional_data: None,
-                                            });
-
-                                            // Add each new tool result as a message
-                                            for tool_result in follow_up_tool_results {
-                                                final_follow_up_messages.push(blanco_core::chat_provider::Message {
-                                                    role: "tool".to_string(),
-                                                    content: tool_result.content,
-                                                    tool_call_id: Some(tool_result.tool_call_id),
-                                                    tool_calls: None,
-                                                    additional_data: None,
-                                                });
-                                            }
-
-                                            log::debug!("Sending final follow-up request with {} messages", final_follow_up_messages.len());
-
-                                            // Send final follow-up request
-                                            let final_follow_up_request = blanco_core::chat_provider::ChatCompletionRequest {
-                                                model: model_name_clone2,
-                                                messages: final_follow_up_messages,
-                                                stream: false,
-                                                temperature: 0.7,
-                                                max_tokens: Some(2048),
-                                                tools: provider_clone.get_tools(),
-                                                tool_choice: None,
-                                                top_p: None,
-                                                frequency_penalty: None,
-                                                presence_penalty: None,
-                                                additional_params: None,
-                                            };
-
-                                            let final_follow_up_response = provider.chat_completion(final_follow_up_request).await
-                                                .map_err(|e| anyhow::anyhow!("Final follow-up chat completion failed: {}", e))?;
-
-                                            if let Some(final_choice) = final_follow_up_response.choices.first() {
-                                                log::debug!("Final follow-up finish reason: {:?}", final_choice.finish_reason);
-                                                // Create result message
-                                                let result_message = ChatMessage::assistant(
-                                                    final_choice.message.content.clone(),
-                                                    model_name_for_tools.clone()
-                                                );
-
-                                                // Update state via the weak handle
-                                                if let Ok(_) = chat_session_handle.update(async_cx, |chat_session, cx| {
-                                                    chat_session.add_message(result_message.clone(), cx);
-                                                }) {
-                                                    // State updated successfully
-                                                }
-                                                
-                                                Ok(final_choice.message.content.clone())
-                                            } else {
-                                                Err(anyhow::anyhow!("No final follow-up response content received"))
-                                            }
-                                        } else {
-                                            Err(anyhow::anyhow!("Follow-up tool calls indicated but no tool calls found"))
-                                        }
-                                    }
-                                    _ => {
-                                        // Create result message
-                                        let result_message = ChatMessage::assistant(
-                                            follow_up_choice.message.content.clone(),
-                                            model_name_for_tools.clone()
-                                        );
-
-                                         // Update state via the weak handle
-                                        if let Ok(_) = chat_session_handle.update(async_cx, |chat_session, cx| {
-                                            chat_session.add_message(result_message.clone(), cx);
-                                        }) {
-                                            // State updated successfully
-                                        }
-
-                                        // Normal response, return content
-                                        Ok(follow_up_choice.message.content.clone())
-                                    }
-                                }
-                            } else {
-                                Err(anyhow::anyhow!("No follow-up response content received"))
-                            }
-                        } else {
-                            Err(anyhow::anyhow!("Tool calls indicated but no tool calls found"))
-                        }
+                    if tool_calls_count == 0 {
+                        return Err(anyhow::anyhow!(
+                            "Tool calls indicated but no tool calls found on iteration {}",
+                            loop_count
+                        ));
                     }
-                    _ => {
-                        // Create result message
-                        let result_message = ChatMessage::assistant(
-                            choice.message.content.clone(),
-                            model_name_for_tools.clone()
-                        );
 
-                            // Update state via the weak handle
-                        if let Ok(_) = chat_session_handle.update(async_cx, |chat_session, cx| {
-                            chat_session.add_message(result_message.clone(), cx);
-                        }) {
-                            // State updated successfully
-                        }
+                    // Process tool calls with real-time UI updates
+                    request_messages = Self::process_tool_calls_with_realtime_ui(
+                        &provider,
+                        &choice.message,
+                        request_messages,
+                        &model_name,
+                        &ui_sender,
+                    ).await.map_err(|e| anyhow::anyhow!(
+                        "Failed to process tool calls on iteration {}: {}",
+                        loop_count, e
+                    ))?;
 
-                        // Handle normal responses
-                        Ok(choice.message.content.clone())
-                    }
+                    log::debug!("Completed processing {} tool calls on iteration {}, total messages: {}",
+                               tool_calls_count, loop_count, request_messages.len());
                 }
-            } else {
-                Err(anyhow::anyhow!("No response content received"))
+                blanco_core::chat_provider::FinishReason::Stop => {
+                    // Normal completion
+                    log::debug!("Normal completion received on iteration {}", loop_count);
+                    let final_message = ChatMessage::assistant(
+                        choice.message.content.clone(),
+                        model_name,
+                    );
+                    let _ = ui_sender.send(final_message).await;
+                    return Ok(choice.message.content.clone());
+                }
+                blanco_core::chat_provider::FinishReason::Length => {
+                    return Err(anyhow::anyhow!(
+                        "Response too long on iteration {}. Consider breaking down the request.",
+                        loop_count
+                    ));
+                }
+                blanco_core::chat_provider::FinishReason::ContentFilter => {
+                    return Err(anyhow::anyhow!(
+                        "Content filtered by provider on iteration {}",
+                        loop_count
+                    ));
+                }
+                _ => {
+                    // Handle any other finish reasons
+                    log::debug!("Unknown finish reason {:?} on iteration {}, treating as completion",
+                               choice.finish_reason, loop_count);
+                    let final_message = ChatMessage::assistant(
+                        choice.message.content.clone(),
+                        model_name,
+                    );
+                    let _ = ui_sender.send(final_message).await;
+                    return Ok(choice.message.content.clone());
+                }
             }
-        })
+        }
+    }
+
+    /// Process tool calls with real-time UI updates
+    async fn process_tool_calls_with_realtime_ui(
+        provider: &Arc<dyn ChatProvider<Error = ProviderError>>,
+        assistant_message: &blanco_core::chat_provider::Message,
+        mut current_messages: Vec<blanco_core::chat_provider::Message>,
+        model_name: &str,
+        ui_sender: &Sender<ChatMessage>,
+    ) -> Result<Vec<blanco_core::chat_provider::Message>>
+    {
+        let tool_calls = assistant_message.tool_calls.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Tool calls indicated but no tool calls found"))?;
+
+        if tool_calls.is_empty() {
+            return Err(anyhow::anyhow!("Tool calls array is empty"));
+        }
+
+        let mut successful_tool_calls = 0;
+        let mut failed_tool_calls = 0;
+
+        // Create tool call data for UI display
+        let tool_call_data: Vec<crate::agent::chat_types::ToolCallData> = tool_calls.iter().map(|tc| {
+            crate::agent::chat_types::ToolCallData {
+                id: tc.id.clone(),
+                tool_name: tc.function.name.clone(),
+                arguments: tc.function.arguments.clone(),
+                result: None, // Will be filled after execution
+            }
+        }).collect();
+
+        // Create and immediately emit assistant message with tool calls
+        let assistant_ui_message = ChatMessage::assistant(
+            assistant_message.content.clone(),
+            model_name.to_string()
+        ).with_tool_calls(tool_call_data.clone());
+        let _ = ui_sender.send(assistant_ui_message).await;
+
+        // Add the assistant's tool call message to the conversation
+        current_messages.push(blanco_core::chat_provider::Message {
+            role: "assistant".to_string(),
+            content: assistant_message.content.clone(),
+            tool_call_id: None,
+            tool_calls: Some(tool_calls.clone()),
+            additional_data: None,
+        });
+
+        // Execute each tool call individually with real-time updates
+        for (index, tool_call) in tool_calls.iter().enumerate() {
+            log::debug!("Executing tool call {}/{}: {} with args: {}",
+                       index + 1, tool_calls.len(), tool_call.function.name, tool_call.function.arguments);
+
+            let tool_call = tool_call.clone();
+            let tool_call_clone = tool_call.clone();
+
+            match provider.call_tool(tool_call).await {
+                Ok(result) => {
+                    log::debug!("Tool call {}/{} succeeded - success: {}, content length: {}",
+                               index + 1, tool_calls.len(), result.success, result.content.len());
+
+                    // Create and immediately emit tool result message for UI
+                    let tool_ui_message = ChatMessage::tool(
+                        result.content.clone(),
+                        result.tool_call_id.clone(),
+                        model_name.to_string()
+                    );
+                    let _ = ui_sender.send(tool_ui_message).await;
+
+                    // Add tool result as a message to conversation
+                    current_messages.push(blanco_core::chat_provider::Message {
+                        role: "tool".to_string(),
+                        content: result.content,
+                        tool_call_id: Some(result.tool_call_id),
+                        tool_calls: None,
+                        additional_data: None,
+                    });
+
+                    successful_tool_calls += 1;
+                }
+                Err(e) => {
+                    log::error!("Tool call {}/{} failed: {}", index + 1, tool_calls.len(), e);
+
+                    // Create and immediately emit error message for UI
+                    let error_content = format!("Tool call failed: {}", e);
+                    let tool_ui_message = ChatMessage::tool(
+                        error_content.clone(),
+                        tool_call_clone.id.clone(),
+                        model_name.to_string()
+                    );
+                    let _ = ui_sender.send(tool_ui_message).await;
+
+                    // Add error result as a message to conversation
+                    current_messages.push(blanco_core::chat_provider::Message {
+                        role: "tool".to_string(),
+                        content: error_content,
+                        tool_call_id: Some(tool_call_clone.id.clone()),
+                        tool_calls: None,
+                        additional_data: None,
+                    });
+
+                    failed_tool_calls += 1;
+                }
+            }
+        }
+
+        log::debug!("Processed {} tool calls: {} successful, {} failed, total messages: {}",
+                   tool_calls.len(), successful_tool_calls, failed_tool_calls, current_messages.len());
+
+        // If all tool calls failed, return an error
+        if failed_tool_calls == tool_calls.len() {
+            return Err(anyhow::anyhow!(
+                "All {} tool calls failed", tool_calls.len()
+            ));
+        }
+
+        // If some tool calls failed, log a warning but continue
+        if failed_tool_calls > 0 {
+            log::warn!("{} out of {} tool calls failed", failed_tool_calls, tool_calls.len());
+        }
+
+        Ok(current_messages)
+    }
+
+    /// Build initial request messages from conversation history
+    fn build_request_messages(
+        system_prompt: &str,
+        messages: &[ChatMessage],
+        user_message: &str,
+    ) -> Vec<blanco_core::chat_provider::Message> {
+        let mut request_messages = vec![
+            blanco_core::chat_provider::Message {
+                role: "system".to_string(),
+                content: system_prompt.to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+                additional_data: None,
+            },
+        ];
+
+        // Add conversation history
+        for message in messages {
+            let provider_message = match message.role {
+                MessageRole::User => blanco_core::chat_provider::Message {
+                    role: "user".to_string(),
+                    content: message.content.clone(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                    additional_data: None,
+                },
+                MessageRole::Assistant => blanco_core::chat_provider::Message {
+                    role: "assistant".to_string(),
+                    content: message.content.clone(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                    additional_data: None,
+                },
+                MessageRole::System => blanco_core::chat_provider::Message {
+                    role: "system".to_string(),
+                    content: message.content.clone(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                    additional_data: None,
+                },
+                MessageRole::Tool => blanco_core::chat_provider::Message {
+                    role: "tool".to_string(),
+                    content: message.content.clone(),
+                    tool_call_id: message.tool_call_id.clone(),
+                    tool_calls: None,
+                    additional_data: None,
+                },
+            };
+            request_messages.push(provider_message);
+        }
+
+        // Add the current user message
+        request_messages.push(blanco_core::chat_provider::Message {
+            role: "user".to_string(),
+            content: user_message.to_string(),
+            tool_call_id: None,
+            tool_calls: None,
+            additional_data: None,
+        });
+
+        request_messages
     }
 
     pub fn get_last_assistant_message(&self) -> Option<&ChatMessage> {

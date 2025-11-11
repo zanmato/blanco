@@ -22,11 +22,6 @@ impl ChatMessageState {
             _subscriptions: Vec::new(),
         }
     }
-
-    pub fn update_content(&mut self, message: String, cx: &mut Context<Self>) {
-        self.message = message.into();
-        cx.notify();
-    }
 }
 
 impl Render for ChatMessageState {
