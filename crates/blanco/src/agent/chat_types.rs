@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use gpui::SharedString;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -13,7 +14,7 @@ pub enum MessageRole {
 pub struct ChatMessage {
     pub id: String,
     pub role: MessageRole,
-    pub content: String,
+    pub content: SharedString,
     pub timestamp: DateTime<Utc>,
     pub metadata: MessageMetadata,
     pub tool_calls: Option<Vec<ToolCallData>>,
@@ -178,7 +179,7 @@ impl ChatMessage {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             role,
-            content,
+            content: content.into(),
             timestamp: Utc::now(),
             metadata: MessageMetadata {
                 tokens_used: None,
@@ -214,7 +215,7 @@ impl ChatMessage {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             role: MessageRole::Tool,
-            content,
+            content: content.into(),
             timestamp: Utc::now(),
             metadata: MessageMetadata {
                 tokens_used: None,

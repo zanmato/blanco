@@ -29,7 +29,6 @@ actions!(
         OpenConnection,
         OpenSettings,
         OpenNewConnectionModal,
-        RunQuery,
         CommitChanges,
         RollbackChanges,
         CopyAsCSV,
@@ -367,7 +366,10 @@ impl BlancoApp {
                                 if let Some(db) = app_db.read().await.as_ref() {
                                     match db.save_connection(&conn_data).await {
                                         Ok(connection_id) => {
-                                            log::info!("Connection saved with ID: {}", connection_id);
+                                            log::info!(
+                                                "Connection saved with ID: {}",
+                                                connection_id
+                                            );
                                         }
                                         Err(e) => {
                                             log::error!("Failed to save connection: {}", e);
@@ -403,13 +405,6 @@ impl BlancoApp {
 
         // Focus the first input field after the modal opens
         content_for_focus.read(cx).focus_handle(cx).focus(window);
-    }
-
-    fn on_run_query(&mut self, _: &RunQuery, window: &mut Window, cx: &mut Context<Self>) {
-        // Delegate query execution to the editor panel
-        self.editor_panel.update(cx, |panel, cx| {
-            panel.run_query(window, cx);
-        });
     }
 
     fn on_commit_changes(
@@ -528,7 +523,6 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::on_settings))
             .on_action(cx.listener(Self::on_new_connection_modal))
-            .on_action(cx.listener(Self::on_run_query))
             .on_action(cx.listener(Self::on_commit_changes))
             .on_action(cx.listener(Self::on_rollback_changes))
             .on_action(cx.listener(Self::on_rename_tab))
@@ -591,15 +585,12 @@ impl Render for BlancoApp {
 }
 
 fn init_menus(cx: &mut App) {
-    // Register keyboard shortcut for settings (Ctrl/Cmd + ,)
+    // Register keyboard shortcut for settings
     cx.bind_keys([
-        gpui::KeyBinding::new("cmd-,", OpenSettings, None),
-        gpui::KeyBinding::new("ctrl-,", OpenSettings, None),
+        gpui::KeyBinding::new("super-,", OpenSettings, None),
         // Register keyboard shortcuts for commit operations
-        gpui::KeyBinding::new("cmd-shift-c", CommitChanges, None),
-        gpui::KeyBinding::new("ctrl-shift-c", CommitChanges, None),
-        gpui::KeyBinding::new("cmd-shift-r", RollbackChanges, None),
-        gpui::KeyBinding::new("ctrl-shift-r", RollbackChanges, None),
+        gpui::KeyBinding::new("super-shift-c", CommitChanges, None),
+        gpui::KeyBinding::new("super-shift-r", RollbackChanges, None),
     ]);
     cx.set_menus(vec![
         Menu {

@@ -223,13 +223,13 @@ mod tests {
         sqlite_connection.connect(&connection_string).await?;
 
         // Create the test table using Blanco connection
-        sqlite_connection.execute_query(create_table_sql).await?;
+        sqlite_connection.execute_query(create_table_sql, None).await?;
 
         // Insert test data using Blanco connection
-        sqlite_connection.execute_query(insert_sql).await?;
+        sqlite_connection.execute_query(insert_sql, None).await?;
 
         // Test a simple query to make sure Blanco can handle the data
-        let query_result = sqlite_connection.execute_query("SELECT * FROM comprehensive_test WHERE id = (SELECT MAX(id) FROM comprehensive_test)").await?;
+        let query_result = sqlite_connection.execute_query("SELECT * FROM comprehensive_test WHERE id = (SELECT MAX(id) FROM comprehensive_test)", None).await?;
 
         println!("Blanco SQLite connection test successful!");
         println!("Columns returned: {}", query_result.columns.len());
@@ -245,5 +245,75 @@ mod tests {
 
         println!("\n=== SQLite Data Types Test Completed Successfully! ===");
         Ok(())
+    }
+
+    #[test]
+    fn test_table_name_extraction() {
+        use blanco_core::Connection;
+
+        let connection_string = "sqlite::memory:".to_string();
+        let mut sqlite_connection = crate::SqliteConnection::new(connection_string.clone()).unwrap();
+
+        // Test table name extraction from query with alias
+        let query_with_alias = "SELECT id, status FROM orders o WHERE o.id = 1";
+        let extracted_table_name = sqlite_connection.extract_actual_table_name(query_with_alias).unwrap();
+        assert_eq!(extracted_table_name, Some("orders".to_string()));
+
+        // Test alias resolution
+        let resolved_table = sqlite_connection.resolve_table_alias(query_with_alias, "o").unwrap();
+        assert_eq!(resolved_table, Some("orders".to_string()));
+
+        // Test with different query patterns
+        let test_cases = vec![
+            ("SELECT * FROM customers", Some("customers")),
+            ("SELECT * FROM orders o", Some("orders")),
+            ("SELECT * FROM products p WHERE p.id = 1", Some("products")),
+            ("SELECT * FROM orders JOIN customers c ON orders.customer_id = c.id", Some("orders")),
+        ];
+
+        for (query, expected) in test_cases {
+            let result = sqlite_connection.extract_actual_table_name(query).unwrap();
+            assert_eq!(result, expected.map(String::from), "Failed for query: {}", query);
+        }
+
+        println!("✅ SQLite table name extraction tests passed!");
+        println!("   Extracted table name from 'orders o': {:?}", extracted_table_name);
+        println!("   Resolved alias 'o': {:?}", resolved_table);
+    }
+
+    #[test]
+    fn test_multiple_changes_consolidation() {
+        use blanco_core::table_operations::{TableChangeOperation, OperationType, RowIdentifier, ColumnChange};
+
+        // Test multiple changes consolidation
+        let changes = vec![
+            ColumnChange {
+                column_name: "status".to_string(),
+                old_value: Some("pending".to_string()),
+                new_value: Some("shipped".to_string()),
+            },
+            ColumnChange {
+                column_name: "customer_name".to_string(),
+                old_value: Some("John Doe".to_string()),
+                new_value: Some("John Smith".to_string()),
+            },
+        ];
+
+        let operation = TableChangeOperation {
+            table_name: "orders".to_string(),
+            operation_type: OperationType::Update,
+            row_identifier: RowIdentifier::PrimaryKey {
+                column: "id".to_string(),
+                value: "1".to_string()
+            },
+            changes,
+        };
+
+        let generated_sql = operation.to_sql_query();
+        let expected_sql = "UPDATE orders SET status = 'shipped', customer_name = 'John Smith' WHERE id = '1'";
+        assert_eq!(generated_sql, expected_sql);
+
+        println!("✅ SQLite multiple changes consolidation test passed!");
+        println!("   Generated SQL: {}", generated_sql);
     }
 }

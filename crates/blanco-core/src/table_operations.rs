@@ -101,16 +101,40 @@ impl TableChangeOperation {
     pub fn to_sql_query(&self) -> String {
         match self.operation_type {
             OperationType::Update => {
-                if let (Some(change), RowIdentifier::PrimaryKey { column: pk_column, value: pk_value }) =
-                    (self.changes.first(), &self.row_identifier) {
-                    format!(
-                        "UPDATE {} SET {} = '{}' WHERE {} = '{}'",
-                        self.table_name,
-                        change.column_name,
-                        change.new_value.as_ref().unwrap_or(&String::new()),
-                        pk_column,
-                        pk_value
-                    )
+                if let RowIdentifier::PrimaryKey { column: pk_column, value: pk_value } = &self.row_identifier {
+                    if self.changes.is_empty() {
+                        format!("UPDATE {}", self.table_name)
+                    } else if self.changes.len() == 1 {
+                        // Single column change
+                        let change = &self.changes[0];
+                        format!(
+                            "UPDATE {} SET {} = '{}' WHERE {} = '{}'",
+                            self.table_name,
+                            change.column_name,
+                            change.new_value.as_ref().unwrap_or(&String::new()),
+                            pk_column,
+                            pk_value
+                        )
+                    } else {
+                        // Multiple column changes
+                        let set_clauses: Vec<String> = self.changes
+                            .iter()
+                            .map(|change| {
+                                format!(
+                                    "{} = '{}'",
+                                    change.column_name,
+                                    change.new_value.as_ref().unwrap_or(&String::new())
+                                )
+                            })
+                            .collect();
+                        format!(
+                            "UPDATE {} SET {} WHERE {} = '{}'",
+                            self.table_name,
+                            set_clauses.join(", "),
+                            pk_column,
+                            pk_value
+                        )
+                    }
                 } else {
                     format!("UPDATE {}", self.table_name)
                 }

@@ -385,4 +385,43 @@ mod tests {
         println!("\n=== PostgreSQL Data Types Test Completed Successfully! ===");
         Ok(())
     }
+
+    #[test]
+    fn test_postgres_table_name_extraction() {
+        use blanco_core::Connection;
+
+        let postgres_connection = crate::PostgresConnection::new(
+            "localhost".to_string(),
+            5432,
+            "testdb".to_string(),
+            "user".to_string(),
+            Some("password".to_string()),
+        );
+
+        // Test table name extraction from query with alias
+        let query_with_alias = "SELECT id, status FROM orders o WHERE o.id = 1";
+        let extracted_table_name = postgres_connection.extract_actual_table_name(query_with_alias).unwrap();
+        assert_eq!(extracted_table_name, Some("orders".to_string()));
+
+        // Test alias resolution
+        let resolved_table = postgres_connection.resolve_table_alias(query_with_alias, "o").unwrap();
+        assert_eq!(resolved_table, Some("orders".to_string()));
+
+        // Test with different query patterns
+        let test_cases = vec![
+            ("SELECT * FROM customers", Some("customers")),
+            ("SELECT * FROM orders o", Some("orders")),
+            ("SELECT * FROM products p WHERE p.id = 1", Some("products")),
+            ("SELECT * FROM orders JOIN customers c ON orders.customer_id = c.id", Some("orders")),
+        ];
+
+        for (query, expected) in test_cases {
+            let result = postgres_connection.extract_actual_table_name(query).unwrap();
+            assert_eq!(result, expected.map(String::from), "Failed for query: {}", query);
+        }
+
+        println!("✅ PostgreSQL table name extraction tests passed!");
+        println!("   Extracted table name from 'orders o': {:?}", extracted_table_name);
+        println!("   Resolved alias 'o': {:?}", resolved_table);
+    }
 }

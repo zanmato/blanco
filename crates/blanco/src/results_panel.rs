@@ -28,8 +28,9 @@ pub struct TableOperationResponse {
     pub error_message: Option<String>,
     pub operations_executed: usize,
 }
-use blanco_core::table_operations::TableChangeOperation;
-use blanco_core::ColumnChange;
+use blanco_core::table_operations::{
+    ColumnChange, OperationType, RowIdentifier, TableChangeOperation,
+};
 use blanco_core::QueryResult;
 
 // Data structures for copy functionality
@@ -353,6 +354,7 @@ pub struct ResultsTableDelegate {
     primary_key_column: Option<String>,
     pending_edit_cell: Option<(usize, usize)>,
     connection_id: Option<i64>,
+    original_query: Option<String>,
 }
 
 impl ResultsTableDelegate {
@@ -375,15 +377,71 @@ impl ResultsTableDelegate {
         self.connection_id = Some(connection_id);
     }
 
+    /// Set the original SQL query for alias resolution
+    pub fn set_original_query(&mut self, query: String) {
+        self.original_query = Some(query);
+    }
+
+    /// Create a TableChange with the given parameters
+    pub fn create_table_change(
+        &self,
+        change_type: ChangeType,
+        table_name: String,
+        row_index: usize,
+        column_index: Option<usize>,
+        old_value: Option<String>,
+        new_value: Option<String>,
+        primary_key_value: Option<String>,
+        primary_key_column: Option<String>,
+    ) -> TableChange {
+        TableChange::new(
+            change_type,
+            table_name,
+            row_index,
+            column_index,
+            old_value,
+            new_value,
+            primary_key_value,
+            primary_key_column,
+        )
+    }
+
     /// Convert table changes to database-agnostic TableChangeOperations
+    /// This method consolidates multiple changes to the same row into single operations.
     pub fn create_change_operations(
         &self,
     ) -> Vec<blanco_core::table_operations::TableChangeOperation> {
-        let mut operations = Vec::new();
+        use std::collections::HashMap;
+
+        // Map to consolidate changes by (table_name, pk_column, pk_value)
+        let mut update_operations: HashMap<(String, String, String), Vec<ColumnChange>> =
+            HashMap::new();
+        let mut insert_operations: Vec<blanco_core::table_operations::TableChangeOperation> =
+            Vec::new();
 
         for change in &self.edit_state.changes {
-            let operation = match change.change_type {
+            match change.change_type {
                 ChangeType::UpdateCell => {
+                    // Get primary key information
+                    let (pk_column, pk_value) = if let (Some(pk_col), Some(pk_val)) =
+                        (&change.primary_key_column, &change.primary_key_value)
+                    {
+                        (pk_col.clone(), pk_val.clone())
+                    } else {
+                        // Fallback: try to get primary key from delegate
+                        if let Some(ref pk_column) = self.primary_key_column {
+                            if let Some(pk_value) =
+                                self.rows.get(change.row_index).and_then(|row| row.first())
+                            {
+                                (pk_column.clone(), pk_value.clone())
+                            } else {
+                                continue; // Skip this change if we can't determine PK
+                            }
+                        } else {
+                            continue; // Skip this change if we can't determine PK
+                        }
+                    };
+
                     // Get column name from index
                     let column_name = self
                         .columns
@@ -391,40 +449,19 @@ impl ResultsTableDelegate {
                         .map(|col| col.name.to_string())
                         .unwrap_or_else(|| "unknown".to_string());
 
-                    // Use the primary key information stored in the change
-                    if let (Some(pk_column), Some(pk_value)) =
-                        (&change.primary_key_column, &change.primary_key_value)
-                    {
-                        TableChangeOperation::update_cell(
-                            change.table_name.clone(),
-                            pk_column.clone(),
-                            pk_value.clone(),
-                            column_name,
-                            change.old_value.clone(),
-                            change.new_value.clone(),
-                        )
-                    } else {
-                        // Fallback: try to get primary key from delegate
-                        if let Some(ref pk_column) = self.primary_key_column {
-                            if let Some(pk_value) =
-                                self.rows.get(change.row_index).and_then(|row| row.first())
-                            {
-                                // Assume PK is first column as fallback
-                                TableChangeOperation::update_cell(
-                                    change.table_name.clone(),
-                                    pk_column.clone(),
-                                    pk_value.clone(),
-                                    column_name,
-                                    change.old_value.clone(),
-                                    change.new_value.clone(),
-                                )
-                            } else {
-                                continue; // Skip this change if we can't determine PK
-                            }
-                        } else {
-                            continue; // Skip this change if we can't determine PK
-                        }
-                    }
+                    // Create column change
+                    let column_change = ColumnChange {
+                        column_name,
+                        old_value: change.old_value.clone(),
+                        new_value: change.new_value.clone(),
+                    };
+
+                    // Add to the consolidated operation
+                    let key = (change.table_name.clone(), pk_column, pk_value);
+                    update_operations
+                        .entry(key)
+                        .or_default()
+                        .push(column_change);
                 }
                 ChangeType::InsertRow => {
                     // Convert the new_value (comma-separated) into column changes
@@ -443,15 +480,33 @@ impl ResultsTableDelegate {
                             })
                             .collect();
 
-                        TableChangeOperation::insert_row(change.table_name.clone(), column_changes)
-                    } else {
-                        continue; // Skip if no values
+                        insert_operations.push(TableChangeOperation::insert_row(
+                            change.table_name.clone(),
+                            column_changes,
+                        ));
                     }
+                    // If no values, skip the INSERT change
                 }
-            };
+            }
+        }
 
+        // Convert consolidated update operations to TableChangeOperations
+        let mut operations = Vec::new();
+        for ((table_name, pk_column, pk_value), column_changes) in update_operations {
+            let operation = TableChangeOperation {
+                operation_type: OperationType::Update,
+                table_name,
+                row_identifier: RowIdentifier::PrimaryKey {
+                    column: pk_column,
+                    value: pk_value,
+                },
+                changes: column_changes,
+            };
             operations.push(operation);
         }
+
+        // Add insert operations
+        operations.extend(insert_operations);
 
         operations
     }
@@ -632,7 +687,7 @@ impl ResultsTableDelegate {
                     "VALID"
                 };
 
-                let change = TableChange::new(
+                let change = self.create_table_change(
                     ChangeType::UpdateCell,
                     table_name.clone(),
                     row,
@@ -1257,6 +1312,10 @@ impl ResultsPanel {
         }
 
         self.table.update(cx, |table, cx| {
+            // Set the original query for alias resolution
+            if let Some(ref query) = result.query_text {
+                table.delegate_mut().set_original_query(query.clone());
+            }
             table.delegate_mut().set_query_result(result.clone());
             table.refresh(cx);
         });
@@ -1525,7 +1584,7 @@ impl ResultsPanel {
                         "Change validation passed"
                     };
 
-                    let change = TableChange::new(
+                    let change = delegate.create_table_change(
                         ChangeType::UpdateCell,
                         tbl_name.clone(),
                         row,
@@ -2145,7 +2204,7 @@ impl ResultsPanel {
             if let Some(table_name) = &delegate.table_name {
                 let primary_key_value = delegate.rows.get(row).and_then(|r| r.first()).cloned();
 
-                let change = TableChange::new(
+                let change = delegate.create_table_change(
                     ChangeType::UpdateCell,
                     table_name.clone(),
                     row,
@@ -2182,7 +2241,7 @@ impl ResultsPanel {
             if let Some(table_name) = &delegate.table_name {
                 let primary_key_value = delegate.rows.get(row).and_then(|r| r.first()).cloned();
 
-                let change = TableChange::new(
+                let change = delegate.create_table_change(
                     ChangeType::UpdateCell,
                     table_name.clone(),
                     row,

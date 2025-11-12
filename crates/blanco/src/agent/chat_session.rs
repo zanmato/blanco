@@ -1,13 +1,11 @@
 use anyhow::Result;
-use gpui::{Context, EventEmitter, Task};
-use std::sync::Arc;
 use async_std::channel::Sender;
 use futures::StreamExt;
+use gpui::{Context, EventEmitter, Task};
+use std::sync::Arc;
 
 use super::chat_types::{ChatCommand, ChatEvent, ChatMessage, MessageRole, SqlContext};
-use blanco_core::chat_provider::{
-    ChatCompletionRequest, ChatProvider, ProviderError,
-};
+use blanco_core::chat_provider::{ChatCompletionRequest, ChatProvider, ProviderError};
 
 #[derive(Clone)]
 pub struct ChatSession {
@@ -253,15 +251,17 @@ Would you like me to help you implement any of these optimizations?",
 
             // Spawn a task to listen for UI updates
             let handle_clone = chat_session_handle.clone();
-            async_cx.spawn(async move |cx| {
-                while let Some(message) = rx.next().await {
-                    if let Ok(_) = handle_clone.update(cx, |chat_session, cx| {
-                        chat_session.add_message(message.clone(), cx);
-                    }) {
-                        // State updated successfully
+            async_cx
+                .spawn(async move |cx| {
+                    while let Some(message) = rx.next().await {
+                        if let Ok(_) = handle_clone.update(cx, |chat_session, cx| {
+                            chat_session.add_message(message.clone(), cx);
+                        }) {
+                            // State updated successfully
+                        }
                     }
-                }
-            }).detach();
+                })
+                .detach();
 
             // Process the message loop with real-time UI updates
             let response = Self::process_message_loop_with_realtime_ui(
@@ -271,7 +271,8 @@ Would you like me to help you implement any of these optimizations?",
                 model_name.clone(),
                 user_message,
                 tx,
-            ).await?;
+            )
+            .await?;
 
             Ok(response)
         })
@@ -285,14 +286,10 @@ Would you like me to help you implement any of these optimizations?",
         model_name: String,
         user_message: String,
         ui_sender: Sender<ChatMessage>,
-    ) -> Result<String>
-    {
+    ) -> Result<String> {
         // Build initial request messages with conversation history
-        let mut request_messages = Self::build_request_messages(
-            &system_prompt,
-            &initial_messages,
-            &user_message,
-        );
+        let mut request_messages =
+            Self::build_request_messages(&system_prompt, &initial_messages, &user_message);
 
         let mut loop_count = 0;
         const MAX_LOOP_ITERATIONS: usize = 10; // Prevent infinite loops
@@ -324,24 +321,35 @@ Would you like me to help you implement any of these optimizations?",
                 additional_params: None,
             };
 
-            let response = provider.chat_completion(request).await
-                .map_err(|e| anyhow::anyhow!("Chat completion failed on iteration {}: {}", loop_count, e))?;
+            let response = provider.chat_completion(request).await.map_err(|e| {
+                anyhow::anyhow!("Chat completion failed on iteration {}: {}", loop_count, e)
+            })?;
 
-            let choice = response.choices.first()
-                .ok_or_else(|| anyhow::anyhow!("No response content received on iteration {}", loop_count))?;
+            let choice = response.choices.first().ok_or_else(|| {
+                anyhow::anyhow!("No response content received on iteration {}", loop_count)
+            })?;
 
-            log::debug!("Response received on iteration {}, finish reason: {:?}",
-                       loop_count, choice.finish_reason);
+            log::debug!(
+                "Response received on iteration {}, finish reason: {:?}",
+                loop_count,
+                choice.finish_reason
+            );
 
             // Check if we need to process tool calls
             match choice.finish_reason {
                 blanco_core::chat_provider::FinishReason::ToolCalls => {
-                    let tool_calls_count = choice.message.tool_calls.as_ref()
+                    let tool_calls_count = choice
+                        .message
+                        .tool_calls
+                        .as_ref()
                         .map(|t| t.len())
                         .unwrap_or(0);
 
-                    log::debug!("Tool calls detected on iteration {}, processing {} tool calls",
-                               loop_count, tool_calls_count);
+                    log::debug!(
+                        "Tool calls detected on iteration {}, processing {} tool calls",
+                        loop_count,
+                        tool_calls_count
+                    );
 
                     if tool_calls_count == 0 {
                         return Err(anyhow::anyhow!(
@@ -357,21 +365,28 @@ Would you like me to help you implement any of these optimizations?",
                         request_messages,
                         &model_name,
                         &ui_sender,
-                    ).await.map_err(|e| anyhow::anyhow!(
-                        "Failed to process tool calls on iteration {}: {}",
-                        loop_count, e
-                    ))?;
+                    )
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to process tool calls on iteration {}: {}",
+                            loop_count,
+                            e
+                        )
+                    })?;
 
-                    log::debug!("Completed processing {} tool calls on iteration {}, total messages: {}",
-                               tool_calls_count, loop_count, request_messages.len());
+                    log::debug!(
+                        "Completed processing {} tool calls on iteration {}, total messages: {}",
+                        tool_calls_count,
+                        loop_count,
+                        request_messages.len()
+                    );
                 }
                 blanco_core::chat_provider::FinishReason::Stop => {
                     // Normal completion
                     log::debug!("Normal completion received on iteration {}", loop_count);
-                    let final_message = ChatMessage::assistant(
-                        choice.message.content.clone(),
-                        model_name,
-                    );
+                    let final_message =
+                        ChatMessage::assistant(choice.message.content.clone(), model_name);
                     let _ = ui_sender.send(final_message).await;
                     return Ok(choice.message.content.clone());
                 }
@@ -389,12 +404,13 @@ Would you like me to help you implement any of these optimizations?",
                 }
                 _ => {
                     // Handle any other finish reasons
-                    log::debug!("Unknown finish reason {:?} on iteration {}, treating as completion",
-                               choice.finish_reason, loop_count);
-                    let final_message = ChatMessage::assistant(
-                        choice.message.content.clone(),
-                        model_name,
+                    log::debug!(
+                        "Unknown finish reason {:?} on iteration {}, treating as completion",
+                        choice.finish_reason,
+                        loop_count
                     );
+                    let final_message =
+                        ChatMessage::assistant(choice.message.content.clone(), model_name);
                     let _ = ui_sender.send(final_message).await;
                     return Ok(choice.message.content.clone());
                 }
@@ -409,9 +425,10 @@ Would you like me to help you implement any of these optimizations?",
         mut current_messages: Vec<blanco_core::chat_provider::Message>,
         model_name: &str,
         ui_sender: &Sender<ChatMessage>,
-    ) -> Result<Vec<blanco_core::chat_provider::Message>>
-    {
-        let tool_calls = assistant_message.tool_calls.as_ref()
+    ) -> Result<Vec<blanco_core::chat_provider::Message>> {
+        let tool_calls = assistant_message
+            .tool_calls
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Tool calls indicated but no tool calls found"))?;
 
         if tool_calls.is_empty() {
@@ -422,20 +439,22 @@ Would you like me to help you implement any of these optimizations?",
         let mut failed_tool_calls = 0;
 
         // Create tool call data for UI display
-        let tool_call_data: Vec<crate::agent::chat_types::ToolCallData> = tool_calls.iter().map(|tc| {
-            crate::agent::chat_types::ToolCallData {
-                id: tc.id.clone(),
-                tool_name: tc.function.name.clone(),
-                arguments: tc.function.arguments.clone(),
-                result: None, // Will be filled after execution
-            }
-        }).collect();
+        let tool_call_data: Vec<crate::agent::chat_types::ToolCallData> = tool_calls
+            .iter()
+            .map(|tc| {
+                crate::agent::chat_types::ToolCallData {
+                    id: tc.id.clone(),
+                    tool_name: tc.function.name.clone(),
+                    arguments: tc.function.arguments.clone(),
+                    result: None, // Will be filled after execution
+                }
+            })
+            .collect();
 
         // Create and immediately emit assistant message with tool calls
-        let assistant_ui_message = ChatMessage::assistant(
-            assistant_message.content.clone(),
-            model_name.to_string()
-        ).with_tool_calls(tool_call_data.clone());
+        let assistant_ui_message =
+            ChatMessage::assistant(assistant_message.content.clone(), model_name.to_string())
+                .with_tool_calls(tool_call_data.clone());
         let _ = ui_sender.send(assistant_ui_message).await;
 
         // Add the assistant's tool call message to the conversation
@@ -449,22 +468,32 @@ Would you like me to help you implement any of these optimizations?",
 
         // Execute each tool call individually with real-time updates
         for (index, tool_call) in tool_calls.iter().enumerate() {
-            log::debug!("Executing tool call {}/{}: {} with args: {}",
-                       index + 1, tool_calls.len(), tool_call.function.name, tool_call.function.arguments);
+            log::debug!(
+                "Executing tool call {}/{}: {} with args: {}",
+                index + 1,
+                tool_calls.len(),
+                tool_call.function.name,
+                tool_call.function.arguments
+            );
 
             let tool_call = tool_call.clone();
             let tool_call_clone = tool_call.clone();
 
             match provider.call_tool(tool_call).await {
                 Ok(result) => {
-                    log::debug!("Tool call {}/{} succeeded - success: {}, content length: {}",
-                               index + 1, tool_calls.len(), result.success, result.content.len());
+                    log::debug!(
+                        "Tool call {}/{} succeeded - success: {}, content length: {}",
+                        index + 1,
+                        tool_calls.len(),
+                        result.success,
+                        result.content.len()
+                    );
 
                     // Create and immediately emit tool result message for UI
                     let tool_ui_message = ChatMessage::tool(
                         result.content.clone(),
                         result.tool_call_id.clone(),
-                        model_name.to_string()
+                        model_name.to_string(),
                     );
                     let _ = ui_sender.send(tool_ui_message).await;
 
@@ -487,7 +516,7 @@ Would you like me to help you implement any of these optimizations?",
                     let tool_ui_message = ChatMessage::tool(
                         error_content.clone(),
                         tool_call_clone.id.clone(),
-                        model_name.to_string()
+                        model_name.to_string(),
                     );
                     let _ = ui_sender.send(tool_ui_message).await;
 
@@ -505,19 +534,29 @@ Would you like me to help you implement any of these optimizations?",
             }
         }
 
-        log::debug!("Processed {} tool calls: {} successful, {} failed, total messages: {}",
-                   tool_calls.len(), successful_tool_calls, failed_tool_calls, current_messages.len());
+        log::debug!(
+            "Processed {} tool calls: {} successful, {} failed, total messages: {}",
+            tool_calls.len(),
+            successful_tool_calls,
+            failed_tool_calls,
+            current_messages.len()
+        );
 
         // If all tool calls failed, return an error
         if failed_tool_calls == tool_calls.len() {
             return Err(anyhow::anyhow!(
-                "All {} tool calls failed", tool_calls.len()
+                "All {} tool calls failed",
+                tool_calls.len()
             ));
         }
 
         // If some tool calls failed, log a warning but continue
         if failed_tool_calls > 0 {
-            log::warn!("{} out of {} tool calls failed", failed_tool_calls, tool_calls.len());
+            log::warn!(
+                "{} out of {} tool calls failed",
+                failed_tool_calls,
+                tool_calls.len()
+            );
         }
 
         Ok(current_messages)
@@ -529,43 +568,41 @@ Would you like me to help you implement any of these optimizations?",
         messages: &[ChatMessage],
         user_message: &str,
     ) -> Vec<blanco_core::chat_provider::Message> {
-        let mut request_messages = vec![
-            blanco_core::chat_provider::Message {
-                role: "system".to_string(),
-                content: system_prompt.to_string(),
-                tool_call_id: None,
-                tool_calls: None,
-                additional_data: None,
-            },
-        ];
+        let mut request_messages = vec![blanco_core::chat_provider::Message {
+            role: "system".to_string(),
+            content: system_prompt.to_string(),
+            tool_call_id: None,
+            tool_calls: None,
+            additional_data: None,
+        }];
 
         // Add conversation history
         for message in messages {
             let provider_message = match message.role {
                 MessageRole::User => blanco_core::chat_provider::Message {
                     role: "user".to_string(),
-                    content: message.content.clone(),
+                    content: message.content.clone().into(),
                     tool_call_id: None,
                     tool_calls: None,
                     additional_data: None,
                 },
                 MessageRole::Assistant => blanco_core::chat_provider::Message {
                     role: "assistant".to_string(),
-                    content: message.content.clone(),
+                    content: message.content.clone().into(),
                     tool_call_id: None,
                     tool_calls: None,
                     additional_data: None,
                 },
                 MessageRole::System => blanco_core::chat_provider::Message {
                     role: "system".to_string(),
-                    content: message.content.clone(),
+                    content: message.content.clone().into(),
                     tool_call_id: None,
                     tool_calls: None,
                     additional_data: None,
                 },
                 MessageRole::Tool => blanco_core::chat_provider::Message {
                     role: "tool".to_string(),
-                    content: message.content.clone(),
+                    content: message.content.clone().into(),
                     tool_call_id: message.tool_call_id.clone(),
                     tool_calls: None,
                     additional_data: None,

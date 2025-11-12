@@ -730,4 +730,42 @@ impl Connection for SqliteConnection {
             }
         }
     }
+
+    fn extract_actual_table_name(&self, query: &str) -> Result<Option<String>> {
+        log::debug!("Extracting actual table name (not alias) from SQLite query: {}", query);
+
+        let extractor = SqliteTableExtractor::new();
+        match extractor.extract_actual_table_name(query) {
+            Ok(table_name) => {
+                log::debug!("Successfully extracted actual table name: {}", table_name);
+                Ok(Some(table_name))
+            }
+            Err(e) => {
+                log::debug!("Could not extract actual table name from query: {}", e);
+                Ok(None)
+            }
+        }
+    }
+
+    fn resolve_table_alias(&self, query: &str, alias: &str) -> Result<Option<String>> {
+        log::debug!("Resolving table alias '{}' from SQLite query: {}", alias, query);
+
+        let extractor = SqliteTableExtractor::new();
+        match extractor.extract_table_aliases_with_names(query) {
+            Ok(aliases) => {
+                for (table_name, alias_name) in aliases {
+                    if alias_name == alias {
+                        log::debug!("Successfully resolved alias '{}' to table '{}'", alias, table_name);
+                        return Ok(Some(table_name));
+                    }
+                }
+                log::debug!("Alias '{}' not found in query", alias);
+                Ok(None)
+            }
+            Err(e) => {
+                log::debug!("Could not resolve table alias from query: {}", e);
+                Ok(None)
+            }
+        }
+    }
 }

@@ -206,6 +206,14 @@ pub trait Connection: Send + Sync + fmt::Debug {
     /// Returns None if no table can be extracted (e.g., for complex queries or parsing errors)
     fn extract_table_name_from_query(&self, query: &str) -> Result<Option<String>, anyhow::Error>;
 
+    /// Extract the actual table name (not alias) from a SQL query for UPDATE operations
+    /// This returns the real table name that should be used in UPDATE statements, ignoring aliases
+    fn extract_actual_table_name(&self, query: &str) -> Result<Option<String>, anyhow::Error>;
+
+    /// Resolve a table alias to its actual table name using the original SQL query
+    /// Returns the actual table name if the alias is found, None otherwise
+    fn resolve_table_alias(&self, query: &str, alias: &str) -> Result<Option<String>, anyhow::Error>;
+
     /// Execute table change operations in a database-agnostic way
     /// Takes a list of change operations and executes them with proper SQL generation
     async fn execute_table_changes(

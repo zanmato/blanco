@@ -1,20 +1,20 @@
 use gpui::{
     div, prelude::FluentBuilder, px, App, AppContext, Axis, Context, Entity, EventEmitter,
-    FocusHandle, Focusable, InteractiveElement, IntoElement, Keystroke, MouseButton, ParentElement,
-    Render, Styled, Window,
+    FocusHandle, Focusable, InteractiveElement, IntoElement, KeybindingKeystroke, Keystroke,
+    MouseButton, ParentElement, Render, Styled, Window,
 };
 use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputState, TabSize},
     kbd::Kbd,
-    resizable::{h_resizable, resizable_panel, v_resizable},
+    resizable::{h_resizable, resizable_panel, v_resizable, ResizableState},
     tab::{Tab, TabBar},
+    text::TextView,
     v_flex, ActiveTheme, Sizable, StyledExt, WindowExt as _,
 };
-use log::{debug, error, info};
-use std::rc::Rc;
-use std::sync::Arc;
+use log::{debug, error, info, warn};
+use std::{rc::Rc, sync::Arc};
 
 use crate::agent::{ChatPanel, SqlContext};
 use crate::app::RenameTab;
@@ -104,6 +104,9 @@ pub struct EditorPanel {
     _subscriptions: Vec<gpui::Subscription>,
     // Temporary storage for saved tabs that will be restored after connections are loaded
     pending_saved_tabs: Option<Vec<crate::app_database::QueryTabData>>,
+    run_query_keystroke: KeybindingKeystroke,
+    editor_chat_resize_state: Entity<ResizableState>,
+    editor_results_resize_state: Entity<ResizableState>,
 }
 
 /// Parameters for creating a new tab with connection
@@ -133,6 +136,9 @@ impl EditorPanel {
         cx: &mut Context<Self>,
         sidebar_collapsed: bool,
     ) -> Self {
+        let editor_chat_resize_state = cx.new(|_| ResizableState::default());
+        let editor_results_resize_state = cx.new(|_| ResizableState::default());
+
         Self {
             focus_handle: cx.focus_handle(),
             tabs: vec![], // Start with no tabs - tabs are created on demand
@@ -141,6 +147,11 @@ impl EditorPanel {
             sidebar_collapsed,
             _subscriptions: Vec::new(),
             pending_saved_tabs: None,
+            run_query_keystroke: KeybindingKeystroke::from_keystroke(
+                Keystroke::parse("shift-enter").unwrap(),
+            ),
+            editor_chat_resize_state,
+            editor_results_resize_state,
         }
     }
 
@@ -681,6 +692,9 @@ impl EditorPanel {
     ) -> Self {
         info!("Loading {} saved tabs", saved_tabs.len());
 
+        let editor_chat_resize_state = cx.new(|_| ResizableState::default());
+        let editor_results_resize_state = cx.new(|_| ResizableState::default());
+
         let mut panel = Self {
             focus_handle: cx.focus_handle(),
             tabs: vec![],
@@ -689,6 +703,11 @@ impl EditorPanel {
             sidebar_collapsed,
             _subscriptions: Vec::new(),
             pending_saved_tabs: None,
+            run_query_keystroke: KeybindingKeystroke::from_keystroke(
+                Keystroke::parse("shift-enter").unwrap(),
+            ),
+            editor_chat_resize_state,
+            editor_results_resize_state,
         };
 
         if saved_tabs.is_empty() {
@@ -1158,6 +1177,7 @@ impl Render for EditorPanel {
                     .suffix(
                         h_flex()
                             .gap_1()
+                            .px_2()
                             .child(
                                 Button::new("settings-tab")
                                     .ghost()
@@ -1179,11 +1199,13 @@ impl Render for EditorPanel {
                     TabType::Query(query_tab) => {
                         // Query tab: Layout with optional chat panel
                         this.child(
-                            h_resizable(("editor-split", query_tab.id))
+                            h_resizable("editor-split")
+                                .with_state(&self.editor_chat_resize_state)
                                 // Left side: Always show the main content (Editor + Button bar + Results)
                                 .child(
                                     resizable_panel().child(
-                                        v_resizable(("editor-results-split", query_tab.id))
+                                        v_resizable("editor-results-split")
+                                            .with_state(&self.editor_results_resize_state)
                                             .child(
                                                 resizable_panel().size(200.).child(
                                                     v_flex()
@@ -1198,6 +1220,11 @@ impl Render for EditorPanel {
                                                                 .min_h_0()
                                                                 .border_t_1()
                                                                 .border_color(cx.theme().border)
+                                                                .on_key_down(cx.listener(|this, evt: &gpui::KeyDownEvent, window, cx| {
+                                                                    if evt.keystroke.should_match(&this.run_query_keystroke) {
+                                                                        this.run_query(window, cx);
+                                                                    }
+                                                                }))
                                                                 .relative() // Make container relative for absolute popup positioning
                                                                 .child(
                                                                     Input::new(&query_tab.editor)
@@ -1221,8 +1248,7 @@ impl Render for EditorPanel {
                                                         // Button bar (between editor and results)
                                                         .child(
                                                             h_flex()
-                                                                .px_3()
-                                                                .py_1()
+                                                                .p_2()
                                                                 .gap_2()
                                                                 .border_t_1()
                                                                 .border_color(cx.theme().border)
@@ -1232,8 +1258,9 @@ impl Render for EditorPanel {
                                                                 .child(
                                                                         Button::new("run-query")
                                                                             .outline()
+                                                                            .small()
                                                                             .label("Run Current")
-                                                                            .children(vec![Kbd::new(Keystroke::parse("shift-enter").unwrap()).into_any_element()])
+                                                                            .children(vec![Kbd::new(self.run_query_keystroke.inner().clone()).into_any_element()])
                                                                             .on_click(cx.listener(|panel, _, window, cx| panel.run_query(window, cx))),
                                                                     )
                                                         )
@@ -1264,33 +1291,16 @@ impl Render for EditorPanel {
                                                         // Row operation buttons
                                                         .child(
                                                             h_flex()
-                                                                .p_3()
+                                                                .p_2()
                                                                 .gap_2()
                                                                 .border_t_1()
                                                                 .border_color(cx.theme().border)
                                                                 .flex_wrap()
                                                                 .bg(cx.theme().muted.opacity(0.5))
-                                                                // Chat toggle button
-                                                                .child(
-                                                                    Button::new("toggle-chat")
-                                                                        .outline()
-                                                                        .icon(IconName::Sparkles)
-                                                                        .label(if query_tab.chat_enabled {
-                                                                            "Chat ON"
-                                                                        } else {
-                                                                            "Chat OFF"
-                                                                        })
-                                                                        .when(query_tab.chat_enabled, |btn| {
-                                                                            btn.primary()
-                                                                        })
-                                                                        .on_click(cx.listener(|this, _, _window, cx| {
-                                                                            // Toggle chat for the current query tab
-                                                                            this.toggle_chat_for_active_tab(_window, cx);
-                                                                        }))
-                                                                )
                                                                 .child(
                                                                     Button::new("add-row")
                                                                         .outline()
+                                                                        .small()
                                                                         .icon(IconName::Plus)
                                                                         .label("Add Row")
                                                                         .on_click(cx.listener(|this, _, _window, cx| {
@@ -1305,6 +1315,7 @@ impl Render for EditorPanel {
                                                                 .child(
                                                                     Button::new("duplicate-row")
                                                                         .outline()
+                                                                        .small()
                                                                         .icon(IconName::Copy)
                                                                         .label("Duplicate Row")
                                                                         // TODO: Disable when no row is selected
@@ -1321,6 +1332,7 @@ impl Render for EditorPanel {
                                                                 .child(
                                                                     Button::new("commit-changes")
                                                                         .outline()
+                                                                        .small()
                                                                         .icon(IconName::Check)
                                                                         .label("Commit Changes")
                                                                         .children(vec![Kbd::new(Keystroke::parse("cmd-shift-c").unwrap()).into_any_element()])
@@ -1336,6 +1348,7 @@ impl Render for EditorPanel {
                                                                 .child(
                                                                     Button::new("rollback-changes")
                                                                         .outline()
+                                                                        .small()
                                                                         .icon(IconName::CircleX)
                                                                         .label("Rollback")
                                                                         .children(vec![Kbd::new(Keystroke::parse("cmd-shift-r").unwrap()).into_any_element()])
@@ -1346,6 +1359,21 @@ impl Render for EditorPanel {
                                                                                 });
                                                                             }
                                                                         })),
+                                                                )
+                                                                .child(div().flex_1())
+                                                                // Chat toggle button
+                                                                .child(
+                                                                    Button::new("toggle-chat")
+                                                                        .outline()
+                                                                        .small()
+                                                                        .icon(IconName::Bot)
+                                                                        .when(query_tab.chat_enabled, |btn| {
+                                                                            btn.primary()
+                                                                        })
+                                                                        .on_click(cx.listener(|this, _, _window, cx| {
+                                                                            // Toggle chat for the current query tab
+                                                                            this.toggle_chat_for_active_tab(_window, cx);
+                                                                        }))
                                                                 ),
                                                             ),
                                                         ),
@@ -1429,10 +1457,9 @@ impl Render for EditorPanel {
                                         .child(div().flex_1())
                                         .child(
                                             Button::new("save-settings")
-                                                .primary()
-                                                .icon(IconName::Check)
+                                                .outline()
+                                                .icon(IconName::Save)
                                                 .label("Save Settings")
-                                                .children(vec![Kbd::new(Keystroke::parse("shift-enter").unwrap()).into_any_element()])
                                                 .on_click(cx.listener(|this, _, window, cx| {
                                                     this.save_settings(window, cx);
                                                 })),

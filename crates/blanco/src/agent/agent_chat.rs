@@ -1,12 +1,14 @@
 use gpui::{
     actions, div, prelude::FluentBuilder, px, App, AppContext, Axis, Context, Entity, FocusHandle,
-    Focusable, IntoElement, ParentElement, Render, Styled, Subscription, Window,
+    Focusable, InteractiveElement as _, IntoElement, KeybindingKeystroke, Keystroke, ParentElement,
+    Render, SharedString, Styled, Subscription, Window,
 };
 use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputState},
     spinner::Spinner,
+    text::TextView,
     v_flex, ActiveTheme, Disableable, Icon, Sizable, StyledExt as _,
 };
 use std::sync::Arc;
@@ -16,7 +18,7 @@ use crate::agent::chat_types::MessageRole;
 
 use super::chat_message_view::ChatMessageState;
 use super::chat_session::ChatSession;
-use super::chat_types::{ChatEvent, SqlContext};
+use super::chat_types::{ChatEvent, ChatMessage, SqlContext};
 use blanco_core::chat_provider::{ChatProvider, ProviderError};
 use blanco_ui::IconName;
 
@@ -30,6 +32,7 @@ pub struct ChatPanel {
     pub _subscriptions: Vec<Subscription>,
     pub is_loading: bool,
     pub tab_id: usize,
+    pub send_message_keystroke: KeybindingKeystroke,
 }
 
 impl ChatPanel {
@@ -66,7 +69,7 @@ impl ChatPanel {
                                 MessageRole::Tool => {
                                     message.tool_call_id.unwrap_or("tool".to_owned())
                                 }
-                                _ => message.content,
+                                _ => message.content.into(),
                             },
                             message.role.clone(),
                             cx,
@@ -130,6 +133,9 @@ impl ChatPanel {
             _subscriptions: subscriptions,
             is_loading: false,
             tab_id,
+            send_message_keystroke: KeybindingKeystroke::from_keystroke(
+                Keystroke::parse("shift-enter").unwrap(),
+            ),
         }
     }
 
@@ -190,7 +196,7 @@ impl Focusable for ChatPanel {
 }
 
 impl Render for ChatPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .size_full()
             .min_h_0()
@@ -238,10 +244,7 @@ impl Render for ChatPanel {
                         .gap_4()
                         .size_full()
                         // Messages
-                        .children(
-                            self.messages
-                                .iter().cloned(),
-                        )
+                        .children(self.messages.iter().cloned())
                         // Loading indicator
                         .when(self.is_loading, |this| {
                             this.child(
@@ -287,6 +290,13 @@ impl Render for ChatPanel {
                             .rounded_lg()
                             .border_0()
                             .text_size(px(13.0)) // Smaller font size for the input text
+                            .on_key_down(cx.listener(
+                                |this, evt: &gpui::KeyDownEvent, window, cx| {
+                                    if evt.keystroke.should_match(&this.send_message_keystroke) {
+                                        this.send_message(window, cx);
+                                    }
+                                },
+                            ))
                             .child(
                                 Input::new(&self.input_state)
                                     .disabled(self.is_loading)

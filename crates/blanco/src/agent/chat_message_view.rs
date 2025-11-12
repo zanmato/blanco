@@ -1,13 +1,13 @@
 use gpui::{
-    div, px, Context, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
-    Window,
+    div, px, App, Context, ElementId, IntoElement, ParentElement, Render, RenderOnce, SharedString,
+    Styled, Subscription, Window,
 };
 use gpui_component::{h_flex, text::TextView, v_flex, ActiveTheme, Icon, IconName, StyledExt as _};
 
 use super::chat_types::MessageRole;
 
 pub struct ChatMessageState {
-    pub id: usize,
+    pub id: ElementId,
     pub message: SharedString,
     pub role: MessageRole,
     _subscriptions: Vec<Subscription>,
@@ -16,7 +16,7 @@ pub struct ChatMessageState {
 impl ChatMessageState {
     pub fn new(id: usize, message: String, role: MessageRole, _cx: &mut Context<Self>) -> Self {
         Self {
-            id,
+            id: ("chat-message-", id).into(),
             message: message.into(),
             role,
             _subscriptions: Vec::new(),
@@ -30,14 +30,10 @@ impl Render for ChatMessageState {
             MessageRole::Assistant => {
                 // Assistant: No padding, no background, just markdown content
                 div().child(
-                    TextView::markdown(
-                        ("chat-message-content", self.id),
-                        self.message.clone(),
-                        window,
-                        cx,
-                    )
-                    .scrollable(false)
-                    .selectable(true),
+                    TextView::markdown(self.id.clone(), self.message.clone(), window, cx)
+                        .scrollable(false)
+                        .selectable(false)
+                        .static_mode(true),
                 )
             }
             MessageRole::Tool => {
@@ -67,14 +63,10 @@ impl Render for ChatMessageState {
                         .unwrap_or(cx.theme().background))
                     .text_color(cx.theme().foreground)
                     .child(
-                        TextView::markdown(
-                            ("chat-message-content", self.id),
-                            self.message.clone(),
-                            window,
-                            cx,
-                        )
-                        .scrollable(false)
-                        .selectable(true),
+                        TextView::markdown(self.id.clone(), self.message.clone(), window, cx)
+                            .scrollable(false)
+                            .selectable(false)
+                            .static_mode(true),
                     )
             }
             MessageRole::System => {
@@ -97,13 +89,13 @@ impl Render for ChatMessageState {
                             .text_color(cx.theme().foreground)
                             .child(
                                 TextView::markdown(
-                                    ("chat-message-content", self.id),
+                                    self.id.clone(),
                                     self.message.clone(),
                                     window,
                                     cx,
                                 )
                                 .scrollable(false)
-                                .selectable(true),
+                                .selectable(false),
                             ),
                     )
             }
