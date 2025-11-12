@@ -89,6 +89,35 @@ pub struct ColumnInfo {
     pub primary_key: bool,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum LoadingState {
+    Idle,
+    Connecting,
+    Streaming,
+    ProcessingTools,
+    Error(String),
+}
+
+impl LoadingState {
+    pub fn is_loading(&self) -> bool {
+        !matches!(self, LoadingState::Idle)
+    }
+
+    pub fn message(&self) -> &'static str {
+        match self {
+            LoadingState::Idle => "",
+            LoadingState::Connecting => "Connecting...",
+            LoadingState::Streaming => "Thinking",
+            LoadingState::ProcessingTools => "Processing tools...",
+            LoadingState::Error(_) => "Error occurred",
+        }
+    }
+
+    pub fn show_spinner(&self) -> bool {
+        matches!(self, LoadingState::Connecting | LoadingState::Streaming | LoadingState::ProcessingTools)
+    }
+}
+
 // Chat session events
 #[derive(Clone, Debug)]
 #[allow(clippy::large_enum_variant)]
@@ -120,6 +149,10 @@ pub enum ChatEvent {
         model: String,
     },
     SessionCleared,
+    LoadingStateChanged {
+        old_state: LoadingState,
+        new_state: LoadingState,
+    },
 }
 
 // Chat commands

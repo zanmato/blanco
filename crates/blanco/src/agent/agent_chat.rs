@@ -1,7 +1,7 @@
 use gpui::{
     App, AppContext, Axis, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
-    IntoElement, KeybindingKeystroke, Keystroke, ParentElement, Render, SharedString, Styled,
-    Subscription, Window, actions, div, prelude::FluentBuilder, px,
+    IntoElement, KeybindingKeystroke, Keystroke, ParentElement, Render, Styled, Subscription,
+    Window, actions, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, Sizable, StyledExt as _,
@@ -18,7 +18,7 @@ use crate::agent::chat_types::MessageRole;
 
 use super::chat_message_view::ChatMessageState;
 use super::chat_session::ChatSession;
-use super::chat_types::{ChatEvent, ChatMessage, SqlContext};
+use super::chat_types::{ChatEvent, LoadingState, SqlContext};
 use blanco_core::chat_provider::{ChatProvider, ProviderError};
 use blanco_ui::IconName;
 
@@ -30,7 +30,7 @@ pub struct ChatPanel {
     pub input_state: Entity<InputState>,
     pub messages: Vec<Entity<ChatMessageState>>,
     pub _subscriptions: Vec<Subscription>,
-    pub is_loading: bool,
+    pub loading_state: LoadingState,
     pub tab_id: usize,
     pub send_message_keystroke: KeybindingKeystroke,
 }
@@ -78,16 +78,12 @@ impl ChatPanel {
                     panel.messages.push(message_state);
                     panel.scroll_to_bottom(cx);
 
-                    if message.role != MessageRole::User {
-                        panel.is_loading = false;
-                    }
-
                     cx.notify();
                 }
                 ChatEvent::StreamStarted { message_id } => {
                     // Handle stream start
                     log::debug!("Chat stream started: {}", message_id);
-                    panel.is_loading = true;
+                    panel.loading_state = LoadingState::Streaming;
                     cx.notify();
                 }
                 ChatEvent::StreamUpdate {
@@ -103,13 +99,13 @@ impl ChatPanel {
                     final_content: _,
                 } => {
                     // Handle stream completion
-                    panel.is_loading = false;
+                    panel.loading_state = LoadingState::Idle;
                     panel.scroll_to_bottom(cx);
                     cx.notify();
                 }
                 ChatEvent::Error { message } => {
                     log::error!("Chat error: {}", message);
-                    panel.is_loading = false;
+                    panel.loading_state = LoadingState::Error(message.clone());
                     cx.notify();
                 }
                 ChatEvent::SessionStarted { provider, model } => {
@@ -118,6 +114,11 @@ impl ChatPanel {
                 }
                 ChatEvent::SessionCleared => {
                     panel.messages.clear();
+                    panel.loading_state = LoadingState::Idle;
+                    cx.notify();
+                }
+                ChatEvent::LoadingStateChanged { new_state, .. } => {
+                    panel.loading_state = new_state.clone();
                     cx.notify();
                 }
             }
@@ -131,7 +132,7 @@ impl ChatPanel {
             input_state,
             messages: Vec::new(),
             _subscriptions: subscriptions,
-            is_loading: false,
+            loading_state: LoadingState::Idle,
             tab_id,
             send_message_keystroke: KeybindingKeystroke::from_keystroke(
                 Keystroke::parse("shift-enter").unwrap(),
@@ -152,9 +153,10 @@ impl ChatPanel {
             input.set_value("", window, cx);
         });
 
-        // Add user message to session
-        self.is_loading = true;
+        // Set loading state to connecting when sending message
+        self.loading_state = LoadingState::Connecting;
         cx.notify();
+
         self.session.update(cx, |session, cx| {
             session.send_message(input_text.clone(), cx).detach();
         });
@@ -246,7 +248,7 @@ impl Render for ChatPanel {
                         // Messages
                         .children(self.messages.iter().cloned())
                         // Loading indicator
-                        .when(self.is_loading, |this| {
+                        .when(self.loading_state.is_loading(), |this| {
                             this.child(
                                 div()
                                     .flex()
@@ -254,12 +256,31 @@ impl Render for ChatPanel {
                                     .gap_2()
                                     .text_sm()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child("Thinking")
-                                    .child(
-                                        Spinner::new()
-                                            .icon(IconName::LoaderCircle)
-                                            .small()
-                                            .color(cx.theme().muted_foreground),
+                                    .child(self.loading_state.message())
+                                    .when(self.loading_state.show_spinner(), |this| {
+                                        this.child(
+                                            Spinner::new()
+                                                .icon(IconName::LoaderCircle)
+                                                .small()
+                                                .color(cx.theme().muted_foreground),
+                                        )
+                                    })
+                                    .when(
+                                        matches!(self.loading_state, LoadingState::Error(_)),
+                                        |this| {
+                                            this.child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_1()
+                                                    .child(
+                                                        Icon::new(IconName::TriangleAlert)
+                                                            .size(px(14.))
+                                                            .text_color(gpui::red()),
+                                                    )
+                                                    .child("Error"),
+                                            )
+                                        },
                                     ),
                             )
                         })
@@ -287,7 +308,7 @@ impl Render for ChatPanel {
                     }))
                     .child(
                         Input::new(&self.input_state)
-                            .disabled(self.is_loading)
+                            .disabled(self.loading_state.is_loading())
                             .bordered(false)
                             .p_3()
                             .bg(cx
@@ -304,7 +325,7 @@ impl Render for ChatPanel {
                                 .icon(IconName::ArrowUp)
                                 .primary()
                                 .xsmall()
-                                .disabled(self.is_loading)
+                                .disabled(self.loading_state.is_loading())
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.send_message(window, cx);
                                 })),

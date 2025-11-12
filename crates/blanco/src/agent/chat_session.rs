@@ -4,7 +4,7 @@ use futures::StreamExt;
 use gpui::{Context, EventEmitter, Task};
 use std::sync::Arc;
 
-use super::chat_types::{ChatCommand, ChatEvent, ChatMessage, MessageRole, SqlContext};
+use super::chat_types::{ChatCommand, ChatEvent, ChatMessage, LoadingState, MessageRole, SqlContext};
 use blanco_core::chat_provider::{ChatCompletionRequest, ChatProvider, ProviderError};
 
 #[derive(Clone)]
@@ -13,8 +13,7 @@ pub struct ChatSession {
     pub provider: Option<Arc<dyn ChatProvider<Error = ProviderError>>>,
     pub model_name: String,
     pub provider_name: String,
-    #[allow(dead_code)]
-    pub is_loading: bool,
+    pub loading_state: LoadingState,
     pub sql_context: SqlContext,
     #[allow(dead_code)]
     pub streaming_message_id: Option<String>,
@@ -33,7 +32,7 @@ impl ChatSession {
             provider: Some(provider),
             provider_name,
             model_name,
-            is_loading: false,
+            loading_state: LoadingState::Idle,
             sql_context: SqlContext::empty(),
             streaming_message_id: None,
         }
@@ -46,7 +45,7 @@ impl ChatSession {
             provider: None,
             provider_name: "Mock".to_string(),
             model_name: "mock-gpt-4".to_string(),
-            is_loading: false,
+            loading_state: LoadingState::Idle,
             sql_context: SqlContext::empty(),
             streaming_message_id: None,
         }
@@ -59,7 +58,7 @@ impl ChatSession {
             provider: None,
             provider_name: "Unknown".to_string(),
             model_name: "unknown".to_string(),
-            is_loading: false,
+            loading_state: LoadingState::Idle,
             sql_context: SqlContext::empty(),
             streaming_message_id: None,
         }
@@ -82,6 +81,12 @@ impl ChatSession {
 
         // Emit message added event
         cx.emit(ChatEvent::MessageAdded { message });
+    }
+
+    pub fn set_loading_state(&mut self, new_state: LoadingState, cx: &mut Context<Self>) {
+        let old_state = self.loading_state.clone();
+        self.loading_state = new_state.clone();
+        cx.emit(ChatEvent::LoadingStateChanged { old_state, new_state });
     }
 
     pub fn clear_messages(&mut self) {
@@ -245,9 +250,14 @@ Would you like me to help you implement any of these optimizations?",
         let user_message = user_message.to_string();
         let provider_clone = provider.clone();
 
-        cx.spawn(async move |chat_session_handle, async_cx| {
+        cx.spawn(async move |chat_session_handle, mut async_cx| {
             // Create an async channel for real-time UI updates
             let (tx, mut rx) = async_std::channel::unbounded::<ChatMessage>();
+
+            // Set initial loading state to connecting
+            let _ = chat_session_handle.update(async_cx, |session, cx| {
+                session.set_loading_state(LoadingState::Connecting, cx);
+            });
 
             // Spawn a task to listen for UI updates
             let handle_clone = chat_session_handle.clone();
@@ -265,27 +275,41 @@ Would you like me to help you implement any of these optimizations?",
 
             // Process the message loop with real-time UI updates
             let response = Self::process_message_loop_with_realtime_ui(
+                chat_session_handle.clone(),
                 provider_clone,
                 system_prompt,
                 messages,
                 model_name.clone(),
                 user_message,
                 tx,
+                &mut async_cx,
             )
-            .await?;
+            .await;
 
-            Ok(response)
+            // Reset loading state when done
+            let final_state = match &response {
+                Ok(_) => LoadingState::Idle,
+                Err(e) => LoadingState::Error(e.to_string()),
+            };
+
+            let _ = chat_session_handle.update(async_cx, |session, cx| {
+                session.set_loading_state(final_state, cx);
+            });
+
+            response
         })
     }
 
     /// Process messages in a loop to handle dynamic tool call sequences with real-time UI updates
     async fn process_message_loop_with_realtime_ui(
+        chat_session_handle: gpui::WeakEntity<ChatSession>,
         provider: Arc<dyn ChatProvider<Error = ProviderError>>,
         system_prompt: String,
         initial_messages: Vec<ChatMessage>,
         model_name: String,
         user_message: String,
         ui_sender: Sender<ChatMessage>,
+        async_cx: &mut gpui::AsyncApp,
     ) -> Result<String> {
         // Build initial request messages with conversation history
         let mut request_messages =
@@ -305,6 +329,11 @@ Would you like me to help you implement any of these optimizations?",
             loop_count += 1;
 
             log::debug!("Starting message loop iteration {}", loop_count);
+
+            // Set loading state to streaming when making request
+            let _ = chat_session_handle.update(async_cx, |session, cx| {
+                session.set_loading_state(LoadingState::Streaming, cx);
+            });
 
             // Create and send request
             let request = ChatCompletionRequest {
@@ -357,6 +386,11 @@ Would you like me to help you implement any of these optimizations?",
                             loop_count
                         ));
                     }
+
+                    // Set loading state to processing tools
+                    let _ = chat_session_handle.update(async_cx, |session, cx| {
+                        session.set_loading_state(LoadingState::ProcessingTools, cx);
+                    });
 
                     // Process tool calls with real-time UI updates
                     request_messages = Self::process_tool_calls_with_realtime_ui(
