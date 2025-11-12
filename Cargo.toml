@@ -11,8 +11,8 @@ members = [
 
 [workspace.dependencies]
 # Core GPUI dependencies
-gpui = { version = "0.2.0" }
-gpui-macros = "0.2.0"
+gpui = { version = "0.2.2" }
+gpui-macros = "0.2.2"
 gpui-component = { path = "vendor/gpui-component/crates/ui", features = [
     "tree-sitter-languages",
 ] }
