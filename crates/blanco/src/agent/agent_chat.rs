@@ -1,7 +1,7 @@
 use gpui::{
-    App, AppContext, Axis, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
-    IntoElement, KeybindingKeystroke, Keystroke, ParentElement, Render, Styled, Subscription,
-    Window, actions, div, prelude::FluentBuilder, px,
+    App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
+    KeybindingKeystroke, Keystroke, ParentElement, Render, StatefulInteractiveElement as _, Styled,
+    Subscription, Window, actions, div, point, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, Sizable, StyledExt as _,
@@ -21,11 +21,15 @@ use super::chat_session::ChatSession;
 use super::chat_types::{ChatEvent, LoadingState, SqlContext};
 use blanco_core::chat_provider::{ChatProvider, ProviderError};
 use blanco_ui::IconName;
+use gpui::ScrollHandle;
+use gpui_component::scroll::{Scrollbar, ScrollbarState};
 
 actions!(agent_chat, [SendMessage, ClearChat]);
 
 pub struct ChatPanel {
     pub focus_handle: FocusHandle,
+    pub scroll_state: ScrollbarState,
+    pub scroll_handle: ScrollHandle,
     pub session: Entity<ChatSession>,
     pub input_state: Entity<InputState>,
     pub messages: Vec<Entity<ChatMessageState>>,
@@ -128,6 +132,8 @@ impl ChatPanel {
 
         Self {
             focus_handle: cx.focus_handle(),
+            scroll_state: ScrollbarState::default(),
+            scroll_handle: ScrollHandle::new(),
             session,
             input_state,
             messages: Vec::new(),
@@ -176,12 +182,14 @@ impl ChatPanel {
     }
 
     fn scroll_to_bottom(&mut self, cx: &mut Context<Self>) {
+        // Clone the scroll handle before moving into the async closure
+        let scroll_handle = self.scroll_handle.clone();
+
         // Schedule scroll to bottom after render
-        cx.spawn(async move |_, _cx| {
+        cx.spawn(async move |_, cx| {
             // Small delay to ensure content is rendered
             gpui::Timer::after(Duration::from_millis(50)).await;
-            // Note: In a real implementation, you'd use the scroll handle
-            // self.scroll_handle.scroll_to(ScrollPosition { offset: px(f32::MAX), anchor: Anchor::End });
+            scroll_handle.scroll_to_bottom();
         })
         .detach();
     }
@@ -240,52 +248,66 @@ impl Render for ChatPanel {
             )
             // Messages area
             .child(
-                div().flex_1().min_h_0().child(
-                    v_flex()
-                        .p_3()
-                        .gap_4()
-                        .size_full()
-                        // Messages
-                        .children(self.messages.iter().cloned())
-                        // Loading indicator
-                        .when(self.loading_state.is_loading(), |this| {
-                            this.child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(self.loading_state.message())
-                                    .when(self.loading_state.show_spinner(), |this| {
-                                        this.child(
-                                            Spinner::new()
-                                                .icon(IconName::LoaderCircle)
-                                                .small()
-                                                .color(cx.theme().muted_foreground),
-                                        )
-                                    })
-                                    .when(
-                                        matches!(self.loading_state, LoadingState::Error(_)),
-                                        |this| {
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .child(
+                        v_flex()
+                            .id("agent-messages")
+                            .p_3()
+                            .gap_4()
+                            .size_full()
+                            .track_scroll(&self.scroll_handle)
+                            .overflow_scroll()
+                            // Messages
+                            .children(self.messages.iter().cloned())
+                            // Loading indicator
+                            .when(self.loading_state.is_loading(), |this| {
+                                this.child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(self.loading_state.message())
+                                        .when(self.loading_state.show_spinner(), |this| {
                                             this.child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_1()
-                                                    .child(
-                                                        Icon::new(IconName::TriangleAlert)
-                                                            .size(px(14.))
-                                                            .text_color(gpui::red()),
-                                                    )
-                                                    .child("Error"),
+                                                Spinner::new()
+                                                    .icon(IconName::LoaderCircle)
+                                                    .small()
+                                                    .color(cx.theme().muted_foreground),
                                             )
-                                        },
-                                    ),
-                            )
-                        })
-                        .scrollable(Axis::Vertical),
-                ),
+                                        })
+                                        .when(
+                                            matches!(self.loading_state, LoadingState::Error(_)),
+                                            |this| {
+                                                this.child(
+                                                    div()
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap_1()
+                                                        .child(
+                                                            Icon::new(IconName::TriangleAlert)
+                                                                .size(px(14.))
+                                                                .text_color(gpui::red()),
+                                                        )
+                                                        .child("Error"),
+                                                )
+                                            },
+                                        ),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .right_0()
+                            .bottom_0()
+                            .child(Scrollbar::vertical(&self.scroll_state, &self.scroll_handle)),
+                    ),
             )
             // Input area
             .child(
