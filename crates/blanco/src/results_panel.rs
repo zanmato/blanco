@@ -1,16 +1,18 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
+use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
-    InteractiveElement, IntoElement, MouseButton, ParentElement, Render, Styled, Window, div, px,
+    App, AppContext, Context, ElementId, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
+    InteractiveElement, IntoElement, MouseButton, ParentElement, Render, Styled, Subscription,
+    Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName,
     input::{Input, InputEvent, InputState},
-    legacytable::{Column, ColumnSort, Table, TableDelegate},
     menu::PopupMenu,
+    table::{Column, ColumnSort, Table, TableDelegate, TableEvent, TableState},
     v_flex,
 };
 
@@ -95,6 +97,7 @@ pub struct CellEditState {
     pub selected_cells: HashSet<(usize, usize)>, // Track selected cells
     pub selected_rows: HashSet<usize>, // Track selected rows
     pub current_column: usize,        // Track current column for selection
+    pub clicked_cell: Option<(usize, usize)>, // Track the last clicked cell for double-click editing
 }
 
 impl CellEditState {
@@ -722,6 +725,10 @@ impl ResultsTableDelegate {
         }
     }
 
+    pub fn set_pending_edit_cell(&mut self, row: usize, col: usize) {
+        self.pending_edit_cell = Some((row, col));
+    }
+
     pub fn update_cell_value(&mut self, row: usize, col: usize, new_value: String) {
         self.edit_state.edited_values.insert((row, col), new_value);
     }
@@ -990,12 +997,7 @@ impl TableDelegate for ResultsTableDelegate {
         &self.columns[col_ix]
     }
 
-    fn render_th(
-        &self,
-        col_ix: usize,
-        _: &mut Window,
-        _: &mut Context<Table<Self>>,
-    ) -> impl IntoElement {
+    fn render_th(&self, col_ix: usize, _: &mut Window, _: &mut App) -> impl IntoElement {
         let col = &self.columns[col_ix];
         div()
             .font_family("Fira Code")
@@ -1008,7 +1010,7 @@ impl TableDelegate for ResultsTableDelegate {
         row_ix: usize,
         col_ix: usize,
         _window: &mut Window,
-        cx: &mut Context<Table<Self>>,
+        cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
         let is_row_number_col = col_ix == 0;
         let is_editing = self.edit_state.is_editing(row_ix, col_ix) && !is_row_number_col;
@@ -1080,44 +1082,7 @@ impl TableDelegate for ResultsTableDelegate {
                             .py_0(), // No vertical padding
                     )
             } else {
-                // Fallback if input is not available
-                div()
-                    .font_family("Fira Code")
-                    .text_size(px(12.))
-                    .bg(cx.theme().background)
-                    .border_1()
-                    .border_color(cx.theme().blue)
-                    .px_2()
-                    .py_1()
-                    .rounded(cx.theme().radius)
-                    .size_full()
-                    .flex() // Enable flexbox layout
-                    .items_center() // Center vertically
-                    .when(self.is_numeric_column(col_ix - 1), |this| {
-                        // Adjust for row number column
-                        this.justify_end() // Right-align numeric columns
-                    })
-                    .when(self.is_uuid_column(col_ix - 1), |this| {
-                        // Adjust for row number column
-                        this.font_family("Fira Code") // Monospace font for UUIDs
-                            .text_color(cx.theme().blue) // Blue color for UUIDs
-                    })
-                    .when(self.is_timestamp_column(col_ix - 1), |this| {
-                        // Adjust for row number column
-                        this.font_family("Fira Code") // Monospace font for timestamps
-                            .text_color(cx.theme().green) // Green color for timestamps
-                    })
-                    .when(self.is_json_column(col_ix - 1), |this| {
-                        // Adjust for row number column
-                        this.font_family("Fira Code") // Monospace font for JSON
-                            .text_color(cx.theme().yellow) // Yellow color for JSON
-                    })
-                    .when(self.is_array_column(col_ix - 1), |this| {
-                        // Adjust for row number column
-                        this.font_family("Fira Code") // Monospace font for arrays
-                            .text_color(cx.theme().blue) // Blue color for arrays
-                    })
-                    .child(display_text)
+                div().child("")
             }
         } else {
             // Check if this is a numeric column for right-alignment (adjust for row number column)
@@ -1173,46 +1138,29 @@ impl TableDelegate for ResultsTableDelegate {
                 .when(is_null, |this| {
                     this.text_color(cx.theme().muted_foreground).italic()
                 })
-                // All data cells (non-row-number) should be selectable for copying
-                .when(!is_row_number_col, |this| {
-                    this.on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |table, event: &gpui::MouseDownEvent, _window, cx| {
-                            let delegate = table.delegate_mut();
-
-                            if event.click_count == 1 {
-                                // Single click - select cell
-                                log::info!(
-                                    "Single click on cell {}:{} - selecting cell",
-                                    row_ix,
-                                    col_ix
-                                );
-                                delegate.clear_selection();
-                                delegate.select_cell(row_ix, col_ix);
-                                table.refresh(cx);
-                                cx.notify();
-                            } else if event.click_count == 2 {
-                                // Double click - start editing (only if editable)
-                                log::info!("Double click on cell {}:{}", row_ix, col_ix);
-
-                                if delegate.is_editable() {
-                                    // Only set pending edit if not already editing this cell
-                                    if delegate.edit_state.editing_cell != Some((row_ix, col_ix)) {
-                                        delegate.pending_edit_cell = Some((row_ix, col_ix));
-                                        table.refresh(cx);
-                                        cx.notify();
-                                    }
-                                }
-                            }
-                        }),
-                    )
-                })
                 // Only show visual feedback for editable cells when hovering
                 .when(!is_row_number_col && !is_null && is_editable, |this| {
                     this.cursor_pointer()
                 })
                 .when(!is_editable && !is_row_number_col, |this| {
                     this.text_color(cx.theme().muted_foreground.opacity(0.6))
+                })
+                // All data cells (non-row-number) should be selectable for copying
+                .when(!is_row_number_col, |this| {
+                    this.on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |table, event: &gpui::MouseDownEvent, _window, cx| {
+                            if event.click_count == 2 {
+                                let delegate = table.delegate_mut();
+                                if delegate.is_editable() {
+                                    delegate.clear_selection();
+                                    delegate.set_pending_edit_cell(row_ix, col_ix);
+                                    table.refresh(cx);
+                                    cx.notify();
+                                }
+                            }
+                        }),
+                    )
                 })
                 .px_2()
                 .py_1()
@@ -1225,7 +1173,7 @@ impl TableDelegate for ResultsTableDelegate {
         col_ix: usize,
         sort: ColumnSort,
         _: &mut Window,
-        _: &mut Context<Table<Self>>,
+        _: &mut Context<TableState<Self>>,
     ) {
         // Don't sort by row number column
         if col_ix == 0 {
@@ -1255,7 +1203,7 @@ impl TableDelegate for ResultsTableDelegate {
         &mut self,
         _visible_range: Range<usize>,
         _: &mut Window,
-        _: &mut Context<Table<Self>>,
+        _: &mut Context<TableState<Self>>,
     ) {
     }
 
@@ -1263,15 +1211,11 @@ impl TableDelegate for ResultsTableDelegate {
         &mut self,
         _visible_range: Range<usize>,
         _: &mut Window,
-        _: &mut Context<Table<Self>>,
+        _: &mut Context<TableState<Self>>,
     ) {
     }
 
-    fn render_last_empty_col(
-        &mut self,
-        _window: &mut Window,
-        _cx: &mut Context<Table<Self>>,
-    ) -> impl IntoElement {
+    fn render_last_empty_col(&self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         // Add extra space to ensure all columns are scrollable
         // This compensates for any viewport calculation issues
         div().w(px(30.0)).h_full().flex_shrink_0()
@@ -1281,8 +1225,8 @@ impl TableDelegate for ResultsTableDelegate {
         &self,
         row_ix: usize,
         menu: PopupMenu,
-        _window: &Window,
-        _cx: &App,
+        _window: &mut Window,
+        _cx: &mut App,
     ) -> PopupMenu {
         let has_selection = self.edit_state.has_selection();
         let _selected_data = self.get_selected_data();
@@ -1349,13 +1293,14 @@ impl TableDelegate for ResultsTableDelegate {
 
 pub struct ResultsPanel {
     focus_handle: FocusHandle,
-    table: Entity<Table<ResultsTableDelegate>>,
+    table_state: Entity<TableState<ResultsTableDelegate>>,
     current_result: Option<QueryResult>,
     editing_input: Option<Entity<InputState>>,
     editing_cell: Option<(usize, usize)>,
     copy_handler: CopyHandler,
     current_selected_col: usize, // Track current column for selection/editing
     current_selected_row: Option<usize>, // Track current selected row for duplication
+    _subscriptions: Vec<Subscription>, // Store subscriptions to prevent them from being dropped
 }
 
 impl ResultsPanel {
@@ -1375,16 +1320,18 @@ impl ResultsPanel {
             delegate.set_connection_id(conn_id);
         }
 
-        let table = cx.new(|cx| {
-            Table::new(delegate, window, cx)
-                .row_selectable(true)
-                .col_selectable(false)
-        });
+        let table_state = cx.new(|cx| TableState::new(delegate, window, cx));
 
-        // The cell-level mouse events will handle selection and editing directly
+        // Set up event subscriptions
+        let mut subscriptions = Vec::new();
+
+        // Subscribe to table events to handle double-clicks for editing
+        log::info!("Setting up table event subscription for ResultsPanel");
+        let subscription = cx.subscribe_in(&table_state, window, Self::on_table_event);
+        subscriptions.push(subscription);
 
         Self {
-            table,
+            table_state,
             focus_handle: cx.focus_handle(),
             current_result: None,
             editing_input: None,
@@ -1392,6 +1339,7 @@ impl ResultsPanel {
             copy_handler: CopyHandler::new(),
             current_selected_col: 1, // Start with first data column (column 1, after row number)
             current_selected_row: None, // No row selected initially
+            _subscriptions: subscriptions,
         }
     }
 
@@ -1403,18 +1351,18 @@ impl ResultsPanel {
     ) {
         // Set connection ID on the delegate for table extraction
         if let Some(conn_id) = connection_id {
-            self.table.update(cx, |table, _cx| {
-                table.delegate_mut().set_connection_id(conn_id);
+            self.table_state.update(cx, |state, _cx| {
+                state.delegate_mut().set_connection_id(conn_id);
             });
         }
 
-        self.table.update(cx, |table, cx| {
+        self.table_state.update(cx, |state, cx| {
             // Set the original query for alias resolution
             if let Some(ref query) = result.query_text {
-                table.delegate_mut().set_original_query(query.clone());
+                state.delegate_mut().set_original_query(query.clone());
             }
-            table.delegate_mut().set_query_result(result.clone());
-            table.refresh(cx);
+            state.delegate_mut().set_query_result(result.clone());
+            state.refresh(cx);
         });
         self.current_result = Some(result.clone());
 
@@ -1427,15 +1375,21 @@ impl ResultsPanel {
 
     pub fn commit_current_edit(&mut self, cx: &mut Context<Self>) {
         // Use the delegate's editing state instead of the panel's
-        let editing_cell = self.table.read(cx).delegate().edit_state.editing_cell;
+        let editing_cell = self.table_state.read(cx).delegate().edit_state.editing_cell;
 
         if let Some((row, col)) = editing_cell {
-            if let Some(input) = &self.table.read(cx).delegate().edit_state.editing_input {
+            if let Some(input) = &self
+                .table_state
+                .read(cx)
+                .delegate()
+                .edit_state
+                .editing_input
+            {
                 let new_value = input.read(cx).text().to_string();
 
                 // Check if this is a new row
                 let is_new_row = self
-                    .table
+                    .table_state
                     .read(cx)
                     .delegate()
                     .edit_state
@@ -1444,8 +1398,8 @@ impl ResultsPanel {
 
                 if is_new_row {
                     // For new rows, update the cell value and track as INSERT
-                    self.table.update(cx, |table, cx| {
-                        let delegate = table.delegate_mut();
+                    self.table_state.update(cx, |state, cx| {
+                        let delegate = state.delegate_mut();
 
                         // Update the actual cell value
                         if let Some(row_data) = delegate.rows.get_mut(row) {
@@ -1499,12 +1453,12 @@ impl ResultsPanel {
                         }
 
                         delegate.edit_state.stop_editing();
-                        table.refresh(cx);
+                        state.refresh(cx);
                     });
                 } else {
                     // For existing rows, update the edited_values and commit as UPDATE
-                    self.table.update(cx, |table, _cx| {
-                        table
+                    self.table_state.update(cx, |state, _cx| {
+                        state
                             .delegate_mut()
                             .update_cell_value(row, col, new_value.clone());
                     });
@@ -1522,7 +1476,7 @@ impl ResultsPanel {
 
     pub fn cancel_current_edit(&mut self, cx: &mut Context<Self>) {
         // Use the delegate's editing state instead of the panel's
-        let editing_cell = self.table.read(cx).delegate().edit_state.editing_cell;
+        let editing_cell = self.table_state.read(cx).delegate().edit_state.editing_cell;
 
         if let Some((row, col)) = editing_cell {
             self.cancel_cell_edit(row, col, cx);
@@ -1538,7 +1492,7 @@ impl ResultsPanel {
     ) {
         // Get the current cell value
         let current_value = self
-            .table
+            .table_state
             .read(cx)
             .delegate()
             .rows
@@ -1549,7 +1503,7 @@ impl ResultsPanel {
 
         // Check if this is a new row (pending insert) or existing row
         let is_new_row = self
-            .table
+            .table_state
             .read(cx)
             .delegate()
             .edit_state
@@ -1557,11 +1511,12 @@ impl ResultsPanel {
             .contains(&row);
 
         // Create input state for editing with the current cell value
+        log::debug!("Is this being recreated?");
         let input = cx.new(|cx| InputState::new(window, cx).default_value(&current_value));
 
         // Start editing in the delegate with the input
-        self.table.update(cx, |table, cx| {
-            let delegate = table.delegate_mut();
+        self.table_state.update(cx, |state, cx| {
+            let delegate = state.delegate_mut();
             delegate.start_editing_cell(row, col);
             delegate.edit_state.start_editing(row, col, input.clone());
 
@@ -1592,7 +1547,7 @@ impl ResultsPanel {
                         .insert((row_clone, col_clone), new_text.clone());
 
                     // Debug: Input change handled in edited_values for commit_cell_edit
-                    table.refresh(cx);
+                    // Note: Can't refresh here due to borrowing issues
                 } else if let InputEvent::Blur = event {
                     // Handle blur - save current edit to edited_values when input loses focus
                     // Get the current editing cell and value
@@ -1615,7 +1570,7 @@ impl ResultsPanel {
             })
             .detach();
 
-            table.refresh(cx);
+            state.refresh(cx);
         });
 
         // Focus the input automatically when editing starts
@@ -1638,8 +1593,8 @@ impl ResultsPanel {
         let mut table_name = None;
         let mut primary_key_value = None;
 
-        self.table.update(cx, |table, cx| {
-            let delegate = table.delegate_mut();
+        self.table_state.update(cx, |state, cx| {
+            let delegate = state.delegate_mut();
 
             // Get the original value before updating
             old_value = delegate.rows.get(row).and_then(|r| r.get(col)).cloned();
@@ -1704,7 +1659,7 @@ impl ResultsPanel {
 
             // Stop editing and clear input
             delegate.edit_state.stop_editing();
-            table.refresh(cx);
+            state.refresh(cx);
         });
 
         // Clear panel editing state
@@ -1716,11 +1671,11 @@ impl ResultsPanel {
     }
 
     pub fn cancel_cell_edit(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
-        self.table.update(cx, |table, cx| {
-            table.delegate_mut().cancel_cell_edit(row, col);
+        self.table_state.update(cx, |state, cx| {
+            state.delegate_mut().cancel_cell_edit(row, col);
             // Stop editing and clear input
-            table.delegate_mut().edit_state.stop_editing();
-            table.refresh(cx);
+            state.delegate_mut().edit_state.stop_editing();
+            state.refresh(cx);
         });
 
         // Clear panel editing state
@@ -1731,7 +1686,7 @@ impl ResultsPanel {
     }
 
     pub fn has_unsaved_changes(&self, cx: &App) -> bool {
-        self.table
+        self.table_state
             .read(cx)
             .delegate()
             .edit_state
@@ -1739,7 +1694,7 @@ impl ResultsPanel {
     }
 
     pub fn get_table_name(&self, cx: &App) -> Option<String> {
-        self.table
+        self.table_state
             .read(cx)
             .delegate()
             .get_table_name()
@@ -1747,7 +1702,7 @@ impl ResultsPanel {
     }
 
     pub fn is_editing(&self, cx: &App) -> bool {
-        self.table
+        self.table_state
             .read(cx)
             .delegate()
             .edit_state
@@ -1756,11 +1711,11 @@ impl ResultsPanel {
     }
 
     pub fn get_changes(&self, cx: &App) -> Vec<TableChange> {
-        let table_read = self.table.read(cx);
+        let table_read = self.table_state.read(cx);
         let _delegate = table_read.delegate();
         // Get changes directly from edited values in delegate
         let mut changes = Vec::new();
-        let table_read = self.table.read(cx);
+        let table_read = self.table_state.read(cx);
         let delegate = table_read.delegate();
 
         for ((row, col), new_value) in &delegate.edit_state.edited_values {
@@ -1786,9 +1741,9 @@ impl ResultsPanel {
     }
 
     pub fn clear_changes(&mut self, cx: &mut Context<Self>) {
-        self.table.update(cx, |table, cx| {
-            table.delegate_mut().edit_state.clear_changes();
-            table.refresh(cx);
+        self.table_state.update(cx, |state, cx| {
+            state.delegate_mut().edit_state.clear_changes();
+            state.refresh(cx);
         });
         cx.notify();
     }
@@ -1796,8 +1751,8 @@ impl ResultsPanel {
     pub fn commit_all_edits(&mut self, cx: &mut Context<Self>) -> Vec<(usize, usize, String)> {
         let mut committed_changes = Vec::new();
 
-        self.table.update(cx, |table, cx| {
-            let delegate = table.delegate_mut();
+        self.table_state.update(cx, |state, cx| {
+            let delegate = state.delegate_mut();
             let edited_cells: Vec<(usize, usize)> =
                 delegate.edit_state.edited_values.keys().cloned().collect();
 
@@ -1812,7 +1767,7 @@ impl ResultsPanel {
                 delegate.cancel_cell_edit(row, col);
             }
 
-            table.refresh(cx);
+            state.refresh(cx);
         });
 
         cx.notify();
@@ -1820,8 +1775,8 @@ impl ResultsPanel {
     }
 
     pub fn cancel_all_edits(&mut self, cx: &mut Context<Self>) {
-        self.table.update(cx, |table, cx| {
-            let delegate = table.delegate_mut();
+        self.table_state.update(cx, |state, cx| {
+            let delegate = state.delegate_mut();
 
             // Cancel current editing cell
             if let Some((row, col)) = delegate.edit_state.editing_cell {
@@ -1832,14 +1787,14 @@ impl ResultsPanel {
             delegate.edit_state.edited_values.clear();
             delegate.edit_state.original_values.clear();
 
-            table.refresh(cx);
+            state.refresh(cx);
         });
 
         cx.notify();
     }
 
     pub fn get_current_editing_cell(&self, cx: &App) -> Option<(usize, usize)> {
-        self.table.read(cx).delegate().edit_state.editing_cell
+        self.table_state.read(cx).delegate().edit_state.editing_cell
     }
 
     pub fn update_editing_cell_value(
@@ -1849,9 +1804,9 @@ impl ResultsPanel {
         new_value: String,
         cx: &mut Context<Self>,
     ) {
-        self.table.update(cx, |table, cx| {
-            table.delegate_mut().update_cell_value(row, col, new_value);
-            table.refresh(cx);
+        self.table_state.update(cx, |state, cx| {
+            state.delegate_mut().update_cell_value(row, col, new_value);
+            state.refresh(cx);
         });
         cx.notify();
     }
@@ -1893,7 +1848,11 @@ impl ResultsPanel {
         }
 
         // Get changes and convert to database-agnostic operations
-        let change_operations = self.table.read(cx).delegate().create_change_operations();
+        let change_operations = self
+            .table_state
+            .read(cx)
+            .delegate()
+            .create_change_operations();
 
         if change_operations.is_empty() {
             log::info!("Commit Changes: No changes to commit");
@@ -1906,12 +1865,17 @@ impl ResultsPanel {
         );
 
         // Get connection id from delegate (use fallback if not available)
-        let connection_id = self.table.read(cx).delegate().connection_id.unwrap_or(0);
+        let connection_id = self
+            .table_state
+            .read(cx)
+            .delegate()
+            .connection_id
+            .unwrap_or(0);
         // TODO: error here instead of fallback to connection_id 0
 
         // Get table name for logging
         let table_name = self
-            .table
+            .table_state
             .read(cx)
             .delegate()
             .table_name
@@ -1966,7 +1930,7 @@ impl ResultsPanel {
 
         // Spawn background task to execute table operations
         let db_service = cx.global::<DbService>().clone();
-        let _table_entity = self.table.clone();
+        let _table_entity = self.table_state.clone();
         let _sql_log_entity: Option<Entity<blanco_ui::SqlLog>> = sql_log.cloned();
 
         cx.background_spawn(async move {
@@ -2053,9 +2017,9 @@ impl ResultsPanel {
                     if response.success {
                         // Clear edits and refresh the table
                         let _ = entity.update(cx, |panel, cx| {
-                            panel.table.update(cx, |table, cx| {
-                                table.delegate_mut().edit_state.clear_edits();
-                                table.refresh(cx);
+                            panel.table_state.update(cx, |state, cx| {
+                                state.delegate_mut().edit_state.clear_edits();
+                                state.refresh(cx);
                             });
 
                             // Update SQL log with success message
@@ -2133,13 +2097,13 @@ impl ResultsPanel {
 
         // Get table name and connection for events
         let table_name = self
-            .table
+            .table_state
             .read(cx)
             .delegate()
             .table_name
             .clone()
             .unwrap_or_else(|| "unknown".to_string());
-        let connection_id = self.table.read(cx).delegate().connection_id;
+        let connection_id = self.table_state.read(cx).delegate().connection_id;
 
         // TODO: error here instead of fallback to sqlite::memory
 
@@ -2156,8 +2120,8 @@ impl ResultsPanel {
                     if let Some(col) = change.column_index {
                         let row = change.row_index;
                         if let Some(old_value) = &change.old_value {
-                            self.table.update(cx, |table, _cx| {
-                                if let Some(cell) = table.delegate_mut().get_cell_mut(row, col) {
+                            self.table_state.update(cx, |state, _cx| {
+                                if let Some(cell) = state.delegate_mut().get_cell_mut(row, col) {
                                     *cell = old_value.clone();
                                 }
                             });
@@ -2167,8 +2131,8 @@ impl ResultsPanel {
                 ChangeType::InsertRow => {
                     // Remove inserted rows (reverse order to maintain indices)
                     let row = change.row_index;
-                    self.table.update(cx, |table, _cx| {
-                        table.delegate_mut().remove_row(row);
+                    self.table_state.update(cx, |state, _cx| {
+                        state.delegate_mut().remove_row(row);
                     });
                 }
             }
@@ -2193,8 +2157,8 @@ impl ResultsPanel {
     }
 
     pub fn add_new_row(&mut self, cx: &mut Context<Self>) {
-        self.table.update(cx, |table, cx| {
-            let delegate = table.delegate_mut();
+        self.table_state.update(cx, |state, cx| {
+            let delegate = state.delegate_mut();
             let column_count = delegate.columns.len();
 
             // Create a new row with empty values
@@ -2228,14 +2192,14 @@ impl ResultsPanel {
                 delegate.edit_state.add_change(change);
             }
 
-            table.refresh(cx);
+            state.refresh(cx);
         });
         cx.notify();
     }
 
     pub fn duplicate_row(&mut self, row_index: usize, cx: &mut Context<Self>) {
-        self.table.update(cx, |table, cx| {
-            let delegate = table.delegate_mut();
+        self.table_state.update(cx, |state, cx| {
+            let delegate = state.delegate_mut();
 
             // Check if the row exists
             if let Some(row_to_duplicate) = delegate.rows.get(row_index).cloned() {
@@ -2276,7 +2240,7 @@ impl ResultsPanel {
                     delegate.edit_state.add_change(change);
                 }
 
-                table.refresh(cx);
+                state.refresh(cx);
             }
         });
         cx.notify();
@@ -2284,8 +2248,8 @@ impl ResultsPanel {
 
     /// Set a cell value to NULL
     pub fn set_cell_to_null(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
-        self.table.update(cx, |table, cx| {
-            let delegate = table.delegate_mut();
+        self.table_state.update(cx, |state, cx| {
+            let delegate = state.delegate_mut();
 
             // Get current value for change tracking
             let old_value = delegate.rows.get(row).and_then(|r| r.get(col)).cloned();
@@ -2314,15 +2278,15 @@ impl ResultsPanel {
                 delegate.edit_state.add_change(change);
             }
 
-            table.refresh(cx);
+            state.refresh(cx);
         });
         cx.notify();
     }
 
     /// Clear a cell value (set to empty string)
     pub fn clear_cell_value(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
-        self.table.update(cx, |table, cx| {
-            let delegate = table.delegate_mut();
+        self.table_state.update(cx, |state, cx| {
+            let delegate = state.delegate_mut();
 
             // Get current value for change tracking
             let old_value = delegate.rows.get(row).and_then(|r| r.get(col)).cloned();
@@ -2351,7 +2315,7 @@ impl ResultsPanel {
                 delegate.edit_state.add_change(change);
             }
 
-            table.refresh(cx);
+            state.refresh(cx);
         });
         cx.notify();
     }
@@ -2375,9 +2339,9 @@ impl ResultsPanel {
             );
 
             // Clear edit state after successful commit
-            self.table.update(cx, |table, cx| {
-                table.delegate_mut().edit_state.clear_edits();
-                table.refresh(cx);
+            self.table_state.update(cx, |state, cx| {
+                state.delegate_mut().edit_state.clear_edits();
+                state.refresh(cx);
             });
 
             // Optionally refresh the data or show a success message
@@ -2396,13 +2360,13 @@ impl ResultsPanel {
     // Copy and selection action handlers
     fn on_copy_cell(&mut self, action: &CopyCell, _window: &mut Window, cx: &mut Context<Self>) {
         let cell_value = self
-            .table
+            .table_state
             .read(cx)
             .delegate()
             .get_cell_value(action.row, action.col);
 
         // Get column type if available
-        let column_types = self.table.read(cx).delegate().column_types.clone();
+        let column_types = self.table_state.read(cx).delegate().column_types.clone();
         let column_type = column_types
             .get(action.col.saturating_sub(1)) // Adjust for row number column
             .map(|s| s.as_str())
@@ -2424,7 +2388,7 @@ impl ResultsPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let selected_data = self.table.read(cx).delegate().get_selected_data();
+        let selected_data = self.table_state.read(cx).delegate().get_selected_data();
 
         if let Err(e) = self.copy_handler.copy_as_format(&selected_data, "csv", cx) {
             log::error!("Failed to copy as CSV: {}", e);
@@ -2437,7 +2401,7 @@ impl ResultsPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let selected_data = self.table.read(cx).delegate().get_selected_data();
+        let selected_data = self.table_state.read(cx).delegate().get_selected_data();
 
         if let Err(e) = self.copy_handler.copy_as_format(&selected_data, "json", cx) {
             log::error!("Failed to copy as JSON: {}", e);
@@ -2450,7 +2414,7 @@ impl ResultsPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let selected_data = self.table.read(cx).delegate().get_selected_data();
+        let selected_data = self.table_state.read(cx).delegate().get_selected_data();
 
         if let Err(e) = self.copy_handler.copy_as_format(&selected_data, "sql", cx) {
             log::error!("Failed to copy as SQL: {}", e);
@@ -2463,7 +2427,7 @@ impl ResultsPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let selected_data = self.table.read(cx).delegate().get_selected_data();
+        let selected_data = self.table_state.read(cx).delegate().get_selected_data();
 
         if let Err(e) = self
             .copy_handler
@@ -2475,10 +2439,10 @@ impl ResultsPanel {
 
     fn on_select_row(&mut self, action: &SelectRow, _window: &mut Window, cx: &mut Context<Self>) {
         self.current_selected_row = Some(action.row);
-        self.table.update(cx, |table, _cx| {
-            let delegate = table.delegate_mut();
+        self.table_state.update(cx, |state, _cx| {
+            let delegate = state.delegate_mut();
             delegate.select_row(action.row);
-            table.refresh(_cx);
+            state.refresh(_cx);
         });
         cx.notify();
     }
@@ -2490,10 +2454,10 @@ impl ResultsPanel {
         cx: &mut Context<Self>,
     ) {
         self.current_selected_row = None;
-        self.table.update(cx, |table, _cx| {
-            let delegate = table.delegate_mut();
+        self.table_state.update(cx, |state, _cx| {
+            let delegate = state.delegate_mut();
             delegate.edit_state.clear_selection();
-            table.refresh(_cx);
+            state.refresh(_cx);
         });
         cx.notify();
     }
@@ -2522,8 +2486,8 @@ impl ResultsPanel {
         cx: &mut Context<Self>,
     ) {
         // Handle row selection for the current column
-        self.table.update(cx, |table, cx| {
-            let delegate = table.delegate_mut();
+        self.table_state.update(cx, |state, cx| {
+            let delegate = state.delegate_mut();
 
             // Select the current column in the clicked row
             delegate.edit_state.clear_selection();
@@ -2531,15 +2495,15 @@ impl ResultsPanel {
                 .edit_state
                 .selected_cells
                 .insert((action.row, self.current_selected_col));
-            table.refresh(cx);
+            state.refresh(cx);
         });
         cx.notify();
     }
 
     /// Navigate cells in the table with keyboard
     fn navigate_cells(&mut self, cx: &mut Context<Self>, row_delta: isize, col_delta: isize) {
-        self.table.update(cx, |table, cx| {
-            let delegate = table.delegate_mut();
+        self.table_state.update(cx, |state, cx| {
+            let delegate = state.delegate_mut();
 
             // Start from current tracked position
             let mut current_row = 1;
@@ -2573,15 +2537,15 @@ impl ResultsPanel {
                 .selected_cells
                 .insert((final_row, final_col));
 
-            table.refresh(cx);
+            state.refresh(cx);
         });
         cx.notify();
     }
 
     /// Select the current cell based on keyboard focus
     fn select_current_cell(&mut self, cx: &mut Context<Self>) {
-        self.table.update(cx, |table, cx| {
-            let delegate = table.delegate_mut();
+        self.table_state.update(cx, |state, cx| {
+            let delegate = state.delegate_mut();
 
             // If there are selected cells, toggle the first one
             if let Some(&(row, col)) = delegate.edit_state.selected_cells.iter().next() {
@@ -2596,15 +2560,54 @@ impl ResultsPanel {
                 }
             }
 
-            table.refresh(cx);
+            state.refresh(cx);
         });
         cx.notify();
+    }
+
+    /// Handle table events for double-click editing
+    fn on_table_event(
+        &mut self,
+        table_state: &Entity<TableState<ResultsTableDelegate>>,
+        event: &TableEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        log::info!("Received table event in on_table_event");
+        match event {
+            /*
+            TableEvent::DoubleClickedRow(row) => {
+                log::info!("Double clicked row: {}", row);
+                // Use the current_column from the delegate's edit state
+                // This should be updated when users navigate through cells
+                let col = self.table_state.read(cx).delegate().edit_state.current_column;
+
+                log::info!("Starting edit for cell ({}, {})", row, col);
+                if let Err(e) = self.start_editing_without_window(*row, col, cx) {
+                    log::error!("Failed to start cell edit: {}", e);
+                }
+            }
+            */
+            TableEvent::SelectRow(row) => {
+                log::info!("Row selected: {}", row);
+                // Update the selected row tracking
+                self.current_selected_row = Some(*row);
+            }
+            _ => {
+                log::info!("Received other table event");
+            }
+        }
     }
 
     /// Sync the ResultsPanel's current_selected_col with the delegate's current_column
     #[allow(dead_code)]
     fn sync_current_column(&mut self, cx: &mut Context<Self>) {
-        self.current_selected_col = self.table.read(cx).delegate().edit_state.current_column;
+        self.current_selected_col = self
+            .table_state
+            .read(cx)
+            .delegate()
+            .edit_state
+            .current_column;
     }
 }
 
@@ -2618,18 +2621,19 @@ impl Focusable for ResultsPanel {
 impl Render for ResultsPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Check for pending edits
-        if let Some((row, col)) = self.table.read(cx).delegate().pending_edit_cell {
+        if let Some((row, col)) = self.table_state.read(cx).delegate().pending_edit_cell {
             // Clear the pending edit and start editing
-            self.table.update(cx, |table, _cx| {
-                table.delegate_mut().pending_edit_cell = None;
+            self.table_state.update(cx, |state, _cx| {
+                state.delegate_mut().pending_edit_cell = None;
             });
+
             self.start_cell_edit(row, col, window, cx);
         }
 
-        let _row_count = self.table.read(cx).delegate().rows_count(cx);
+        let _row_count = self.table_state.read(cx).delegate().rows_count(cx);
         let _has_unsaved_changes = self.has_unsaved_changes(cx);
         let _table_name = self.get_table_name(cx);
-        let _is_editable = self.table.read(cx).delegate().is_editable();
+        let _is_editable = self.table_state.read(cx).delegate().is_editable();
 
         v_flex()
             .size_full()
@@ -2649,9 +2653,9 @@ impl Render for ResultsPanel {
                                 this.cancel_current_edit(cx);
                             } else {
                                 // Clear all selections when not editing
-                                this.table.update(cx, |table, cx| {
-                                    table.delegate_mut().clear_selection();
-                                    table.refresh(cx);
+                                this.table_state.update(cx, |state, cx| {
+                                    state.delegate_mut().clear_selection();
+                                    state.refresh(cx);
                                 });
                                 cx.notify();
                             }
@@ -2737,7 +2741,7 @@ impl Render for ResultsPanel {
                     .flex_1() // Allow table to fill available space
                     .overflow_hidden()
                     .min_h(px(200.0)) // Minimum height for table
-                    .child(self.table.clone()),
+                    .child(Table::new(&self.table_state)),
             )
     }
 }
