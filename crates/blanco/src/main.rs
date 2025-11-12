@@ -13,7 +13,6 @@ mod rename_form;
 mod results_panel;
 mod settings;
 mod sidebar;
-mod sql_completion;
 mod sql_completion_provider;
 mod theme_loader;
 mod time_format;
@@ -23,7 +22,7 @@ pub use sidebar::ConnectionSidebar;
 
 use assets::Assets;
 use db_service::DbService;
-use gpui::{px, size, AppContext, Application, WindowBounds, WindowOptions};
+use gpui::{AppContext, Application, WindowBounds, WindowOptions, px, size};
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
 fn main() {

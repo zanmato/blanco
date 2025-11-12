@@ -132,26 +132,6 @@ pub enum AppEvent {
         table_name: String,
     },
 
-    /// SQL completion events
-    CompletionTriggered {
-        tab_id: usize,
-        position: crate::sql_completion::Position,
-        trigger_character: Option<char>,
-    },
-    CompletionSelected {
-        tab_id: usize,
-        item: crate::sql_completion::CompletionItem,
-        position: crate::sql_completion::Position,
-    },
-    CompletionCancelled {
-        tab_id: usize,
-    },
-    HoverRequested {
-        tab_id: usize,
-        position: crate::sql_completion::Position,
-        word: String,
-    },
-
     /// Error events
     ErrorOccurred {
         context: String,
