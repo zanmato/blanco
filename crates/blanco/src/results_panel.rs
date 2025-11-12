@@ -3,17 +3,18 @@ use std::ops::Range;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, px, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
-    InteractiveElement, IntoElement, MouseButton, ParentElement, Render, Styled, Window,
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
+    InteractiveElement, IntoElement, MouseButton, ParentElement, Render, Styled, Window, div, px,
 };
 use gpui_component::{
+    ActiveTheme, Icon, IconName,
     input::{Input, InputEvent, InputState},
     legacytable::{Column, ColumnSort, Table, TableDelegate},
     menu::PopupMenu,
-    v_flex, ActiveTheme, Icon, IconName,
+    v_flex,
 };
 
-use crate::app::{ClearSelection, CopyCell, SelectRow}; // Import the action types
+use crate::app::{AddRow, ClearSelection, CopyCell, DuplicateRow, SelectRow}; // Import the action types
 use crate::app_events::AppEvent;
 use crate::db_service::DbService;
 use crate::transformers::CopyHandler;
@@ -28,10 +29,10 @@ pub struct TableOperationResponse {
     pub error_message: Option<String>,
     pub operations_executed: usize,
 }
+use blanco_core::QueryResult;
 use blanco_core::table_operations::{
     ColumnChange, OperationType, RowIdentifier, TableChangeOperation,
 };
-use blanco_core::QueryResult;
 
 // Data structures for copy functionality
 #[derive(Clone, Debug)]
@@ -163,6 +164,10 @@ impl CellEditState {
         self.edited_values.clear();
         self.original_values.clear();
         self.pending_new_rows.clear();
+    }
+
+    pub fn is_new_row(&self, row_index: usize) -> bool {
+        self.pending_new_rows.contains(&row_index)
     }
 
     pub fn select_cell(&mut self, row: usize, col: usize) -> bool {
@@ -365,6 +370,74 @@ impl ResultsTableDelegate {
         }
     }
 
+    /// Find the column index of the primary key column (excluding row number column)
+    pub fn get_primary_key_column_index(&self) -> Option<usize> {
+        if let Some(pk_column) = &self.primary_key_column {
+            // Skip row number column (index 0) and find the primary key in data columns
+            self.columns
+                .iter()
+                .skip(1)
+                .position(|col| col.name.as_str() == pk_column)
+        } else {
+            None
+        }
+    }
+
+    /// Get column names for INSERT operations, excluding row number and primary key (for new rows)
+    pub fn get_insert_column_names(&self, exclude_primary_key: bool) -> Vec<String> {
+        let pk_index = if exclude_primary_key {
+            self.get_primary_key_column_index()
+        } else {
+            None
+        };
+
+        self.columns
+            .iter()
+            .skip(1) // Skip row number column
+            .enumerate()
+            .filter_map(|(data_index, col)| {
+                // Convert data_index back to full column index
+                let _full_index = data_index + 1;
+                if exclude_primary_key {
+                    if let Some(pk_data_index) = pk_index {
+                        if data_index == pk_data_index {
+                            return None; // Skip primary key column
+                        }
+                    }
+                }
+                Some(col.name.to_string())
+            })
+            .collect()
+    }
+
+    /// Get column values for INSERT operations, excluding row number and primary key (for new rows)
+    pub fn get_insert_values(&self, row_index: usize, exclude_primary_key: bool) -> Vec<String> {
+        let pk_index = if exclude_primary_key {
+            self.get_primary_key_column_index()
+        } else {
+            None
+        };
+
+        if let Some(row) = self.rows.get(row_index) {
+            row.iter()
+                .skip(1) // Skip row number column
+                .enumerate()
+                .filter_map(|(data_index, val)| {
+                    if exclude_primary_key {
+                        if let Some(pk_data_index) = pk_index {
+                            if data_index == pk_data_index {
+                                return None; // Skip primary key column
+                            }
+                        }
+                    }
+                    Some(val.clone())
+                })
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
+
     /// Get a mutable reference to a cell
     pub fn get_cell_mut(&mut self, row: usize, col: usize) -> Option<&mut String> {
         self.rows
@@ -464,28 +537,32 @@ impl ResultsTableDelegate {
                         .push(column_change);
                 }
                 ChangeType::InsertRow => {
-                    // Convert the new_value (comma-separated) into column changes
-                    if let Some(ref values_str) = change.new_value {
-                        let values: Vec<String> =
-                            values_str.split(", ").map(|s| s.to_string()).collect();
+                    // For INSERT operations, get the current values from the actual row data
+                    // This ensures we use the most up-to-date values instead of stored ones
+                    let column_names = self.get_insert_column_names(true); // exclude_primary_key = true
+                    let row_values = self.get_insert_values(change.row_index, true); // exclude_primary_key = true
 
-                        let column_changes: Vec<ColumnChange> = self
-                            .columns
-                            .iter()
-                            .zip(values.iter())
-                            .map(|(col, value)| ColumnChange {
-                                column_name: col.name.to_string(),
+                    let column_changes: Vec<ColumnChange> = column_names
+                        .into_iter()
+                        .zip(row_values.iter())
+                        .map(|(column_name, value)| {
+                            let formatted_value = if value.is_empty() || value == "NULL" {
+                                "NULL".to_string()
+                            } else {
+                                format!("'{}'", value.replace("'", "''"))
+                            };
+                            ColumnChange {
+                                column_name,
                                 old_value: None,
-                                new_value: Some(value.clone()),
-                            })
-                            .collect();
+                                new_value: Some(formatted_value),
+                            }
+                        })
+                        .collect();
 
-                        insert_operations.push(TableChangeOperation::insert_row(
-                            change.table_name.clone(),
-                            column_changes,
-                        ));
-                    }
-                    // If no values, skip the INSERT change
+                    insert_operations.push(TableChangeOperation::insert_row(
+                        change.table_name.clone(),
+                        column_changes,
+                    ));
                 }
             }
         }
@@ -552,9 +629,11 @@ impl ResultsTableDelegate {
         column_widths.insert(0, row_num_width);
 
         // Build columns from result with calculated widths, starting with row number column
-        let mut columns = vec![Column::new("row_number".to_string(), "#".to_string())
-            .width(row_num_width)
-            .resizable(false)];
+        let mut columns = vec![
+            Column::new("row_number".to_string(), "#".to_string())
+                .width(row_num_width)
+                .resizable(false),
+        ];
 
         columns.extend(result.columns.iter().enumerate().map(|(i, name)| {
             Column::new(format!("col_{}", i + 1), name)
@@ -673,32 +752,36 @@ impl ResultsTableDelegate {
                 log::info!("No row data found at row {}", row);
             }
 
-            // Track the change for SQL generation
+            // Track the change for SQL generation (but not for new rows)
             if let (Some(original), Some(table_name)) = (&original_value, &self.table_name) {
-                // Get primary key value using the detected primary key column
-                let primary_key_value = self.get_primary_key_value(row);
+                // Check if this is a new row - if so, don't create UPDATE changes
+                // New rows should be handled by INSERT operations only
+                if !self.edit_state.is_new_row(row) {
+                    // Get primary key value using the detected primary key column
+                    let primary_key_value = self.get_primary_key_value(row);
 
-                // Validate change before creating
-                let _validation_status = if primary_key_value.is_none() {
-                    "INVALID: No primary key value"
-                } else if self.primary_key_column.is_none() {
-                    "WARNING: No primary key column detected"
-                } else {
-                    "VALID"
-                };
+                    // Validate change before creating
+                    let _validation_status = if primary_key_value.is_none() {
+                        "INVALID: No primary key value"
+                    } else if self.primary_key_column.is_none() {
+                        "WARNING: No primary key column detected"
+                    } else {
+                        "VALID"
+                    };
 
-                let change = self.create_table_change(
-                    ChangeType::UpdateCell,
-                    table_name.clone(),
-                    row,
-                    Some(col),
-                    Some(original.clone()),
-                    Some(new_value.clone()),
-                    primary_key_value,
-                    self.primary_key_column.clone(),
-                );
+                    let change = self.create_table_change(
+                        ChangeType::UpdateCell,
+                        table_name.clone(),
+                        row,
+                        Some(col),
+                        Some(original.clone()),
+                        Some(new_value.clone()),
+                        primary_key_value,
+                        self.primary_key_column.clone(),
+                    );
 
-                self.edit_state.add_change(change);
+                    self.edit_state.add_change(change);
+                }
             }
 
             // Clear only the editing state, keep edited_values for visual indicator
@@ -1242,6 +1325,18 @@ impl TableDelegate for ResultsTableDelegate {
             menu.menu("Select Row", Box::new(SelectRow { row: row_ix }))
         };
 
+        // Row operations
+        let menu = menu
+            .separator()
+            .menu_with_icon("Add Row", Icon::new(IconName::Plus), Box::new(AddRow))
+            .when(row_is_selected, |menu| {
+                menu.menu_with_icon(
+                    "Duplicate Row",
+                    Icon::new(IconName::Copy),
+                    Box::new(DuplicateRow { row: row_ix }),
+                )
+            });
+
         // Clear selection if we have any
         if has_selection {
             menu.separator()
@@ -1260,6 +1355,7 @@ pub struct ResultsPanel {
     editing_cell: Option<(usize, usize)>,
     copy_handler: CopyHandler,
     current_selected_col: usize, // Track current column for selection/editing
+    current_selected_row: Option<usize>, // Track current selected row for duplication
 }
 
 impl ResultsPanel {
@@ -1295,6 +1391,7 @@ impl ResultsPanel {
             editing_cell: None,
             copy_handler: CopyHandler::new(),
             current_selected_col: 1, // Start with first data column (column 1, after row number)
+            current_selected_row: None, // No row selected initially
         }
     }
 
@@ -1568,36 +1665,40 @@ impl ResultsPanel {
             delegate.update_cell_value(row, col, new_value.clone());
             committed_value = delegate.commit_cell_edit(row, col);
 
-            // Track the change for SQL generation
+            // Track the change for SQL generation (but not for new rows)
             if let (Some(old_val), Some(tbl_name)) = (&old_value, &table_name) {
                 if old_val != &new_value {
-                    // Get primary key value (assuming first column is primary key)
-                    let primary_key_value = delegate.get_primary_key_value(row);
-                    let primary_key_column = delegate.primary_key_column.clone();
+                    // Check if this is a new row - if so, don't create UPDATE changes
+                    // New rows should be handled by INSERT operations only
+                    if !delegate.edit_state.is_new_row(row) {
+                        // Get primary key value (assuming first column is primary key)
+                        let primary_key_value = delegate.get_primary_key_value(row);
+                        let primary_key_column = delegate.primary_key_column.clone();
 
-                    // Validate change data before creating
-                    let _validation_msg = if primary_key_value.is_none() {
-                        "Warning: No primary key value found - change may not be executable"
-                    } else if primary_key_column.is_none() {
-                        "Warning: No primary key column detected - using first column"
-                    } else {
-                        "Change validation passed"
-                    };
+                        // Validate change data before creating
+                        let _validation_msg = if primary_key_value.is_none() {
+                            "Warning: No primary key value found - change may not be executable"
+                        } else if primary_key_column.is_none() {
+                            "Warning: No primary key column detected - using first column"
+                        } else {
+                            "Change validation passed"
+                        };
 
-                    let change = delegate.create_table_change(
-                        ChangeType::UpdateCell,
-                        tbl_name.clone(),
-                        row,
-                        Some(col),
-                        Some(old_val.clone()),
-                        Some(new_value.clone()),
-                        primary_key_value,
-                        primary_key_column,
-                    );
-                    delegate.edit_state.add_change(change);
+                        let change = delegate.create_table_change(
+                            ChangeType::UpdateCell,
+                            tbl_name.clone(),
+                            row,
+                            Some(col),
+                            Some(old_val.clone()),
+                            Some(new_value.clone()),
+                            primary_key_value,
+                            primary_key_column,
+                        );
+                        delegate.edit_state.add_change(change);
 
-                    // Log the change tracking (this will be visible when user commits)
-                    // Note: We defer detailed logging to commit time to avoid cluttering the log
+                        // Log the change tracking (this will be visible when user commits)
+                        // Note: We defer detailed logging to commit time to avoid cluttering the log
+                    }
                 }
             }
 
@@ -1886,6 +1987,7 @@ impl ResultsPanel {
                     let mut success = true;
 
                     for operation in &change_operations_for_pipeline {
+                        log::debug!("Got operation {:?}", operation);
                         let sql_query = operation.to_sql_query();
                         match connection.execute_query(&sql_query, None).await {
                             Ok(query_result) => {
@@ -2103,14 +2205,12 @@ impl ResultsPanel {
             let new_row_index = delegate.rows.len() - 1;
             delegate.edit_state.pending_new_rows.push(new_row_index);
 
-            // Track the INSERT change with NULL values
+            // Track the INSERT change with NULL values (excluding row number and primary key columns)
             if let Some(table_name) = &delegate.table_name {
-                let _column_names: Vec<String> = delegate
-                    .columns
+                // For new rows, exclude primary key to avoid UPDATE/INSERT confusion
+                let column_names = delegate.get_insert_column_names(true); // exclude_primary_key = true
+                let values_str = column_names
                     .iter()
-                    .map(|col| col.name.to_string())
-                    .collect();
-                let values_str = (0..column_count)
                     .map(|_| "NULL".to_string())
                     .collect::<Vec<_>>()
                     .join(", ");
@@ -2122,7 +2222,7 @@ impl ResultsPanel {
                     None,
                     None,
                     Some(values_str.clone()),
-                    None,
+                    None, // No primary key value for new rows
                     delegate.primary_key_column.clone(),
                 );
                 delegate.edit_state.add_change(change);
@@ -2146,15 +2246,12 @@ impl ResultsPanel {
                 let new_row_index = delegate.rows.len() - 1;
                 delegate.edit_state.pending_new_rows.push(new_row_index);
 
-                // Track the INSERT change with proper column values
+                // Track the INSERT change with proper column values (excluding row number and primary key columns)
                 if let Some(table_name) = &delegate.table_name {
-                    // Create a proper representation of the row data for SQL
-                    let _column_names: Vec<String> = delegate
-                        .columns
-                        .iter()
-                        .map(|col| col.name.to_string())
-                        .collect();
-                    let values_str = row_to_duplicate
+                    // For new rows (duplicated rows), exclude primary key to avoid UPDATE/INSERT confusion
+                    let _column_names = delegate.get_insert_column_names(true); // exclude_primary_key = true
+                    let values = delegate.get_insert_values(new_row_index, true); // exclude_primary_key = true
+                    let values_str = values
                         .iter()
                         .map(|val| {
                             if val.is_empty() || val == "NULL" {
@@ -2173,7 +2270,7 @@ impl ResultsPanel {
                         None,
                         None,
                         Some(values_str.clone()),
-                        None,
+                        None, // No primary key value for new rows
                         delegate.primary_key_column.clone(),
                     );
                     delegate.edit_state.add_change(change);
@@ -2377,6 +2474,7 @@ impl ResultsPanel {
     }
 
     fn on_select_row(&mut self, action: &SelectRow, _window: &mut Window, cx: &mut Context<Self>) {
+        self.current_selected_row = Some(action.row);
         self.table.update(cx, |table, _cx| {
             let delegate = table.delegate_mut();
             delegate.select_row(action.row);
@@ -2391,12 +2489,30 @@ impl ResultsPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.current_selected_row = None;
         self.table.update(cx, |table, _cx| {
             let delegate = table.delegate_mut();
             delegate.edit_state.clear_selection();
             table.refresh(_cx);
         });
         cx.notify();
+    }
+
+    fn on_add_row(&mut self, _action: &AddRow, _window: &mut Window, cx: &mut Context<Self>) {
+        self.add_new_row(cx);
+    }
+
+    fn on_duplicate_row(
+        &mut self,
+        action: &DuplicateRow,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.duplicate_row(action.row, cx);
+    }
+
+    pub fn get_selected_row(&self) -> Option<usize> {
+        self.current_selected_row
     }
 
     fn on_select_row_action(
@@ -2612,6 +2728,8 @@ impl Render for ResultsPanel {
             .on_action(cx.listener(Self::on_copy_as_markdown))
             .on_action(cx.listener(Self::on_select_row))
             .on_action(cx.listener(Self::on_clear_selection))
+            .on_action(cx.listener(Self::on_add_row))
+            .on_action(cx.listener(Self::on_duplicate_row))
             // The table component (table should have built-in scrolling)
             .child(
                 div()

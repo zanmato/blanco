@@ -89,6 +89,16 @@ pub struct DoubleClickCell {
 
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
+pub struct AddRow;
+
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct DuplicateRow {
+    pub row: usize,
+}
+
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
 pub struct RenameTab {
     pub tab_index: usize,
     pub new_name: String,
