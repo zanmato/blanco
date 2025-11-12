@@ -123,10 +123,13 @@ fn main() {
             app_id: Some("com.blanco.sql-editor".into()),
         };
 
-        cx.open_window(window_options, |window, cx| {
-            let blanco_app = cx.new(|cx| app::BlancoApp::new(window, cx));
-            cx.new(|cx| gpui_component::Root::new(blanco_app.into(), window, cx))
+        cx.spawn(async move |cx| {
+            cx.open_window(window_options, |window, cx| {
+                let blanco_app = cx.new(|cx| app::BlancoApp::new(window, cx));
+                cx.new(|cx| gpui_component::Root::new(blanco_app.into(), window, cx))
+            })?;
+            Ok::<_, anyhow::Error>(())
         })
-        .expect("Failed to open window");
+        .detach();
     });
 }

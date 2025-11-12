@@ -11,8 +11,8 @@ members = [
 
 [workspace.dependencies]
 # Core GPUI dependencies
-gpui = { version = "0.2.2", features = ["test-support"] }
-gpui-macros = "0.2.2"
+gpui = { version = "0.2.0" }
+gpui-macros = "0.2.0"
 gpui-component = { path = "vendor/gpui-component/crates/ui", features = [
     "tree-sitter-languages",
 ] }
@@ -108,3 +108,7 @@ type_complexity = "allow"
 
 [profile.release]
 opt-level = 3
+
+[profile.profiling]
+inherits = "release"
+debug = true

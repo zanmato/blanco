@@ -1,15 +1,15 @@
 use gpui::{
-    actions, div, prelude::FluentBuilder, px, App, AppContext, Axis, Context, Entity, FocusHandle,
-    Focusable, InteractiveElement as _, IntoElement, KeybindingKeystroke, Keystroke, ParentElement,
-    Render, SharedString, Styled, Subscription, Window,
+    App, AppContext, Axis, Context, Entity, FocusHandle, Focusable, InteractiveElement as _,
+    IntoElement, KeybindingKeystroke, Keystroke, ParentElement, Render, SharedString, Styled,
+    Subscription, Window, actions, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
+    ActiveTheme, Disableable, Icon, Sizable, StyledExt as _,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputState},
     spinner::Spinner,
-    text::TextView,
-    v_flex, ActiveTheme, Disableable, Icon, Sizable, StyledExt as _,
+    v_flex,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -196,7 +196,7 @@ impl Focusable for ChatPanel {
 }
 
 impl Render for ChatPanel {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .size_full()
             .min_h_0()
@@ -268,60 +268,47 @@ impl Render for ChatPanel {
             )
             // Input area
             .child(
-                v_flex()
-                    .p_3()
+                // Text input container with no borders
+                div()
+                    .relative()
                     .bg(cx
                         .theme()
                         .highlight_theme
                         .style
                         .editor_background
                         .unwrap_or(cx.theme().background))
-                    .gap_3()
+                    .rounded_lg()
+                    .border_0()
+                    .text_size(px(13.0)) // Smaller font size for the input text
+                    .on_key_down(cx.listener(|this, evt: &gpui::KeyDownEvent, window, cx| {
+                        if evt.keystroke.should_match(&this.send_message_keystroke) {
+                            this.send_message(window, cx);
+                        }
+                    }))
                     .child(
-                        // Text input container with no borders
-                        div()
-                            .relative()
+                        Input::new(&self.input_state)
+                            .disabled(self.is_loading)
+                            .bordered(false)
+                            .p_3()
                             .bg(cx
                                 .theme()
                                 .highlight_theme
                                 .style
                                 .editor_background
-                                .unwrap_or(cx.theme().background))
-                            .rounded_lg()
-                            .border_0()
-                            .text_size(px(13.0)) // Smaller font size for the input text
-                            .on_key_down(cx.listener(
-                                |this, evt: &gpui::KeyDownEvent, window, cx| {
-                                    if evt.keystroke.should_match(&this.send_message_keystroke) {
-                                        this.send_message(window, cx);
-                                    }
-                                },
-                            ))
-                            .child(
-                                Input::new(&self.input_state)
-                                    .disabled(self.is_loading)
-                                    .bordered(false)
-                                    .p_0()
-                                    .bg(cx
-                                        .theme()
-                                        .highlight_theme
-                                        .style
-                                        .editor_background
-                                        .unwrap_or(cx.theme().background)),
-                            )
-                            // Send button positioned further to bottom right corner
-                            .child(
-                                div().absolute().bottom_1().right_1().child(
-                                    Button::new("send-message")
-                                        .icon(IconName::ArrowUp)
-                                        .primary()
-                                        .xsmall()
-                                        .disabled(self.is_loading)
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.send_message(window, cx);
-                                        })),
-                                ),
-                            ),
+                                .unwrap_or(cx.theme().background)),
+                    )
+                    // Send button positioned further to bottom right corner
+                    .child(
+                        div().absolute().bottom_3().right_3().child(
+                            Button::new("send-message")
+                                .icon(IconName::ArrowUp)
+                                .primary()
+                                .xsmall()
+                                .disabled(self.is_loading)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.send_message(window, cx);
+                                })),
+                        ),
                     ),
             )
     }

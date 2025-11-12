@@ -1,19 +1,19 @@
 use gpui::{
-    div, prelude::FluentBuilder, px, App, AppContext, Axis, Context, Entity, EventEmitter,
-    FocusHandle, Focusable, InteractiveElement, IntoElement, KeybindingKeystroke, Keystroke,
-    MouseButton, ParentElement, Render, Styled, Window,
+    App, AppContext, Axis, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, KeybindingKeystroke, Keystroke, MouseButton, ParentElement,
+    Render, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
+    ActiveTheme, Sizable, StyledExt, WindowExt as _,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputState, TabSize},
     kbd::Kbd,
-    resizable::{h_resizable, resizable_panel, v_resizable, ResizableState},
+    resizable::{ResizableState, h_resizable, resizable_panel, v_resizable},
     tab::{Tab, TabBar},
-    text::TextView,
-    v_flex, ActiveTheme, Sizable, StyledExt, WindowExt as _,
+    v_flex,
 };
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 use std::{rc::Rc, sync::Arc};
 
 use crate::agent::{ChatPanel, SqlContext};
@@ -24,7 +24,7 @@ use crate::chat_provider_resolver::ChatProviderResolver;
 use crate::db_service::DbService;
 use crate::rename_form::RenameTabForm;
 use crate::results_panel::ResultsPanel;
-use crate::settings::{load_settings, Settings};
+use crate::settings::{Settings, load_settings};
 use crate::sql_completion_provider::SqlCompletionProvider;
 use blanco_core::chat_provider::{ChatProvider, ProviderError};
 use blanco_ui::{IconName, SqlLog};
@@ -507,7 +507,7 @@ impl EditorPanel {
                                         result.table_name = table_name.clone();
 
                                         // Extract primary key if we have a table name and results
-                                        if let (Some(ref table_name), false) =
+                                        if let (Some(table_name), false) =
                                             (&table_name, result.rows.is_empty())
                                         {
                                             // Try to get primary key information for the table
