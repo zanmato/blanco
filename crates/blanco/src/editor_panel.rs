@@ -501,7 +501,7 @@ impl EditorPanel {
 
                                         // Extract table metadata from the query
                                         let table_name = connection
-                                            .extract_table_name_from_query(&query_clone)
+                                            .extract_table_name_from_query(&query_clone, false)
                                             .ok()
                                             .flatten();
                                         result.table_name = table_name.clone();
@@ -867,30 +867,6 @@ impl EditorPanel {
             chat_panel: None,
         };
 
-        // Set up subscription to listen for InputEvent from the editor
-        let editor_subscription = cx.subscribe_in(&editor, window, {
-            let tab_id = query_tab.id;
-            move |editor_panel: &mut EditorPanel, _editor, event, window, cx| {
-                // Only handle events from the active tab
-                if let Some(active_tab) = editor_panel.tabs.get(editor_panel.active_tab_ix) {
-                    if let TabType::Query(active_query_tab) = active_tab {
-                        if active_query_tab.id == tab_id {
-                            if let gpui_component::input::InputEvent::PressEnter {
-                                secondary: false,
-                            } = event
-                            {
-                                // Ctrl/Cmd+Enter was pressed, run the query
-                                editor_panel.run_query(window, cx);
-                            }
-                        }
-                    }
-                }
-            }
-        });
-
-        // Store the subscription
-        self._subscriptions.push(editor_subscription);
-
         self.tabs.push(TabType::Query(query_tab));
         cx.notify();
     }
@@ -1222,6 +1198,7 @@ impl Render for EditorPanel {
                                                                 .border_color(cx.theme().border)
                                                                 .on_key_down(cx.listener(|this, evt: &gpui::KeyDownEvent, window, cx| {
                                                                     if evt.keystroke.should_match(&this.run_query_keystroke) {
+                                                                        log::debug!("Matches keystroke {:?}", evt.keystroke);
                                                                         this.run_query(window, cx);
                                                                     }
                                                                 }))

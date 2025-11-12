@@ -152,7 +152,11 @@ pub trait Connection: Send + Sync + fmt::Debug {
 
     /// Execute a SQL query and return the results
     /// If database_name is provided, the query will be executed in the context of that database
-    async fn execute_query(&self, query: &str, database_name: Option<&str>) -> Result<QueryResult, anyhow::Error>;
+    async fn execute_query(
+        &self,
+        query: &str,
+        database_name: Option<&str>,
+    ) -> Result<QueryResult, anyhow::Error>;
 
     /// Execute a parameterized query with prepared statements
     async fn execute_prepared_query(
@@ -204,15 +208,19 @@ pub trait Connection: Send + Sync + fmt::Debug {
 
     /// Extract the primary table name from a SQL query
     /// Returns None if no table can be extracted (e.g., for complex queries or parsing errors)
-    fn extract_table_name_from_query(&self, query: &str) -> Result<Option<String>, anyhow::Error>;
-
-    /// Extract the actual table name (not alias) from a SQL query for UPDATE operations
-    /// This returns the real table name that should be used in UPDATE statements, ignoring aliases
-    fn extract_actual_table_name(&self, query: &str) -> Result<Option<String>, anyhow::Error>;
+    fn extract_table_name_from_query(
+        &self,
+        query: &str,
+        alias: bool,
+    ) -> Result<Option<String>, anyhow::Error>;
 
     /// Resolve a table alias to its actual table name using the original SQL query
     /// Returns the actual table name if the alias is found, None otherwise
-    fn resolve_table_alias(&self, query: &str, alias: &str) -> Result<Option<String>, anyhow::Error>;
+    fn resolve_table_alias(
+        &self,
+        query: &str,
+        alias: &str,
+    ) -> Result<Option<String>, anyhow::Error>;
 
     /// Execute table change operations in a database-agnostic way
     /// Takes a list of change operations and executes them with proper SQL generation

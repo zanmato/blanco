@@ -60,32 +60,17 @@ impl PostgresTableExtractor {
     }
 
     /// Extract the primary table name from a SELECT query
-    pub fn extract_primary_table(&self, sql: &str) -> Result<String> {
+    pub fn extract_primary_table(&self, sql: &str, alias: bool) -> Result<String> {
         let options = ParseOptions::new();
         let mut issues = Vec::new();
 
         if let Some(statement) = parse_statement(sql, &mut issues, &options) {
-            if let Some(table_name) = self.extract_from_statement(&statement) {
+            if let Some(table_name) = self.extract_from_statement(&statement, false) {
                 return Ok(table_name);
             }
         }
 
         Err(anyhow!("Could not extract table name from query"))
-    }
-
-    /// Extract the actual table name (not alias) for UPDATE operations
-    /// This returns the real table name that should be used in UPDATE statements
-    pub fn extract_actual_table_name(&self, sql: &str) -> Result<String> {
-        let options = ParseOptions::new();
-        let mut issues = Vec::new();
-
-        if let Some(statement) = parse_statement(sql, &mut issues, &options) {
-            if let Some(table_name) = self.extract_actual_table_from_statement(&statement) {
-                return Ok(table_name);
-            }
-        }
-
-        Err(anyhow!("Could not extract actual table name from query"))
     }
 
     /// Extract table aliases with their actual table names for resolution
@@ -202,9 +187,9 @@ impl PostgresTableExtractor {
     }
 
     /// Extract table name from parsed statement
-    fn extract_from_statement(&self, statement: &Statement) -> Option<String> {
+    fn extract_from_statement(&self, statement: &Statement, alias: bool) -> Option<String> {
         match statement {
-            Statement::Select(select) => self.extract_from_select(select),
+            Statement::Select(select) => self.extract_from_select(select, alias),
             Statement::InsertReplace(insert) => {
                 // Handle PostgreSQL-specific INSERT syntax
                 insert.table.last().map(|last_id| last_id.value.to_string())
@@ -212,7 +197,7 @@ impl PostgresTableExtractor {
             Statement::Update(update) => {
                 // Handle PostgreSQL-specific UPDATE syntax
                 if let Some(first_table) = update.tables.first() {
-                    self.extract_from_table_reference(first_table)
+                    self.extract_from_table_reference(first_table, alias)
                 } else {
                     None
                 }
@@ -232,101 +217,51 @@ impl PostgresTableExtractor {
     }
 
     /// Extract table name from a SELECT statement
-    fn extract_from_select(&self, select: &sql_parse::Select) -> Option<String> {
+    fn extract_from_select(&self, select: &sql_parse::Select, alias: bool) -> Option<String> {
         if let Some(table_references) = &select.table_references {
             if let Some(first_table) = table_references.first() {
-                return self.extract_from_table_reference(first_table);
+                return self.extract_from_table_reference(first_table, alias);
             }
         }
         None
     }
 
     /// Extract table name from a table reference
-    fn extract_from_table_reference(&self, table_ref: &TableReference) -> Option<String> {
+    fn extract_from_table_reference(
+        &self,
+        table_ref: &TableReference,
+        alias: bool,
+    ) -> Option<String> {
         match table_ref {
             TableReference::Table {
                 identifier, as_, ..
             } => {
-                if let Some(alias) = as_ {
-                    Some(alias.value.to_string())
-                } else {
-                    identifier.last().map(|last_id| last_id.value.to_string())
+                if alias {
+                    if let Some(alias) = as_ {
+                        return Some(alias.value.to_string());
+                    }
                 }
+
+                identifier.last().map(|last_id| last_id.value.to_string())
             }
             TableReference::Query { query, as_, .. } => {
                 if let Some(alias) = as_ {
                     Some(alias.value.to_string())
                 } else {
-                    self.extract_from_statement(query)
+                    self.extract_from_statement(query, alias)
                 }
             }
             TableReference::Join { left, right, .. } => self
-                .extract_from_table_reference(left)
-                .or_else(|| self.extract_from_table_reference(right)),
-        }
-    }
-
-    /// Extract actual table name (not alias) from a table reference for UPDATE operations
-    fn extract_actual_table_from_statement(&self, statement: &Statement) -> Option<String> {
-        match statement {
-            Statement::Select(select) => self.extract_actual_table_from_select(select),
-            Statement::InsertReplace(insert) => {
-                // Handle PostgreSQL-specific INSERT syntax
-                insert.table.last().map(|last_id| last_id.value.to_string())
-            }
-            Statement::Update(update) => {
-                // Handle PostgreSQL-specific UPDATE syntax
-                if let Some(first_table) = update.tables.first() {
-                    self.extract_actual_table_from_table_reference(first_table)
-                } else {
-                    None
-                }
-            }
-            Statement::Delete(delete) => {
-                // Handle PostgreSQL-specific DELETE syntax
-                if let Some(first_table_vec) = delete.tables.first() {
-                    first_table_vec
-                        .last()
-                        .map(|last_id| last_id.value.to_string())
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
-    }
-
-    /// Extract actual table name (not alias) from a SELECT statement
-    fn extract_actual_table_from_select(&self, select: &sql_parse::Select) -> Option<String> {
-        if let Some(table_references) = &select.table_references {
-            if let Some(first_table) = table_references.first() {
-                return self.extract_actual_table_from_table_reference(first_table);
-            }
-        }
-        None
-    }
-
-    /// Extract actual table name (not alias) from a table reference
-    fn extract_actual_table_from_table_reference(&self, table_ref: &TableReference) -> Option<String> {
-        match table_ref {
-            TableReference::Table {
-                identifier, ..
-            } => {
-                // Always return the actual table name, not the alias
-                identifier.last().map(|last_id| last_id.value.to_string())
-            }
-            TableReference::Query { query, .. } => {
-                // Extract tables from subquery
-                self.extract_actual_table_from_statement(query)
-            }
-            TableReference::Join { left, right, .. } => self
-                .extract_actual_table_from_table_reference(left)
-                .or_else(|| self.extract_actual_table_from_table_reference(right)),
+                .extract_from_table_reference(left, alias)
+                .or_else(|| self.extract_from_table_reference(right, alias)),
         }
     }
 
     /// Extract aliases with actual table names from a statement
-    fn extract_aliases_with_names_from_statement(&self, statement: &Statement) -> Vec<(String, String)> {
+    fn extract_aliases_with_names_from_statement(
+        &self,
+        statement: &Statement,
+    ) -> Vec<(String, String)> {
         let mut aliases = Vec::new();
 
         if let Statement::Select(select) = statement {
@@ -591,14 +526,14 @@ mod tests {
 
         assert_eq!(
             extractor
-                .extract_primary_table("SELECT * FROM users")
+                .extract_primary_table("SELECT * FROM users u", false)
                 .unwrap(),
             "users"
         );
 
         assert_eq!(
             extractor
-                .extract_primary_table("SELECT * FROM public.users")
+                .extract_primary_table("SELECT * FROM public.users", false)
                 .unwrap(),
             "users"
         );

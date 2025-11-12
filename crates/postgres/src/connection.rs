@@ -1408,11 +1408,11 @@ impl Connection for PostgresConnection {
         }
     }
 
-    fn extract_table_name_from_query(&self, query: &str) -> Result<Option<String>> {
+    fn extract_table_name_from_query(&self, query: &str, alias: bool) -> Result<Option<String>> {
         log::debug!("Extracting table name from PostgreSQL query: {}", query);
 
         let extractor = PostgresTableExtractor::new();
-        match extractor.extract_primary_table(query) {
+        match extractor.extract_primary_table(query, alias) {
             Ok(table_name) => {
                 log::debug!("Successfully extracted table name: {}", table_name);
                 Ok(Some(table_name))
@@ -1424,31 +1424,23 @@ impl Connection for PostgresConnection {
         }
     }
 
-    fn extract_actual_table_name(&self, query: &str) -> Result<Option<String>> {
-        log::debug!("Extracting actual table name (not alias) from PostgreSQL query: {}", query);
-
-        let extractor = PostgresTableExtractor::new();
-        match extractor.extract_actual_table_name(query) {
-            Ok(table_name) => {
-                log::debug!("Successfully extracted actual table name: {}", table_name);
-                Ok(Some(table_name))
-            }
-            Err(e) => {
-                log::debug!("Could not extract actual table name from query: {}", e);
-                Ok(None)
-            }
-        }
-    }
-
     fn resolve_table_alias(&self, query: &str, alias: &str) -> Result<Option<String>> {
-        log::debug!("Resolving table alias '{}' from PostgreSQL query: {}", alias, query);
+        log::debug!(
+            "Resolving table alias '{}' from PostgreSQL query: {}",
+            alias,
+            query
+        );
 
         let extractor = PostgresTableExtractor::new();
         match extractor.extract_table_aliases_with_names(query) {
             Ok(aliases) => {
                 for (table_name, alias_name) in aliases {
                     if alias_name == alias {
-                        log::debug!("Successfully resolved alias '{}' to table '{}'", alias, table_name);
+                        log::debug!(
+                            "Successfully resolved alias '{}' to table '{}'",
+                            alias,
+                            table_name
+                        );
                         return Ok(Some(table_name));
                     }
                 }
