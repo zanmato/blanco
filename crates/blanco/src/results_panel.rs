@@ -856,12 +856,7 @@ impl ResultsTableDelegate {
         if let Some(column_type) = self.column_types.get(col_index) {
             let type_lower = column_type.to_lowercase();
             let is_array = type_lower == "array" || type_lower.ends_with("[]");
-            log::debug!(
-                "Array detection: type='{}', lower='{}', is_array={}",
-                column_type,
-                type_lower,
-                is_array
-            );
+
             is_array
         } else {
             log::debug!("Array detection: No column type for index {}", col_index);
@@ -966,23 +961,19 @@ impl TableDelegate for ResultsTableDelegate {
                     })
                     .when(self.is_uuid_column(col_ix - 1), |this| {
                         // Adjust for row number column
-                        this.font_family("Fira Code") // Monospace font for UUIDs
-                            .text_color(cx.theme().blue) // Blue color for UUIDs
+                        this.text_color(cx.theme().blue) // Blue color for UUIDs
                     })
                     .when(self.is_timestamp_column(col_ix - 1), |this| {
                         // Adjust for row number column
-                        this.font_family("Fira Code") // Monospace font for timestamps
-                            .text_color(cx.theme().green) // Green color for timestamps
+                        this.text_color(cx.theme().green) // Green color for timestamps
                     })
                     .when(self.is_json_column(col_ix - 1), |this| {
                         // Adjust for row number column
-                        this.font_family("Fira Code") // Monospace font for JSON
-                            .text_color(cx.theme().yellow) // Yellow color for JSON
+                        this.text_color(cx.theme().yellow) // Yellow color for JSON
                     })
                     .when(self.is_array_column(col_ix - 1), |this| {
                         // Adjust for row number column
-                        this.font_family("Fira Code") // Monospace font for arrays
-                            .text_color(cx.theme().blue) // Blue color for arrays
+                        this.text_color(cx.theme().blue) // Blue color for arrays
                     })
                     .child(
                         Input::new(&input)
@@ -1010,6 +1001,9 @@ impl TableDelegate for ResultsTableDelegate {
                     this.font_weight(FontWeight::BOLD) // Bold row numbers
                         .text_color(cx.theme().muted_foreground) // Muted color for row numbers
                         .cursor_pointer() // Pointer cursor for row selection
+                        .when(self.edit_state.is_new_row(row_ix), |this| {
+                            this.border_l_3().border_color(cx.theme().yellow)
+                        })
                 })
                 .when(is_numeric && !is_row_number_col, |this| {
                     this.justify_end() // Right-align numeric columns
@@ -1018,22 +1012,19 @@ impl TableDelegate for ResultsTableDelegate {
                 .when(
                     !is_row_number_col && self.is_uuid_column(col_ix - 1),
                     |this| {
-                        this.font_family("Fira Code") // Monospace font for UUIDs
-                            .text_color(cx.theme().blue) // Blue color for UUIDs
+                        this.text_color(cx.theme().blue) // Blue color for UUIDs
                     },
                 )
                 .when(
                     !is_row_number_col && self.is_timestamp_column(col_ix - 1),
                     |this| {
-                        this.font_family("Fira Code") // Monospace font for timestamps
-                            .text_color(cx.theme().green) // Green color for timestamps
+                        this.text_color(cx.theme().green) // Green color for timestamps
                     },
                 )
                 .when(
                     !is_row_number_col && self.is_json_column(col_ix - 1),
                     |this| {
-                        this.font_family("Fira Code") // Monospace font for JSON
-                            .text_color(cx.theme().yellow) // Yellow color for JSON
+                        this.text_color(cx.theme().yellow) // Yellow color for JSON
                     },
                 )
                 .when(is_edited, |this| {
