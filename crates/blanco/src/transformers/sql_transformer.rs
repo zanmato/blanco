@@ -1,4 +1,4 @@
-use crate::transformers::{DataTransformer, TransformError, SelectedTableData};
+use crate::transformers::{DataTransformer, SelectedTableData, TransformError};
 
 pub struct SqlTransformer;
 
@@ -21,7 +21,9 @@ impl DataTransformer for SqlTransformer {
         }
 
         // Use provided table name or a default generic name
-        let table_name = data.table_name.as_ref()
+        let table_name = data
+            .table_name
+            .as_ref()
             .cloned()
             .unwrap_or_else(|| "unknown".to_string());
 
@@ -30,7 +32,9 @@ impl DataTransformer for SqlTransformer {
         // Handle selected rows first
         if !data.selected_rows.is_empty() {
             // Generate column list once
-            let column_list = data.columns.iter()
+            let column_list = data
+                .columns
+                .iter()
                 .map(|col| sql_identifier(col))
                 .collect::<Vec<_>>()
                 .join(", ");
@@ -48,7 +52,9 @@ impl DataTransformer for SqlTransformer {
                     ));
 
                     // Add values with proper escaping
-                    let values: Vec<String> = row.cells.iter()
+                    let values: Vec<String> = row
+                        .cells
+                        .iter()
                         .map(|cell| {
                             if cell.value.is_empty() || cell.value.eq_ignore_ascii_case("null") {
                                 "NULL".to_string()
@@ -64,74 +70,14 @@ impl DataTransformer for SqlTransformer {
             }
         }
 
-        // Handle selected cells - group by row to create complete INSERT statements
-        if !data.selected_cells.is_empty() {
-            // Group cells by row and get unique columns
-            let mut rows: std::collections::HashMap<usize, std::collections::HashSet<usize>> = std::collections::HashMap::new();
-            let mut cell_data: std::collections::HashMap<(usize, usize), &crate::results_panel::SelectedCell> = std::collections::HashMap::new();
-
-            for cell in &data.selected_cells {
-                rows.entry(cell.row).or_default().insert(cell.col);
-                cell_data.insert((cell.row, cell.col), cell);
-            }
-
-            let mut row_indices: Vec<usize> = rows.keys().cloned().collect();
-            row_indices.sort();
-
-            for row_idx in row_indices {
-                if let Some(columns) = rows.get(&row_idx) {
-                    let mut sorted_columns: Vec<usize> = columns.iter().cloned().collect();
-                    sorted_columns.sort();
-
-                    // Generate column names for this row's selection
-                    let column_names: Vec<String> = sorted_columns.iter()
-                        .filter_map(|&col| {
-                            cell_data.get(&(row_idx, col))
-                                .and_then(|cell| cell.column_name.clone())
-                        })
-                        .collect();
-
-                    if column_names.is_empty() {
-                        continue;
-                    }
-
-                    let column_list = column_names.iter()
-                        .map(|col| sql_identifier(col))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-
-                    // Generate values for this row
-                    let values: Vec<String> = sorted_columns.iter()
-                        .map(|&col| {
-                            if let Some(cell) = cell_data.get(&(row_idx, col)) {
-                                if cell.value.is_empty() || cell.value.eq_ignore_ascii_case("null") {
-                                    "NULL".to_string()
-                                } else {
-                                    format!("'{}'", sql_escape_string(&cell.value))
-                                }
-                            } else {
-                                "NULL".to_string()
-                            }
-                        })
-                        .collect();
-
-                    // Create the INSERT statement
-                    output.push_str(&format!(
-                        "INSERT INTO {} ({})\nVALUES (",
-                        sql_identifier(&table_name),
-                        column_list
-                    ));
-
-                    output.push_str(&values.join(", "));
-                    output.push_str(");\n\n");
-                }
-            }
-        }
-
         Ok(output)
     }
 
-    fn transform_single_cell(&self, value: &str, _column_type: &str) -> Result<String, TransformError> {
+    fn transform_single_cell(
+        &self,
+        value: &str,
+        _column_type: &str,
+    ) -> Result<String, TransformError> {
         if value.is_empty() || value.eq_ignore_ascii_case("null") {
             Ok("NULL".to_string())
         } else {
@@ -174,9 +120,18 @@ mod tests {
         let transformer = SqlTransformer;
         assert_eq!(transformer.format_name(), "SQL");
         assert_eq!(transformer.file_extension(), "sql");
-        assert_eq!(transformer.transform_single_cell("test", "").unwrap(), "'test'");
+        assert_eq!(
+            transformer.transform_single_cell("test", "").unwrap(),
+            "'test'"
+        );
         assert_eq!(transformer.transform_single_cell("", "").unwrap(), "NULL");
-        assert_eq!(transformer.transform_single_cell("NULL", "").unwrap(), "NULL");
-        assert_eq!(transformer.transform_single_cell("it's", "").unwrap(), "'it''s'");
+        assert_eq!(
+            transformer.transform_single_cell("NULL", "").unwrap(),
+            "NULL"
+        );
+        assert_eq!(
+            transformer.transform_single_cell("it's", "").unwrap(),
+            "'it''s'"
+        );
     }
 }

@@ -38,7 +38,11 @@ pub trait DataTransformer: Send + Sync {
     fn transform_selected_data(&self, data: &SelectedTableData) -> Result<String, TransformError>;
 
     /// Transforms a single cell value (for simple copy operations)
-    fn transform_single_cell(&self, value: &str, _column_type: &str) -> Result<String, TransformError> {
+    fn transform_single_cell(
+        &self,
+        value: &str,
+        _column_type: &str,
+    ) -> Result<String, TransformError> {
         Ok(value.to_string())
     }
 
@@ -59,11 +63,16 @@ impl TransformerRegistry {
     }
 
     pub fn register<T: DataTransformer + 'static>(&mut self, transformer: T) {
-        self.transformers.insert(transformer.format_name().to_lowercase(), Box::new(transformer));
+        self.transformers.insert(
+            transformer.format_name().to_lowercase(),
+            Box::new(transformer),
+        );
     }
 
     pub fn get_transformer(&self, format_name: &str) -> Option<&dyn DataTransformer> {
-        self.transformers.get(&format_name.to_lowercase()).map(|t| t.as_ref())
+        self.transformers
+            .get(&format_name.to_lowercase())
+            .map(|t| t.as_ref())
     }
 
     pub fn get_available_formats(&self) -> Vec<&str> {
@@ -75,27 +84,32 @@ impl TransformerRegistry {
             .collect()
     }
 
-    pub fn transform_data(&self, data: &SelectedTableData, format_name: &str) -> Result<String, TransformError> {
-        let transformer = self.get_transformer(format_name)
-            .ok_or_else(|| TransformError::FormatError(format!("Unknown format: {}", format_name)))?;
+    pub fn transform_data(
+        &self,
+        data: &SelectedTableData,
+        format_name: &str,
+    ) -> Result<String, TransformError> {
+        let transformer = self.get_transformer(format_name).ok_or_else(|| {
+            TransformError::FormatError(format!("Unknown format: {}", format_name))
+        })?;
 
         transformer.transform_selected_data(data)
     }
 }
 
 // Re-export transformer modules and types
+pub mod copy_handler;
 pub mod csv_transformer;
-pub mod sql_transformer;
 pub mod json_transformer;
 pub mod markdown_transformer;
-pub mod copy_handler;
+pub mod sql_transformer;
 
 // Export types for convenience
+pub use copy_handler::CopyHandler;
 pub use csv_transformer::CsvTransformer;
-pub use sql_transformer::SqlTransformer;
 pub use json_transformer::JsonTransformer;
 pub use markdown_transformer::MarkdownTransformer;
-pub use copy_handler::CopyHandler;
+pub use sql_transformer::SqlTransformer;
 
 impl Default for TransformerRegistry {
     fn default() -> Self {
@@ -112,17 +126,12 @@ impl Default for TransformerRegistry {
 impl SelectedTableData {
     /// Check if there's any data selected
     pub fn has_selection(&self) -> bool {
-        !self.selected_cells.is_empty() || !self.selected_rows.is_empty()
+        !self.selected_rows.is_empty()
     }
 
     /// Get all selected data as a flat collection of values
     pub fn get_all_selected_values(&self) -> Vec<String> {
         let mut values = Vec::new();
-
-        // Add individual cell values
-        for cell in &self.selected_cells {
-            values.push(cell.value.clone());
-        }
 
         // Add row cell values
         for row in &self.selected_rows {

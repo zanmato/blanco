@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::transformers::{DataTransformer, TransformError, SelectedTableData};
+use crate::transformers::{DataTransformer, SelectedTableData, TransformError};
 use std::collections::HashMap;
 
 pub struct JsonTransformer;
@@ -35,31 +35,10 @@ impl DataTransformer for JsonTransformer {
                     let mut obj = HashMap::new();
                     for cell in &row.cells {
                         if let Some(col_name) = &cell.column_name {
-                            let json_value = convert_to_json_value(&cell.value, cell.column_type.as_deref().unwrap_or("text"));
-                            obj.insert(col_name.clone(), json_value);
-                        }
-                    }
-                    json_objects.push(obj);
-                }
-            }
-        }
-        // If we have individual cell selections, create sparse objects
-        else if !data.selected_cells.is_empty() {
-            // Group cells by row
-            let mut rows: std::collections::HashMap<usize, Vec<&crate::results_panel::SelectedCell>> = std::collections::HashMap::new();
-            for cell in &data.selected_cells {
-                rows.entry(cell.row).or_default().push(cell);
-            }
-
-            let mut row_indices: Vec<usize> = rows.keys().cloned().collect();
-            row_indices.sort();
-
-            for row_idx in row_indices {
-                if let Some(cells) = rows.get(&row_idx) {
-                    let mut obj = HashMap::new();
-                    for cell in cells.iter() {
-                        if let Some(col_name) = &cell.column_name {
-                            let json_value = convert_to_json_value(&cell.value, cell.column_type.as_deref().unwrap_or("text"));
+                            let json_value = convert_to_json_value(
+                                &cell.value,
+                                cell.column_type.as_deref().unwrap_or("text"),
+                            );
                             obj.insert(col_name.clone(), json_value);
                         }
                     }
@@ -73,10 +52,13 @@ impl DataTransformer for JsonTransformer {
             .map_err(|e| TransformError::FormatError(e.to_string()))
     }
 
-    fn transform_single_cell(&self, value: &str, column_type: &str) -> Result<String, TransformError> {
+    fn transform_single_cell(
+        &self,
+        value: &str,
+        column_type: &str,
+    ) -> Result<String, TransformError> {
         let json_value = convert_to_json_value(value, column_type);
-        serde_json::to_string(&json_value)
-            .map_err(|e| TransformError::FormatError(e.to_string()))
+        serde_json::to_string(&json_value).map_err(|e| TransformError::FormatError(e.to_string()))
     }
 }
 
@@ -248,7 +230,10 @@ mod tests {
 
     #[test]
     fn test_parse_json() {
-        assert_eq!(parse_json(r#"{"key": "value"}"#), Some(json!({"key": "value"})));
+        assert_eq!(
+            parse_json(r#"{"key": "value"}"#),
+            Some(json!({"key": "value"}))
+        );
         assert_eq!(parse_json(r#"[1, 2, 3]"#), Some(json!([1, 2, 3])));
         assert_eq!(parse_json(r#"true"#), Some(json!(true)));
         assert_eq!(parse_json("invalid json"), None);
@@ -257,7 +242,10 @@ mod tests {
     #[test]
     fn test_infer_json_type() {
         // JSON strings
-        assert_eq!(infer_json_type(r#"{"key": "value"}"#), json!({"key": "value"}));
+        assert_eq!(
+            infer_json_type(r#"{"key": "value"}"#),
+            json!({"key": "value"})
+        );
         assert_eq!(infer_json_type(r#"[1, 2, 3]"#), json!([1, 2, 3]));
 
         // Numbers
@@ -277,19 +265,31 @@ mod tests {
     fn test_convert_to_json_value_with_column_types() {
         // NULL values
         assert_eq!(convert_to_json_value("", "text"), serde_json::Value::Null);
-        assert_eq!(convert_to_json_value("NULL", "varchar"), serde_json::Value::Null);
+        assert_eq!(
+            convert_to_json_value("NULL", "varchar"),
+            serde_json::Value::Null
+        );
 
         // Typed numeric values
         assert_eq!(convert_to_json_value("123", "integer"), json!(123));
-        assert_eq!(convert_to_json_value("45.67", "decimal(10,2)"), json!(45.67));
+        assert_eq!(
+            convert_to_json_value("45.67", "decimal(10,2)"),
+            json!(45.67)
+        );
 
         // Typed boolean values
         assert_eq!(convert_to_json_value("true", "boolean"), json!(true));
         assert_eq!(convert_to_json_value("0", "bool"), json!(false));
 
         // JSON columns
-        assert_eq!(convert_to_json_value(r#"{"a": 1}"#, "json"), json!({"a": 1}));
-        assert_eq!(convert_to_json_value(r#"[1,2,3]"#, "jsonb"), json!([1,2,3]));
+        assert_eq!(
+            convert_to_json_value(r#"{"a": 1}"#, "json"),
+            json!({"a": 1})
+        );
+        assert_eq!(
+            convert_to_json_value(r#"[1,2,3]"#, "jsonb"),
+            json!([1, 2, 3])
+        );
 
         // Text columns with type inference
         assert_eq!(convert_to_json_value("123", "text"), json!(123)); // Inferred as number
@@ -303,12 +303,31 @@ mod tests {
         assert_eq!(transformer.file_extension(), "json");
 
         // Test single cell transformation
-        assert_eq!(transformer.transform_single_cell("123", "integer").unwrap(), "123");
-        assert_eq!(transformer.transform_single_cell("", "text").unwrap(), "null");
-        assert_eq!(transformer.transform_single_cell("hello", "text").unwrap(), "\"hello\"");
+        assert_eq!(
+            transformer.transform_single_cell("123", "integer").unwrap(),
+            "123"
+        );
+        assert_eq!(
+            transformer.transform_single_cell("", "text").unwrap(),
+            "null"
+        );
+        assert_eq!(
+            transformer.transform_single_cell("hello", "text").unwrap(),
+            "\"hello\""
+        );
 
         // Test complex types
-        assert_eq!(transformer.transform_single_cell(r#"{"key": "value"}"#, "json").unwrap(), r#"{"key":"value"}"#);
-        assert_eq!(transformer.transform_single_cell("true", "boolean").unwrap(), "true");
+        assert_eq!(
+            transformer
+                .transform_single_cell(r#"{"key": "value"}"#, "json")
+                .unwrap(),
+            r#"{"key":"value"}"#
+        );
+        assert_eq!(
+            transformer
+                .transform_single_cell("true", "boolean")
+                .unwrap(),
+            "true"
+        );
     }
 }

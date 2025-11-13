@@ -1,11 +1,10 @@
 use gpui::{
-    actions, div, prelude::FluentBuilder, px, rgb, Action, App, AppContext, Context, Entity,
-    EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, Menu, MenuItem,
-    ParentElement, Render, Styled, Subscription, Window,
+    Action, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, Menu, MenuItem, ParentElement, Render, Styled, Subscription,
+    Window, actions, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    button::Button, h_flex, menu::AppMenuBar, v_flex, ActiveTheme, Root, TitleBar, WindowExt as _,
-    TITLE_BAR_HEIGHT,
+    ActiveTheme, Root, TITLE_BAR_HEIGHT, TitleBar, WindowExt as _, button::Button, menu::AppMenuBar,
 };
 use log::{debug, error, info};
 use serde::Deserialize;
@@ -51,14 +50,6 @@ pub struct NewQuery {
     pub schema_name: Option<String>,
     pub table_name: Option<String>,
     pub content: Option<String>,
-}
-
-// Copy and selection actions
-#[derive(Action, Clone, PartialEq, Eq)]
-#[action(namespace = blanco_app, no_json)]
-pub struct CopyCell {
-    pub row: usize,
-    pub col: usize,
 }
 
 #[derive(Action, Clone, PartialEq, Eq)]

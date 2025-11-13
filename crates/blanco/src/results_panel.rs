@@ -1,22 +1,21 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
-use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, Context, ElementId, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
     InteractiveElement, IntoElement, MouseButton, ParentElement, Render, Styled, Subscription,
     Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName,
+    ActiveTheme, Icon,
     input::{Input, InputEvent, InputState},
     menu::PopupMenu,
-    table::{Column, ColumnSort, Table, TableDelegate, TableEvent, TableState},
+    table::{Column, ColumnSort, Table, TableDelegate, TableState},
     v_flex,
 };
 
-use crate::app::{AddRow, ClearSelection, CopyCell, DuplicateRow, SelectRow}; // Import the action types
+use crate::app::{AddRow, DuplicateRow};
 use crate::app_events::AppEvent;
 use crate::db_service::DbService;
 use crate::transformers::CopyHandler;
@@ -35,10 +34,12 @@ use blanco_core::QueryResult;
 use blanco_core::table_operations::{
     ColumnChange, OperationType, RowIdentifier, TableChangeOperation,
 };
+use blanco_ui::IconName;
 
 // Data structures for copy functionality
 #[derive(Clone, Debug)]
 pub struct SelectedCell {
+    #[allow(dead_code)]
     pub row: usize,
     pub col: usize,
     pub value: String,
@@ -59,7 +60,6 @@ pub struct SelectedTableData {
     pub table_name: Option<String>,
     pub columns: Vec<String>,
     pub column_types: Vec<String>,
-    pub selected_cells: Vec<SelectedCell>,
     pub selected_rows: Vec<SelectedRow>,
     #[allow(dead_code)]
     pub primary_key_column: Option<String>,
@@ -94,10 +94,8 @@ pub struct CellEditState {
     pub pending_new_rows: Vec<usize>, // Track rows that are newly added
     pub editing_input: Option<Entity<InputState>>, // Store input state per delegate
     pub changes: Vec<TableChange>,    // Track all changes for SQL generation
-    pub selected_cells: HashSet<(usize, usize)>, // Track selected cells
     pub selected_rows: HashSet<usize>, // Track selected rows
     pub current_column: usize,        // Track current column for selection
-    pub clicked_cell: Option<(usize, usize)>, // Track the last clicked cell for double-click editing
 }
 
 impl CellEditState {
@@ -153,7 +151,6 @@ impl CellEditState {
         self.pending_new_rows.clear();
         self.editing_input = None;
         self.changes.clear();
-        self.selected_cells.clear();
         self.selected_rows.clear();
         self.current_column = 1; // Start with first data column
     }
@@ -173,42 +170,8 @@ impl CellEditState {
         self.pending_new_rows.contains(&row_index)
     }
 
-    pub fn select_cell(&mut self, row: usize, col: usize) -> bool {
-        // Toggle cell selection (col 0 is row number column)
-        if col == 0 {
-            return false;
-        }
-        if self.selected_cells.contains(&(row, col)) {
-            self.selected_cells.remove(&(row, col));
-            false
-        } else {
-            self.selected_cells.insert((row, col));
-            true
-        }
-    }
-
-    pub fn select_row(&mut self, row: usize) -> bool {
-        // Toggle row selection
-        if self.selected_rows.contains(&row) {
-            self.selected_rows.remove(&row);
-            false
-        } else {
-            self.selected_rows.insert(row);
-            true
-        }
-    }
-
-    pub fn is_cell_selected(&self, row: usize, col: usize) -> bool {
-        self.selected_cells.contains(&(row, col)) || self.selected_rows.contains(&row)
-    }
-
     pub fn clear_selection(&mut self) {
-        self.selected_cells.clear();
         self.selected_rows.clear();
-    }
-
-    pub fn has_selection(&self) -> bool {
-        !self.selected_cells.is_empty() || !self.selected_rows.is_empty()
     }
 }
 
@@ -611,7 +574,7 @@ impl ResultsTableDelegate {
                 for row in result.rows.iter().take(20) {
                     // Sample more rows for better accuracy
                     if let Some(cell_value) = row.get(i) {
-                        let content_width = cell_value.len() as f32 * 7.0; // Adjusted for smaller font
+                        let content_width = cell_value.len() as f32 * 9.0; // Adjusted for smaller font
                         max_width = max_width.max(content_width);
                     }
                 }
@@ -906,77 +869,8 @@ impl ResultsTableDelegate {
         }
     }
 
-    pub fn get_cell_value(&self, row: usize, col: usize) -> Option<String> {
-        self.rows.get(row).and_then(|r| r.get(col)).cloned()
-    }
-
     pub fn is_editable(&self) -> bool {
         self.table_name.is_some() && self.primary_key_column.is_some()
-    }
-
-    pub fn get_selected_data(&self) -> SelectedTableData {
-        let mut selected_cells = Vec::new();
-        let mut selected_rows = Vec::new();
-
-        // Collect selected cell data
-        for &(row, col) in &self.edit_state.selected_cells {
-            if let Some(cell_value) = self.get_cell_value(row, col) {
-                selected_cells.push(SelectedCell {
-                    row,
-                    col: col - 1, // Adjust for row number column
-                    value: cell_value,
-                    column_name: self.columns.get(col).map(|c| c.name.to_string()),
-                    column_type: self.column_types.get(col - 1).cloned(), // Adjust for row number column
-                });
-            }
-        }
-
-        // Collect selected row data
-        for &row in &self.edit_state.selected_rows {
-            if let Some(row_data) = self.rows.get(row) {
-                let cells: Vec<SelectedCell> = row_data
-                    .iter()
-                    .enumerate()
-                    .filter(|&(col, _)| col > 0) // Skip row number column
-                    .map(|(col, value)| SelectedCell {
-                        row,
-                        col: col - 1, // Adjust for row number column
-                        value: value.clone(),
-                        column_name: self.columns.get(col).map(|c| c.name.to_string()),
-                        column_type: self.column_types.get(col - 1).cloned(), // Adjust for row number column
-                    })
-                    .collect();
-
-                selected_rows.push(SelectedRow {
-                    row,
-                    cells,
-                    primary_key_value: None, // TODO: Extract primary key if needed
-                });
-            }
-        }
-
-        SelectedTableData {
-            table_name: self.table_name.clone(),
-            columns: self
-                .columns
-                .iter()
-                .skip(1)
-                .map(|c| c.name.to_string())
-                .collect(), // Skip row number column
-            column_types: self.column_types.clone(),
-            selected_cells,
-            selected_rows,
-            primary_key_column: None, // TODO: Extract primary key if needed
-        }
-    }
-
-    // Wrapper methods for selection functionality
-    pub fn select_row(&mut self, row: usize) {
-        self.edit_state.select_row(row);
-    }
-
-    pub fn select_cell(&mut self, row: usize, col: usize) {
-        self.edit_state.select_cell(row, col);
     }
 
     pub fn clear_selection(&mut self) {
@@ -997,7 +891,7 @@ impl TableDelegate for ResultsTableDelegate {
         &self.columns[col_ix]
     }
 
-    fn render_th(&self, col_ix: usize, _: &mut Window, _: &mut App) -> impl IntoElement {
+    fn render_th(&self, col_ix: usize, _: &mut Window, _cx: &mut App) -> impl IntoElement {
         let col = &self.columns[col_ix];
         div()
             .font_family("Fira Code")
@@ -1016,7 +910,6 @@ impl TableDelegate for ResultsTableDelegate {
         let is_editing = self.edit_state.is_editing(row_ix, col_ix) && !is_row_number_col;
         let is_edited = self.edit_state.is_edited(row_ix, col_ix) && !is_row_number_col;
         let is_editable = self.is_editable() && !is_row_number_col;
-        let is_selected = self.edit_state.is_cell_selected(row_ix, col_ix);
 
         let current_value = if is_edited {
             let edited_val = self.edit_state.get_edited_value(row_ix, col_ix).cloned();
@@ -1130,11 +1023,6 @@ impl TableDelegate for ResultsTableDelegate {
                         .border_l_2()
                         .border_color(cx.theme().yellow)
                 })
-                .when(is_selected, |this| {
-                    this.bg(cx.theme().blue.opacity(0.2))
-                        .border_1()
-                        .border_color(cx.theme().blue)
-                })
                 .when(is_null, |this| {
                     this.text_color(cx.theme().muted_foreground).italic()
                 })
@@ -1228,66 +1116,37 @@ impl TableDelegate for ResultsTableDelegate {
         _window: &mut Window,
         _cx: &mut App,
     ) -> PopupMenu {
-        let has_selection = self.edit_state.has_selection();
-        let _selected_data = self.get_selected_data();
-        let row_is_selected = self.edit_state.selected_rows.contains(&row_ix);
-
-        // Basic copy operations - use simple menu items (no submenus for now)
-        let menu = if has_selection {
-            menu.menu_with_icon(
-                "Copy Selection as CSV",
-                Icon::new(IconName::Copy),
+        // Basic copy operations - always show "Copy as" format
+        let menu = menu
+            .menu_with_icon(
+                "Copy as CSV",
+                Icon::new(IconName::Sheet),
                 Box::new(crate::app::CopyAsCSV),
             )
-            .menu("Copy Selection as JSON", Box::new(crate::app::CopyAsJSON))
-            .menu("Copy Selection as SQL", Box::new(crate::app::CopyAsSQL))
-            .menu(
-                "Copy Selection as Markdown",
+            .menu_with_icon(
+                "Copy as JSON",
+                Icon::new(IconName::Braces),
+                Box::new(crate::app::CopyAsJSON),
+            )
+            .menu_with_icon(
+                "Copy as SQL",
+                Icon::new(IconName::Database),
+                Box::new(crate::app::CopyAsSQL),
+            )
+            .menu_with_icon(
+                "Copy as Markdown",
+                Icon::new(IconName::Markdown),
                 Box::new(crate::app::CopyAsMarkdown),
-            )
-        } else {
-            menu.menu(
-                "Copy Cell",
-                Box::new(CopyCell {
-                    row: row_ix,
-                    col: 0,
-                }),
-            )
-            .menu("Copy Cell as CSV", Box::new(crate::app::CopyAsCSV))
-            .menu("Copy Cell as JSON", Box::new(crate::app::CopyAsJSON))
-            .menu("Copy Cell as SQL", Box::new(crate::app::CopyAsSQL))
-            .menu(
-                "Copy Cell as Markdown",
-                Box::new(crate::app::CopyAsMarkdown),
-            )
-        };
-
-        // Row selection options
-        let menu = if row_is_selected {
-            menu.menu_with_check("Select Row", true, Box::new(SelectRow { row: row_ix }))
-        } else {
-            menu.menu("Select Row", Box::new(SelectRow { row: row_ix }))
-        };
+            );
 
         // Row operations
-        let menu = menu
-            .separator()
+        menu.separator()
             .menu_with_icon("Add Row", Icon::new(IconName::Plus), Box::new(AddRow))
-            .when(row_is_selected, |menu| {
-                menu.menu_with_icon(
-                    "Duplicate Row",
-                    Icon::new(IconName::Copy),
-                    Box::new(DuplicateRow { row: row_ix }),
-                )
-            });
-
-        // Clear selection if we have any
-        if has_selection {
-            menu.separator()
-                .menu("Clear Selection", Box::new(ClearSelection))
-        } else {
-            menu
-        }
+            .menu_with_icon(
+                "Duplicate Row",
+                Icon::new(IconName::Copy),
+                Box::new(DuplicateRow { row: row_ix }),
+            )
     }
 }
 
@@ -1298,8 +1157,6 @@ pub struct ResultsPanel {
     editing_input: Option<Entity<InputState>>,
     editing_cell: Option<(usize, usize)>,
     copy_handler: CopyHandler,
-    current_selected_col: usize, // Track current column for selection/editing
-    current_selected_row: Option<usize>, // Track current selected row for duplication
     _subscriptions: Vec<Subscription>, // Store subscriptions to prevent them from being dropped
 }
 
@@ -1320,15 +1177,10 @@ impl ResultsPanel {
             delegate.set_connection_id(conn_id);
         }
 
-        let table_state = cx.new(|cx| TableState::new(delegate, window, cx));
+        let table_state = cx.new(|cx| TableState::new(delegate, window, cx).col_selectable(false));
 
         // Set up event subscriptions
-        let mut subscriptions = Vec::new();
-
-        // Subscribe to table events to handle double-clicks for editing
-        log::info!("Setting up table event subscription for ResultsPanel");
-        let subscription = cx.subscribe_in(&table_state, window, Self::on_table_event);
-        subscriptions.push(subscription);
+        let subscriptions = Vec::new();
 
         Self {
             table_state,
@@ -1337,8 +1189,6 @@ impl ResultsPanel {
             editing_input: None,
             editing_cell: None,
             copy_handler: CopyHandler::new(),
-            current_selected_col: 1, // Start with first data column (column 1, after row number)
-            current_selected_row: None, // No row selected initially
             _subscriptions: subscriptions,
         }
     }
@@ -1371,107 +1221,6 @@ impl ResultsPanel {
         self.editing_cell = None;
 
         cx.notify();
-    }
-
-    pub fn commit_current_edit(&mut self, cx: &mut Context<Self>) {
-        // Use the delegate's editing state instead of the panel's
-        let editing_cell = self.table_state.read(cx).delegate().edit_state.editing_cell;
-
-        if let Some((row, col)) = editing_cell {
-            if let Some(input) = &self
-                .table_state
-                .read(cx)
-                .delegate()
-                .edit_state
-                .editing_input
-            {
-                let new_value = input.read(cx).text().to_string();
-
-                // Check if this is a new row
-                let is_new_row = self
-                    .table_state
-                    .read(cx)
-                    .delegate()
-                    .edit_state
-                    .pending_new_rows
-                    .contains(&row);
-
-                if is_new_row {
-                    // For new rows, update the cell value and track as INSERT
-                    self.table_state.update(cx, |state, cx| {
-                        let delegate = state.delegate_mut();
-
-                        // Update the actual cell value
-                        if let Some(row_data) = delegate.rows.get_mut(row) {
-                            if let Some(cell) = row_data.get_mut(col) {
-                                *cell = new_value.clone();
-                            }
-                        }
-
-                        // Update the INSERT change with the new value
-                        if let Some(table_name) = &delegate.table_name {
-                            let column_names: Vec<String> = delegate
-                                .columns
-                                .iter()
-                                .map(|col| col.name.to_string())
-                                .collect();
-                            let values: Vec<String> = delegate
-                                .rows
-                                .get(row)
-                                .unwrap_or(&vec!["".to_string(); column_names.len()])
-                                .clone();
-                            let values_str = values
-                                .iter()
-                                .map(|val| {
-                                    if val.is_empty() || val == "NULL" {
-                                        "NULL".to_string()
-                                    } else {
-                                        format!("'{}'", val.replace("'", "''"))
-                                    }
-                                })
-                                .collect::<Vec<_>>()
-                                .join(", ");
-
-                            // Remove the old INSERT change if it exists
-                            delegate.edit_state.changes.retain(|change| {
-                                !(change.change_type == ChangeType::InsertRow
-                                    && change.row_index == row)
-                            });
-
-                            // Add the updated INSERT change
-                            let change = TableChange::new(
-                                ChangeType::InsertRow,
-                                table_name.clone(),
-                                row,
-                                None,
-                                None,
-                                Some(values_str),
-                                None,
-                                delegate.primary_key_column.clone(),
-                            );
-                            delegate.edit_state.add_change(change);
-                        }
-
-                        delegate.edit_state.stop_editing();
-                        state.refresh(cx);
-                    });
-                } else {
-                    // For existing rows, update the edited_values and commit as UPDATE
-                    self.table_state.update(cx, |state, _cx| {
-                        state
-                            .delegate_mut()
-                            .update_cell_value(row, col, new_value.clone());
-                    });
-
-                    // Then commit the edit
-                    self.commit_cell_edit(row, col, new_value, cx);
-                }
-
-                // Clear panel editing state
-                self.editing_input = None;
-                self.editing_cell = None;
-            }
-        }
     }
 
     pub fn cancel_current_edit(&mut self, cx: &mut Context<Self>) {
@@ -1699,15 +1448,6 @@ impl ResultsPanel {
             .delegate()
             .get_table_name()
             .map(|s| s.to_string())
-    }
-
-    pub fn is_editing(&self, cx: &App) -> bool {
-        self.table_state
-            .read(cx)
-            .delegate()
-            .edit_state
-            .editing_cell
-            .is_some()
     }
 
     pub fn get_changes(&self, cx: &App) -> Vec<TableChange> {
@@ -2197,128 +1937,59 @@ impl ResultsPanel {
         cx.notify();
     }
 
-    pub fn duplicate_row(&mut self, row_index: usize, cx: &mut Context<Self>) {
+    pub fn duplicate_row(&mut self, cx: &mut Context<Self>) {
         self.table_state.update(cx, |state, cx| {
-            let delegate = state.delegate_mut();
+            let selected_rows = state.selected_rows().clone();
 
             // Check if the row exists
-            if let Some(row_to_duplicate) = delegate.rows.get(row_index).cloned() {
-                // Add the duplicated row
-                delegate.rows.push(row_to_duplicate.clone());
+            for row_ix in selected_rows {
+                let delegate = state.delegate_mut();
+                if let Some(row_to_duplicate) = delegate.rows.get(row_ix).cloned() {
+                    // Add the duplicated row
+                    delegate.rows.push(row_to_duplicate.clone());
 
-                // Mark this as a pending new row
-                let new_row_index = delegate.rows.len() - 1;
-                delegate.edit_state.pending_new_rows.push(new_row_index);
+                    // Mark this as a pending new row
+                    let new_row_index = delegate.rows.len() - 1;
+                    delegate.edit_state.pending_new_rows.push(new_row_index);
 
-                // Track the INSERT change with proper column values (excluding row number and primary key columns)
-                if let Some(table_name) = &delegate.table_name {
-                    // For new rows (duplicated rows), exclude primary key to avoid UPDATE/INSERT confusion
-                    let _column_names = delegate.get_insert_column_names(true); // exclude_primary_key = true
-                    let values = delegate.get_insert_values(new_row_index, true); // exclude_primary_key = true
-                    let values_str = values
-                        .iter()
-                        .map(|val| {
-                            if val.is_empty() || val == "NULL" {
-                                "NULL".to_string()
-                            } else {
-                                format!("'{}'", val.replace("'", "''"))
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
+                    // Track the INSERT change with proper column values (excluding row number and primary key columns)
+                    if let Some(table_name) = &delegate.table_name {
+                        // For new rows (duplicated rows), exclude primary key to avoid UPDATE/INSERT confusion
+                        let _column_names = delegate.get_insert_column_names(true); // exclude_primary_key = true
+                        let values = delegate.get_insert_values(new_row_index, true); // exclude_primary_key = true
+                        let values_str = values
+                            .iter()
+                            .map(|val| {
+                                if val.is_empty() || val == "NULL" {
+                                    "NULL".to_string()
+                                } else {
+                                    format!("'{}'", val.replace("'", "''"))
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ");
 
-                    let change = TableChange::new(
-                        ChangeType::InsertRow,
-                        table_name.clone(),
-                        new_row_index,
-                        None,
-                        None,
-                        Some(values_str.clone()),
-                        None, // No primary key value for new rows
-                        delegate.primary_key_column.clone(),
-                    );
-                    delegate.edit_state.add_change(change);
+                        let change = TableChange::new(
+                            ChangeType::InsertRow,
+                            table_name.clone(),
+                            new_row_index,
+                            None,
+                            None,
+                            Some(values_str.clone()),
+                            None, // No primary key value for new rows
+                            delegate.primary_key_column.clone(),
+                        );
+                        delegate.edit_state.add_change(change);
+                    }
+
+                    state.refresh(cx);
                 }
-
-                state.refresh(cx);
             }
         });
         cx.notify();
     }
 
-    /// Set a cell value to NULL
-    pub fn set_cell_to_null(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
-        self.table_state.update(cx, |state, cx| {
-            let delegate = state.delegate_mut();
-
-            // Get current value for change tracking
-            let old_value = delegate.rows.get(row).and_then(|r| r.get(col)).cloned();
-
-            // Set the cell value to NULL
-            if let Some(row_data) = delegate.rows.get_mut(row) {
-                if let Some(cell) = row_data.get_mut(col) {
-                    *cell = "NULL".to_string();
-                }
-            }
-
-            // Track the change
-            if let Some(table_name) = &delegate.table_name {
-                let primary_key_value = delegate.rows.get(row).and_then(|r| r.first()).cloned();
-
-                let change = delegate.create_table_change(
-                    ChangeType::UpdateCell,
-                    table_name.clone(),
-                    row,
-                    Some(col),
-                    old_value,
-                    Some("NULL".to_string()),
-                    primary_key_value.clone(),
-                    delegate.primary_key_column.clone(),
-                );
-                delegate.edit_state.add_change(change);
-            }
-
-            state.refresh(cx);
-        });
-        cx.notify();
-    }
-
-    /// Clear a cell value (set to empty string)
-    pub fn clear_cell_value(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
-        self.table_state.update(cx, |state, cx| {
-            let delegate = state.delegate_mut();
-
-            // Get current value for change tracking
-            let old_value = delegate.rows.get(row).and_then(|r| r.get(col)).cloned();
-
-            // Set the cell value to empty string
-            if let Some(row_data) = delegate.rows.get_mut(row) {
-                if let Some(cell) = row_data.get_mut(col) {
-                    *cell = "".to_string();
-                }
-            }
-
-            // Track the change
-            if let Some(table_name) = &delegate.table_name {
-                let primary_key_value = delegate.rows.get(row).and_then(|r| r.first()).cloned();
-
-                let change = delegate.create_table_change(
-                    ChangeType::UpdateCell,
-                    table_name.clone(),
-                    row,
-                    Some(col),
-                    old_value,
-                    Some("".to_string()),
-                    primary_key_value.clone(),
-                    delegate.primary_key_column.clone(),
-                );
-                delegate.edit_state.add_change(change);
-            }
-
-            state.refresh(cx);
-        });
-        cx.notify();
-    }
+    /// Set a cell value to NUL
 
     /// Handle table operation completion event
     #[allow(dead_code)]
@@ -2358,29 +2029,6 @@ impl ResultsPanel {
     }
 
     // Copy and selection action handlers
-    fn on_copy_cell(&mut self, action: &CopyCell, _window: &mut Window, cx: &mut Context<Self>) {
-        let cell_value = self
-            .table_state
-            .read(cx)
-            .delegate()
-            .get_cell_value(action.row, action.col);
-
-        // Get column type if available
-        let column_types = self.table_state.read(cx).delegate().column_types.clone();
-        let column_type = column_types
-            .get(action.col.saturating_sub(1)) // Adjust for row number column
-            .map(|s| s.as_str())
-            .unwrap_or("text");
-
-        if let Some(cell_value) = cell_value {
-            if let Err(e) = self
-                .copy_handler
-                .copy_single_cell(&cell_value, column_type, "csv", cx)
-            {
-                log::error!("Failed to copy cell: {}", e);
-            }
-        }
-    }
 
     fn on_copy_as_csv(
         &mut self,
@@ -2388,7 +2036,16 @@ impl ResultsPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let selected_data = self.table_state.read(cx).delegate().get_selected_data();
+        let table_state = self.table_state.read(cx);
+        let selected_rows = table_state.selected_rows().clone();
+        let delegate = table_state.delegate();
+
+        if selected_rows.is_empty() {
+            log::error!("Failed to copy as CSV: No rows selected for copying");
+            return;
+        }
+
+        let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
 
         if let Err(e) = self.copy_handler.copy_as_format(&selected_data, "csv", cx) {
             log::error!("Failed to copy as CSV: {}", e);
@@ -2401,7 +2058,16 @@ impl ResultsPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let selected_data = self.table_state.read(cx).delegate().get_selected_data();
+        let table_state = self.table_state.read(cx);
+        let selected_rows = table_state.selected_rows().clone();
+        let delegate = table_state.delegate();
+
+        if selected_rows.is_empty() {
+            log::error!("Failed to copy as JSON: No rows selected for copying");
+            return;
+        }
+
+        let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
 
         if let Err(e) = self.copy_handler.copy_as_format(&selected_data, "json", cx) {
             log::error!("Failed to copy as JSON: {}", e);
@@ -2414,7 +2080,16 @@ impl ResultsPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let selected_data = self.table_state.read(cx).delegate().get_selected_data();
+        let table_state = self.table_state.read(cx);
+        let selected_rows = table_state.selected_rows().clone();
+        let delegate = table_state.delegate();
+
+        if selected_rows.is_empty() {
+            log::error!("Failed to copy as SQL: No rows selected for copying");
+            return;
+        }
+
+        let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
 
         if let Err(e) = self.copy_handler.copy_as_format(&selected_data, "sql", cx) {
             log::error!("Failed to copy as SQL: {}", e);
@@ -2427,7 +2102,16 @@ impl ResultsPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let selected_data = self.table_state.read(cx).delegate().get_selected_data();
+        let table_state = self.table_state.read(cx);
+        let selected_rows = table_state.selected_rows().clone();
+        let delegate = table_state.delegate();
+
+        if selected_rows.is_empty() {
+            log::error!("Failed to copy as Markdown: No rows selected for copying");
+            return;
+        }
+
+        let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
 
         if let Err(e) = self
             .copy_handler
@@ -2437,177 +2121,62 @@ impl ResultsPanel {
         }
     }
 
-    fn on_select_row(&mut self, action: &SelectRow, _window: &mut Window, cx: &mut Context<Self>) {
-        self.current_selected_row = Some(action.row);
-        self.table_state.update(cx, |state, _cx| {
-            let delegate = state.delegate_mut();
-            delegate.select_row(action.row);
-            state.refresh(_cx);
-        });
-        cx.notify();
-    }
-
-    fn on_clear_selection(
-        &mut self,
-        _action: &crate::app::ClearSelection,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.current_selected_row = None;
-        self.table_state.update(cx, |state, _cx| {
-            let delegate = state.delegate_mut();
-            delegate.edit_state.clear_selection();
-            state.refresh(_cx);
-        });
-        cx.notify();
-    }
-
     fn on_add_row(&mut self, _action: &AddRow, _window: &mut Window, cx: &mut Context<Self>) {
         self.add_new_row(cx);
     }
 
     fn on_duplicate_row(
         &mut self,
-        action: &DuplicateRow,
+        _action: &DuplicateRow,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.duplicate_row(action.row, cx);
+        self.duplicate_row(cx);
     }
 
-    pub fn get_selected_row(&self) -> Option<usize> {
-        self.current_selected_row
-    }
+    pub fn get_selected_data_for_rows(
+        &self,
+        selected_rows: &HashSet<usize>,
+        delegate: &ResultsTableDelegate,
+    ) -> SelectedTableData {
+        let mut selected_rows_data = Vec::new();
 
-    fn on_select_row_action(
-        &mut self,
-        action: &crate::app::SelectRow,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        // Handle row selection for the current column
-        self.table_state.update(cx, |state, cx| {
-            let delegate = state.delegate_mut();
+        // Collect selected row data
+        for &row in selected_rows {
+            if let Some(row_data) = delegate.rows.get(row) {
+                let cells: Vec<SelectedCell> = row_data
+                    .iter()
+                    .enumerate()
+                    .filter(|&(col, _)| col > 0) // Skip row number column
+                    .map(|(col, value)| SelectedCell {
+                        row,
+                        col: col - 1, // Adjust for row number column
+                        value: value.clone(),
+                        column_name: delegate.columns.get(col).map(|c| c.name.to_string()),
+                        column_type: delegate.column_types.get(col - 1).cloned(), // Adjust for row number column
+                    })
+                    .collect();
 
-            // Select the current column in the clicked row
-            delegate.edit_state.clear_selection();
-            delegate
-                .edit_state
-                .selected_cells
-                .insert((action.row, self.current_selected_col));
-            state.refresh(cx);
-        });
-        cx.notify();
-    }
-
-    /// Navigate cells in the table with keyboard
-    fn navigate_cells(&mut self, cx: &mut Context<Self>, row_delta: isize, col_delta: isize) {
-        self.table_state.update(cx, |state, cx| {
-            let delegate = state.delegate_mut();
-
-            // Start from current tracked position
-            let mut current_row = 1;
-            let mut current_col = self.current_selected_col;
-
-            // Find first selected cell, or use current position
-            if let Some(&(row, col)) = delegate.edit_state.selected_cells.iter().next() {
-                current_row = row;
-                current_col = col;
-            }
-
-            // Calculate new position
-            let new_row = (current_row as isize + row_delta).max(1) as usize;
-            let new_col = (current_col as isize + col_delta).max(1) as usize;
-
-            // Keep within bounds
-            let max_row = delegate.rows.len();
-            let max_col = delegate.columns.len().saturating_sub(1);
-
-            let final_row = new_row.min(max_row);
-            let final_col = new_col.min(max_col);
-
-            // Update both tracked columns
-            self.current_selected_col = final_col;
-            delegate.edit_state.current_column = final_col;
-
-            // Clear current selection and select new cell
-            delegate.edit_state.clear_selection();
-            delegate
-                .edit_state
-                .selected_cells
-                .insert((final_row, final_col));
-
-            state.refresh(cx);
-        });
-        cx.notify();
-    }
-
-    /// Select the current cell based on keyboard focus
-    fn select_current_cell(&mut self, cx: &mut Context<Self>) {
-        self.table_state.update(cx, |state, cx| {
-            let delegate = state.delegate_mut();
-
-            // If there are selected cells, toggle the first one
-            if let Some(&(row, col)) = delegate.edit_state.selected_cells.iter().next() {
-                if delegate.edit_state.selected_cells.contains(&(row, col)) {
-                    // If already selected, clear all selections
-                    delegate.edit_state.clear_selection();
-                }
-            } else {
-                // If no selected cells, select the first cell
-                if !delegate.rows.is_empty() && delegate.columns.len() > 1 {
-                    delegate.edit_state.selected_cells.insert((1, 1));
-                }
-            }
-
-            state.refresh(cx);
-        });
-        cx.notify();
-    }
-
-    /// Handle table events for double-click editing
-    fn on_table_event(
-        &mut self,
-        table_state: &Entity<TableState<ResultsTableDelegate>>,
-        event: &TableEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        log::info!("Received table event in on_table_event");
-        match event {
-            /*
-            TableEvent::DoubleClickedRow(row) => {
-                log::info!("Double clicked row: {}", row);
-                // Use the current_column from the delegate's edit state
-                // This should be updated when users navigate through cells
-                let col = self.table_state.read(cx).delegate().edit_state.current_column;
-
-                log::info!("Starting edit for cell ({}, {})", row, col);
-                if let Err(e) = self.start_editing_without_window(*row, col, cx) {
-                    log::error!("Failed to start cell edit: {}", e);
-                }
-            }
-            */
-            TableEvent::SelectRow(row) => {
-                log::info!("Row selected: {}", row);
-                // Update the selected row tracking
-                self.current_selected_row = Some(*row);
-            }
-            _ => {
-                log::info!("Received other table event");
+                selected_rows_data.push(SelectedRow {
+                    row,
+                    cells,
+                    primary_key_value: None, // TODO: Extract primary key if needed
+                });
             }
         }
-    }
 
-    /// Sync the ResultsPanel's current_selected_col with the delegate's current_column
-    #[allow(dead_code)]
-    fn sync_current_column(&mut self, cx: &mut Context<Self>) {
-        self.current_selected_col = self
-            .table_state
-            .read(cx)
-            .delegate()
-            .edit_state
-            .current_column;
+        SelectedTableData {
+            table_name: delegate.table_name.clone(),
+            columns: delegate
+                .columns
+                .iter()
+                .skip(1)
+                .map(|c| c.name.to_string())
+                .collect::<Vec<_>>(),
+            column_types: delegate.column_types.clone(),
+            selected_rows: selected_rows_data,
+            primary_key_column: delegate.primary_key_column.clone(),
+        }
     }
 }
 
@@ -2639,99 +2208,11 @@ impl Render for ResultsPanel {
             .size_full()
             .border_t_1()
             .border_color(cx.theme().border)
-            // Handle keyboard events for commit/cancel
-            .on_key_down(
-                cx.listener(|this, event: &gpui::KeyDownEvent, _window, cx| {
-                    match event.keystroke.key.as_str() {
-                        "enter" => {
-                            if this.is_editing(cx) {
-                                this.commit_current_edit(cx);
-                            }
-                        }
-                        "escape" => {
-                            if this.is_editing(cx) {
-                                this.cancel_current_edit(cx);
-                            } else {
-                                // Clear all selections when not editing
-                                this.table_state.update(cx, |state, cx| {
-                                    state.delegate_mut().clear_selection();
-                                    state.refresh(cx);
-                                });
-                                cx.notify();
-                            }
-                        }
-                        "up" => {
-                            // Navigate up in the table
-                            if this.is_editing(cx) {
-                                // If editing, cancel editing first
-                                this.cancel_current_edit(cx);
-                            } else {
-                                // Navigate to previous row
-                                this.navigate_cells(cx, -1, 0);
-                            }
-                        }
-                        "down" => {
-                            // Navigate down in the table
-                            if this.is_editing(cx) {
-                                // If editing, cancel editing first
-                                this.cancel_current_edit(cx);
-                            } else {
-                                // Navigate to next row
-                                this.navigate_cells(cx, 1, 0);
-                            }
-                        }
-                        "left" => {
-                            // Navigate left in the table
-                            if this.is_editing(cx) {
-                                // If editing, cancel editing first
-                                this.cancel_current_edit(cx);
-                            } else {
-                                // Navigate to previous column
-                                this.navigate_cells(cx, 0, -1);
-                            }
-                        }
-                        "right" => {
-                            // Navigate right in the table
-                            if this.is_editing(cx) {
-                                // If editing, cancel editing first
-                                this.cancel_current_edit(cx);
-                            } else {
-                                // Navigate to next column
-                                this.navigate_cells(cx, 0, 1);
-                            }
-                        }
-                        "space" => {
-                            // Select current cell
-                            if !this.is_editing(cx) {
-                                this.select_current_cell(cx);
-                            }
-                        }
-                        "ctrl-shift-n" => {
-                            // Ctrl + Shift + N: Set current cell to NULL
-                            if let Some((row, col)) = this.get_current_editing_cell(cx) {
-                                this.set_cell_to_null(row, col, cx);
-                            }
-                        }
-                        "ctrl-shift-k" => {
-                            // Ctrl + Shift + K: Clear current cell value
-                            if let Some((row, col)) = this.get_current_editing_cell(cx) {
-                                this.clear_cell_value(row, col, cx);
-                            }
-                        }
-                        _ => {}
-                    }
-                }),
-            )
-            // Handle table events for row-based selection
-            .on_action(cx.listener(Self::on_select_row_action))
             // Handle copy and selection actions
-            .on_action(cx.listener(Self::on_copy_cell))
             .on_action(cx.listener(Self::on_copy_as_csv))
             .on_action(cx.listener(Self::on_copy_as_json))
             .on_action(cx.listener(Self::on_copy_as_sql))
             .on_action(cx.listener(Self::on_copy_as_markdown))
-            .on_action(cx.listener(Self::on_select_row))
-            .on_action(cx.listener(Self::on_clear_selection))
             .on_action(cx.listener(Self::on_add_row))
             .on_action(cx.listener(Self::on_duplicate_row))
             // The table component (table should have built-in scrolling)

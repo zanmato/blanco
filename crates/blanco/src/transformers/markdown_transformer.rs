@@ -32,13 +32,6 @@ impl DataTransformer for MarkdownTransformer {
         let mut min_col = usize::MAX;
         let mut max_col = 0;
 
-        // Check selected cells
-        for cell in &data.selected_cells {
-            included_columns.insert(cell.col);
-            min_col = min_col.min(cell.col);
-            max_col = max_col.max(cell.col);
-        }
-
         // Check selected rows
         for row in &data.selected_rows {
             for cell in &row.cells {
@@ -65,13 +58,6 @@ impl DataTransformer for MarkdownTransformer {
             if let Some(col_name) = data.columns.get(col_idx) {
                 columns.push((col_idx, col_name.clone()));
                 let mut max_width = col_name.len();
-
-                // Consider selected cells for this column
-                for cell in &data.selected_cells {
-                    if cell.col == col_idx {
-                        max_width = max_width.max(cell.value.len());
-                    }
-                }
 
                 // Consider selected rows for this column
                 for row in &data.selected_rows {
@@ -121,38 +107,6 @@ impl DataTransformer for MarkdownTransformer {
                     }
                     output.push('\n');
                 }
-            }
-        }
-        // If we have individual cell selections, create sparse rows
-        else if !data.selected_cells.is_empty() {
-            // Group cells by row
-            let mut rows: std::collections::HashMap<
-                usize,
-                Vec<&crate::results_panel::SelectedCell>,
-            > = std::collections::HashMap::new();
-            for cell in &data.selected_cells {
-                rows.entry(cell.row).or_default().push(cell);
-            }
-
-            let mut row_indices: Vec<usize> = rows.keys().cloned().collect();
-            row_indices.sort();
-
-            for row_idx in row_indices {
-                output.push('|');
-                for (i, &(col_idx, _)) in columns.iter().enumerate() {
-                    output.push(' ');
-                    if let Some(cells) = rows.get(&row_idx) {
-                        if let Some(cell) = cells.iter().find(|c| c.col == col_idx) {
-                            output.push_str(&format_cell(&cell.value, column_widths[i]));
-                        } else {
-                            output.push_str(&format_cell("", column_widths[i]));
-                        }
-                    } else {
-                        output.push_str(&format_cell("", column_widths[i]));
-                    }
-                    output.push_str(" |");
-                }
-                output.push('\n');
             }
         }
 

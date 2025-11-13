@@ -1000,15 +1000,6 @@ impl Render for EditorPanel {
 
         let current_tab = self.tabs.get(self.active_tab_ix);
 
-        // Check if there's a selected row for the duplicate row button
-        let has_selected_row = current_tab
-            .and_then(|tab| match tab {
-                TabType::Query(query_tab) => Some(query_tab.results_panel.read(cx).get_selected_row()),
-                TabType::Settings(_) => None,
-            })
-            .flatten()
-            .is_some();
-
         div()
             .flex()
             .flex_col()
@@ -1304,17 +1295,13 @@ impl Render for EditorPanel {
                                                                         .small()
                                                                         .icon(IconName::Copy)
                                                                         .label("Duplicate Row")
-                                                                        .when(has_selected_row, |this| {
-                                                                            this.on_click(cx.listener(|this, _, _window, cx| {
-                                                                                if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
-                                                                                    query_tab.results_panel.update(cx, |results_panel, cx| {
-                                                                                        if let Some(selected_row) = results_panel.get_selected_row() {
-                                                                                            results_panel.duplicate_row(selected_row, cx);
-                                                                                        }
-                                                                                    });
-                                                                                }
-                                                                            }))
-                                                                        })
+                                                                        .on_click(cx.listener(|this, _, _window, cx| {
+                                                                            if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
+                                                                                query_tab.results_panel.update(cx, |results_panel, cx| {
+                                                                                    results_panel.duplicate_row(cx);
+                                                                                });
+                                                                            }
+                                                                        }))
                                                                 )
                                                                 // Commit and rollback buttons (always available)
                                                                 .child(
