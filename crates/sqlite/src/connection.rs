@@ -718,11 +718,11 @@ impl Connection for SqliteConnection {
         }
     }
 
-    fn extract_table_name_from_query(&self, query: &str, _alias: bool) -> Result<Option<String>> {
+    fn extract_table_name_from_query(&self, query: &str, alias: bool) -> Result<Option<String>> {
         log::debug!("Extracting table name from SQLite query: {}", query);
 
         let extractor = SqliteTableExtractor::new();
-        match extractor.extract_primary_table(query) {
+        match extractor.extract_table(query, alias) {
             Ok(table_name) => {
                 log::debug!("Successfully extracted table name: {}", table_name);
                 Ok(Some(table_name))

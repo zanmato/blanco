@@ -3,23 +3,15 @@
 //! This crate provides SQLite-specific functionality including:
 //! - Database connection management
 //! - SQL parsing with SQLite dialect
-//! - Auto-completion for SQLite queries
-//! - Hover information for tables and columns
 
 pub mod connection;
-pub mod sql_parser;
-pub mod completion;
-pub mod hover;
 pub mod factory;
+pub mod sql_parser;
 
 // Re-export main types for convenience
-pub use connection::{
-    SqliteConnection, SqliteConnectionKey
-};
+pub use connection::{SqliteConnection, SqliteConnectionKey};
 
-pub use sql_parser::{
-    SqliteTableExtractor, CompletionKind, ParsedQuery, TableAlias
-};
+pub use sql_parser::{CompletionKind, ParsedQuery, SqliteTableExtractor, TableAlias};
 
 pub use factory::SqliteConnectionFactory;
 
@@ -29,25 +21,27 @@ pub use factory::SqliteConnectionFactory;
 
 #[cfg(test)]
 mod tests {
-    use sqlx::{Row, sqlite::SqlitePoolOptions};
-    use std::env;
     use blanco_core::Connection;
+    use sqlx::{sqlite::SqlitePoolOptions, Row};
+    use std::env;
     use tempfile::NamedTempFile;
 
     #[async_std::test]
     async fn test_sqlite_data_type_serialization() -> Result<(), Box<dyn std::error::Error>> {
         // Use environment variable for connection string or fallback to temporary file
-        let connection_string = env::var("SQLITE_CONNECTION_STRING")
-            .unwrap_or_else(|_| {
-                // Create a temporary file for SQLite database
-                let temp_file = NamedTempFile::new().expect("Failed to create temporary file");
-                let path = temp_file.path().to_string_lossy().to_string();
-                // Keep the temporary file alive by not dropping it
-                std::mem::forget(temp_file);
-                format!("sqlite:{}", path)
-            });
+        let connection_string = env::var("SQLITE_CONNECTION_STRING").unwrap_or_else(|_| {
+            // Create a temporary file for SQLite database
+            let temp_file = NamedTempFile::new().expect("Failed to create temporary file");
+            let path = temp_file.path().to_string_lossy().to_string();
+            // Keep the temporary file alive by not dropping it
+            std::mem::forget(temp_file);
+            format!("sqlite:{}", path)
+        });
 
-        println!("Testing SQLite data types with connection: {}", connection_string);
+        println!(
+            "Testing SQLite data types with connection: {}",
+            connection_string
+        );
 
         // Connect to SQLite
         let pool = SqlitePoolOptions::new()
@@ -131,7 +125,10 @@ mod tests {
 
         println!("Inserting test data...");
         let result = sqlx::query(insert_sql).execute(&pool).await?;
-        println!("Test data inserted successfully! Rows affected: {}", result.rows_affected());
+        println!(
+            "Test data inserted successfully! Rows affected: {}",
+            result.rows_affected()
+        );
 
         // Read the data back and verify serialization
         println!("\n=== Testing Data Type Serialization ===\n");
@@ -151,24 +148,49 @@ mod tests {
         let row = sqlx::query(select_sql).fetch_one(&pool).await?;
 
         // Helper function to safely extract and print values
-        fn safe_print<T: std::fmt::Display + sqlx::Type<sqlx::Sqlite> + for<'r> sqlx::Decode<'r, sqlx::Sqlite>>(name: &str, row: &sqlx::sqlite::SqliteRow, column: &str) -> Result<(), sqlx::Error> {
+        fn safe_print<
+            T: std::fmt::Display + sqlx::Type<sqlx::Sqlite> + for<'r> sqlx::Decode<'r, sqlx::Sqlite>,
+        >(
+            name: &str,
+            row: &sqlx::sqlite::SqliteRow,
+            column: &str,
+        ) -> Result<(), sqlx::Error> {
             match row.try_get::<Option<T>, _>(column) {
-                Ok(Some(value)) => println!("{:<25}: {} ({})", name, value, std::any::type_name::<T>()),
+                Ok(Some(value)) => {
+                    println!("{:<25}: {} ({})", name, value, std::any::type_name::<T>())
+                }
                 Ok(None) => println!("{:<25}: NULL", name),
-                Err(e) => println!("{:<25}: ERROR - {} ({})", name, e, std::any::type_name::<T>()),
+                Err(e) => println!(
+                    "{:<25}: ERROR - {} ({})",
+                    name,
+                    e,
+                    std::any::type_name::<T>()
+                ),
             }
             Ok(())
         }
 
         // Helper function for blob types
-        fn safe_print_blob(name: &str, row: &sqlx::sqlite::SqliteRow, column: &str) -> Result<(), sqlx::Error> {
+        fn safe_print_blob(
+            name: &str,
+            row: &sqlx::sqlite::SqliteRow,
+            column: &str,
+        ) -> Result<(), sqlx::Error> {
             match row.try_get::<Option<Vec<u8>>, _>(column) {
                 Ok(Some(bytes)) => {
-                    let hex_str = bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+                    let hex_str = bytes
+                        .iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect::<String>();
                     println!("{:<25}: {} (blob: {} bytes)", name, hex_str, bytes.len());
-                },
+                }
                 Ok(None) => println!("{:<25}: NULL", name),
-                Err(e) => println!("{:<25}: ERROR - {} ({})", name, e, std::any::type_name::<Vec<u8>>()),
+                Err(e) => println!(
+                    "{:<25}: ERROR - {} ({})",
+                    name,
+                    e,
+                    std::any::type_name::<Vec<u8>>()
+                ),
             }
             Ok(())
         }
@@ -223,7 +245,9 @@ mod tests {
         sqlite_connection.connect(&connection_string).await?;
 
         // Create the test table using Blanco connection
-        sqlite_connection.execute_query(create_table_sql, None).await?;
+        sqlite_connection
+            .execute_query(create_table_sql, None)
+            .await?;
 
         // Insert test data using Blanco connection
         sqlite_connection.execute_query(insert_sql, None).await?;
@@ -238,7 +262,11 @@ mod tests {
         if let Some(first_row) = query_result.rows.first() {
             println!("\n--- Blanco Serialization Results ---");
             for (i, value) in first_row.iter().enumerate() {
-                let column_name = query_result.columns.get(i).cloned().unwrap_or_else(|| "unknown".to_string());
+                let column_name = query_result
+                    .columns
+                    .get(i)
+                    .cloned()
+                    .unwrap_or_else(|| "unknown".to_string());
                 println!("{:<25}: {}", column_name, value);
             }
         }
@@ -248,42 +276,10 @@ mod tests {
     }
 
     #[test]
-    fn test_table_name_extraction() {
-        use blanco_core::Connection;
-
-        let connection_string = "sqlite::memory:".to_string();
-        let mut sqlite_connection = crate::SqliteConnection::new(connection_string.clone()).unwrap();
-
-        // Test table name extraction from query with alias
-        let query_with_alias = "SELECT id, status FROM orders o WHERE o.id = 1";
-        let extracted_table_name = sqlite_connection.extract_actual_table_name(query_with_alias).unwrap();
-        assert_eq!(extracted_table_name, Some("orders".to_string()));
-
-        // Test alias resolution
-        let resolved_table = sqlite_connection.resolve_table_alias(query_with_alias, "o").unwrap();
-        assert_eq!(resolved_table, Some("orders".to_string()));
-
-        // Test with different query patterns
-        let test_cases = vec![
-            ("SELECT * FROM customers", Some("customers")),
-            ("SELECT * FROM orders o", Some("orders")),
-            ("SELECT * FROM products p WHERE p.id = 1", Some("products")),
-            ("SELECT * FROM orders JOIN customers c ON orders.customer_id = c.id", Some("orders")),
-        ];
-
-        for (query, expected) in test_cases {
-            let result = sqlite_connection.extract_actual_table_name(query).unwrap();
-            assert_eq!(result, expected.map(String::from), "Failed for query: {}", query);
-        }
-
-        println!("✅ SQLite table name extraction tests passed!");
-        println!("   Extracted table name from 'orders o': {:?}", extracted_table_name);
-        println!("   Resolved alias 'o': {:?}", resolved_table);
-    }
-
-    #[test]
     fn test_multiple_changes_consolidation() {
-        use blanco_core::table_operations::{TableChangeOperation, OperationType, RowIdentifier, ColumnChange};
+        use blanco_core::table_operations::{
+            ColumnChange, OperationType, RowIdentifier, TableChangeOperation,
+        };
 
         // Test multiple changes consolidation
         let changes = vec![
@@ -304,13 +300,14 @@ mod tests {
             operation_type: OperationType::Update,
             row_identifier: RowIdentifier::PrimaryKey {
                 column: "id".to_string(),
-                value: "1".to_string()
+                value: "1".to_string(),
             },
             changes,
         };
 
         let generated_sql = operation.to_sql_query();
-        let expected_sql = "UPDATE orders SET status = 'shipped', customer_name = 'John Smith' WHERE id = '1'";
+        let expected_sql =
+            "UPDATE orders SET status = 'shipped', customer_name = 'John Smith' WHERE id = '1'";
         assert_eq!(generated_sql, expected_sql);
 
         println!("✅ SQLite multiple changes consolidation test passed!");

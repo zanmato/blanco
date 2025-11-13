@@ -1,5 +1,5 @@
 use gpui::{
-    div, px, App, Context, ElementId, IntoElement, ParentElement, Render, RenderOnce, SharedString,
+    div, px, Context, ElementId, IntoElement, ParentElement, Render, SharedString,
     Styled, Subscription, Window,
 };
 use gpui_component::{h_flex, text::TextView, v_flex, ActiveTheme, Icon, IconName, StyledExt as _};

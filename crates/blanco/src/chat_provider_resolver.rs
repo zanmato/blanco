@@ -60,15 +60,14 @@ impl ChatProviderResolver {
         let config_hash = self.calculate_config_hash(&settings.chat);
 
         // Check if we can reuse the cached provider
-        if let Some(cached) = &self.cached_provider {
-            if cached.config_hash == config_hash {
+        if let Some(cached) = &self.cached_provider
+            && cached.config_hash == config_hash {
                 return Ok(ProviderInfo {
                     provider: cached.provider.clone(),
                     provider_name: cached.provider_name.clone(),
                     model_name: cached.model_name.clone(),
                 });
             }
-        }
 
         // Create new provider based on settings
         let provider_info = self.create_provider_from_settings(&settings.chat)?;

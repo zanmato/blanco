@@ -59,13 +59,13 @@ impl PostgresTableExtractor {
         Self {}
     }
 
-    /// Extract the primary table name from a SELECT query
-    pub fn extract_primary_table(&self, sql: &str, alias: bool) -> Result<String> {
+    /// Extract the table name from a SELECT query
+    pub fn extract_table(&self, sql: &str, alias: bool) -> Result<String> {
         let options = ParseOptions::new();
         let mut issues = Vec::new();
 
         if let Some(statement) = parse_statement(sql, &mut issues, &options) {
-            if let Some(table_name) = self.extract_from_statement(&statement, false) {
+            if let Some(table_name) = self.extract_from_statement(&statement, alias) {
                 return Ok(table_name);
             }
         }
@@ -267,7 +267,7 @@ impl PostgresTableExtractor {
         if let Statement::Select(select) = statement {
             if let Some(table_references) = &select.table_references {
                 for table_ref in table_references {
-                    self.extract_aliases_with_names_from_reference(table_ref, &mut aliases);
+                    Self::extract_aliases_with_names_from_reference(table_ref, &mut aliases);
                 }
             }
         }
@@ -277,7 +277,6 @@ impl PostgresTableExtractor {
 
     /// Extract aliases with actual table names from a table reference
     fn extract_aliases_with_names_from_reference(
-        &self,
         table_ref: &TableReference,
         aliases: &mut Vec<(String, String)>,
     ) {
@@ -300,8 +299,8 @@ impl PostgresTableExtractor {
                 }
             }
             TableReference::Join { left, right, .. } => {
-                self.extract_aliases_with_names_from_reference(left, aliases);
-                self.extract_aliases_with_names_from_reference(right, aliases);
+                Self::extract_aliases_with_names_from_reference(left, aliases);
+                Self::extract_aliases_with_names_from_reference(right, aliases);
             }
         }
     }
@@ -526,14 +525,14 @@ mod tests {
 
         assert_eq!(
             extractor
-                .extract_primary_table("SELECT * FROM users u", false)
+                .extract_table("SELECT * FROM users u", false)
                 .unwrap(),
             "users"
         );
 
         assert_eq!(
             extractor
-                .extract_primary_table("SELECT * FROM public.users", false)
+                .extract_table("SELECT * FROM public.users", false)
                 .unwrap(),
             "users"
         );

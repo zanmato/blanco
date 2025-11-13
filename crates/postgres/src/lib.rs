@@ -3,13 +3,9 @@
 //! This crate provides PostgreSQL-specific functionality including:
 //! - Database connection management
 //! - SQL parsing with PostgreSQL dialect
-//! - Auto-completion for PostgreSQL queries (TODO)
-//! - Hover information for tables and columns (TODO)
 
-pub mod completion;
 pub mod connection;
 pub mod factory;
-pub mod hover;
 pub mod sql_parser;
 
 // Re-export main types for convenience
@@ -343,7 +339,10 @@ mod tests {
                                 println!("{:<25}: {} (raw text)", "custom_enum", text_val);
                             }
                             Err(_) => {
-                                println!("{:<25}: ERROR - couldn't decode as raw text", "custom_enum");
+                                println!(
+                                    "{:<25}: ERROR - couldn't decode as raw text",
+                                    "custom_enum"
+                                );
                             }
                         }
                     }
@@ -400,11 +399,15 @@ mod tests {
 
         // Test table name extraction from query with alias
         let query_with_alias = "SELECT id, status FROM orders o WHERE o.id = 1";
-        let extracted_table_name = postgres_connection.extract_actual_table_name(query_with_alias).unwrap();
+        let extracted_table_name = postgres_connection
+            .extract_actual_table_name(query_with_alias)
+            .unwrap();
         assert_eq!(extracted_table_name, Some("orders".to_string()));
 
         // Test alias resolution
-        let resolved_table = postgres_connection.resolve_table_alias(query_with_alias, "o").unwrap();
+        let resolved_table = postgres_connection
+            .resolve_table_alias(query_with_alias, "o")
+            .unwrap();
         assert_eq!(resolved_table, Some("orders".to_string()));
 
         // Test with different query patterns
@@ -412,16 +415,29 @@ mod tests {
             ("SELECT * FROM customers", Some("customers")),
             ("SELECT * FROM orders o", Some("orders")),
             ("SELECT * FROM products p WHERE p.id = 1", Some("products")),
-            ("SELECT * FROM orders JOIN customers c ON orders.customer_id = c.id", Some("orders")),
+            (
+                "SELECT * FROM orders JOIN customers c ON orders.customer_id = c.id",
+                Some("orders"),
+            ),
         ];
 
         for (query, expected) in test_cases {
-            let result = postgres_connection.extract_actual_table_name(query).unwrap();
-            assert_eq!(result, expected.map(String::from), "Failed for query: {}", query);
+            let result = postgres_connection
+                .extract_actual_table_name(query)
+                .unwrap();
+            assert_eq!(
+                result,
+                expected.map(String::from),
+                "Failed for query: {}",
+                query
+            );
         }
 
         println!("✅ PostgreSQL table name extraction tests passed!");
-        println!("   Extracted table name from 'orders o': {:?}", extracted_table_name);
+        println!(
+            "   Extracted table name from 'orders o': {:?}",
+            extracted_table_name
+        );
         println!("   Resolved alias 'o': {:?}", resolved_table);
     }
 }

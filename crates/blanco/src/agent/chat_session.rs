@@ -4,7 +4,9 @@ use futures::StreamExt;
 use gpui::{Context, EventEmitter, Task};
 use std::sync::Arc;
 
-use super::chat_types::{ChatCommand, ChatEvent, ChatMessage, LoadingState, MessageRole, SqlContext};
+use super::chat_types::{
+    ChatCommand, ChatEvent, ChatMessage, LoadingState, MessageRole, SqlContext,
+};
 use blanco_core::chat_provider::{ChatCompletionRequest, ChatProvider, ProviderError};
 
 #[derive(Clone)]
@@ -86,7 +88,10 @@ impl ChatSession {
     pub fn set_loading_state(&mut self, new_state: LoadingState, cx: &mut Context<Self>) {
         let old_state = self.loading_state.clone();
         self.loading_state = new_state.clone();
-        cx.emit(ChatEvent::LoadingStateChanged { old_state, new_state });
+        cx.emit(ChatEvent::LoadingStateChanged {
+            old_state,
+            new_state,
+        });
     }
 
     pub fn clear_messages(&mut self) {
@@ -181,7 +186,10 @@ Would you like me to help you implement any of these optimizations?",
             }
             ChatCommand::Schema(table_name) => {
                 if let Some(table) = table_name {
-                    format!("Showing schema for table: {}\n\n*Schema information would be displayed here with columns, data types, and constraints.*\n\nThis will be implemented once database schema introspection is available.", table)
+                    format!(
+                        "Showing schema for table: {}\n\n*Schema information would be displayed here with columns, data types, and constraints.*\n\nThis will be implemented once database schema introspection is available.",
+                        table
+                    )
                 } else if self.sql_context.tables.is_empty() {
                     "No table information available. Connect to a database first to see available tables.".to_string()
                 } else {
@@ -250,7 +258,7 @@ Would you like me to help you implement any of these optimizations?",
         let user_message = user_message.to_string();
         let provider_clone = provider.clone();
 
-        cx.spawn(async move |chat_session_handle, mut async_cx| {
+        cx.spawn(async move |chat_session_handle, async_cx| {
             // Create an async channel for real-time UI updates
             let (tx, mut rx) = async_std::channel::unbounded::<ChatMessage>();
 
@@ -264,9 +272,12 @@ Would you like me to help you implement any of these optimizations?",
             async_cx
                 .spawn(async move |cx| {
                     while let Some(message) = rx.next().await {
-                        if let Ok(_) = handle_clone.update(cx, |chat_session, cx| {
-                            chat_session.add_message(message.clone(), cx);
-                        }) {
+                        if handle_clone
+                            .update(cx, |chat_session, cx| {
+                                chat_session.add_message(message.clone(), cx);
+                            })
+                            .is_ok()
+                        {
                             // State updated successfully
                         }
                     }
@@ -282,7 +293,7 @@ Would you like me to help you implement any of these optimizations?",
                 model_name.clone(),
                 user_message,
                 tx,
-                &mut async_cx,
+                async_cx,
             )
             .await;
 
@@ -301,6 +312,7 @@ Would you like me to help you implement any of these optimizations?",
     }
 
     /// Process messages in a loop to handle dynamic tool call sequences with real-time UI updates
+    #[allow(clippy::too_many_arguments)]
     async fn process_message_loop_with_realtime_ui(
         chat_session_handle: gpui::WeakEntity<ChatSession>,
         provider: Arc<dyn ChatProvider<Error = ProviderError>>,

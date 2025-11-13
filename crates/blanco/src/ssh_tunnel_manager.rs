@@ -136,8 +136,8 @@ pub fn ssh_tunnel_operations() -> &'static SshTunnelOperations {
 pub fn get_connection_string_with_tunnel(conn: &ConnectionData) -> Result<String> {
     let operations = ssh_tunnel_operations();
 
-    if conn.uses_ssh_tunnel() {
-        if let Some(local_port) = operations.get_local_tunnel_port(conn) {
+    if conn.uses_ssh_tunnel()
+        && let Some(local_port) = operations.get_local_tunnel_port(conn) {
             // Use the local tunnel port in the connection string
             let host = "127.0.0.1";
             let database = conn
@@ -170,7 +170,6 @@ pub fn get_connection_string_with_tunnel(conn: &ConnectionData) -> Result<String
 
             return Ok(connection_string);
         }
-    }
 
     // Fall back to the original connection string
     conn.connection_string

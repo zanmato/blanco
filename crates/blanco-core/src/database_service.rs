@@ -178,10 +178,10 @@ pub trait DatabaseService: Send + Sync {
 
         let mut tables = Vec::new();
         for row in query_result.rows {
-            if !row.is_empty() {
-                if let Ok(table_info) = serde_json::from_str::<Value>(&row[0]) {
-                    tables.push(table_info);
-                }
+            if !row.is_empty()
+                && let Ok(table_info) = serde_json::from_str::<Value>(&row[0])
+            {
+                tables.push(table_info);
             }
         }
 

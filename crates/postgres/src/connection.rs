@@ -1412,7 +1412,7 @@ impl Connection for PostgresConnection {
         log::debug!("Extracting table name from PostgreSQL query: {}", query);
 
         let extractor = PostgresTableExtractor::new();
-        match extractor.extract_primary_table(query, alias) {
+        match extractor.extract_table(query, alias) {
             Ok(table_name) => {
                 log::debug!("Successfully extracted table name: {}", table_name);
                 Ok(Some(table_name))

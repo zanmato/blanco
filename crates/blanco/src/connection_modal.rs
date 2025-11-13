@@ -1,12 +1,12 @@
 use gpui::{
-    div, prelude::FluentBuilder, px, App, AppContext, Axis, Context, Entity, FocusHandle,
-    Focusable, IntoElement, ParentElement, Render, Styled, Window,
+    App, AppContext, Axis, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
+    Render, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    h_flex,
+    ActiveTheme, Icon, IconName, IndexPath, StyledExt, h_flex,
     input::{Input, InputState},
     select::{Select, SelectState},
-    v_flex, ActiveTheme, Icon, IconName, IndexPath, StyledExt,
+    v_flex,
 };
 
 use crate::app_database::ConnectionData;
@@ -119,6 +119,7 @@ struct PostgresForm {
 }
 
 impl PostgresForm {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         host_input: Entity<InputState>,
         port_input: Entity<InputState>,

@@ -1,9 +1,9 @@
 use crate::connection_sidebar::{Sidebar, SidebarGroup, SidebarMenu, SidebarMenuItem};
 use gpui::{
-    div, App, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, Styled, Window,
+    App, Context, EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, Styled, Window, div,
 };
-use gpui_component::{v_flex, Side};
+use gpui_component::{Side, v_flex};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -482,8 +482,8 @@ impl ConnectionSidebar {
         database_name: &str,
         cx: &mut Context<Self>,
     ) {
-        if let Some(connection_info) = self.unified_connections.get_mut(connection_key) {
-            if let Some(database) = connection_info
+        if let Some(connection_info) = self.unified_connections.get_mut(connection_key)
+            && let Some(database) = connection_info
                 .databases
                 .iter_mut()
                 .find(|d| d.name == database_name)
@@ -511,8 +511,7 @@ impl ConnectionSidebar {
                             if let Some(conn_info) = sidebar
                                 .unified_connections
                                 .get_mut(&connection_key_for_success)
-                            {
-                                if let Some(database) = conn_info
+                                && let Some(database) = conn_info
                                     .databases
                                     .iter_mut()
                                     .find(|d| d.name == database_name_for_success_clone)
@@ -525,7 +524,6 @@ impl ConnectionSidebar {
                                         database.schemas.push(schema);
                                     }
                                 }
-                            }
                             log::info!(
                                 "Loaded {} schemas for database '{}': {}",
                                 schemas_count,
@@ -538,8 +536,7 @@ impl ConnectionSidebar {
                             if let Some(conn_info) = sidebar
                                 .unified_connections
                                 .get_mut(&connection_key_for_error)
-                            {
-                                if let Some(database) = conn_info
+                                && let Some(database) = conn_info
                                     .databases
                                     .iter_mut()
                                     .find(|d| d.name == database_name_for_error)
@@ -549,7 +546,6 @@ impl ConnectionSidebar {
                                     error_schema.tables = vec![error_msg.clone()];
                                     database.schemas.push(error_schema);
                                 }
-                            }
                             log::error!(
                                 "Failed to load schemas for database '{}': {}",
                                 database_name_for_error,
@@ -562,7 +558,6 @@ impl ConnectionSidebar {
 
                 cx.notify();
             }
-        }
     }
 
     /// Toggle expansion of a schema and load tables as needed
@@ -573,13 +568,12 @@ impl ConnectionSidebar {
         schema_name: &str,
         cx: &mut Context<Self>,
     ) {
-        if let Some(connection_info) = self.unified_connections.get_mut(connection_key) {
-            if let Some(database) = connection_info
+        if let Some(connection_info) = self.unified_connections.get_mut(connection_key)
+            && let Some(database) = connection_info
                 .databases
                 .iter_mut()
                 .find(|d| d.name == database_name)
-            {
-                if let Some(schema) = database.schemas.iter_mut().find(|s| s.name == schema_name) {
+                && let Some(schema) = database.schemas.iter_mut().find(|s| s.name == schema_name) {
                     let was_expanded = schema.expanded;
                     schema.expanded = !schema.expanded;
 
@@ -609,20 +603,16 @@ impl ConnectionSidebar {
                                 if let Some(conn_info) = sidebar
                                     .unified_connections
                                     .get_mut(&connection_key_for_success)
-                                {
-                                    if let Some(database) = conn_info
+                                    && let Some(database) = conn_info
                                         .databases
                                         .iter_mut()
                                         .find(|d| d.name == database_name_for_success_clone)
-                                    {
-                                        if let Some(schema) = database
-                                            .schemas
-                                            .iter_mut()
-                                            .find(|s| s.name == schema_name_for_success_clone)
-                                        {
-                                            schema.tables = tables;
-                                        }
-                                    }
+                                    && let Some(schema) = database
+                                        .schemas
+                                        .iter_mut()
+                                        .find(|s| s.name == schema_name_for_success_clone)
+                                {
+                                    schema.tables = tables;
                                 }
                                 log::info!(
                                     "Loaded {} tables for schema '{}' in database '{}': {}",
@@ -637,21 +627,17 @@ impl ConnectionSidebar {
                                 if let Some(conn_info) = sidebar
                                     .unified_connections
                                     .get_mut(&connection_key_for_error)
-                                {
-                                    if let Some(database) = conn_info
+                                    && let Some(database) = conn_info
                                         .databases
                                         .iter_mut()
                                         .find(|d| d.name == database_name_for_error)
-                                    {
-                                        if let Some(schema) = database
+                                        && let Some(schema) = database
                                             .schemas
                                             .iter_mut()
                                             .find(|s| s.name == schema_name_for_error)
                                         {
                                             schema.tables = vec![format!("Error: {}", error_msg)];
                                         }
-                                    }
-                                }
                                 log::error!(
                                     "Failed to load tables for schema '{}' in database '{}': {}",
                                     schema_name_for_error,
@@ -665,8 +651,6 @@ impl ConnectionSidebar {
 
                     cx.notify();
                 }
-            }
-        }
     }
 }
 

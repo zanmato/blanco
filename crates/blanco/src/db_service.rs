@@ -4,7 +4,7 @@ use async_std::sync::RwLock;
 use async_trait::async_trait;
 use blanco_core::{Connection, ConnectionFactory, ConnectionRegistry};
 use gpui::{App, Global};
-use postgres::{connection::PostgresSshConfig, PgConnectionKey, PostgresConnection};
+use postgres::{PgConnectionKey, PostgresConnection, connection::PostgresSshConfig};
 use sqlite::{SqliteConnection, SqliteConnectionKey};
 use sqlx::Row;
 use std::collections::HashMap;
@@ -317,11 +317,11 @@ impl UnifiedConnectionManager {
         // Check for existing connection
         {
             let connections = self.connections.read().await;
-            if let Some(existing_conn) = connections.get(&connection_key) {
-                if existing_conn.test_connection().await.unwrap_or(false) {
-                    log::debug!("Using existing healthy SSH connection: {}", connection_key);
-                    return Ok(Arc::clone(existing_conn));
-                }
+            if let Some(existing_conn) = connections.get(&connection_key)
+                && existing_conn.test_connection().await.unwrap_or(false)
+            {
+                log::debug!("Using existing healthy SSH connection: {}", connection_key);
+                return Ok(Arc::clone(existing_conn));
             }
         }
 
@@ -426,14 +426,14 @@ impl DbService {
         let db_type: String = connection_row.try_get("db_type")?;
 
         // Apply database override for PostgreSQL connections
-        if db_type == "PostgreSQL" && database_name.is_some() {
-            connection_string = replace_database_in_postgres_connection_string(
-                &connection_string,
-                database_name.unwrap(),
-            );
+        if db_type == "PostgreSQL"
+            && let Some(database_name) = database_name
+        {
+            connection_string =
+                replace_database_in_postgres_connection_string(&connection_string, database_name);
             log::debug!(
                 "Applied database override '{}' to connection string: {}",
-                database_name.unwrap(),
+                database_name,
                 connection_string
             );
         }
@@ -472,7 +472,12 @@ impl DbService {
                             ssh_private_key_password,
                         };
 
-                        log::info!("Creating PostgreSQL connection with SSH tunnel to {}:{} for connection ID {}", ssh_config.ssh_host, ssh_config.ssh_port, connection_id);
+                        log::info!(
+                            "Creating PostgreSQL connection with SSH tunnel to {}:{} for connection ID {}",
+                            ssh_config.ssh_host,
+                            ssh_config.ssh_port,
+                            connection_id
+                        );
                         let unified_manager = self.unified_manager().await;
                         return unified_manager
                             .read()
@@ -483,7 +488,10 @@ impl DbService {
                             )
                             .await;
                     } else {
-                        log::warn!("SSH configuration has empty host or user for connection ID {}, ignoring SSH tunnel", connection_id);
+                        log::warn!(
+                            "SSH configuration has empty host or user for connection ID {}, ignoring SSH tunnel",
+                            connection_id
+                        );
                     }
                 }
             }
@@ -500,12 +508,12 @@ impl DbService {
         connection_string: &str,
     ) -> Result<std::sync::Arc<dyn blanco_core::Connection>, anyhow::Error> {
         let unified_manager = self.unified_manager().await;
-        let result = unified_manager
+
+        unified_manager
             .read()
             .await
             .get_or_create_connection(connection_string)
-            .await;
-        result
+            .await
     }
 
     /// Execute a query by connection ID

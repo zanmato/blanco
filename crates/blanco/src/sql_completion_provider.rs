@@ -212,14 +212,12 @@ impl SqlCompletionProvider {
     /// Get cached tables or fetch them if not cached/expired
     async fn get_cached_tables(&self) -> Result<Vec<String>> {
         // First, check if we have valid cached data
-        if let Ok(cache) = self.cache.lock() {
-            if let Some(cached_tables) = &cache.tables {
-                if !cached_tables.is_expired(Self::CACHE_TTL_SECONDS) {
-                    log::debug!("Using cached tables for database '{}'", self.database_name);
-                    return Ok(cached_tables.data.clone());
-                }
-            }
-        } // Lock released here
+        if let Ok(cache) = self.cache.lock()
+            && let Some(cached_tables) = &cache.tables
+            && !cached_tables.is_expired(Self::CACHE_TTL_SECONDS) {
+                log::debug!("Using cached tables for database '{}'", self.database_name);
+                return Ok(cached_tables.data.clone());
+            } // Lock released here
 
         // No valid cache, fetch fresh data
         log::debug!(
@@ -240,18 +238,16 @@ impl SqlCompletionProvider {
     /// Get cached columns for a table or fetch them if not cached/expired
     async fn get_cached_columns(&self, table_name: &str) -> Result<Vec<String>> {
         // First, check if we have valid cached data
-        if let Ok(cache) = self.cache.lock() {
-            if let Some(cached_columns) = cache.columns.get(table_name) {
-                if !cached_columns.is_expired(Self::CACHE_TTL_SECONDS) {
+        if let Ok(cache) = self.cache.lock()
+            && let Some(cached_columns) = cache.columns.get(table_name)
+                && !cached_columns.is_expired(Self::CACHE_TTL_SECONDS) {
                     log::debug!(
                         "Using cached columns for table '{}', database '{}'",
                         table_name,
                         self.database_name
                     );
                     return Ok(cached_columns.data.clone());
-                }
-            }
-        } // Lock released here
+                } // Lock released here
 
         // No valid cache, fetch fresh data
         log::debug!(
@@ -282,18 +278,16 @@ impl SqlCompletionProvider {
         let cache_key = format!("{}:{}", self.database_name, table_name);
 
         // First, check if we have valid cached data
-        if let Ok(cache) = self.cache.lock() {
-            if let Some(cached_info) = cache.table_info.get(&cache_key) {
-                if !cached_info.is_expired(Self::CACHE_TTL_SECONDS) {
+        if let Ok(cache) = self.cache.lock()
+            && let Some(cached_info) = cache.table_info.get(&cache_key)
+                && !cached_info.is_expired(Self::CACHE_TTL_SECONDS) {
                     log::debug!(
                         "Using cached table info for '{}' in database '{}'",
                         table_name,
                         self.database_name
                     );
                     return Ok(cached_info.data.clone());
-                }
-            }
-        } // Lock released here
+                } // Lock released here
 
         // No valid cache, fetch fresh data using connection trait
         log::debug!(
@@ -318,9 +312,9 @@ impl SqlCompletionProvider {
         let cache_key = format!("{}:{}.{}", self.database_name, table_name, column_name);
 
         // First, check if we have valid cached data
-        if let Ok(cache) = self.cache.lock() {
-            if let Some(cached_info) = cache.column_info.get(&cache_key) {
-                if !cached_info.is_expired(Self::CACHE_TTL_SECONDS) {
+        if let Ok(cache) = self.cache.lock()
+            && let Some(cached_info) = cache.column_info.get(&cache_key)
+                && !cached_info.is_expired(Self::CACHE_TTL_SECONDS) {
                     log::debug!(
                         "Using cached column info for '{}.{}' in database '{}'",
                         table_name,
@@ -328,9 +322,7 @@ impl SqlCompletionProvider {
                         self.database_name
                     );
                     return Ok(cached_info.data.clone());
-                }
-            }
-        } // Lock released here
+                } // Lock released here
 
         // No valid cache, fetch fresh data using connection trait
         log::debug!(
@@ -738,40 +730,40 @@ impl SqlCompletionProvider {
         );
 
         // Handle dot notation: "table.column" or "alias.column"
-        if context.is_dot_notation {
-            if let Some(table_name) = &context.dot_table_name {
-                log::debug!(
-                    "SQL Completion: Dot notation detected, table_name='{}'",
-                    table_name
-                );
-                log::debug!(
-                    "SQL Completion: Parsed aliases from full text: {:?}",
-                    context.table_aliases
-                );
+        if context.is_dot_notation
+            && let Some(table_name) = &context.dot_table_name
+        {
+            log::debug!(
+                "SQL Completion: Dot notation detected, table_name='{}'",
+                table_name
+            );
+            log::debug!(
+                "SQL Completion: Parsed aliases from full text: {:?}",
+                context.table_aliases
+            );
 
-                // First try to resolve as alias
-                if let Some(resolved_table) =
-                    self.resolve_table_alias(&context.table_aliases, table_name)
-                {
-                    log::debug!(
-                        "SQL Completion: Resolved alias '{}' to table '{}'",
-                        table_name,
-                        resolved_table
-                    );
-                    return Some(resolved_table);
-                }
-
+            // First try to resolve as alias
+            if let Some(resolved_table) =
+                self.resolve_table_alias(&context.table_aliases, table_name)
+            {
                 log::debug!(
-                    "SQL Completion: Alias resolution failed, using table_name='{}' directly",
-                    table_name
+                    "SQL Completion: Resolved alias '{}' to table '{}'",
+                    table_name,
+                    resolved_table
                 );
-                // If alias resolution fails and table_name is likely an alias (single letter),
-                // we could try common table names or return None to avoid invalid table queries
-                if self.is_valid_identifier(table_name) && !self.is_sql_keyword(table_name) {
-                    // For now, return the table_name as-is, but in a real implementation,
-                    // we might want to maintain alias history or provide better fallbacks
-                    return Some(table_name.clone());
-                }
+                return Some(resolved_table);
+            }
+
+            log::debug!(
+                "SQL Completion: Alias resolution failed, using table_name='{}' directly",
+                table_name
+            );
+            // If alias resolution fails and table_name is likely an alias (single letter),
+            // we could try common table names or return None to avoid invalid table queries
+            if self.is_valid_identifier(table_name) && !self.is_sql_keyword(table_name) {
+                // For now, return the table_name as-is, but in a real implementation,
+                // we might want to maintain alias history or provide better fallbacks
+                return Some(table_name.clone());
             }
         }
 
@@ -813,18 +805,18 @@ impl SqlCompletionProvider {
         let context = self.parse_sql_context(text_before_cursor);
 
         // Handle dot notation: "table.column" or "alias.column"
-        if context.is_dot_notation {
-            if let Some(table_name) = &context.dot_table_name {
-                // First try to resolve as alias
-                if let Some(resolved_table) =
-                    self.resolve_table_alias(&context.table_aliases, table_name)
-                {
-                    return Some(resolved_table);
-                }
-                // Otherwise treat as table name if it's valid
-                if self.is_valid_identifier(table_name) && !self.is_sql_keyword(table_name) {
-                    return Some(table_name.clone());
-                }
+        if context.is_dot_notation
+            && let Some(table_name) = &context.dot_table_name
+        {
+            // First try to resolve as alias
+            if let Some(resolved_table) =
+                self.resolve_table_alias(&context.table_aliases, table_name)
+            {
+                return Some(resolved_table);
+            }
+            // Otherwise treat as table name if it's valid
+            if self.is_valid_identifier(table_name) && !self.is_sql_keyword(table_name) {
+                return Some(table_name.clone());
             }
         }
 
@@ -918,14 +910,12 @@ impl SqlCompletionProvider {
         let mut last_pos = -1;
 
         for keyword in &keywords {
-            if let Some(pos) = text_upper.rfind(keyword) {
-                if pos as i32 > last_pos {
-                    if let Some(table) = self.find_table_after_keyword(text, keyword) {
-                        last_pos = pos as i32;
-                        last_table = Some(table);
-                    }
+            if let Some(pos) = text_upper.rfind(keyword)
+                && pos as i32 > last_pos
+                && let Some(table) = self.find_table_after_keyword(text, keyword) {
+                    last_pos = pos as i32;
+                    last_table = Some(table);
                 }
-            }
         }
 
         // If we found a table, try to resolve it through aliases
@@ -1178,7 +1168,7 @@ impl HoverProvider for SqlCompletionProvider {
         let end_pos_clone = end_pos;
 
         // Spawn background task to fetch hover information using cache
-        let task = cx.background_spawn(async move {
+        cx.background_spawn(async move {
             // Try to determine if this is a table or column and get appropriate info using cache
             if let Some(hover_info) =
                 get_cached_hover_info(&provider_clone, &current_word_clone, &text_before_cursor)
@@ -1196,9 +1186,7 @@ impl HoverProvider for SqlCompletionProvider {
             } else {
                 Ok(None)
             }
-        });
-
-        task
+        })
     }
 }
 
@@ -1214,11 +1202,9 @@ async fn get_cached_hover_info(
     if let Some(table_name) = provider_clone
         .extract_table_for_columns(&text_before_cursor_clone)
         .await
-    {
-        if let Ok(column_info) = provider.get_cached_column_info(&table_name, word).await {
+        && let Ok(column_info) = provider.get_cached_column_info(&table_name, word).await {
             return Some(column_info);
         }
-    }
 
     // If no column context found, try table lookup
     if let Ok(table_info) = provider.get_cached_table_info(word).await {

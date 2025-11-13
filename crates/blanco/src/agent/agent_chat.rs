@@ -1,7 +1,7 @@
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
     KeybindingKeystroke, Keystroke, ParentElement, Render, StatefulInteractiveElement as _, Styled,
-    Subscription, Window, actions, div, point, prelude::FluentBuilder, px,
+    Subscription, Window, actions, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, Sizable, StyledExt as _,
@@ -186,7 +186,7 @@ impl ChatPanel {
         let scroll_handle = self.scroll_handle.clone();
 
         // Schedule scroll to bottom after render
-        cx.spawn(async move |_, cx| {
+        cx.spawn(async move |_, _cx| {
             // Small delay to ensure content is rendered
             gpui::Timer::after(Duration::from_millis(50)).await;
             scroll_handle.scroll_to_bottom();

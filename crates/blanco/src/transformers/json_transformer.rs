@@ -135,11 +135,10 @@ fn parse_numeric(value: &str) -> Option<serde_json::Value> {
     }
 
     // Try float
-    if let Ok(float_val) = value.parse::<f64>() {
-        if let Some(num) = serde_json::Number::from_f64(float_val) {
+    if let Ok(float_val) = value.parse::<f64>()
+        && let Some(num) = serde_json::Number::from_f64(float_val) {
             return Some(serde_json::Value::Number(num));
         }
-    }
 
     None
 }

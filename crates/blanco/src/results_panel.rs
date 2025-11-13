@@ -364,12 +364,11 @@ impl ResultsTableDelegate {
             .filter_map(|(data_index, col)| {
                 // Convert data_index back to full column index
                 let _full_index = data_index + 1;
-                if exclude_primary_key {
-                    if let Some(pk_data_index) = pk_index {
-                        if data_index == pk_data_index {
-                            return None; // Skip primary key column
-                        }
-                    }
+                if exclude_primary_key
+                    && let Some(pk_data_index) = pk_index
+                    && data_index == pk_data_index
+                {
+                    return None; // Skip primary key column
                 }
                 Some(col.name.to_string())
             })
@@ -389,12 +388,11 @@ impl ResultsTableDelegate {
                 .skip(1) // Skip row number column
                 .enumerate()
                 .filter_map(|(data_index, val)| {
-                    if exclude_primary_key {
-                        if let Some(pk_data_index) = pk_index {
-                            if data_index == pk_data_index {
-                                return None; // Skip primary key column
-                            }
-                        }
+                    if exclude_primary_key
+                        && let Some(pk_data_index) = pk_index
+                        && data_index == pk_data_index
+                    {
+                        return None; // Skip primary key column
                     }
                     Some(val.clone())
                 })
@@ -419,30 +417,6 @@ impl ResultsTableDelegate {
     /// Set the original SQL query for alias resolution
     pub fn set_original_query(&mut self, query: String) {
         self.original_query = Some(query);
-    }
-
-    /// Create a TableChange with the given parameters
-    pub fn create_table_change(
-        &self,
-        change_type: ChangeType,
-        table_name: String,
-        row_index: usize,
-        column_index: Option<usize>,
-        old_value: Option<String>,
-        new_value: Option<String>,
-        primary_key_value: Option<String>,
-        primary_key_column: Option<String>,
-    ) -> TableChange {
-        TableChange::new(
-            change_type,
-            table_name,
-            row_index,
-            column_index,
-            old_value,
-            new_value,
-            primary_key_value,
-            primary_key_column,
-        )
     }
 
     /// Convert table changes to database-agnostic TableChangeOperations
@@ -739,7 +713,7 @@ impl ResultsTableDelegate {
                         "VALID"
                     };
 
-                    let change = self.create_table_change(
+                    let change = TableChange::new(
                         ChangeType::UpdateCell,
                         table_name.clone(),
                         row,
@@ -855,9 +829,8 @@ impl ResultsTableDelegate {
     pub fn is_array_column(&self, col_index: usize) -> bool {
         if let Some(column_type) = self.column_types.get(col_index) {
             let type_lower = column_type.to_lowercase();
-            let is_array = type_lower == "array" || type_lower.ends_with("[]");
 
-            is_array
+            type_lower == "array" || type_lower.ends_with("[]")
         } else {
             log::debug!("Array detection: No column type for index {}", col_index);
             false
@@ -925,15 +898,12 @@ impl TableDelegate for ResultsTableDelegate {
         let is_editable = self.is_editable() && !is_row_number_col;
 
         let current_value = if is_edited {
-            let edited_val = self.edit_state.get_edited_value(row_ix, col_ix).cloned();
-            edited_val
+            self.edit_state.get_edited_value(row_ix, col_ix).cloned()
         } else {
-            let original_val = self
-                .rows
+            self.rows
                 .get(row_ix)
                 .and_then(|row| row.get(col_ix))
-                .cloned();
-            original_val
+                .cloned()
         }
         .unwrap_or_else(|| "--".to_string());
 
@@ -1379,39 +1349,39 @@ impl ResultsPanel {
             committed_value = delegate.commit_cell_edit(row, col);
 
             // Track the change for SQL generation (but not for new rows)
-            if let (Some(old_val), Some(tbl_name)) = (&old_value, &table_name) {
-                if old_val != &new_value {
-                    // Check if this is a new row - if so, don't create UPDATE changes
-                    // New rows should be handled by INSERT operations only
-                    if !delegate.edit_state.is_new_row(row) {
-                        // Get primary key value (assuming first column is primary key)
-                        let primary_key_value = delegate.get_primary_key_value(row);
-                        let primary_key_column = delegate.primary_key_column.clone();
+            if let (Some(old_val), Some(tbl_name)) = (&old_value, &table_name)
+                && old_val != &new_value
+            {
+                // Check if this is a new row - if so, don't create UPDATE changes
+                // New rows should be handled by INSERT operations only
+                if !delegate.edit_state.is_new_row(row) {
+                    // Get primary key value (assuming first column is primary key)
+                    let primary_key_value = delegate.get_primary_key_value(row);
+                    let primary_key_column = delegate.primary_key_column.clone();
 
-                        // Validate change data before creating
-                        let _validation_msg = if primary_key_value.is_none() {
-                            "Warning: No primary key value found - change may not be executable"
-                        } else if primary_key_column.is_none() {
-                            "Warning: No primary key column detected - using first column"
-                        } else {
-                            "Change validation passed"
-                        };
+                    // Validate change data before creating
+                    let _validation_msg = if primary_key_value.is_none() {
+                        "Warning: No primary key value found - change may not be executable"
+                    } else if primary_key_column.is_none() {
+                        "Warning: No primary key column detected - using first column"
+                    } else {
+                        "Change validation passed"
+                    };
 
-                        let change = delegate.create_table_change(
-                            ChangeType::UpdateCell,
-                            tbl_name.clone(),
-                            row,
-                            Some(col),
-                            Some(old_val.clone()),
-                            Some(new_value.clone()),
-                            primary_key_value,
-                            primary_key_column,
-                        );
-                        delegate.edit_state.add_change(change);
+                    let change = TableChange::new(
+                        ChangeType::UpdateCell,
+                        tbl_name.clone(),
+                        row,
+                        Some(col),
+                        Some(old_val.clone()),
+                        Some(new_value.clone()),
+                        primary_key_value,
+                        primary_key_column,
+                    );
+                    delegate.edit_state.add_change(change);
 
-                        // Log the change tracking (this will be visible when user commits)
-                        // Note: We defer detailed logging to commit time to avoid cluttering the log
-                    }
+                    // Log the change tracking (this will be visible when user commits)
+                    // Note: We defer detailed logging to commit time to avoid cluttering the log
                 }
             }
 
@@ -1653,29 +1623,6 @@ impl ResultsPanel {
         });
 
         log::info!("Commit Changes: Starting table operations execution");
-
-        // Log the operations to SQL log if available
-        if let Some(sql_log) = sql_log {
-            for operation in &change_operations_for_logging {
-                let sql_query = operation.to_sql_query();
-                sql_log.update(cx, |log, cx| {
-                    log.append_text(&blanco_ui::SqlLogMessage::SqlStatement(sql_query), cx);
-                    log.append_text(
-                        &blanco_ui::SqlLogMessage::Comment("Executing table operation".to_string()),
-                        cx,
-                    );
-                });
-            }
-
-            // Log summary
-            let summary = format!(
-                "Executing {} table operations",
-                change_operations_for_logging.len()
-            );
-            sql_log.update(cx, |log, cx| {
-                log.append_text(&blanco_ui::SqlLogMessage::Comment(summary), cx);
-            });
-        }
 
         // Spawn background task to execute table operations
         let db_service = cx.global::<DbService>().clone();
@@ -1997,8 +1944,6 @@ impl ResultsPanel {
         });
         cx.notify();
     }
-
-    /// Set a cell value to NUL
 
     /// Handle table operation completion event
     #[allow(dead_code)]

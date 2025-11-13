@@ -124,37 +124,6 @@ pub struct TabCreationParams {
 }
 
 impl EditorPanel {
-    #[allow(dead_code)]
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::new_with_sidebar_state(window, cx, false)
-    }
-
-    /// Create a new editor panel with optional sidebar state
-    #[allow(dead_code)]
-    pub fn new_with_sidebar_state(
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-        sidebar_collapsed: bool,
-    ) -> Self {
-        let editor_chat_resize_state = cx.new(|_| ResizableState::default());
-        let editor_results_resize_state = cx.new(|_| ResizableState::default());
-
-        Self {
-            focus_handle: cx.focus_handle(),
-            tabs: vec![], // Start with no tabs - tabs are created on demand
-            active_tab_ix: 0,
-            next_tab_id: 1,
-            sidebar_collapsed,
-            _subscriptions: Vec::new(),
-            pending_saved_tabs: None,
-            run_query_keystroke: KeybindingKeystroke::from_keystroke(
-                Keystroke::parse("shift-enter").unwrap(),
-            ),
-            editor_chat_resize_state,
-            editor_results_resize_state,
-        }
-    }
-
     pub fn set_sidebar_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
         self.sidebar_collapsed = collapsed;
         cx.notify();
@@ -200,49 +169,45 @@ impl EditorPanel {
     }
 
     pub fn rename_tab(&mut self, tab_index: usize, new_name: &str, cx: &mut Context<Self>) {
-        if tab_index < self.tabs.len() {
-            if let Some(TabType::Query(query_tab)) = self.tabs.get_mut(tab_index) {
-                let old_name = query_tab.title.clone();
-                query_tab.title = new_name.to_string();
+        if tab_index < self.tabs.len()
+            && let Some(TabType::Query(query_tab)) = self.tabs.get_mut(tab_index)
+        {
+            let old_name = query_tab.title.clone();
+            query_tab.title = new_name.to_string();
 
-                // Update database if this tab has a db_id
-                if let Some(db_id) = query_tab.db_id {
-                    let db_service = DbService::global(cx).clone();
-                    let app_db = db_service.app_db_handle();
-                    let new_name = new_name.to_string(); // Convert to owned String
+            // Update database if this tab has a db_id
+            if let Some(db_id) = query_tab.db_id {
+                let db_service = DbService::global(cx).clone();
+                let app_db = db_service.app_db_handle();
+                let new_name = new_name.to_string(); // Convert to owned String
 
-                    cx.spawn(async move |_, _cx| {
-                        if let Some(app_db) = app_db.read().await.as_ref() {
-                            // Load existing tab data to preserve all fields
-                            if let Ok(Some(existing_tab)) = app_db.load_query_tab_by_id(db_id).await
-                            {
-                                let mut updated_tab = existing_tab;
-                                updated_tab.title = new_name;
+                cx.spawn(async move |_, _cx| {
+                    if let Some(app_db) = app_db.read().await.as_ref() {
+                        // Load existing tab data to preserve all fields
+                        if let Ok(Some(existing_tab)) = app_db.load_query_tab_by_id(db_id).await {
+                            let mut updated_tab = existing_tab;
+                            updated_tab.title = new_name;
 
-                                if let Err(e) = app_db.save_query_tab(&updated_tab).await {
-                                    log::error!("Failed to update tab name in database: {}", e);
-                                }
-                            } else {
-                                log::error!(
-                                    "Failed to load existing tab data for tab ID: {}",
-                                    db_id
-                                );
+                            if let Err(e) = app_db.save_query_tab(&updated_tab).await {
+                                log::error!("Failed to update tab name in database: {}", e);
                             }
                         } else {
-                            log::error!("App database not initialized for tab rename");
+                            log::error!("Failed to load existing tab data for tab ID: {}", db_id);
                         }
-                    })
-                    .detach();
-                }
-
-                log::info!(
-                    "Tab {} renamed from '{}' to '{}'",
-                    tab_index,
-                    old_name,
-                    new_name
-                );
-                cx.notify();
+                    } else {
+                        log::error!("App database not initialized for tab rename");
+                    }
+                })
+                .detach();
             }
+
+            log::info!(
+                "Tab {} renamed from '{}' to '{}'",
+                tab_index,
+                old_name,
+                new_name
+            );
+            cx.notify();
         }
     }
 
@@ -905,15 +870,14 @@ impl EditorPanel {
 
     /// Update chat context for the active tab
     pub fn update_chat_context_for_active_tab(&mut self, cx: &mut Context<Self>) {
-        if let Some(TabType::Query(query_tab)) = self.tabs.get_mut(self.active_tab_ix) {
-            if query_tab.chat_enabled {
-                if let Some(ref chat_panel) = query_tab.chat_panel {
-                    let sql_context = query_tab.get_sql_context(cx);
-                    chat_panel.update(cx, |panel, cx| {
-                        panel.update_sql_context(sql_context, cx);
-                    });
-                }
-            }
+        if let Some(TabType::Query(query_tab)) = self.tabs.get_mut(self.active_tab_ix)
+            && query_tab.chat_enabled
+            && let Some(ref chat_panel) = query_tab.chat_panel
+        {
+            let sql_context = query_tab.get_sql_context(cx);
+            chat_panel.update(cx, |panel, cx| {
+                panel.update_sql_context(sql_context, cx);
+            });
         }
     }
 
@@ -990,12 +954,12 @@ impl EventEmitter<AppEvent> for EditorPanel {}
 impl Render for EditorPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Handle pending text for settings tabs first
-        if let Some(TabType::Settings(settings_tab)) = self.tabs.get_mut(self.active_tab_ix) {
-            if let Some(pending_text) = settings_tab.pending_text.take() {
-                settings_tab.editor.update(cx, |state, cx| {
-                    state.replace(&pending_text, window, cx);
-                });
-            }
+        if let Some(TabType::Settings(settings_tab)) = self.tabs.get_mut(self.active_tab_ix)
+            && let Some(pending_text) = settings_tab.pending_text.take()
+        {
+            settings_tab.editor.update(cx, |state, cx| {
+                state.replace(&pending_text, window, cx);
+            });
         }
 
         let current_tab = self.tabs.get(self.active_tab_ix);
