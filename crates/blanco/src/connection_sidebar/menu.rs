@@ -1,9 +1,9 @@
 use gpui::{
-    div, percentage, prelude::FluentBuilder as _, AnyElement, App, ClickEvent, Context, ElementId,
-    FocusHandle, InteractiveElement, IntoElement, ParentElement, RenderOnce, SharedString,
-    StatefulInteractiveElement, Styled, Window,
+    AnyElement, App, ClickEvent, Context, ElementId, FocusHandle, InteractiveElement, IntoElement,
+    ParentElement, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div,
+    percentage, prelude::FluentBuilder as _,
 };
-use gpui_component::{h_flex, v_flex, ActiveTheme as _, Collapsible, StyledExt};
+use gpui_component::{ActiveTheme as _, Collapsible, StyledExt, h_flex, v_flex};
 use std::rc::Rc;
 
 // Import context menu components
@@ -260,26 +260,21 @@ impl RenderOnce for SidebarMenuItem {
                 handler(ev, window, cx)
             });
 
-        // Add context menu if one is provided
-        let item_with_context_menu = match context_menu {
-            Some(menu_builder) => {
-                // log::info!("Setting up context menu for item: {}", context_label);
+        div()
+            .w_full()
+            .child(
                 main_item.context_menu(move |menu, window, cx| {
-                    log::info!("Context menu TRIGGERED for item: {}", context_label);
-                    let built_menu = menu_builder(menu, window, cx);
-                    log::info!("Context menu BUILT successfully for: {}", context_label);
-                    built_menu
+                    if let Some(menu_builder) = &context_menu {
+                        log::info!("Context menu TRIGGERED for item: {}", context_label);
+                        let built_menu = menu_builder(menu, window, cx);
+                        log::info!("Context menu BUILT successfully for: {}", context_label);
+                        built_menu
+                    } else {
+                        menu
+                    }
                 })
-            }
-            None => {
-                //  log::info!("No context menu for item: {}", context_label);
-                main_item
-            }
-        };
-
-        div().w_full().child(item_with_context_menu).when(
-            is_submenu && is_open && !is_collapsed,
-            |this| {
+            )
+            .when(is_submenu && is_open && !is_collapsed, |this| {
                 this.child(
                     v_flex()
                         .id("submenu")
@@ -296,7 +291,6 @@ impl RenderOnce for SidebarMenuItem {
                                 .map(|(ix, item)| item.id(ix)),
                         ),
                 )
-            },
-        )
+            })
     }
 }

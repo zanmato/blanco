@@ -1039,7 +1039,8 @@ impl Render for EditorPanel {
 
                                 // Clone the tab title to avoid lifetime issues
                                 let tab_title = query_tab.title.clone();
-                                Tab::new(&tab_title)
+                                Tab::new()
+                                    .label(&tab_title)
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |_this, event: &gpui::MouseDownEvent, window, cx| {
@@ -1049,7 +1050,7 @@ impl Render for EditorPanel {
                                                 let form = RenameTabForm::new(tab_index, tab_title.clone(), window, cx);
                                                 let form_for_modal = form.clone();
 
-                                                window.open_modal(cx, move |modal, _window, _cx| {
+                                                window.open_dialog(cx, move |modal, _window, _cx| {
                                                     let form_clone = form_for_modal.clone();
                                                     let tab_index_clone = tab_index;
                                                     modal
@@ -1122,7 +1123,8 @@ impl Render for EditorPanel {
                                 let show_close_button = self.tabs.len() > 1;
                                 let tab_index = ix;
 
-                                Tab::new(label)
+                                Tab::new()
+                                    .label(label)
                                     .suffix(
                                         h_flex()
                                             .gap_2()
@@ -1256,6 +1258,7 @@ impl Render for EditorPanel {
                                                                 .child(
                                                                     div()
                                                                         .flex_1()
+                                                                        .max_h(px(160.))
                                                                         .overflow_hidden()
                                                                         .bg(cx.theme().highlight_theme.style.editor_background.unwrap_or(cx.theme().background))
                                                                         .child(

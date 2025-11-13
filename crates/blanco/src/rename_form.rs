@@ -1,9 +1,9 @@
 use gpui::{
-    px, App, AppContext, Context, DismissEvent, Entity, EventEmitter, IntoElement, ParentElement,
-    Render, Styled, Window,
+    App, AppContext, Context, DismissEvent, Entity, EventEmitter, IntoElement, ParentElement,
+    Render, Styled, Window, px,
 };
 use gpui_component::{
-    form::form_field,
+    form::field,
     input::{Input, InputState},
     v_flex,
 };
@@ -98,7 +98,7 @@ impl EventEmitter<AppEvent> for RenameTabForm {}
 impl Render for RenameTabForm {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         v_flex().gap_3().min_w(px(200.)).child(
-            form_field()
+            field()
                 .label("Name")
                 .child(Input::new(&self.input).w_full()),
         )

@@ -324,7 +324,7 @@ impl BlancoApp {
         // The app implements EventEmitter<AppEvent>, so it can emit events
         let app_entity = cx.entity().downgrade();
 
-        window.open_modal(cx, move |modal, _window, _cx| {
+        window.open_dialog(cx, move |modal, _window, _cx| {
             let content_clone = modal_content.clone();
 
             modal
@@ -507,7 +507,7 @@ impl Focusable for BlancoApp {
 impl Render for BlancoApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let sheet_layer = Root::render_sheet_layer(window, cx);
-        let modal_layer = Root::render_modal_layer(window, cx);
+        let dialog_layer = Root::render_dialog_layer(window, cx);
         let notification_layer = Root::render_notification_layer(window, cx);
 
         let blanco_icon = Icon::new(IconName::Cat);
@@ -580,7 +580,7 @@ impl Render for BlancoApp {
                     }),
             )
             .children(sheet_layer)
-            .children(modal_layer)
+            .children(dialog_layer)
             .children(notification_layer)
     }
 }
