@@ -891,12 +891,30 @@ impl TableDelegate for ResultsTableDelegate {
         &self.columns[col_ix]
     }
 
-    fn render_th(&self, col_ix: usize, _: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render_th(
+        &self,
+        col_ix: usize,
+        _: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        let is_row_number_col = col_ix == 0;
         let col = &self.columns[col_ix];
         div()
             .font_family("Fira Code")
             .text_sm()
             .child(col.name.to_string())
+            .when(is_row_number_col, |this| {
+                this.on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |table, event: &gpui::MouseDownEvent, _window, cx| {
+                        if event.click_count == 1 {
+                            table.select_all_rows(cx);
+                            table.refresh(cx);
+                            cx.notify();
+                        }
+                    }),
+                )
+            })
     }
 
     fn render_td(
