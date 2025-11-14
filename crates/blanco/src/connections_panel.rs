@@ -869,11 +869,12 @@ impl ConnectionsPanel {
     fn render_header_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .gap_2()
-            .p_3()
+            .px_3()
+            .py_2()
             .border_b_1()
             .border_color(cx.theme().border)
             .child(
-                Label::new("Saved Connections")
+                Label::new("Connections")
                     .font_bold()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground),
@@ -947,12 +948,6 @@ impl ConnectionsPanel {
             .on_click(cx.listener({
                 let item = item.clone();
                 move |this, _event: &ClickEvent, _window, cx| {
-                    log::debug!("Got click event {:?}", _event);
-                    // Left click - handle expansion and selection
-                    eprintln!(
-                        "Left-click detected on tree item: {} (ID: {})",
-                        item.label, item.id
-                    );
                     this.handle_tree_item_click(&item.id, cx);
                 }
             }))

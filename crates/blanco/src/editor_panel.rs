@@ -439,7 +439,13 @@ impl EditorPanel {
                             connection_id,
                             database_name
                         );
-                        match db_service.get_or_create_connection(connection_id).await {
+                        match db_service
+                            .get_or_create_connection_with_database(
+                                connection_id,
+                                Some(&database_name),
+                            )
+                            .await
+                        {
                             Ok(connection) => {
                                 log::debug!(
                                     "Connection retrieved successfully, type: {}",
@@ -1057,7 +1063,6 @@ impl Render for EditorPanel {
                                             .items_center()
                                             .child(
                                                 div()
-                                                    .pr_2()
                                                     .text_xs()
                                                     .text_color(cx.theme().muted_foreground)
                                                     .child(

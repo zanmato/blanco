@@ -217,7 +217,8 @@ impl Render for ChatPanel {
             // Header
             .child(
                 h_flex()
-                    .p_3()
+                    .px_3()
+                    .py_2()
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .bg(cx.theme().muted.opacity(0.3))
