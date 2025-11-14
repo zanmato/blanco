@@ -236,14 +236,7 @@ impl BlancoApp {
                     }
                     AppEvent::ConnectionsLoaded { .. } => {
                         // This is the key event for tab restoration with window access!
-                        log::info!("Connections loaded, restoring saved tabs with window access");
-                        editor_panel_clone.update(cx, |editor_panel, cx| {
-                            if let Err(e) =
-                                editor_panel.restore_saved_tabs_with_connections_sync(window, cx)
-                            {
-                                log::error!("Failed to restore saved tabs: {}", e);
-                            }
-                        });
+                        log::info!("Connections loaded");
                     }
                     _ => {}
                 }

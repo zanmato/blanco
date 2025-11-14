@@ -656,7 +656,7 @@ impl EditorPanel {
     /// Load saved query tabs from the app database
     /// This should be called from BlancoApp initialization
     pub fn new_with_saved_tabs(
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
         sidebar_collapsed: bool,
         saved_tabs: Vec<QueryTabData>,
@@ -681,18 +681,8 @@ impl EditorPanel {
             editor_results_resize_state,
         };
 
-        if saved_tabs.is_empty() {
-            debug!("No saved tabs found, creating default tab");
-        } else {
-            debug!(
-                "Found {} saved tabs, storing for restoration after connections load",
-                saved_tabs.len()
-            );
-            // Store saved tabs for later restoration after connections are loaded
-            panel.pending_saved_tabs = Some(saved_tabs);
-        }
+        panel.restore_saved_tabs_with_connections_sync(saved_tabs, window, cx);
 
-        info!("Restored {} tabs total", panel.tabs.len());
         panel
     }
 
@@ -700,30 +690,19 @@ impl EditorPanel {
     /// This function matches saved tabs with actual connections and only restores valid ones
     pub fn restore_saved_tabs_with_connections_sync(
         &mut self,
+        saved_tabs: Vec<QueryTabData>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Result<(), anyhow::Error> {
-        let saved_tabs = match self.pending_saved_tabs.take() {
-            Some(tabs) => tabs,
-            None => {
-                debug!("No pending saved tabs to restore");
-                return Ok(());
-            }
-        };
-
+    ) {
         if saved_tabs.is_empty() {
             debug!("No saved tabs to restore");
-            return Ok(());
+            return;
         }
 
         info!(
             "Attempting to restore {} saved tabs with connection matching",
             saved_tabs.len()
         );
-
-        // Get all available connections from the database to match with saved tabs
-        let db_service = DbService::global(cx).clone();
-        let _app_db = db_service.app_db_handle();
 
         let mut restored_count = 0;
         let total_tabs = saved_tabs.len();
@@ -776,7 +755,6 @@ impl EditorPanel {
             "Successfully restored {} out of {} saved tabs",
             restored_count, total_tabs
         );
-        Ok(())
     }
 
     /// Helper to create a tab with a specific connection
