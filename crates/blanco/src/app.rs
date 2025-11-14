@@ -253,9 +253,19 @@ impl BlancoApp {
                     // Could show loading indicator or update status
                     log::info!("Query execution started");
                 }
-                AppEvent::QueryExecutionCompleted { .. } => {
-                    // Could update status or refresh data
-                    log::info!("Query execution completed");
+                AppEvent::QueryExecutionCompleted { connection_id, database_name, success, .. } => {
+                    // Refresh connections panel to mark connection as connected if query was successful
+                    if *success {
+                        if let Some(conn_id) = connection_id {
+                            log::info!("Query execution completed successfully for connection {}, refreshing connections panel", conn_id);
+                            sidebar_clone.update(cx, |sidebar, cx| {
+                                // Mark the connection as connected and refresh the sidebar view
+                                sidebar.validate_connection_as_connected(*conn_id, cx);
+                            });
+                        }
+                    } else {
+                        log::info!("Query execution completed with errors");
+                    }
                 }
                 AppEvent::TableOperationCompleted { table_name, success, rows_affected, operations_executed, .. } => {
                     if *success {

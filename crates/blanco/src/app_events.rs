@@ -36,6 +36,7 @@ pub enum AppEvent {
     },
     QueryExecutionCompleted {
         connection_id: Option<i64>,
+        database_name: Option<String>,
         success: bool,
         execution_time: Duration,
         rows_affected: Option<u64>,

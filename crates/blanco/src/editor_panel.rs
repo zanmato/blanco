@@ -522,6 +522,7 @@ impl EditorPanel {
                                             .update(cx, |_, cx| {
                                                 cx.emit(AppEvent::QueryExecutionCompleted {
                                                     connection_id: Some(connection_id),
+                                                    database_name: Some(database_name.clone()),
                                                     success: true,
                                                     execution_time: start_time.elapsed(),
                                                     rows_affected: Some(rows_affected),
@@ -550,6 +551,7 @@ impl EditorPanel {
                                             .update(cx, |_, cx| {
                                                 cx.emit(AppEvent::QueryExecutionCompleted {
                                                     connection_id: Some(connection_id),
+                                                    database_name: Some(database_name.clone()),
                                                     success: false,
                                                     execution_time: start_time.elapsed(),
                                                     rows_affected: None,
