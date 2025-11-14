@@ -28,7 +28,7 @@ impl DataTransformer for CsvTransformer {
             if !data.columns.is_empty() {
                 for (i, col) in data.columns.iter().enumerate() {
                     if i > 0 {
-                        output.push(',');
+                        output.push(';');
                     }
                     output.push_str(&csv_escape(col));
                 }
@@ -43,7 +43,7 @@ impl DataTransformer for CsvTransformer {
                 if let Some(row) = data.selected_rows.iter().find(|r| r.row == row_idx) {
                     for (i, cell) in row.cells.iter().enumerate() {
                         if i > 0 {
-                            output.push(',');
+                            output.push(';');
                         }
                         output.push_str(&csv_escape(&cell.value));
                     }
@@ -72,7 +72,7 @@ fn csv_escape(value: &str) -> String {
 
     // Check if we need to quote the value
     let needs_quoting =
-        value.contains(',') || value.contains('"') || value.contains('\n') || value.contains('\r');
+        value.contains(';') || value.contains('"') || value.contains('\n') || value.contains('\r');
 
     if needs_quoting {
         // Double up any quotes and wrap in quotes
@@ -90,7 +90,7 @@ mod tests {
     #[test]
     fn test_csv_escape() {
         assert_eq!(csv_escape("simple"), "simple");
-        assert_eq!(csv_escape("contains, comma"), "\"contains, comma\"");
+        assert_eq!(csv_escape("contains; semicolon"), "\"contains; semicolon\"");
         assert_eq!(csv_escape("contains\"quote"), "\"contains\"\"quote\"");
         assert_eq!(csv_escape("multi\nline"), "\"multi\nline\"");
         assert_eq!(csv_escape(""), "");
@@ -103,9 +103,9 @@ mod tests {
         assert_eq!(transformer.file_extension(), "csv");
         assert_eq!(
             transformer
-                .transform_single_cell("test, value", "")
+                .transform_single_cell("test; value", "")
                 .unwrap(),
-            "\"test, value\""
+            "\"test; value\""
         );
     }
 }
