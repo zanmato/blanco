@@ -950,8 +950,8 @@ impl TableDelegate for ResultsTableDelegate {
                             .size_full()
                             .text_size(px(12.))
                             .border_0() // No border on the input
-                            .px_0() // No horizontal padding
-                            .py_0(), // No vertical padding
+                            .p_2()
+                            .bg(cx.theme().yellow.opacity(0.3)),
                     )
             } else {
                 div().child("")
@@ -998,7 +998,7 @@ impl TableDelegate for ResultsTableDelegate {
                     },
                 )
                 .when(is_edited, |this| {
-                    this.bg(cx.theme().yellow.opacity(0.1))
+                    this.bg(cx.theme().yellow.opacity(0.3))
                         .border_l_2()
                         .border_color(cx.theme().yellow)
                 })
@@ -1623,6 +1623,20 @@ impl ResultsPanel {
         });
 
         log::info!("Commit Changes: Starting table operations execution");
+
+        // Log the operations to SQL log if available
+        if let Some(sql_log) = sql_log {
+            for operation in &change_operations_for_logging {
+                let sql_query = operation.to_sql_query();
+                sql_log.update(cx, |log, cx| {
+                    log.append_text(&blanco_ui::SqlLogMessage::SqlStatement(sql_query), cx);
+                    log.append_text(
+                        &blanco_ui::SqlLogMessage::Comment("Executing table operation".to_string()),
+                        cx,
+                    );
+                });
+            }
+        }
 
         // Spawn background task to execute table operations
         let db_service = cx.global::<DbService>().clone();
