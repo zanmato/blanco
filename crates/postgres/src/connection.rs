@@ -95,15 +95,33 @@ impl PgServerKey {
             return format!("postgresql://{}@localhost:{}", self.username, self.port);
         }
 
+        // Add application_name parameter
+        url = format!("{}?application_name=Blanco", url);
+
         log::debug!("Generated server connection string: {}", url);
         url
     }
 
     /// Generate connection string for a specific database
     pub fn to_database_connection_string(&self, database: &str) -> String {
-        let conn_str = format!("{}/{}", self.to_server_connection_string(), database);
-        log::debug!("Generated database connection string: {}", conn_str);
-        conn_str
+        let password_str = self.password.as_deref().unwrap_or("");
+        let mut url = format!("postgresql://{}:{}", self.username, password_str);
+
+        if !self.host.is_empty() && self.host != "localhost" {
+            url = format!("{}@{}:{}", url, self.host, self.port);
+        } else if self.host == "localhost" {
+            url = format!("{}@localhost:{}", url, self.port);
+        } else {
+            // No host specified - this is an error case
+            log::error!("No host specified in PostgreSQL connection string");
+            return format!("postgresql://{}@localhost:{}", self.username, self.port);
+        }
+
+        // Add database and application_name parameter
+        url = format!("{}/{}?application_name=Blanco", url, database);
+
+        log::debug!("Generated database connection string: {}", url);
+        url
     }
 
     /// Generate a server-level connection string with SSH tunnel support
@@ -113,6 +131,9 @@ impl PgServerKey {
 
         // Always use localhost and the tunnel port when SSH tunneling
         url = format!("{}@localhost:{}", url, local_tunnel_port);
+
+        // Add application_name parameter
+        url = format!("{}?application_name=Blanco", url);
 
         log::debug!("Generated SSH tunnel server connection string: {}", url);
         url
@@ -124,16 +145,20 @@ impl PgServerKey {
         database: &str,
         local_tunnel_port: u16,
     ) -> String {
-        let conn_str = format!(
-            "{}/{}",
-            self.to_server_connection_string_with_tunnel(local_tunnel_port),
-            database
-        );
+        let password_str = self.password.as_deref().unwrap_or("");
+        let mut url = format!("postgresql://{}:{}", self.username, password_str);
+
+        // Always use localhost and the tunnel port when SSH tunneling
+        url = format!("{}@localhost:{}", url, local_tunnel_port);
+
+        // Add database and application_name parameter
+        url = format!("{}/{}?application_name=Blanco", url, database);
+
         log::debug!(
             "Generated SSH tunnel database connection string: {}",
-            conn_str
+            url
         );
-        conn_str
+        url
     }
 }
 
@@ -212,12 +237,12 @@ impl PgConnectionKey {
     pub fn to_connection_string(&self) -> String {
         if let Some(ref password) = self.password {
             format!(
-                "postgresql://{}:{}@{}:{}/{}",
+                "postgresql://{}:{}@{}:{}/{}?application_name=Blanco",
                 self.username, password, self.host, self.port, self.database
             )
         } else {
             format!(
-                "postgresql://{}@{}:{}/{}",
+                "postgresql://{}@{}:{}/{}?application_name=Blanco",
                 self.username, self.host, self.port, self.database
             )
         }
