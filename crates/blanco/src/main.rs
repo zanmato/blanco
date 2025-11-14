@@ -6,19 +6,16 @@ mod assets;
 mod chat_provider_resolver;
 mod connection;
 mod connection_modal;
-mod connection_sidebar;
+mod connections_panel;
 mod db_service;
 mod editor_panel;
 mod rename_form;
 mod results_panel;
 mod settings;
-mod sidebar;
 mod sql_completion_provider;
 mod theme_loader;
 mod time_format;
 mod transformers;
-
-pub use sidebar::ConnectionSidebar;
 
 use assets::Assets;
 use db_service::DbService;

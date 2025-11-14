@@ -86,6 +86,10 @@ pub enum AppEvent {
     },
     CreateNewQueryTab {
         connection_id: i64,
+        connection_name: String,
+        database_name: String,
+        schema_name: Option<String>,
+        table_name: Option<String>,
     },
 
     /// Database, Schema and Table events
@@ -155,6 +159,26 @@ pub enum AppEvent {
         connection_pool_size: usize,
     },
 
+    /// Tree component events
+    TreeItemExpanded {
+        item_id: String,
+        item_type: TreeItemType,
+        connection_id: Option<i64>,
+    },
+    TreeItemCollapsed {
+        item_id: String,
+        item_type: TreeItemType,
+        connection_id: Option<i64>,
+    },
+    TreeItemSelected {
+        item_id: String,
+        item_type: TreeItemType,
+        connection_id: Option<i64>,
+        database_name: Option<String>,
+        schema_name: Option<String>,
+        table_name: Option<String>,
+    },
+
     /// Chat events
     ChatMessageSent {
         tab_id: usize,
@@ -190,4 +214,35 @@ pub enum ErrorSeverity {
     Warning,
     Error,
     Critical,
+}
+
+/// Tree item types for different hierarchical levels
+#[derive(Clone, Debug, PartialEq)]
+pub enum TreeItemType {
+    Connection,
+    Database,
+    Schema,
+    Table,
+}
+
+/// Context menu actions for tree items
+#[derive(Clone, Debug, PartialEq)]
+pub enum Action {
+    // Connection actions
+    NewQuery,
+    Refresh,
+    Disconnect,
+    EditConnection,
+    CopyConnectionString,
+
+    // Schema actions
+    CopySchemaName,
+
+    // Table actions
+    SelectAllFromTable,
+    GenerateInsert,
+    GenerateUpdate,
+    GenerateDelete,
+    CopyTableName,
+    DescribeTable,
 }

@@ -15,9 +15,9 @@ use gpui_component::Icon;
 use crate::{
     app_events::AppEvent,
     connection_modal::NewConnectionModal,
+    connections_panel::ConnectionsPanel,
     db_service::DbService,
     editor_panel::{EditorPanel, TabCreationParams},
-    sidebar::ConnectionSidebar,
 };
 
 actions!(
@@ -104,7 +104,7 @@ pub enum ConnectionType {
 
 pub struct BlancoApp {
     focus_handle: FocusHandle,
-    sidebar: Entity<ConnectionSidebar>,
+    sidebar: Entity<ConnectionsPanel>,
     editor_panel: Entity<EditorPanel>,
     sidebar_collapsed: bool,
     app_menu_bar: Entity<AppMenuBar>,
@@ -115,7 +115,7 @@ impl BlancoApp {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         init_menus(cx);
 
-        let sidebar = cx.new(|cx| ConnectionSidebar::new(window, cx));
+        let sidebar = cx.new(|cx| ConnectionsPanel::new(window, cx));
 
         // Load saved tabs from database
         info!("Loading saved tabs from database");
@@ -165,12 +165,63 @@ impl BlancoApp {
         // Subscribe to sidebar events with window access for tab restoration
         let editor_panel_clone = editor_panel.clone();
         let subscription =
-            cx.subscribe_in(&sidebar, window, move |_app, sidebar, event, window, cx| {
+            cx.subscribe_in(&sidebar, window, move |app, sidebar, event, window, cx| {
                 match event {
+                    AppEvent::CreateNewQueryTab {
+                        connection_id,
+                        connection_name,
+                        database_name,
+                        schema_name,
+                        table_name,
+                    } => {
+                        log::info!(
+                            "CreateNewQueryTab called: {} (database: {:?}, schema: {:?}, table: {:?})",
+                            connection_id,
+                            database_name,
+                            schema_name,
+                            table_name,
+                        );
+
+                        // Generate appropriate title based on provided parameters
+                        let title = match (&schema_name, &table_name) {
+                            (None, None) => database_name.clone(),
+                            (Some(schema), None) => format!("{}.{}", database_name, schema),
+                            (Some(schema), Some(table)) => format!("{}.{}.{}", database_name, schema, table),
+                            (None, Some(table)) => format!("{}", table),
+                        };
+
+                        // Generate content for table queries if not provided
+                        let content = table_name
+                                .as_ref()
+                                .map(|table| match &schema_name {
+                                    Some(schema) => format!("SELECT * FROM {}.{} LIMIT 100;", schema, table),
+                                    None => format!("SELECT * FROM {} LIMIT 100;", table),
+                                });
+
+                        // Create a new query tab with the specified parameters
+                        app.editor_panel.update(cx, |panel, cx| {
+                            panel.create_and_add_tab_with_connection(
+                                window,
+                                TabCreationParams {
+                                    title,
+                                    content,
+                                    db_id: None,
+                                    connection_id: *connection_id,
+                                    connection_type: "".to_owned(),
+                                    connection_name: Some(connection_name.clone()),
+                                    database_name: database_name.clone(),
+                                    schema_name: schema_name.clone(),
+                                },
+                                cx,
+                            );
+                        });
+                        cx.notify();
+                    }
                     AppEvent::ConnectionEstablished { .. } => {
                         // Refresh sidebar connections when a new connection is established
-                        sidebar.update(cx, |sidebar, cx| {
-                            sidebar.load_database_connections(cx);
+                        sidebar.update(cx, |_sidebar, _cx| {
+                            // TOOD: refresh connections panel
+                            // sidebar.load_database_connections(cx);
                         });
 
                         // Optionally refresh editor panel connection options
@@ -237,7 +288,7 @@ impl BlancoApp {
                                 "🔄 Calling sidebar.set_collapsed with: {}",
                                 app.sidebar_collapsed
                             );
-                            sidebar.set_collapsed(app.sidebar_collapsed, cx);
+                            // sidebar.set_collapsed(app.sidebar_collapsed, cx);
                         });
 
                         // Update editor panel's sidebar state
@@ -286,15 +337,6 @@ impl BlancoApp {
         log::info!("🔄 ToggleSidebar action triggered!");
         self.sidebar_collapsed = !self.sidebar_collapsed;
         log::info!("🔄 New sidebar_collapsed state: {}", self.sidebar_collapsed);
-
-        // Update sidebar's collapse state
-        self.sidebar.update(cx, |sidebar, cx| {
-            log::info!(
-                "🔄 Calling sidebar.set_collapsed with: {}",
-                self.sidebar_collapsed
-            );
-            sidebar.set_collapsed(self.sidebar_collapsed, cx);
-        });
 
         // Update editor panel's sidebar state
         self.editor_panel.update(cx, |panel, cx| {
@@ -432,56 +474,6 @@ impl BlancoApp {
         });
     }
 
-    fn on_new_query(&mut self, action: &NewQuery, window: &mut Window, cx: &mut Context<Self>) {
-        // Generate appropriate title based on provided parameters
-        let title = match (&action.schema_name, &action.table_name) {
-            (None, None) => action.database_name.clone(),
-            (Some(schema), None) => format!("{}.{}", action.database_name, schema),
-            (Some(schema), Some(table)) => format!("{}.{}.{}", action.database_name, schema, table),
-            (None, Some(_)) => {
-                // This shouldn't happen in normal usage, but handle gracefully
-                action.database_name.clone()
-            }
-        };
-
-        // Generate content for table queries if not provided
-        let content = action.content.clone().or_else(|| {
-            action
-                .table_name
-                .as_ref()
-                .map(|table| match &action.schema_name {
-                    Some(schema) => format!("SELECT * FROM {}.{}", schema, table),
-                    None => format!("SELECT * FROM {}", table),
-                })
-        });
-
-        log::info!(
-            "on_new_query called: {} (schema: {:?}, table: {:?})",
-            title,
-            action.schema_name,
-            action.table_name
-        );
-
-        // Create a new query tab with the specified parameters
-        self.editor_panel.update(cx, |panel, cx| {
-            panel.create_and_add_tab_with_connection(
-                window,
-                TabCreationParams {
-                    title,
-                    content,
-                    db_id: None,
-                    connection_id: action.connection_id,
-                    connection_type: "".to_owned(),
-                    connection_name: None,
-                    database_name: action.database_name.clone(),
-                    schema_name: action.schema_name.clone(),
-                },
-                cx,
-            );
-        });
-        cx.notify();
-    }
-
     fn on_rename_tab(&mut self, action: &RenameTab, _window: &mut Window, cx: &mut Context<Self>) {
         log::info!(
             "on_rename_tab called: tab_index={}, new_name={}",
@@ -519,7 +511,6 @@ impl Render for BlancoApp {
             .flex_col()
             .on_action(cx.listener(Self::on_quit))
             .on_action(cx.listener(Self::on_about))
-            .on_action(cx.listener(Self::on_new_query))
             .on_action(cx.listener(Self::on_open_connection))
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::on_settings))
@@ -547,23 +538,19 @@ impl Render for BlancoApp {
                     .flex()
                     .flex_1()
                     .w_full()
-                    // Sidebar (always visible, handles its own collapsed state)
                     .items_start()
-                    .child({
+                    // Left side: Connections panel sidebar
+                    .when(!self.sidebar_collapsed, |this| {
                         let window_height = window_bounds.size.height;
-
-                        div()
-                            .h(window_height - TITLE_BAR_HEIGHT - px(25.))
-                            .overflow_hidden()
-                            .when(self.sidebar_collapsed, |div| {
-                                div.w(px(48.)) // Collapsed width
-                            })
-                            .when(!self.sidebar_collapsed, |div| {
-                                div.w(px(256.)) // Expanded width
-                            })
-                            .border_r_1()
-                            .border_color(cx.theme().border)
-                            .child(self.sidebar.clone())
+                        this.child(
+                            div()
+                                .h(window_height - TITLE_BAR_HEIGHT - px(25.))
+                                .w(px(256.))
+                                .overflow_hidden()
+                                .border_r_1()
+                                .border_color(cx.theme().border)
+                                .child(self.sidebar.clone()),
+                        )
                     })
                     // Main panel
                     .child({
