@@ -6,6 +6,7 @@ use gpui_component::{
     ActiveTheme, Icon, IconName, IndexPath, StyledExt, h_flex,
     input::{Input, InputState},
     select::{Select, SelectState},
+    switch::Switch,
     v_flex,
 };
 
@@ -188,78 +189,61 @@ impl PostgresForm {
                     .child(div().text_sm().child("Password"))
                     .child(Input::new(&self.password_input)),
             )
-            // SSH Tunnel Configuration Section
-            .child(
-                div().mt_4().child(
-                    h_flex()
-                        .gap_2()
-                        .items_center()
+            // SSH Tunnel Configuration Section (rendered by parent)
+            .when(self.ssh_enabled, |this| {
+                this.child(
+                    v_flex()
+                        .gap_3()
                         .child(
-                            div()
-                                .text_sm()
-                                .font_semibold()
-                                .child("SSH Tunnel Configuration"),
+                            h_flex()
+                                .gap_3()
+                                .child(
+                                    v_flex()
+                                        .flex_1()
+                                        .gap_2()
+                                        .child(div().text_sm().child("SSH Host"))
+                                        .child(Input::new(&self.ssh_host_input)),
+                                )
+                                .child(
+                                    v_flex()
+                                        .w_32()
+                                        .gap_2()
+                                        .child(div().text_sm().child("SSH Port"))
+                                        .child(Input::new(&self.ssh_port_input)),
+                                ),
                         )
                         .child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child("(Optional - Connect through SSH bastion host)"),
+                            v_flex()
+                                .gap_2()
+                                .child(div().text_sm().child("SSH Username"))
+                                .child(Input::new(&self.ssh_user_input)),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_3()
+                                .child(
+                                    v_flex()
+                                        .flex_1()
+                                        .gap_2()
+                                        .child(div().text_sm().child("SSH Password"))
+                                        .child(Input::new(&self.ssh_password_input)),
+                                )
+                                .child(
+                                    v_flex()
+                                        .flex_1()
+                                        .gap_2()
+                                        .child(div().text_sm().child("Private Key Path"))
+                                        .child(Input::new(&self.ssh_private_key_input)),
+                                ),
+                        )
+                        .child(
+                            v_flex()
+                                .gap_2()
+                                .child(div().text_sm().child("Private Key Password"))
+                                .child(Input::new(&self.ssh_private_key_password_input)),
                         ),
-                ),
-            )
-            .child(
-                v_flex()
-                    .gap_3()
-                    .child(
-                        h_flex()
-                            .gap_3()
-                            .child(
-                                v_flex()
-                                    .flex_1()
-                                    .gap_2()
-                                    .child(div().text_sm().child("SSH Host"))
-                                    .child(Input::new(&self.ssh_host_input)),
-                            )
-                            .child(
-                                v_flex()
-                                    .w_32()
-                                    .gap_2()
-                                    .child(div().text_sm().child("SSH Port"))
-                                    .child(Input::new(&self.ssh_port_input)),
-                            ),
-                    )
-                    .child(
-                        v_flex()
-                            .gap_2()
-                            .child(div().text_sm().child("SSH Username"))
-                            .child(Input::new(&self.ssh_user_input)),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_3()
-                            .child(
-                                v_flex()
-                                    .flex_1()
-                                    .gap_2()
-                                    .child(div().text_sm().child("SSH Password"))
-                                    .child(Input::new(&self.ssh_password_input)),
-                            )
-                            .child(
-                                v_flex()
-                                    .flex_1()
-                                    .gap_2()
-                                    .child(div().text_sm().child("Private Key Path"))
-                                    .child(Input::new(&self.ssh_private_key_input)),
-                            ),
-                    )
-                    .child(
-                        v_flex()
-                            .gap_2()
-                            .child(div().text_sm().child("Private Key Password"))
-                            .child(Input::new(&self.ssh_private_key_password_input)),
-                    ),
-            )
+                )
+            })
             .into_any_element()
     }
 
@@ -306,16 +290,20 @@ impl PostgresForm {
 
         let port = port_str.parse::<i32>().ok()?;
 
-        // Check if SSH configuration is provided
-        let ssh_host = self.ssh_host_input.read(cx).value();
-        let ssh_port_str = self.ssh_port_input.read(cx).value();
-        let ssh_user = self.ssh_user_input.read(cx).value();
-        let ssh_password = self.ssh_password_input.read(cx).value();
-        let ssh_private_key_path = self.ssh_private_key_input.read(cx).value();
-        let ssh_private_key_password = self.ssh_private_key_password_input.read(cx).value();
+        if self.ssh_enabled {
+            // SSH is enabled, collect SSH configuration
+            let ssh_host = self.ssh_host_input.read(cx).value();
+            let ssh_port_str = self.ssh_port_input.read(cx).value();
+            let ssh_user = self.ssh_user_input.read(cx).value();
+            let ssh_password = self.ssh_password_input.read(cx).value();
+            let ssh_private_key_path = self.ssh_private_key_input.read(cx).value();
+            let ssh_private_key_password = self.ssh_private_key_password_input.read(cx).value();
 
-        if !ssh_host.is_empty() && !ssh_user.is_empty() {
-            // SSH tunnel configuration is provided
+            // Validate required SSH fields
+            if ssh_host.is_empty() || ssh_user.is_empty() {
+                return None;
+            }
+
             let ssh_port = if ssh_port_str.is_empty() {
                 22
             } else {
@@ -355,7 +343,7 @@ impl PostgresForm {
                 ssh_private_key_password,
             ))
         } else {
-            // No SSH configuration
+            // SSH is disabled, create regular PostgreSQL connection
             Some(ConnectionData::new_postgres(
                 name, host, port, database, username, password,
             ))
@@ -476,6 +464,11 @@ impl NewConnectionModal {
         ConnectorType::from_str(&selected)
     }
 
+    fn toggle_ssh_enabled(&mut self, cx: &mut Context<Self>) {
+        self.postgres_form.ssh_enabled = !self.postgres_form.ssh_enabled;
+        cx.notify();
+    }
+
     pub fn test_connection(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let connector_type = self.get_selected_connector_type(cx);
 
@@ -530,7 +523,36 @@ impl Render for NewConnectionModal {
                 // Render the appropriate form based on selected type
                 .child(match connector_type {
                     ConnectorType::SQLite => self.sqlite_form.render(cx),
-                    ConnectorType::PostgreSQL => self.postgres_form.render(cx),
+                    ConnectorType::PostgreSQL => {
+                        let form_elements = self.postgres_form.render(cx);
+                        v_flex()
+                            .gap_4()
+                            .child(form_elements)
+                            // SSH Tunnel Configuration Section
+                            .child(
+                                div().mt_4().child(
+                                    h_flex()
+                                        .gap_2()
+                                        .items_center()
+                                        .child(
+                                            Switch::new("ssh-enabled-switch")
+                                                .checked(self.postgres_form.ssh_enabled)
+                                                .label("Enable SSH Tunnel")
+                                                .on_click(cx.listener(|modal: &mut Self, _checked, _window, cx| {
+                                                    modal.toggle_ssh_enabled(cx);
+                                                })),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child("(Connect through SSH bastion host)"),
+                                        ),
+                                ),
+                            )
+                            // SSH inputs are conditionally rendered by the PostgresForm
+                            .into_any_element()
+                    }
                 })
                 // Test result display
                 .when_some(self.test_result.clone(), |this, result| {
