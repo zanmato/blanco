@@ -1,8 +1,9 @@
+use blanco_ui::IconName;
 use gpui::{
-    div, px, Context, ElementId, IntoElement, ParentElement, Render, SharedString,
-    Styled, Subscription, Window,
+    Context, ElementId, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
+    Window, div, px,
 };
-use gpui_component::{h_flex, text::TextView, v_flex, ActiveTheme, Icon, IconName, StyledExt as _};
+use gpui_component::{ActiveTheme, Icon, StyledExt as _, h_flex, text::TextView, v_flex};
 
 use super::chat_types::MessageRole;
 
@@ -31,9 +32,9 @@ impl Render for ChatMessageState {
                 // Assistant: No padding, no background, just markdown content
                 div().child(
                     TextView::markdown(self.id.clone(), self.message.clone(), window, cx)
+                        .text_sm()
                         .scrollable(false)
-                        .selectable(false)
-                        .static_mode(true),
+                        .selectable(false),
                 )
             }
             MessageRole::Tool => {
@@ -42,7 +43,7 @@ impl Render for ChatMessageState {
                     .gap_2()
                     .text_color(cx.theme().muted_foreground)
                     .child(
-                        Icon::new(IconName::Info)
+                        Icon::new(IconName::Wrench)
                             .text_color(cx.theme().muted_foreground)
                             .size(px(16.)),
                     )
@@ -64,9 +65,9 @@ impl Render for ChatMessageState {
                     .text_color(cx.theme().foreground)
                     .child(
                         TextView::markdown(self.id.clone(), self.message.clone(), window, cx)
+                            .text_sm()
                             .scrollable(false)
-                            .selectable(false)
-                            .static_mode(true),
+                            .selectable(false),
                     )
             }
             MessageRole::System => {
@@ -94,6 +95,7 @@ impl Render for ChatMessageState {
                                     window,
                                     cx,
                                 )
+                                .text_sm()
                                 .scrollable(false)
                                 .selectable(false),
                             ),

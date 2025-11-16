@@ -808,6 +808,11 @@ impl ConnectionsPanel {
                 let disconnect_label = item.label.clone();
                 let edit_label = item.label.clone();
                 let weak_panel_clone = weak_panel.clone();
+                let weak_panel_disconnect = weak_panel.clone();
+                let connection_id = metadata
+                    .as_ref()
+                    .map(|m| m.connection_id)
+                    .unwrap_or_default();
                 let connection_name = metadata
                     .as_ref()
                     .map(|m| m.connection_name.clone())
@@ -825,9 +830,13 @@ impl ConnectionsPanel {
                 )
                 .separator()
                 .item(
-                    PopupMenuItem::new("Disconnect").on_click(move |_, _window, _cx| {
+                    PopupMenuItem::new("Disconnect").on_click(move |_, _window, cx| {
                         log::info!("Disconnect connection: {}", disconnect_label);
-                        // TODO: Implement disconnect functionality
+                        if let Some(panel) = weak_panel_disconnect.upgrade() {
+                            panel.update(cx, |this, cx| {
+                                this.disconnect_connection(connection_id, cx);
+                            });
+                        }
                     }),
                 )
                 .item(
@@ -1112,6 +1121,44 @@ impl ConnectionsPanel {
         cx.notify();
     }
 
+    /// Disconnect and remove a connection
+    pub fn disconnect_connection(&mut self, connection_id: i64, cx: &mut Context<Self>) {
+        log::info!("Disconnecting connection {}", connection_id);
+
+        // Remove connection from the connections list
+        self.connections.retain(|conn| conn.id != Some(connection_id));
+
+        // Remove metadata and tracking
+        self.database_metadata.remove(&connection_id);
+        self.loaded_connections.remove(&connection_id);
+        self.expanded_connections.remove(&connection_id);
+
+        // Remove any tree item metadata for this connection
+        let keys_to_remove: Vec<String> = self.tree_item_metadata
+            .keys()
+            .filter(|key| key.starts_with(&format!("connection:{}", connection_id)) ||
+                      key.starts_with(&format!("database:{}:", connection_id)) ||
+                      key.starts_with(&format!("schema:{}:", connection_id)) ||
+                      key.starts_with(&format!("table:{}:", connection_id)))
+            .cloned()
+            .collect();
+
+        for key in keys_to_remove {
+            self.tree_item_metadata.remove(&key);
+        }
+
+        // Update the tree to reflect the removal
+        self.update_tree_items(cx);
+
+        // Emit connection lost event for any listeners
+        cx.emit(AppEvent::ConnectionLost {
+            connection_id: Some(connection_id),
+            error: "Disconnected by user".to_string(),
+        });
+
+        cx.notify();
+    }
+
     /// Validate and mark a connection as connected after successful query execution
     pub fn validate_connection_as_connected(&mut self, connection_id: i64, cx: &mut Context<Self>) {
         self.load_connection_children(connection_id, false, cx);
@@ -1127,7 +1174,7 @@ impl ConnectionsPanel {
         div()
             .gap_2()
             .px_3()
-            .py_2()
+            .py(px(7.))
             .border_b_1()
             .border_color(cx.theme().border)
             .child(
@@ -1183,9 +1230,8 @@ impl ConnectionsPanel {
         ListItem::new(ix)
             .selected(selected)
             .w_full()
-            .rounded(cx.theme().radius)
             .px_3()
-            .pl(px(16.) * depth as f32 + px(12.)) // Indent based on depth
+            .pl(px(12.) * depth as f32 + px(12.)) // Indent based on depth
             .child(
                 h_flex()
                     .id(("tree-item", ix))
@@ -1217,6 +1263,7 @@ impl Render for ConnectionsPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .size_full()
+            .gap_2()
             .bg(cx.theme().sidebar_primary_foreground)
             .child(self.render_header_section(cx))
             .child(self.render_connections_tree(cx))

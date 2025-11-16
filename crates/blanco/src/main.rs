@@ -13,13 +13,14 @@ mod rename_form;
 mod results_panel;
 mod settings;
 mod sql_completion_provider;
-mod theme_loader;
 mod time_format;
 mod transformers;
 
 use assets::Assets;
 use db_service::DbService;
-use gpui::{AppContext, Application, WindowBounds, WindowOptions, px, size};
+use gpui::{AppContext, Application, SharedString, WindowBounds, WindowOptions, px, size};
+use gpui_component::{Theme, ThemeRegistry};
+use std::path::PathBuf;
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
 fn main() {
@@ -36,30 +37,18 @@ fn main() {
 
         gpui_component::init(cx);
 
-        // Load and apply the One Dark theme (converted from Zed format)
-        if let Err(e) =
-            theme_loader::load_and_apply_theme("themes/one-dark-darkened-converted.json", cx)
-        {
-            eprintln!("Failed to load theme: {}", e);
-        }
-
-        // Load Fira Code fonts
-        let font_paths = cx.asset_source().list("fonts/fira-code").unwrap();
-        let mut embedded_fonts = Vec::new();
-        for font_path in font_paths {
-            if font_path.ends_with(".ttf") {
-                let font_bytes = cx
-                    .asset_source()
-                    .load(&font_path)
-                    .ok()
-                    .flatten()
-                    .map(|bytes| bytes.to_vec());
-                if let Some(bytes) = font_bytes {
-                    embedded_fonts.push(bytes.into());
-                }
+        // Load and watch themes from ./themes directory
+        let settings = settings::load_settings().unwrap();
+        let theme_name = SharedString::from(settings.appearance.theme);
+        if let Err(err) = ThemeRegistry::watch_dir(PathBuf::from("./themes"), cx, move |cx| {
+            log::info!("themes {:?}", ThemeRegistry::global(cx).themes());
+            if let Some(theme) = ThemeRegistry::global(cx).themes().get(&theme_name).cloned() {
+                Theme::global_mut(cx).apply_config(&theme);
+                log::info!("Applying theme {}", theme_name);
             }
+        }) {
+            log::error!("Failed to watch themes directory: {}", err);
         }
-        cx.text_system().add_fonts(embedded_fonts).unwrap();
 
         // Initialize database service
         let db_service = DbService::new();

@@ -1312,7 +1312,7 @@ impl Render for EditorPanel {
                                     query_tab.chat_enabled && query_tab.chat_panel.is_some(),
                                     |this| {
                                         this.child(
-                                            resizable_panel().child(
+                                            resizable_panel().size(300.).child(
                                                 div()
                                                     .border_l_1()
                                                     .border_color(cx.theme().border)

@@ -14,23 +14,13 @@ pub struct Settings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeneralSettings {
-    pub auto_save: bool,
-    pub auto_save_interval_seconds: u32,
     pub check_for_updates: bool,
-    pub telemetry: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EditorSettings {
-    pub font_size: u32,
     pub font_family: String,
-    pub tab_size: u32,
-    pub hard_tabs: bool,
     pub word_wrap: bool,
-    pub line_numbers: bool,
-    pub minimap: bool,
-    pub auto_complete: bool,
-    pub bracket_matching: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,10 +35,6 @@ pub struct DatabaseSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppearanceSettings {
     pub theme: String,
-    pub sidebar_width: u32,
-    pub results_panel_height: u32,
-    pub show_status_bar: bool,
-    pub compact_mode: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,10 +52,7 @@ pub struct ChatSettings {
 impl Default for GeneralSettings {
     fn default() -> Self {
         Self {
-            auto_save: true,
-            auto_save_interval_seconds: 30,
             check_for_updates: true,
-            telemetry: false,
         }
     }
 }
@@ -77,15 +60,8 @@ impl Default for GeneralSettings {
 impl Default for EditorSettings {
     fn default() -> Self {
         Self {
-            font_size: 14,
-            font_family: "Monaco".to_string(),
-            tab_size: 4,
-            hard_tabs: false,
+            font_family: "Fira Code".to_string(),
             word_wrap: false,
-            line_numbers: true,
-            minimap: true,
-            auto_complete: true,
-            bracket_matching: true,
         }
     }
 }
@@ -105,11 +81,7 @@ impl Default for DatabaseSettings {
 impl Default for AppearanceSettings {
     fn default() -> Self {
         Self {
-            theme: "dark".to_string(),
-            sidebar_width: 250,
-            results_panel_height: 300,
-            show_status_bar: true,
-            compact_mode: false,
+            theme: "One Dark - Darkened".to_string(),
         }
     }
 }
