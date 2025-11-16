@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -91,7 +92,7 @@ impl Default for ChatSettings {
         Self {
             provider: "openai".to_string(),
             model: "gpt-4".to_string(),
-            api_key: "".to_string(), // User needs to provide this
+            api_key: "".to_string(),
             base_url: "https://api.openai.com".to_string(),
             max_tokens: 2048,
             temperature: 0.7,
@@ -130,6 +131,11 @@ pub fn save_settings(settings: &Settings) -> Result<(), Box<dyn std::error::Erro
     let json_content = serde_json::to_string_pretty(settings)?;
     let mut file = fs::File::create(&settings_path)?;
     file.write_all(json_content.as_bytes())?;
+
+    // Set file permissions to 600 (read/write for owner only)
+    let mut perms = fs::metadata(&settings_path)?.permissions();
+    perms.set_mode(0o600);
+    fs::set_permissions(&settings_path, perms)?;
 
     Ok(())
 }
