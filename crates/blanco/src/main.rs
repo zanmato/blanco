@@ -9,6 +9,8 @@ mod connection_modal;
 mod connections_panel;
 mod db_service;
 mod editor_panel;
+mod export_modal;
+mod export_service;
 mod rename_form;
 mod results_panel;
 mod settings;
@@ -111,7 +113,7 @@ fn main() {
         cx.spawn(async move |cx| {
             cx.open_window(window_options, |window, cx| {
                 let blanco_app = cx.new(|cx| app::BlancoApp::new(window, cx));
-                cx.new(|cx| gpui_component::Root::new(blanco_app.into(), window, cx))
+                cx.new(|cx| gpui_component::Root::new(blanco_app, window, cx))
             })?;
             Ok::<_, anyhow::Error>(())
         })

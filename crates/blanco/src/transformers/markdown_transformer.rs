@@ -121,6 +121,30 @@ impl DataTransformer for MarkdownTransformer {
         // For markdown, we just return the value as-is
         Ok(value.to_string())
     }
+
+    fn transform_stream_row(
+        &self,
+        row_data: &[String],
+        columns: &[String],
+        _column_types: &[String],
+    ) -> Result<String, TransformError> {
+        // Markdown streaming is not well-supported due to column width calculation,
+        // but we provide a basic implementation for completeness
+        let mut output = String::new();
+        output.push('|');
+        for value in row_data {
+            output.push(' ');
+            output.push_str(value);
+            output.push_str(" |");
+        }
+        output.push('\n');
+        Ok(output)
+    }
+
+    fn supports_streaming(&self) -> bool {
+        // Markdown doesn't support streaming due to column width calculation
+        false
+    }
 }
 
 /// Format a cell value with proper padding for markdown table

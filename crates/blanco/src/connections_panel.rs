@@ -3,13 +3,16 @@ use crate::app_events::{AppEvent, TreeItemType};
 use crate::db_service::DbService;
 use blanco_ui::IconName;
 use gpui::{
-    AppContext, ClickEvent, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
-    ParentElement, Render, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder,
-    px,
+    AppContext, Bounds, ClickEvent, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
+    ParentElement, Point, Render, StatefulInteractiveElement, Styled, Task, TitlebarOptions,
+    Window, WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowKind, WindowOptions,
+    div, prelude::FluentBuilder, px, size,
 };
 use gpui_component::menu::ContextMenuExt;
 use gpui_component::{
-    ActiveTheme as _, Icon, StyledExt, h_flex,
+    ActiveTheme as _, Icon, Root, StyledExt, WindowExt,
+    button::{Button, ButtonVariants},
+    h_flex,
     label::Label,
     list::ListItem,
     menu::PopupMenuItem,
@@ -928,35 +931,72 @@ impl ConnectionsPanel {
             } else if metadata.as_ref().map(|m| &m.kind) == Some(&TreeItemKind::Table) {
                 // Table level
                 // Table context menu - clone for each closure
-                let select_label = item.label.clone();
-                let weak_panel_clone = weak_panel.clone();
-                let table_schema_name = metadata.as_ref().and_then(|m| m.schema_name.clone());
-                let table_name = metadata.as_ref().and_then(|m| m.table_name.clone());
-                let connection_id = metadata
+                let select_label_new_query = item.label.clone();
+                let weak_panel_new_query = weak_panel.clone();
+                let table_schema_name_new_query =
+                    metadata.as_ref().and_then(|m| m.schema_name.clone());
+                let table_name_new_query = metadata.as_ref().and_then(|m| m.table_name.clone());
+                let connection_id_new_query = metadata
                     .as_ref()
                     .map(|m| m.connection_id)
                     .unwrap_or_default();
-                let database_name = metadata
+                let database_name_new_query = metadata
                     .as_ref()
                     .and_then(|m| m.database_name.clone())
                     .unwrap_or_default();
-                let connection_name = metadata
+                let connection_name_new_query = metadata
+                    .as_ref()
+                    .map(|m| m.connection_name.clone())
+                    .unwrap_or_default();
+
+                let select_label_export = item.label.clone();
+                let weak_panel_export = weak_panel.clone();
+                let table_schema_name_export =
+                    metadata.as_ref().and_then(|m| m.schema_name.clone());
+                let table_name_export = metadata.as_ref().and_then(|m| m.table_name.clone());
+                let connection_id_export = metadata
+                    .as_ref()
+                    .map(|m| m.connection_id)
+                    .unwrap_or_default();
+                let database_name_export = metadata
+                    .as_ref()
+                    .and_then(|m| m.database_name.clone())
+                    .unwrap_or_default();
+                let connection_name_export = metadata
                     .as_ref()
                     .map(|m| m.connection_name.clone())
                     .unwrap_or_default();
 
                 this.item(
                     PopupMenuItem::new("New Query").on_click(move |_, _window, cx| {
-                        log::info!("New Query for table: {}", select_label);
-                        if let Some(panel) = weak_panel_clone.upgrade() {
+                        log::info!("New Query for table: {}", select_label_new_query);
+                        if let Some(panel) = weak_panel_new_query.upgrade() {
                             panel.update(cx, |_, cx| {
                                 cx.emit(AppEvent::CreateNewQueryTab {
-                                    connection_id,
-                                    connection_name: connection_name.clone(),
-                                    database_name: database_name.clone(),
-                                    schema_name: table_schema_name.clone(),
-                                    table_name: table_name.clone(),
+                                    connection_id: connection_id_new_query,
+                                    connection_name: connection_name_new_query.clone(),
+                                    database_name: database_name_new_query.clone(),
+                                    schema_name: table_schema_name_new_query.clone(),
+                                    table_name: table_name_new_query.clone(),
                                 });
+                            });
+                        }
+                    }),
+                )
+                .item(
+                    PopupMenuItem::new("Export Data").on_click(move |_, window, cx| {
+                        log::info!("Export data for table: {}", select_label_export);
+                        if let Some(panel) = weak_panel_export.upgrade() {
+                            panel.update(cx, |panel, cx| {
+                                panel.export_table_data(
+                                    connection_id_export,
+                                    connection_name_export.clone(),
+                                    database_name_export.clone(),
+                                    table_schema_name_export.clone(),
+                                    table_name_export.clone(),
+                                    window,
+                                    cx,
+                                );
                             });
                         }
                     }),
@@ -1126,7 +1166,8 @@ impl ConnectionsPanel {
         log::info!("Disconnecting connection {}", connection_id);
 
         // Remove connection from the connections list
-        self.connections.retain(|conn| conn.id != Some(connection_id));
+        self.connections
+            .retain(|conn| conn.id != Some(connection_id));
 
         // Remove metadata and tracking
         self.database_metadata.remove(&connection_id);
@@ -1134,12 +1175,15 @@ impl ConnectionsPanel {
         self.expanded_connections.remove(&connection_id);
 
         // Remove any tree item metadata for this connection
-        let keys_to_remove: Vec<String> = self.tree_item_metadata
+        let keys_to_remove: Vec<String> = self
+            .tree_item_metadata
             .keys()
-            .filter(|key| key.starts_with(&format!("connection:{}", connection_id)) ||
-                      key.starts_with(&format!("database:{}:", connection_id)) ||
-                      key.starts_with(&format!("schema:{}:", connection_id)) ||
-                      key.starts_with(&format!("table:{}:", connection_id)))
+            .filter(|key| {
+                key.starts_with(&format!("connection:{}", connection_id))
+                    || key.starts_with(&format!("database:{}:", connection_id))
+                    || key.starts_with(&format!("schema:{}:", connection_id))
+                    || key.starts_with(&format!("table:{}:", connection_id))
+            })
             .cloned()
             .collect();
 
@@ -1255,9 +1299,65 @@ impl ConnectionsPanel {
                 }
             }))
     }
-}
 
-impl EventEmitter<AppEvent> for ConnectionsPanel {}
+    pub fn export_table_data(
+        &mut self,
+        connection_id: i64,
+        _connection_name: String,
+        database_name: String,
+        schema_name: Option<String>,
+        table_name: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(table_name) = table_name {
+            // Create the export modal content
+            let modal_content = cx.new(|cx| {
+                crate::export_modal::ExportModal::new(
+                    connection_id,
+                    database_name,
+                    schema_name,
+                    table_name,
+                    window,
+                    cx,
+                )
+            });
+
+            window.open_dialog(cx, move |dialog, _window, cx| {
+                let modal_clone = modal_content.clone();
+                dialog
+                    .title("Export Table Data")
+                    .h(px(450.0))
+                    .child(modal_content.clone())
+                    .footer({
+                        move |_ok, _cancel, window, cx| {
+                            vec![
+                                Button::new("export-cancel")
+                                    .label("Cancel")
+                                    .on_click(|_, window, cx| {
+                                        window.close_dialog(cx);
+                                    }),
+                                Button::new("export-submit")
+                                    .primary()
+                                    .label("Export")
+                                    .on_click({
+                                        let modal_for_button = modal_clone.clone();
+                                        move |_, window, cx| {
+                                            modal_for_button.update(cx, |modal, cx| {
+                                                modal.start_export(window, cx);
+                                            });
+                                            window.close_dialog(cx);
+                                        }
+                                    })
+                            ]
+                        }
+                    })
+            })
+        } else {
+            log::error!("Cannot export: No table name provided");
+        }
+    }
+}
 
 impl Render for ConnectionsPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1269,6 +1369,8 @@ impl Render for ConnectionsPanel {
             .child(self.render_connections_tree(cx))
     }
 }
+
+impl EventEmitter<AppEvent> for ConnectionsPanel {}
 
 // Add display_name method to ConnectionData
 impl ConnectionData {

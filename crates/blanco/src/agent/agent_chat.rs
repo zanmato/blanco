@@ -321,8 +321,8 @@ impl Render for ChatPanel {
                         .style
                         .editor_background
                         .unwrap_or(cx.theme().background))
-                    .rounded_lg()
-                    .border_0()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
                     .text_size(px(13.0)) // Smaller font size for the input text
                     .on_key_down(cx.listener(|this, evt: &gpui::KeyDownEvent, window, cx| {
                         if evt.keystroke.should_match(&this.send_message_keystroke) {

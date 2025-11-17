@@ -62,6 +62,53 @@ impl DataTransformer for CsvTransformer {
     ) -> Result<String, TransformError> {
         Ok(csv_escape(value))
     }
+
+    // === Streaming Methods ===
+
+    fn initialize_stream(
+        &self,
+        columns: &[String],
+        _column_types: &[String],
+    ) -> Result<String, TransformError> {
+        let mut output = String::new();
+
+        // Output CSV header
+        if !columns.is_empty() {
+            for (i, col) in columns.iter().enumerate() {
+                if i > 0 {
+                    output.push(';');
+                }
+                output.push_str(&csv_escape(col));
+            }
+            output.push('\n');
+        }
+
+        Ok(output)
+    }
+
+    fn transform_stream_row(
+        &self,
+        row_data: &[String],
+        _columns: &[String],
+        _column_types: &[String],
+    ) -> Result<String, TransformError> {
+        let mut output = String::new();
+
+        for (i, value) in row_data.iter().enumerate() {
+            if i > 0 {
+                output.push(';');
+            }
+            output.push_str(&csv_escape(value));
+        }
+        output.push('\n');
+
+        Ok(output)
+    }
+
+    fn finalize_stream(&self) -> Result<String, TransformError> {
+        // CSV doesn't need any special finalization
+        Ok(String::new())
+    }
 }
 
 /// Escape a value for CSV format

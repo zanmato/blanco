@@ -5,7 +5,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
     InteractiveElement, IntoElement, MouseButton, ParentElement, Render, Styled, Subscription,
-    Window, div, px,
+    Task, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, Icon,

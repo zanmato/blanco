@@ -5,6 +5,7 @@ use blanco_core::{
     ColumnInfo, Connection, ConnectionUIMetadata, IconName, QueryResult, TableChangeOperation,
     TableMetadata,
 };
+use futures::{Stream, StreamExt};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use sqlx::{Column, ConnectOptions, Row, TypeInfo};
 use std::str::FromStr;
@@ -760,6 +761,128 @@ impl Connection for SqliteConnection {
             Err(e) => {
                 log::debug!("Could not resolve table alias from query: {}", e);
                 Ok(None)
+            }
+        }
+    }
+
+    async fn execute_query_stream_rows(
+        &self,
+        query: &str,
+        _database_name: Option<&str>, // SQLite doesn't support multiple databases
+    ) -> Result<(Vec<String>, Vec<String>, Box<dyn Stream<Item = Result<Vec<String>, anyhow::Error>> + Send + Unpin>), anyhow::Error> {
+        log::debug!("Executing SQLite streaming query: {}", query);
+
+        let pool = self.pool.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("SQLite connection not established")
+        })?;
+
+        // Use sqlx::query().fetch() for true streaming
+        let rows_stream = sqlx::query(query).fetch(pool);
+
+        // We need to collect all rows first to get column information since sqlx streams
+        // don't allow us to peek at the first row without consuming it
+        let mut rows = Vec::new();
+        let mut stream = rows_stream;
+        let mut columns = Vec::new();
+        let mut column_types = Vec::new();
+
+        // Process the first row to get column information
+        let mut first_row_data = None;
+        while let Some(row_result) = stream.next().await {
+            let row = row_result.map_err(|e| anyhow::anyhow!("Failed to fetch row: {}", e))?;
+
+            if first_row_data.is_none() {
+                // Extract column names and types from the first row
+                columns = row.columns()
+                    .iter()
+                    .map(|col| col.name().to_string())
+                    .collect();
+                column_types = row.columns()
+                    .iter()
+                    .map(|col| col.type_info().name().to_string())
+                    .collect();
+
+                let row_data: Vec<String> = (0..columns.len())
+                    .map(|i| convert_sqlite_row_value_to_string(&row, i, &column_types))
+                    .collect();
+
+                first_row_data = Some(row_data.clone());
+                rows.push(row_data);
+            } else {
+                // Process subsequent rows
+                let row_data: Vec<String> = (0..columns.len())
+                    .map(|i| convert_sqlite_row_value_to_string(&row, i, &column_types))
+                    .collect();
+                rows.push(row_data);
+            }
+        }
+
+        if rows.is_empty() {
+            return Ok((vec![], vec![], Box::new(futures::stream::empty())));
+        }
+
+        // Create stream from collected rows
+        let all_rows_stream = futures::stream::iter(rows.into_iter().map(Ok));
+
+        Ok((columns, column_types, Box::new(all_rows_stream)))
+    }
+}
+
+// Helper function for SQLite type conversion
+fn convert_sqlite_row_value_to_string(
+    row: &sqlx::sqlite::SqliteRow,
+    column_index: usize,
+    _column_types: &[String],
+) -> String {
+    // SQLite type conversion - simpler than PostgreSQL
+    if let Ok(val) = row.try_get::<Option<String>, _>(column_index) {
+        // String support
+        val.unwrap_or_else(|| "NULL".to_string())
+    } else if let Ok(val) = row.try_get::<Option<i32>, _>(column_index) {
+        // INTEGER support
+        val.map(|v| v.to_string())
+            .unwrap_or_else(|| "NULL".to_string())
+    } else if let Ok(val) = row.try_get::<Option<i64>, _>(column_index) {
+        // BIGINT support
+        val.map(|v| v.to_string())
+            .unwrap_or_else(|| "NULL".to_string())
+    } else if let Ok(val) = row.try_get::<Option<f64>, _>(column_index) {
+        // FLOAT/REAL support
+        val.map(|v| v.to_string())
+            .unwrap_or_else(|| "NULL".to_string())
+    } else if let Ok(val) = row.try_get::<Option<bool>, _>(column_index) {
+        // BOOLEAN support (SQLite 3.23+)
+        val.map(|v| v.to_string())
+            .unwrap_or_else(|| "NULL".to_string())
+    } else if let Ok(val) = row.try_get::<Option<chrono::NaiveDateTime>, _>(column_index) {
+        // DATETIME support
+        val.map(|v| {
+            // Format in a consistent, readable format
+            v.format("%Y-%m-%d %H:%M:%S").to_string()
+        })
+        .unwrap_or_else(|| "NULL".to_string())
+    } else if let Ok(val) = row.try_get::<Option<chrono::NaiveDate>, _>(column_index) {
+        // DATE support
+        val.map(|v| v.to_string())
+            .unwrap_or_else(|| "NULL".to_string())
+    } else if let Ok(val) = row.try_get::<Option<chrono::NaiveTime>, _>(column_index) {
+        // TIME support
+        val.map(|v| v.to_string())
+            .unwrap_or_else(|| "NULL".to_string())
+    } else if let Ok(val) = row.try_get::<Option<serde_json::Value>, _>(column_index) {
+        // JSON support
+        val.map(|v| {
+            // For compact display, use regular to_string instead of pretty printing
+            v.to_string()
+        })
+        .unwrap_or_else(|| "NULL".to_string())
+    } else {
+        // For unknown types, try basic conversion
+        match row.try_get::<Option<String>, _>(column_index) {
+            Ok(val) => val.unwrap_or_else(|| "NULL".to_string()),
+            Err(_) => {
+                // Last resort: try to get as string directly
+                format!("NULL")
             }
         }
     }

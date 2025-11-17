@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use futures::{Stream, StreamExt};
 
 use crate::results_panel::SelectedTableData;
 
@@ -48,6 +49,47 @@ pub trait DataTransformer: Send + Sync {
 
     /// Returns a description of what this transformer does
     fn description(&self) -> &'static str;
+
+    // === Streaming Methods ===
+
+    /// Initialize streaming transformation with headers and return initial output
+    /// This is called once at the beginning of the streaming process
+    fn initialize_stream(
+        &self,
+        columns: &[String],
+        column_types: &[String],
+    ) -> Result<String, TransformError> {
+        // Default implementation - transformers can override this
+        self.transform_header_row(columns)
+    }
+
+    /// Transform a single row of data during streaming
+    /// This is called for each row as it's processed
+    fn transform_stream_row(
+        &self,
+        row_data: &[String],
+        columns: &[String],
+        column_types: &[String],
+    ) -> Result<String, TransformError>;
+
+    /// Finalize streaming transformation and return any trailing output
+    /// This is called once at the end of the streaming process
+    fn finalize_stream(&self) -> Result<String, TransformError> {
+        // Default implementation - most transformers don't need special finalization
+        Ok(String::new())
+    }
+
+    /// Transform header row specifically (helper method)
+    fn transform_header_row(&self, columns: &[String]) -> Result<String, TransformError> {
+        // Default implementation - transform headers as a regular row
+        self.transform_stream_row(columns, columns, &vec![])
+    }
+
+    /// Check if this transformer supports streaming
+    /// Most transformers can support streaming, but some might need all data at once
+    fn supports_streaming(&self) -> bool {
+        true // Default to true for most transformers
+    }
 }
 
 /// Registry for managing available data transformers
@@ -116,8 +158,8 @@ impl Default for TransformerRegistry {
         let mut registry = Self::new();
         // Register built-in transformers
         registry.register(CsvTransformer);
-        registry.register(SqlTransformer);
-        registry.register(JsonTransformer);
+        registry.register(SqlTransformer::new());
+        registry.register(JsonTransformer::new());
         registry.register(MarkdownTransformer);
         registry
     }

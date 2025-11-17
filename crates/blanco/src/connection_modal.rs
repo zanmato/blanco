@@ -1,6 +1,6 @@
 use gpui::{
-    App, AppContext, Axis, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
-    Render, Styled, Window, div, prelude::FluentBuilder, px,
+    App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
+    Styled, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, IndexPath, StyledExt, h_flex,
@@ -189,11 +189,31 @@ impl PostgresForm {
                     .child(div().text_sm().child("Password"))
                     .child(Input::new(&self.password_input)),
             )
-            // SSH Tunnel Configuration Section (rendered by parent)
+            // SSH Tunnel Configuration Section
+            .child(
+                div().mt_4().child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_semibold()
+                                .child("SSH Tunnel Configuration"),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("(Optional - Connect through SSH bastion host)"),
+                        ),
+                ),
+            )
             .when(self.ssh_enabled, |this| {
                 this.child(
                     v_flex()
                         .gap_3()
+                        .mt_2()
                         .child(
                             h_flex()
                                 .gap_3()
@@ -506,8 +526,9 @@ impl Render for NewConnectionModal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let connector_type = self.get_selected_connector_type(cx);
 
-        v_flex().gap_4().max_h(px(600.0)).child(
+        v_flex().gap_4().child(
             v_flex()
+                .gap_4()
                 .child(
                     v_flex()
                         .gap_2()
@@ -527,10 +548,9 @@ impl Render for NewConnectionModal {
                         let form_elements = self.postgres_form.render(cx);
                         v_flex()
                             .gap_4()
-                            .child(form_elements)
-                            // SSH Tunnel Configuration Section
+                            // SSH Switch Section - above the form
                             .child(
-                                div().mt_4().child(
+                                div().child(
                                     h_flex()
                                         .gap_2()
                                         .items_center()
@@ -538,9 +558,11 @@ impl Render for NewConnectionModal {
                                             Switch::new("ssh-enabled-switch")
                                                 .checked(self.postgres_form.ssh_enabled)
                                                 .label("Enable SSH Tunnel")
-                                                .on_click(cx.listener(|modal: &mut Self, _checked, _window, cx| {
-                                                    modal.toggle_ssh_enabled(cx);
-                                                })),
+                                                .on_click(cx.listener(
+                                                    |modal: &mut Self, _checked, _window, cx| {
+                                                        modal.toggle_ssh_enabled(cx);
+                                                    },
+                                                )),
                                         )
                                         .child(
                                             div()
@@ -550,7 +572,7 @@ impl Render for NewConnectionModal {
                                         ),
                                 ),
                             )
-                            // SSH inputs are conditionally rendered by the PostgresForm
+                            .child(form_elements) // Form renders SSH fields when enabled
                             .into_any_element()
                     }
                 })
@@ -574,8 +596,7 @@ impl Render for NewConnectionModal {
                             })
                             .child(div().text_sm().child(result.message)),
                     )
-                })
-                .scrollable(Axis::Vertical),
+                }),
         )
     }
 }

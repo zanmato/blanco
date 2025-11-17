@@ -1,6 +1,30 @@
 use crate::transformers::{DataTransformer, SelectedTableData, TransformError};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
-pub struct SqlTransformer;
+pub struct SqlTransformer {
+    table_name: Option<String>,
+    first_row: AtomicBool,
+    column_list: Mutex<Option<String>>,
+}
+
+impl SqlTransformer {
+    pub fn new() -> Self {
+        Self {
+            table_name: None,
+            first_row: AtomicBool::new(true),
+            column_list: Mutex::new(None),
+        }
+    }
+
+    pub fn with_table_name(table_name: String) -> Self {
+        Self {
+            table_name: Some(table_name),
+            first_row: AtomicBool::new(true),
+            column_list: Mutex::new(None),
+        }
+    }
+}
 
 impl DataTransformer for SqlTransformer {
     fn format_name(&self) -> &'static str {
@@ -83,6 +107,72 @@ impl DataTransformer for SqlTransformer {
         } else {
             Ok(format!("'{}'", sql_escape_string(value)))
         }
+    }
+
+    // === Streaming Methods ===
+
+    fn initialize_stream(
+        &self,
+        columns: &[String],
+        _column_types: &[String],
+    ) -> Result<String, TransformError> {
+        // Generate and store column list once
+        let column_list = columns
+            .iter()
+            .map(|col| sql_identifier(col))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        *self.column_list.lock().unwrap() = Some(column_list);
+
+        // Start with INSERT statement header
+        let table_name = self.table_name.as_deref().unwrap_or("exported_data");
+        Ok(format!(
+            "INSERT INTO {} ({})\nVALUES\n",
+            sql_identifier(table_name),
+            self.column_list.lock().unwrap().as_ref().unwrap()
+        ))
+    }
+
+    fn transform_stream_row(
+        &self,
+        row_data: &[String],
+        _columns: &[String],
+        _column_types: &[String],
+    ) -> Result<String, TransformError> {
+        // Add values with proper escaping
+        let values: Vec<String> = row_data
+            .iter()
+            .map(|value| {
+                if value.is_empty() || value.eq_ignore_ascii_case("null") {
+                    "NULL".to_string()
+                } else {
+                    format!("'{}'", sql_escape_string(value))
+                }
+            })
+            .collect();
+
+        // Format as a single VALUES row with proper indentation
+        let row_str = format!("  ({})", values.join(", "));
+
+        // Add comma separator if this is not the first row
+        if self.first_row.compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+            // This was the first row and we successfully set it to false
+            Ok(row_str)
+        } else {
+            // This is not the first row
+            Ok(format!(",\n{}", row_str))
+        }
+    }
+
+    fn finalize_stream(&self) -> Result<String, TransformError> {
+        // End the INSERT statement with semicolon
+        Ok(";\n".to_string())
+    }
+
+    fn transform_header_row(&self, columns: &[String]) -> Result<String, TransformError> {
+        // SQL doesn't need headers as a separate row
+        Ok(String::new())
     }
 }
 

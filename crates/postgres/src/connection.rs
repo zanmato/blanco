@@ -7,6 +7,7 @@ use blanco_core::{
     ColumnInfo, Connection, ConnectionUIMetadata, IconName, QueryResult, TableChangeOperation,
     TableMetadata,
 };
+use futures::{Stream, StreamExt};
 use sqlx::postgres::types::PgMoney;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Column, Row, TypeInfo, ValueRef};
@@ -1422,6 +1423,87 @@ impl Connection for PostgresConnection {
         name.chars()
             .map(|c| if c.is_alphanumeric() { c } else { '_' })
             .collect()
+    }
+
+    async fn execute_query_stream_rows(
+        &self,
+        query: &str,
+        database_name: Option<&str>,
+    ) -> Result<(Vec<String>, Vec<String>, Box<dyn Stream<Item = Result<Vec<String>, anyhow::Error>> + Send + Unpin>), anyhow::Error> {
+        log::debug!(
+            "Executing PostgreSQL streaming query: {} (database: {:?})",
+            query,
+            database_name
+        );
+
+        // Get the target database
+        let target_database = if let Some(db) = database_name {
+            db.to_string()
+        } else {
+            self.get_available_database().await?
+        };
+
+        // Get connection pool
+        let pool = self
+            .get_or_create_pool(&target_database)
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to get connection pool for database '{}': {}",
+                    target_database,
+                    e
+                )
+            })?;
+
+        // Use sqlx::query().fetch() for true streaming
+        let rows_stream = sqlx::query(query).fetch(&pool);
+
+        // We need to collect all rows first to get column information since sqlx streams
+        // don't allow us to peek at the first row without consuming it
+        let mut rows = Vec::new();
+        let mut stream = rows_stream;
+        let mut columns = Vec::new();
+        let mut column_types = Vec::new();
+
+        // Process the first row to get column information
+        let mut first_row_data = None;
+        while let Some(row_result) = stream.next().await {
+            let row = row_result.map_err(|e| anyhow::anyhow!("Failed to fetch row: {}", e))?;
+
+            if first_row_data.is_none() {
+                // Extract column names and types from the first row
+                columns = row.columns()
+                    .iter()
+                    .map(|col| col.name().to_string())
+                    .collect();
+                column_types = row.columns()
+                    .iter()
+                    .map(|col| col.type_info().name().to_string())
+                    .collect();
+
+                let row_data: Vec<String> = (0..columns.len())
+                    .map(|i| self.convert_row_value_to_string(&row, i, &column_types))
+                    .collect();
+
+                first_row_data = Some(row_data.clone());
+                rows.push(row_data);
+            } else {
+                // Process subsequent rows
+                let row_data: Vec<String> = (0..columns.len())
+                    .map(|i| self.convert_row_value_to_string(&row, i, &column_types))
+                    .collect();
+                rows.push(row_data);
+            }
+        }
+
+        if rows.is_empty() {
+            return Ok((vec![], vec![], Box::new(futures::stream::empty())));
+        }
+
+        // Create stream from collected rows
+        let all_rows_stream = futures::stream::iter(rows.into_iter().map(Ok));
+
+        Ok((columns, column_types, Box::new(all_rows_stream)))
     }
 
     fn get_ui_metadata(&self) -> ConnectionUIMetadata {

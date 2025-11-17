@@ -529,6 +529,25 @@ impl DbService {
         // Execute the query
         connection.execute_query(sql, None).await
     }
+
+    /// Execute a query and stream rows for large table exports
+    /// Returns column info and a stream of rows
+    pub async fn execute_query_stream_by_id(
+        &self,
+        connection_id: i64,
+        sql: &str,
+        database_name: Option<&str>,
+    ) -> Result<(Vec<String>, Vec<String>, Box<dyn std::marker::Send + std::marker::Sync>), anyhow::Error> {
+        // Get the connection by ID
+        let connection = self.get_or_create_connection(connection_id).await?;
+
+        // For now, use regular query but we'll implement streaming soon
+        // This is a placeholder that will be implemented by each connection type
+        let result = connection.execute_query(sql, database_name).await?;
+
+        // Return a simple stream implementation using the results
+        Ok((result.columns, result.column_types, Box::new(result.rows)))
+    }
 }
 
 // Implement the DatabaseService trait for DbService

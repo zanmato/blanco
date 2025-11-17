@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::fmt;
+use futures::Stream;
 
 /// Icon types for database connections
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -164,6 +165,32 @@ pub trait Connection: Send + Sync + fmt::Debug {
         sql_template: &str,
         parameters: &[String],
     ) -> Result<QueryResult, anyhow::Error>;
+
+    /// Execute a query and return a stream of rows for large datasets
+    /// Returns a tuple of (columns, column_types, row_stream)
+    /// Default implementation uses regular query - should be overridden for large datasets
+    async fn execute_query_stream(
+        &self,
+        query: &str,
+        database_name: Option<&str>,
+    ) -> Result<(Vec<String>, Vec<String>, Box<dyn std::marker::Send + std::marker::Sync>), anyhow::Error> {
+        // Default implementation uses regular query
+        let result = self.execute_query(query, database_name).await?;
+        Ok((result.columns, result.column_types, Box::new(result.rows)))
+    }
+
+    /// Execute a query and return a true stream of rows for large datasets
+    /// Returns a stream of row data (Vec<String>) that can be processed incrementally
+    async fn execute_query_stream_rows(
+        &self,
+        query: &str,
+        database_name: Option<&str>,
+    ) -> Result<(Vec<String>, Vec<String>, Box<dyn Stream<Item = Result<Vec<String>, anyhow::Error>> + Send + Unpin>), anyhow::Error> {
+        // Default implementation converts regular query to stream
+        let result = self.execute_query(query, database_name).await?;
+        let rows = result.rows.into_iter().map(Ok);
+        Ok((result.columns, result.column_types, Box::new(futures::stream::iter(rows))))
+    }
 
     // === Schema Exploration ===
 

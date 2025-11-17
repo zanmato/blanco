@@ -2,8 +2,19 @@
 
 use crate::transformers::{DataTransformer, SelectedTableData, TransformError};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-pub struct JsonTransformer;
+pub struct JsonTransformer {
+    first_row: AtomicBool,
+}
+
+impl JsonTransformer {
+    pub fn new() -> Self {
+        Self {
+            first_row: AtomicBool::new(true),
+        }
+    }
+}
 
 impl DataTransformer for JsonTransformer {
     fn format_name(&self) -> &'static str {
@@ -59,6 +70,60 @@ impl DataTransformer for JsonTransformer {
     ) -> Result<String, TransformError> {
         let json_value = convert_to_json_value(value, column_type);
         serde_json::to_string(&json_value).map_err(|e| TransformError::FormatError(e.to_string()))
+    }
+
+    // === Streaming Methods ===
+
+    fn initialize_stream(
+        &self,
+        columns: &[String],
+        _column_types: &[String],
+    ) -> Result<String, TransformError> {
+        // Start JSON array
+        Ok("[\n".to_string())
+    }
+
+    fn transform_stream_row(
+        &self,
+        row_data: &[String],
+        columns: &[String],
+        column_types: &[String],
+    ) -> Result<String, TransformError> {
+        let mut obj = std::collections::HashMap::new();
+
+        for (i, value) in row_data.iter().enumerate() {
+            if let Some(col_name) = columns.get(i) {
+                let column_type = column_types.get(i).map(|s| s.as_str()).unwrap_or("text");
+                let json_value = convert_to_json_value(value, column_type);
+                obj.insert(col_name.clone(), json_value);
+            }
+        }
+
+        // Format as pretty-printed JSON with proper indentation
+        let json_str = serde_json::to_string_pretty(&obj)
+            .map_err(|e| TransformError::FormatError(e.to_string()))?;
+
+        // Add indentation to match array structure
+        let indented = json_str.lines().map(|line| format!("  {}", line)).collect::<Vec<_>>().join("\n");
+
+        // Add comma separator if this is not the first row
+        if self.first_row.compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+            // This was the first row and we successfully set it to false
+            Ok(indented)
+        } else {
+            // This is not the first row
+            Ok(format!(",\n{}", indented))
+        }
+    }
+
+    fn finalize_stream(&self) -> Result<String, TransformError> {
+        // End JSON array
+        Ok("\n]".to_string())
+    }
+
+    fn transform_header_row(&self, columns: &[String]) -> Result<String, TransformError> {
+        // JSON doesn't need headers as a separate row
+        Ok(String::new())
     }
 }
 

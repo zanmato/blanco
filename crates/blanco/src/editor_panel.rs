@@ -1231,7 +1231,7 @@ impl Render for EditorPanel {
                                                                         .outline()
                                                                         .small()
                                                                         .icon(IconName::Plus)
-                                                                        .label("Add Row")
+                                                                        .label("Add")
                                                                         .on_click(cx.listener(|this, _, _window, cx| {
                                                                             // Add a new row with empty values
                                                                             if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
@@ -1246,7 +1246,7 @@ impl Render for EditorPanel {
                                                                         .outline()
                                                                         .small()
                                                                         .icon(IconName::Copy)
-                                                                        .label("Duplicate Row")
+                                                                        .label("Duplicate")
                                                                         .on_click(cx.listener(|this, _, _window, cx| {
                                                                             if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
                                                                                 query_tab.results_panel.update(cx, |results_panel, cx| {
@@ -1261,7 +1261,7 @@ impl Render for EditorPanel {
                                                                         .outline()
                                                                         .small()
                                                                         .icon(IconName::Check)
-                                                                        .label("Commit Changes")
+                                                                        .label("Commit")
                                                                         .children(vec![Kbd::new(Keystroke::parse("cmd-shift-c").unwrap()).into_any_element()])
                                                                         .on_click(cx.listener(|this, _, window, cx| {
                                                                             if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
@@ -1312,7 +1312,7 @@ impl Render for EditorPanel {
                                     query_tab.chat_enabled && query_tab.chat_panel.is_some(),
                                     |this| {
                                         this.child(
-                                            resizable_panel().size(300.).child(
+                                            resizable_panel().size(400.).child(
                                                 div()
                                                     .border_l_1()
                                                     .border_color(cx.theme().border)
@@ -1367,7 +1367,7 @@ impl Render for EditorPanel {
                                 // Button bar
                                 .child(
                                     h_flex()
-                                        .p_3()
+                                        .p_2()
                                         .gap_2()
                                         .border_t_1()
                                         .border_color(cx.theme().border)
@@ -1375,6 +1375,7 @@ impl Render for EditorPanel {
                                         .child(
                                             Button::new("reset-settings")
                                                 .outline()
+                                                .small()
                                                 .icon(IconName::Asterisk)
                                                 .label("Reset to Defaults")
                                                 .on_click(cx.listener(|this, _, _window, cx| {
@@ -1385,6 +1386,7 @@ impl Render for EditorPanel {
                                         .child(
                                             Button::new("save-settings")
                                                 .outline()
+                                                .small()
                                                 .icon(IconName::Save)
                                                 .label("Save Settings")
                                                 .on_click(cx.listener(|this, _, window, cx| {

@@ -34,6 +34,7 @@ actions!(
         CopyAsJSON,
         CopyAsSQL,
         CopyAsMarkdown,
+        ExportData,
         ClearSelection
     ]
 );
@@ -374,7 +375,8 @@ impl BlancoApp {
 
             modal
                 .title("New Connection")
-                .w(gpui::px(500.))
+                .h(gpui::px(600.))
+                .w(gpui::px(400.))
                 .child(modal_content.clone())
                 .footer({
                     let content = content_clone.clone();
@@ -588,10 +590,7 @@ fn init_menus(cx: &mut App) {
             name: "File".into(),
             items: vec![
                 MenuItem::action("New Connection", OpenNewConnectionModal),
-                MenuItem::action("Open Connection", OpenConnection),
                 MenuItem::action("Preferences...", OpenSettings),
-                MenuItem::Separator,
-                MenuItem::action("About Blanco", About),
                 MenuItem::Separator,
                 MenuItem::action("Quit", Quit),
             ],

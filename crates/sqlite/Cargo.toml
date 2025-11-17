@@ -26,6 +26,7 @@ serde_json = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 log = { workspace = true }
+futures = { workspace = true }
 
 # Rope handling for completion/hover
 ropey = { workspace = true }
