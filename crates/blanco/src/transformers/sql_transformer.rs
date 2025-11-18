@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn test_sql_transformer() {
-        let transformer = SqlTransformer;
+        let transformer = SqlTransformer::new();
         assert_eq!(transformer.format_name(), "SQL");
         assert_eq!(transformer.file_extension(), "sql");
         assert_eq!(

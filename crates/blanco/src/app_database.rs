@@ -741,15 +741,11 @@ impl ConnectionData {
         ssh_private_key_password: Option<String>,
     ) -> Self {
         let connection_string = if password.is_empty() {
-            format!("postgresql://{}@localhost:{}/{}", username, 15432, database)
-        // Will be updated with actual tunnel port
+            format!("postgresql://{}@{}:{}/{}", username, host, port, database)
         } else {
             format!(
-                "postgresql://{}:{}@localhost:{}/{}",
-                username,
-                password,
-                15432,
-                database // Will be updated with actual tunnel port
+                "postgresql://{}:{}@{}:{}/{}",
+                username, password, host, port, database
             )
         };
 
@@ -788,11 +784,13 @@ impl ConnectionData {
     }
 
     /// Check if this connection uses SSH tunnel
+    #[allow(dead_code)]
     pub fn uses_ssh_tunnel(&self) -> bool {
         self.ssh_host.is_some() && !self.ssh_host.as_ref().unwrap().trim().is_empty()
     }
 
     /// Check if SSH tunnel is properly configured
+    #[allow(dead_code)]
     pub fn has_valid_ssh_config(&self) -> bool {
         if let (Some(host), Some(user)) = (&self.ssh_host, &self.ssh_user) {
             !host.trim().is_empty() && !user.trim().is_empty()
@@ -802,6 +800,7 @@ impl ConnectionData {
     }
 
     /// Get SSH display string for UI
+    #[allow(dead_code)]
     pub fn ssh_display_string(&self) -> Option<String> {
         if let (Some(host), Some(port), Some(user)) =
             (&self.ssh_host, &self.ssh_port, &self.ssh_user)

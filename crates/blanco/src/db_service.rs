@@ -11,6 +11,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use url::Url;
 
+// Import SSH tunnel types to resolve the compilation issues
+use crate::ssh_tunnel::{SshTunnel, SshTunnelConfig};
+
 /// Replace the database name in a PostgreSQL connection string
 fn replace_database_in_postgres_connection_string(
     connection_string: &str,
@@ -60,28 +63,11 @@ impl ConnectionFactory for SqliteConnectionFactory {
 }
 
 /// PostgreSQL connection factory using the postgres crate implementation
-pub struct PostgresConnectionFactory {
-    // Store SSH configuration for connections
-    ssh_configs: Arc<async_std::sync::Mutex<std::collections::HashMap<i64, PostgresSshConfig>>>,
-}
+pub struct PostgresConnectionFactory {}
 
 impl PostgresConnectionFactory {
     pub fn new() -> Self {
-        Self {
-            ssh_configs: Arc::new(async_std::sync::Mutex::new(std::collections::HashMap::new())),
-        }
-    }
-
-    /// Set SSH configuration for a connection ID
-    pub async fn set_ssh_config(&self, connection_id: i64, ssh_config: PostgresSshConfig) {
-        let mut configs = self.ssh_configs.lock().await;
-        configs.insert(connection_id, ssh_config);
-    }
-
-    /// Get SSH configuration for a connection ID
-    pub async fn get_ssh_config(&self, connection_id: i64) -> Option<PostgresSshConfig> {
-        let configs = self.ssh_configs.lock().await;
-        configs.get(&connection_id).cloned()
+        Self {}
     }
 
     /// Create PostgreSQL connection with optional SSH configuration
@@ -90,15 +76,23 @@ impl PostgresConnectionFactory {
         connection_string: &str,
         ssh_config: Option<PostgresSshConfig>,
     ) -> Result<Box<dyn Connection>> {
-        let key = PgConnectionKey::from_connection_string(connection_string)?;
+        // If SSH configuration is provided, reject connection (tunnels must be established separately)
+        if ssh_config.is_some() {
+            return Err(anyhow::anyhow!(
+                "SSH configuration provided but SSH tunnels must be established separately. \
+                Call establish_ssh_tunnel_with_gpui_context() first, then use tunneled connection strings."
+            ));
+        }
 
-        let mut conn = if let Some(ssh_cfg) = ssh_config {
-            PostgresConnection::from_key_with_ssh(key, ssh_cfg)
-        } else {
-            PostgresConnection::from_key(key)
-        };
+        // No SSH configuration - use connection string as-is
+        let final_connection_string = connection_string.to_string();
 
-        Connection::connect(&mut conn, connection_string).await?;
+        let key = PgConnectionKey::from_connection_string(&final_connection_string)?;
+
+        // Create regular PostgresConnection (no SSH config needed now)
+        let mut conn = PostgresConnection::from_key(key);
+
+        Connection::connect(&mut conn, &final_connection_string).await?;
         Ok(Box::new(conn))
     }
 }
@@ -133,7 +127,6 @@ pub struct UnifiedConnectionManager {
     registry: Arc<ConnectionRegistry>,
     connections: Arc<RwLock<HashMap<String, Arc<dyn Connection>>>>,
     connection_factories: Arc<HashMap<String, Arc<dyn ConnectionFactory>>>,
-    postgres_factory: Arc<PostgresConnectionFactory>,
 }
 
 impl UnifiedConnectionManager {
@@ -157,7 +150,6 @@ impl UnifiedConnectionManager {
             registry: Arc::new(registry),
             connections: Arc::new(RwLock::new(HashMap::new())),
             connection_factories: Arc::new(factories),
-            postgres_factory: postgres_factory_arc,
         }
     }
 
@@ -305,43 +297,15 @@ impl UnifiedConnectionManager {
         let conn = factory.create_connection(connection_string).await?;
         conn.test_connection().await
     }
+}
 
-    /// Get or create a connection with SSH support for a PostgreSQL connection
-    pub async fn get_or_create_postgres_connection_with_ssh(
-        &self,
-        connection_string: &str,
-        ssh_config: Option<PostgresSshConfig>,
-    ) -> Result<Arc<dyn Connection>, anyhow::Error> {
-        let connection_key = self.generate_connection_key(connection_string)?;
-
-        // Check for existing connection
-        {
-            let connections = self.connections.read().await;
-            if let Some(existing_conn) = connections.get(&connection_key)
-                && existing_conn.test_connection().await.unwrap_or(false)
-            {
-                log::debug!("Using existing healthy SSH connection: {}", connection_key);
-                return Ok(Arc::clone(existing_conn));
-            }
-        }
-
-        // Create new connection with SSH support
-        let mut connections = self.connections.write().await;
-        let conn = self
-            .postgres_factory
-            .create_postgres_connection(connection_string, ssh_config)
-            .await?;
-        let conn_arc: Arc<dyn Connection> = Arc::from(conn);
-
-        // Store the connection
-        connections.insert(connection_key.clone(), conn_arc.clone());
-        log::info!(
-            "Created new PostgreSQL connection with SSH: {}",
-            connection_key
-        );
-
-        Ok(conn_arc)
-    }
+/// SSH tunnel connection info
+#[derive(Debug, Clone)]
+pub struct SshTunnelConnection {
+    pub local_port: u16,
+    pub remote_host: String,
+    pub remote_port: u16,
+    pub created_at: std::time::Instant,
 }
 
 /// Global database service that holds app database and unified connection manager
@@ -349,15 +313,21 @@ impl UnifiedConnectionManager {
 pub struct DbService {
     pub app_db: Arc<RwLock<Option<AppDatabase>>>,
     pub unified_manager: Arc<RwLock<UnifiedConnectionManager>>,
+    // SSH tunnel management
+    ssh_tunnels: Arc<async_std::sync::Mutex<HashMap<String, SshTunnelConnection>>>,
+    // GPUI tokio runtime handle for automatic SSH tunnel establishment
+    runtime_handle: Option<tokio::runtime::Handle>,
 }
 
 impl Global for DbService {}
 
 impl DbService {
-    pub fn new() -> Self {
+    pub fn new(runtime_handle: Option<tokio::runtime::Handle>) -> Self {
         Self {
             app_db: Arc::new(RwLock::new(None)),
             unified_manager: Arc::new(RwLock::new(UnifiedConnectionManager::new())),
+            ssh_tunnels: Arc::new(async_std::sync::Mutex::new(HashMap::new())),
+            runtime_handle,
         }
     }
 
@@ -379,6 +349,173 @@ impl DbService {
     /// Get access to the unified connection manager
     pub async fn unified_manager(&self) -> std::sync::Arc<RwLock<UnifiedConnectionManager>> {
         self.unified_manager.clone()
+    }
+
+    /// Create SSH tunnel key for connection
+    fn create_ssh_tunnel_key(
+        &self,
+        ssh_host: &str,
+        ssh_port: u16,
+        ssh_user: &str,
+        remote_host: &str,
+        remote_port: u16,
+    ) -> String {
+        format!(
+            "{}@{}:{}->{}:{}",
+            ssh_user, ssh_host, ssh_port, remote_host, remote_port
+        )
+    }
+
+    /// Establish SSH tunnel automatically using stored runtime handle
+    fn establish_ssh_tunnel_automatic(
+        &self,
+        ssh_host: String,
+        ssh_port: u16,
+        ssh_user: String,
+        ssh_password: Option<String>,
+        ssh_private_key_path: Option<String>,
+        ssh_private_key_password: Option<String>,
+        remote_host: String,
+        remote_port: u16,
+    ) -> Result<u16, anyhow::Error> {
+        let Some(runtime_handle) = &self.runtime_handle else {
+            return Err(anyhow::anyhow!(
+                "No runtime handle available for automatic SSH tunnel establishment"
+            ));
+        };
+
+        log::info!(
+            "Automatically establishing SSH tunnel for {}@{}:{} -> {}:{}",
+            ssh_user,
+            ssh_host,
+            ssh_port,
+            remote_host,
+            remote_port
+        );
+
+        let local_port = self.assign_local_port();
+
+        // Create SSH tunnel configuration
+        let tunnel_config = SshTunnelConfig {
+            ssh_host: ssh_host.clone(),
+            ssh_port,
+            ssh_user: ssh_user.clone(),
+            ssh_password,
+            ssh_private_key_path,
+            ssh_private_key_password,
+            remote_host: remote_host.clone(),
+            remote_port,
+            local_port,
+        };
+
+        // Spawn SSH tunnel establishment on the stored runtime handle
+        let ssh_tunnels = self.ssh_tunnels.clone();
+        let tunnel_key =
+            self.create_ssh_tunnel_key(&ssh_host, ssh_port, &ssh_user, &remote_host, remote_port);
+        let local_port_for_async = local_port;
+        let remote_host_clone = remote_host.clone();
+        let remote_port_clone = remote_port;
+
+        let _ = runtime_handle.spawn(async move {
+            match SshTunnel::create(tunnel_config).await {
+                Ok(mut tunnel) => {
+                    log::info!("SSH tunnel established automatically: {}", tunnel_key);
+
+                    // Store tunnel connection info
+                    {
+                        let mut tunnels = ssh_tunnels.lock().await;
+                        tunnels.insert(
+                            tunnel_key.clone(),
+                            SshTunnelConnection {
+                                local_port: local_port_for_async,
+                                remote_host: remote_host_clone,
+                                remote_port: remote_port_clone,
+                                created_at: std::time::Instant::now(),
+                            },
+                        );
+                    }
+
+                    // Set up TCP forwarding - this keeps the tunnel alive
+                    if let Err(e) = tunnel.setup_tcp_forwarding().await {
+                        log::error!(
+                            "Failed to setup TCP forwarding for auto-established tunnel {}: {}",
+                            tunnel_key,
+                            e
+                        );
+
+                        // Remove failed tunnel
+                        let mut tunnels = ssh_tunnels.lock().await;
+                        tunnels.remove(&tunnel_key);
+                    }
+                }
+                Err(e) => {
+                    log::error!(
+                        "Failed to establish SSH tunnel automatically {}: {}",
+                        tunnel_key,
+                        e
+                    );
+                }
+            }
+        });
+
+        Ok(local_port)
+    }
+
+    /// Get existing SSH tunnel connection info
+    pub async fn get_ssh_tunnel(
+        &self,
+        ssh_host: &str,
+        ssh_port: u16,
+        ssh_user: &str,
+        remote_host: &str,
+        remote_port: u16,
+    ) -> Option<SshTunnelConnection> {
+        let tunnel_key =
+            self.create_ssh_tunnel_key(ssh_host, ssh_port, ssh_user, remote_host, remote_port);
+        let tunnels = self.ssh_tunnels.lock().await;
+        tunnels.get(&tunnel_key).cloned()
+    }
+
+    /// Create a tunneled connection string using existing SSH tunnel
+    fn create_tunneled_connection_string(
+        &self,
+        _original_connection_string: &str,
+        local_port: u16,
+        database: &str,
+        username: &str,
+        password: Option<&String>,
+    ) -> Result<String> {
+        let host = "localhost";
+
+        let connection_string = if let Some(password) = password {
+            if password.is_empty() {
+                format!(
+                    "postgresql://{}@{}:{}/{}",
+                    username, host, local_port, database
+                )
+            } else {
+                format!(
+                    "postgresql://{}:{}@{}:{}/{}",
+                    username, password, host, local_port, database
+                )
+            }
+        } else {
+            format!(
+                "postgresql://{}@{}:{}/{}",
+                username, host, local_port, database
+            )
+        };
+
+        log::debug!("Created tunneled connection string: {}", connection_string);
+        Ok(connection_string)
+    }
+
+    /// Assign a local port for SSH tunnel
+    fn assign_local_port(&self) -> u16 {
+        // Simple port assignment starting from 15432
+        static PORT_COUNTER: std::sync::atomic::AtomicU16 =
+            std::sync::atomic::AtomicU16::new(15432);
+        PORT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Primary method to get or create a connection by ID
@@ -456,12 +593,18 @@ impl DbService {
                     // Validate that SSH host and user are not empty
                     if !host.trim().is_empty() && !user.trim().is_empty() {
                         let ssh_port: i32 = connection_row.try_get("ssh_port").unwrap_or(22);
-                        let ssh_password: Option<String> =
-                            connection_row.try_get("ssh_password").ok();
-                        let ssh_private_key_path: Option<String> =
-                            connection_row.try_get("ssh_private_key_path").ok();
-                        let ssh_private_key_password: Option<String> =
-                            connection_row.try_get("ssh_private_key_password").ok();
+                        let ssh_password: Option<String> = connection_row
+                            .try_get("ssh_password")
+                            .ok()
+                            .filter(|s: &String| !s.is_empty());
+                        let ssh_private_key_path: Option<String> = connection_row
+                            .try_get("ssh_private_key_path")
+                            .ok()
+                            .filter(|s: &String| !s.is_empty());
+                        let ssh_private_key_password: Option<String> = connection_row
+                            .try_get("ssh_private_key_password")
+                            .ok()
+                            .filter(|s: &String| !s.is_empty());
 
                         let ssh_config = PostgresSshConfig {
                             ssh_host: host.trim().to_string(),
@@ -473,20 +616,112 @@ impl DbService {
                         };
 
                         log::info!(
-                            "Creating PostgreSQL connection with SSH tunnel to {}:{} for connection ID {}",
+                            "Checking for existing SSH tunnel to {}:{} for connection ID {}",
                             ssh_config.ssh_host,
                             ssh_config.ssh_port,
                             connection_id
                         );
-                        let unified_manager = self.unified_manager().await;
-                        return unified_manager
-                            .read()
-                            .await
-                            .get_or_create_postgres_connection_with_ssh(
-                                &connection_string,
-                                Some(ssh_config),
+
+                        // Extract remote host and port from the original connection string
+                        let key = PgConnectionKey::from_connection_string(&connection_string)?;
+                        let remote_host = key.host;
+                        let remote_port = key.port;
+
+                        log::info!(
+                            "Connection string {:?}, key {:?}",
+                            connection_string,
+                            remote_port,
+                        );
+
+                        // Check if SSH tunnel already exists
+                        if let Some(tunnel_info) = self
+                            .get_ssh_tunnel(
+                                &ssh_config.ssh_host,
+                                ssh_config.ssh_port,
+                                &ssh_config.ssh_user,
+                                &remote_host,
+                                remote_port,
                             )
-                            .await;
+                            .await
+                        {
+                            log::info!(
+                                "Using existing SSH tunnel {} -> localhost:{} for connection ID {}",
+                                tunnel_info.remote_host,
+                                tunnel_info.local_port,
+                                connection_id
+                            );
+
+                            // Create connection string using existing tunnel
+                            let tunneled_connection_string = self
+                                .create_tunneled_connection_string(
+                                    &connection_string,
+                                    tunnel_info.local_port,
+                                    &key.database,
+                                    &key.username,
+                                    key.password.as_ref(),
+                                )?;
+
+                            log::info!(
+                                "Creating tunneled PostgreSQL connection to {}:{} via tunnel localhost:{} for connection ID {}",
+                                remote_host,
+                                remote_port,
+                                tunnel_info.local_port,
+                                connection_id
+                            );
+
+                            return self
+                                .get_or_create_unified_connection_internal(
+                                    &tunneled_connection_string,
+                                )
+                                .await;
+                        } else {
+                            log::info!(
+                                "No existing SSH tunnel found for {}@{}:{} -> {}:{}, establishing automatically",
+                                ssh_config.ssh_user,
+                                ssh_config.ssh_host,
+                                ssh_config.ssh_port,
+                                remote_host,
+                                remote_port
+                            );
+
+                            // Automatically establish SSH tunnel using stored runtime handle
+                            log::info!("private key path {:?}", ssh_config.ssh_private_key_path);
+                            let local_port = self.establish_ssh_tunnel_automatic(
+                                ssh_config.ssh_host.clone(),
+                                ssh_config.ssh_port,
+                                ssh_config.ssh_user.clone(),
+                                ssh_config.ssh_password.clone(),
+                                ssh_config.ssh_private_key_path.clone(),
+                                ssh_config.ssh_private_key_password.clone(),
+                                remote_host.to_string(),
+                                remote_port as u16,
+                            )?;
+
+                            log::info!(
+                                "SSH tunnel automatically established on local port: {}",
+                                local_port
+                            );
+
+                            // Create tunneled connection string using the newly established tunnel
+                            let tunneled_connection_string = self
+                                .create_tunneled_connection_string(
+                                    &connection_string,
+                                    local_port,
+                                    &key.database,
+                                    &key.username,
+                                    key.password.as_ref(),
+                                )?;
+
+                            log::info!(
+                                "Creating tunneled PostgreSQL connection using automatically established SSH tunnel"
+                            );
+
+                            return self
+                                .get_or_create_unified_connection_internal(
+                                    &tunneled_connection_string,
+                                )
+                                .await;
+                        }
                     } else {
                         log::warn!(
                             "SSH configuration has empty host or user for connection ID {}, ignoring SSH tunnel",
@@ -528,25 +763,6 @@ impl DbService {
 
         // Execute the query
         connection.execute_query(sql, None).await
-    }
-
-    /// Execute a query and stream rows for large table exports
-    /// Returns column info and a stream of rows
-    pub async fn execute_query_stream_by_id(
-        &self,
-        connection_id: i64,
-        sql: &str,
-        database_name: Option<&str>,
-    ) -> Result<(Vec<String>, Vec<String>, Box<dyn std::marker::Send + std::marker::Sync>), anyhow::Error> {
-        // Get the connection by ID
-        let connection = self.get_or_create_connection(connection_id).await?;
-
-        // For now, use regular query but we'll implement streaming soon
-        // This is a placeholder that will be implemented by each connection type
-        let result = connection.execute_query(sql, database_name).await?;
-
-        // Return a simple stream implementation using the results
-        Ok((result.columns, result.column_types, Box::new(result.rows)))
     }
 }
 

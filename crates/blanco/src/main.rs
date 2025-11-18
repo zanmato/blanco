@@ -15,6 +15,7 @@ mod rename_form;
 mod results_panel;
 mod settings;
 mod sql_completion_provider;
+mod ssh_tunnel;
 mod time_format;
 mod transformers;
 
@@ -22,6 +23,7 @@ use assets::Assets;
 use db_service::DbService;
 use gpui::{AppContext, Application, SharedString, WindowBounds, WindowOptions, px, size};
 use gpui_component::{Theme, ThemeRegistry};
+use gpui_tokio;
 use std::path::PathBuf;
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
@@ -38,6 +40,10 @@ fn main() {
             .init();
 
         gpui_component::init(cx);
+        gpui_tokio::init(cx);
+
+        // Get the tokio runtime handle for automatic SSH tunnel establishment
+        let runtime_handle = gpui_tokio::Tokio::handle(cx);
 
         // Load and watch themes from ./themes directory
         let settings = settings::load_settings().unwrap();
@@ -52,8 +58,8 @@ fn main() {
             log::error!("Failed to watch themes directory: {}", err);
         }
 
-        // Initialize database service
-        let db_service = DbService::new();
+        // Initialize database service with tokio runtime handle for automatic SSH tunnel establishment
+        let db_service = DbService::new(Some(runtime_handle));
 
         // Initialize app database (for query tabs, history, connections) synchronously
         let app_db_handle = db_service.app_db_handle();

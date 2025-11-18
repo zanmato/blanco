@@ -102,8 +102,6 @@ pub struct EditorPanel {
     next_tab_id: usize,
     sidebar_collapsed: bool,
     _subscriptions: Vec<gpui::Subscription>,
-    // Temporary storage for saved tabs that will be restored after connections are loaded
-    pending_saved_tabs: Option<Vec<crate::app_database::QueryTabData>>,
     run_query_keystroke: KeybindingKeystroke,
     editor_chat_resize_state: Entity<ResizableState>,
     editor_results_resize_state: Entity<ResizableState>,
@@ -675,7 +673,6 @@ impl EditorPanel {
             next_tab_id: 0,
             sidebar_collapsed,
             _subscriptions: Vec::new(),
-            pending_saved_tabs: None,
             run_query_keystroke: KeybindingKeystroke::from_keystroke(
                 Keystroke::parse("shift-enter").unwrap(),
             ),

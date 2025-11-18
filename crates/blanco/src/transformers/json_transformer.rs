@@ -362,7 +362,7 @@ mod tests {
 
     #[test]
     fn test_json_transformer() {
-        let transformer = JsonTransformer;
+        let transformer = JsonTransformer::new();
         assert_eq!(transformer.format_name(), "JSON");
         assert_eq!(transformer.file_extension(), "json");
 

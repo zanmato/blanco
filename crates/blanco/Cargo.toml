@@ -25,6 +25,7 @@ blanco-core = { path = "../blanco-core" }
 postgres = { path = "../postgres" }
 sqlite = { path = "../sqlite" }
 blanco-openai = { path = "../openai" }
+gpui_tokio = { path = "../gpui_tokio" }
 
 # Additional dependencies
 env_logger = { workspace = true }
@@ -52,6 +53,7 @@ futures = { workspace = true }
 # SSH tunnel support
 russh = { workspace = true }
 russh-keys = { workspace = true }
+ssh-key = { version = "0.6" }
 
 
 [dev-dependencies]

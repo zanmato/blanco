@@ -805,8 +805,6 @@ impl ConnectionsPanel {
             if metadata.as_ref().map(|m| &m.kind) == Some(&TreeItemKind::Connection) {
                 // Connection level
                 // Connection context menu - clone for each closure
-                let item_id = item.id.clone();
-                let refresh_label_new_query = item.label.clone();
                 let refresh_label_refresh = item.label.clone();
                 let disconnect_label = item.label.clone();
                 let edit_label = item.label.clone();
@@ -815,10 +813,6 @@ impl ConnectionsPanel {
                 let connection_id = metadata
                     .as_ref()
                     .map(|m| m.connection_id)
-                    .unwrap_or_default();
-                let connection_name = metadata
-                    .as_ref()
-                    .map(|m| m.connection_name.clone())
                     .unwrap_or_default();
 
                 this.item(
@@ -1323,20 +1317,20 @@ impl ConnectionsPanel {
                 )
             });
 
-            window.open_dialog(cx, move |dialog, _window, cx| {
+            window.open_dialog(cx, move |dialog, _window, _cx| {
                 let modal_clone = modal_content.clone();
                 dialog
                     .title("Export Table Data")
                     .h(px(450.0))
                     .child(modal_content.clone())
                     .footer({
-                        move |_ok, _cancel, window, cx| {
+                        move |_ok, _cancel, _window, _cx| {
                             vec![
-                                Button::new("export-cancel")
-                                    .label("Cancel")
-                                    .on_click(|_, window, cx| {
+                                Button::new("export-cancel").label("Cancel").on_click(
+                                    |_, window, cx| {
                                         window.close_dialog(cx);
-                                    }),
+                                    },
+                                ),
                                 Button::new("export-submit")
                                     .primary()
                                     .label("Export")
@@ -1348,7 +1342,7 @@ impl ConnectionsPanel {
                                             });
                                             window.close_dialog(cx);
                                         }
-                                    })
+                                    }),
                             ]
                         }
                     })

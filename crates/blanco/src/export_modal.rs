@@ -1,17 +1,18 @@
+use chrono::Utc;
 use gpui::{
     App, AppContext, Axis, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
-    Render, Styled, Task, Window, div, prelude::FluentBuilder, px, Subscription,
+    Render, Styled, Subscription, Task, Window, div, prelude::FluentBuilder, px,
 };
-use std::sync::atomic::{AtomicBool, Ordering};
 use gpui_component::{
-    ActiveTheme, IndexPath, StyledExt, h_flex,
+    ActiveTheme, IndexPath, StyledExt,
     button::Button,
+    h_flex,
     input::{Input, InputState},
     select::{Select, SelectEvent, SelectState},
     v_flex,
 };
 use std::path::PathBuf;
-use chrono::Utc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Export format options
 #[derive(Clone, Debug, PartialEq)]
@@ -30,14 +31,6 @@ impl ExportFormat {
         }
     }
 
-    fn to_string(&self) -> &'static str {
-        match self {
-            ExportFormat::Csv => "CSV",
-            ExportFormat::Json => "JSON",
-            ExportFormat::Sql => "SQL",
-        }
-    }
-
     pub fn file_extension(&self) -> &'static str {
         match self {
             ExportFormat::Csv => "csv",
@@ -48,15 +41,11 @@ impl ExportFormat {
 }
 
 #[derive(Clone)]
-pub struct ExportOptions {
-    pub batch_size: usize,  // For SQL
-}
+pub struct ExportOptions {}
 
 impl Default for ExportOptions {
     fn default() -> Self {
-        Self {
-            batch_size: 1000,
-        }
+        Self {}
     }
 }
 
@@ -90,25 +79,32 @@ impl ExportModal {
         cx: &mut Context<Self>,
     ) -> Self {
         let formats = vec!["CSV".to_string(), "JSON".to_string(), "SQL".to_string()];
-        let format_select = cx.new(|cx| SelectState::new(formats.clone(), Some(IndexPath::new(0)), window, cx));
+        let format_select =
+            cx.new(|cx| SelectState::new(formats.clone(), Some(IndexPath::new(0)), window, cx));
 
         // Initialize directory input
-        let directory_input = cx.new(|cx| InputState::new(window, cx).placeholder("Export directory (e.g., /home/user/exports)"));
+        let directory_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("Export directory (e.g., /home/user/exports)")
+        });
 
         // Generate default filename and prepopulate it
         let default_filename = generate_default_filename(&table_name, &ExportFormat::Csv);
-        let filename_input = cx.new(|cx| InputState::new(window, cx).default_value(&default_filename));
+        let filename_input =
+            cx.new(|cx| InputState::new(window, cx).default_value(&default_filename));
 
         // Set up subscription for format change events
-        let subscription = cx.subscribe(&format_select, move |_modal, _format_select, event: &SelectEvent<Vec<String>>, cx| {
-            // Just set a flag to indicate format changed
-            match event {
-                SelectEvent::Confirm(_) => {
-                    _modal.format_changed.store(true, Ordering::Relaxed);
-                    cx.notify();
+        let subscription = cx.subscribe(
+            &format_select,
+            move |_modal, _format_select, event: &SelectEvent<Vec<String>>, cx| {
+                // Just set a flag to indicate format changed
+                match event {
+                    SelectEvent::Confirm(_) => {
+                        _modal.format_changed.store(true, Ordering::Relaxed);
+                        cx.notify();
+                    }
                 }
-            }
-        });
+            },
+        );
 
         Self {
             focus_handle: cx.focus_handle(),
@@ -158,7 +154,10 @@ impl ExportModal {
         let mut file_path = dir_path.join(filename.as_ref());
 
         // Ensure the filename has the correct extension
-        if !file_path.extension().map_or(false, |ext| ext == format.file_extension()) {
+        if !file_path
+            .extension()
+            .map_or(false, |ext| ext == format.file_extension())
+        {
             file_path.set_extension(format.file_extension());
         }
 
@@ -178,19 +177,22 @@ impl ExportModal {
             if let Some(path) = path.await.ok()?.ok()? {
                 if let Some(dir_path) = path.iter().next() {
                     if let Some(dir_str) = dir_path.to_str() {
-                        window.update(|window, cx| {
-                            directory_input.update(cx, |input, cx| {
-                                input.set_value(dir_str.to_string(), window, cx);
-                            });
-                        }).ok();
+                        window
+                            .update(|window, cx| {
+                                directory_input.update(cx, |input, cx| {
+                                    input.set_value(dir_str.to_string(), window, cx);
+                                });
+                            })
+                            .ok();
                     }
                 }
             }
             Some(())
-        }).detach();
+        })
+        .detach();
     }
 
-    pub fn start_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn start_export(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if self.is_exporting {
             return;
         }
@@ -226,10 +228,10 @@ impl ExportModal {
                 let db_service = crate::db_service::DbService::global(cx).clone();
 
                 // Start async export
-                let export_task = cx.spawn(async move |entity, cx| {
-
+                let export_task = cx.spawn(async move |_entity, _cx| {
                     // Get connection
-                    let connection = match db_service.get_or_create_connection(connection_id).await {
+                    let connection = match db_service.get_or_create_connection(connection_id).await
+                    {
                         Ok(conn) => conn,
                         Err(e) => {
                             log::error!("Failed to get connection for export: {}", e);
@@ -247,8 +249,10 @@ impl ExportModal {
                             } else {
                                 table_name_param.clone()
                             };
-                            Box::new(crate::transformers::SqlTransformer::with_table_name(table_name_for_sql))
-                        },
+                            Box::new(crate::transformers::SqlTransformer::with_table_name(
+                                table_name_for_sql,
+                            ))
+                        }
                     };
 
                     // Create export service
@@ -294,19 +298,6 @@ impl ExportModal {
         }
     }
 
-    pub fn cancel_export(&mut self, cx: &mut Context<Self>) {
-        self.is_cancelled = true;
-        if let Some(task) = self.export_task.take() {
-            task.detach();
-        }
-        self.is_exporting = false;
-        self.export_progress = 0.0;
-        self.exported_rows = 0;
-        cx.notify();
-    }
-
-  
-  
     fn render_progress_bar(&self, cx: &App) -> impl IntoElement {
         if self.is_exporting {
             v_flex()
@@ -348,7 +339,11 @@ impl Focusable for ExportModal {
 impl Render for ExportModal {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Check if format changed and update filename
-        if self.format_changed.compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+        if self
+            .format_changed
+            .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
             let export_format = self.get_selected_format(cx);
             let new_filename = generate_default_filename(&self.table_name, &export_format);
 
@@ -356,8 +351,6 @@ impl Render for ExportModal {
                 input.set_value(&new_filename, window, cx);
             });
         }
-
-        let format = self.get_selected_format(cx);
 
         v_flex()
             .gap_4()
@@ -367,8 +360,8 @@ impl Render for ExportModal {
                 v_flex()
                     .gap_2()
                     .child(div().text_sm().child("Export Format"))
-                    .child(Select::new(&self.format_select))
-              )
+                    .child(Select::new(&self.format_select)),
+            )
             .child(
                 v_flex()
                     .gap_2()
@@ -377,13 +370,11 @@ impl Render for ExportModal {
                         h_flex()
                             .gap_2()
                             .child(Input::new(&self.directory_input).flex_1())
-                            .child(
-                                Button::new("browse-btn")
-                                    .label("Browse")
-                                    .on_click(cx.listener(|modal: &mut Self, _event, window, cx| {
-                                        modal.browse_directory(window, cx);
-                                    })),
-                            ),
+                            .child(Button::new("browse-btn").label("Browse").on_click(
+                                cx.listener(|modal: &mut Self, _event, window, cx| {
+                                    modal.browse_directory(window, cx);
+                                }),
+                            )),
                     ),
             )
             .child(
@@ -392,7 +383,7 @@ impl Render for ExportModal {
                     .child(div().text_sm().child("File Name"))
                     .child(Input::new(&self.filename_input)),
             )
-              .child(self.render_progress_bar(cx))
+            .child(self.render_progress_bar(cx))
             .scrollable(Axis::Vertical)
     }
 }

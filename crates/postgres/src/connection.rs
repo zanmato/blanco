@@ -1,7 +1,6 @@
 use crate::sql_parser::PostgresTableExtractor;
 use anyhow::Result;
 use async_std::sync::RwLock;
-use async_std::task::sleep;
 use async_trait::async_trait;
 use blanco_core::{
     ColumnInfo, Connection, ConnectionUIMetadata, IconName, QueryResult, TableChangeOperation,
@@ -13,7 +12,6 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::{Column, Row, TypeInfo, ValueRef};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 
 /// PostgreSQL connection implementation of the Connection trait
 /// This uses SQLX directly to provide a unified interface with database-specific connection pools
@@ -155,10 +153,7 @@ impl PgServerKey {
         // Add database and application_name parameter
         url = format!("{}/{}?application_name=Blanco", url, database);
 
-        log::debug!(
-            "Generated SSH tunnel database connection string: {}",
-            url
-        );
+        log::debug!("Generated SSH tunnel database connection string: {}", url);
         url
     }
 }
@@ -384,48 +379,6 @@ impl PostgresConnection {
             initial_database: None,
             ssh_config: Some(ssh_config),
             local_tunnel_port: None,
-        }
-    }
-
-    /// Setup SSH tunnel for this connection
-    async fn setup_ssh_tunnel(&mut self) -> Result<u16> {
-        if let Some(ref ssh_config) = self.ssh_config {
-            // Validate SSH configuration before setting up tunnel
-            if ssh_config.ssh_host.is_empty() || ssh_config.ssh_user.is_empty() {
-                log::warn!(
-                    "SSH tunnel configuration is invalid: host='{}', user='{}'",
-                    ssh_config.ssh_host,
-                    ssh_config.ssh_user
-                );
-                // Fall back to direct connection
-                self.server_connection_string = self.server_key.to_server_connection_string();
-                return Ok(self.server_key.port);
-            }
-
-            log::info!(
-                "Setting up SSH tunnel to {}:{}",
-                ssh_config.ssh_host,
-                ssh_config.ssh_port
-            );
-
-            // Simulate SSH tunnel creation (in real implementation, this would use russh)
-            sleep(Duration::from_millis(100)).await;
-
-            // Assign a local port (in real implementation, this would come from SSH tunnel manager)
-            let local_port = 15432; // This would be dynamically assigned
-
-            // Update the server connection string to use the tunnel
-            self.server_connection_string = self
-                .server_key
-                .to_server_connection_string_with_tunnel(local_port);
-            self.local_tunnel_port = Some(local_port);
-
-            log::info!("SSH tunnel established on local port {}", local_port);
-            Ok(local_port)
-        } else {
-            // No SSH configuration, use direct connection
-            self.server_connection_string = self.server_key.to_server_connection_string();
-            Ok(self.server_key.port)
         }
     }
 
@@ -1003,18 +956,12 @@ impl Connection for PostgresConnection {
         let key = PgConnectionKey::from_connection_string(connection_string)?;
         self.server_key = key.to_server_key();
 
-        // Set up SSH tunnel if configured
-        let local_port = self.setup_ssh_tunnel().await?;
+        // SSH tunnel setup is now handled by DbService
+        // The connection string received here already includes the tunnel port if SSH is used
+        self.server_connection_string = connection_string.to_string();
 
-        // Update display name based on whether SSH is used
-        if self.ssh_config.is_some() {
-            self.display_name = Self::generate_server_display_name_with_ssh(
-                &self.server_key,
-                self.ssh_config.as_ref().unwrap(),
-            );
-        } else {
-            self.display_name = Self::generate_server_display_name(&self.server_key);
-        }
+        // Update display name
+        self.display_name = Self::generate_server_display_name(&self.server_key);
 
         // Clear any existing pools (they will be recreated on demand)
         let mut pools = self.pools.write().await;
@@ -1022,12 +969,7 @@ impl Connection for PostgresConnection {
         drop(pools);
 
         log::info!("PostgreSQL server connection configured (pools will be created on demand)");
-        if self.ssh_config.is_some() {
-            log::info!(
-                "Connection will use SSH tunnel on local port {}",
-                local_port
-            );
-        }
+        log::info!("Connection string: {}", self.server_connection_string);
         Ok(())
     }
 
@@ -1222,7 +1164,7 @@ impl Connection for PostgresConnection {
     async fn get_schemas(&self) -> Result<Vec<String>> {
         let result = self
             .execute_query(
-                "SELECT schema_name FROM information_schema.schemata ORDER BY schema_name",
+                "SELECT schema_name FROM information_schema.schemata WHERE schema_owner = 'pg_database_owner' ORDER BY schema_name",
                 None,
             )
             .await?;
@@ -1429,7 +1371,14 @@ impl Connection for PostgresConnection {
         &self,
         query: &str,
         database_name: Option<&str>,
-    ) -> Result<(Vec<String>, Vec<String>, Box<dyn Stream<Item = Result<Vec<String>, anyhow::Error>> + Send + Unpin>), anyhow::Error> {
+    ) -> Result<
+        (
+            Vec<String>,
+            Vec<String>,
+            Box<dyn Stream<Item = Result<Vec<String>, anyhow::Error>> + Send + Unpin>,
+        ),
+        anyhow::Error,
+    > {
         log::debug!(
             "Executing PostgreSQL streaming query: {} (database: {:?})",
             query,
@@ -1472,11 +1421,13 @@ impl Connection for PostgresConnection {
 
             if first_row_data.is_none() {
                 // Extract column names and types from the first row
-                columns = row.columns()
+                columns = row
+                    .columns()
                     .iter()
                     .map(|col| col.name().to_string())
                     .collect();
-                column_types = row.columns()
+                column_types = row
+                    .columns()
                     .iter()
                     .map(|col| col.type_info().name().to_string())
                     .collect();

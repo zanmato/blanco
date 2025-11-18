@@ -1,8 +1,16 @@
 use anyhow::Result;
+use russh::client as russh_client;
+use russh::client::{Config as SshConfig, Handle as SshHandle};
+use russh::keys::load_secret_key;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use tokio::io::copy_bidirectional;
+use tokio::net::TcpListener;
+use tokio::sync::Mutex as TokioMutex;
+
+// Import the global tokio handle
+use gpui_tokio::Tokio;
 
 /// SSH tunnel configuration
 #[derive(Debug, Clone)]
@@ -17,6 +25,10 @@ pub struct SshTunnelConfig {
     pub remote_port: u16,
     pub local_port: u16,
 }
+
+/// Connection identifier for tracking active connections
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ConnectionId(pub String);
 
 impl SshTunnelConfig {
     pub fn from_connection_data(
@@ -50,181 +62,238 @@ pub enum TunnelStatus {
     Failed(String),
 }
 
-/// SSH tunnel information
-#[derive(Debug, Clone)]
-pub struct TunnelInfo {
-    pub config: SshTunnelConfig,
-    pub status: TunnelStatus,
-    pub created_at: Instant,
-    pub last_activity: Instant,
+/// SSH client handler
+struct SshClientHandler {
+    // Add any state needed for the SSH client handler
 }
 
-/// SSH tunnel manager
-pub struct SshTunnelManager {
-    pub(super) tunnels: Arc<Mutex<HashMap<String, TunnelInfo>>>,
-    port_counter: Arc<AtomicU32>,
+#[async_trait::async_trait]
+impl russh_client::Handler for SshClientHandler {
+    type Error = russh::Error;
+
+    async fn check_server_key(
+        &mut self,
+        _server_public_key: &russh::keys::key::PublicKey,
+    ) -> Result<bool, Self::Error> {
+        // In production, you should verify the server key against a known hosts file
+        Ok(true)
+    }
 }
 
-impl SshTunnelManager {
-    pub fn new() -> Self {
-        Self {
-            tunnels: Arc::new(Mutex::new(HashMap::new())),
-            port_counter: Arc::new(AtomicU32::new(15432)), // Start from 15432
-        }
+/// Real SSH tunnel implementation using russh
+pub struct SshTunnel {
+    session: Option<SshHandle<SshClientHandler>>,
+    local_port: u16,
+    config: SshTunnelConfig,
+    status: Arc<Mutex<TunnelStatus>>,
+    is_running: Arc<Mutex<bool>>,
+    active_connections: Arc<Mutex<std::collections::HashSet<ConnectionId>>>,
+}
+
+impl SshTunnel {
+    pub async fn create(config: SshTunnelConfig) -> Result<Self> {
+        let mut tunnel = Self {
+            session: None,
+            local_port: config.local_port,
+            config,
+            status: Arc::new(Mutex::new(TunnelStatus::Disconnected)),
+            is_running: Arc::new(Mutex::new(false)),
+            active_connections: Arc::new(Mutex::new(std::collections::HashSet::new())),
+        };
+
+        tunnel.connect().await?;
+        Ok(tunnel)
     }
 
-    /// Assign a unique local port for a tunnel
-    pub fn assign_local_port(&self) -> u16 {
-        let port = self.port_counter.fetch_add(1, Ordering::SeqCst);
-        // Check if we need to wrap around
-        if port > 65535 {
-            self.port_counter.store(15432, Ordering::SeqCst);
-            return 15432;
-        }
-        port as u16
-    }
+    async fn connect(&mut self) -> Result<()> {
+        *self.status.lock().unwrap() = TunnelStatus::Connecting;
 
-    /// Create a tunnel key for a connection
-    fn create_tunnel_key(&self, conn: &crate::app_database::ConnectionData) -> String {
-        format!(
-            "{}@{}:{}->{}:{}",
-            conn.ssh_user.as_ref().unwrap_or(&"".to_string()),
-            conn.ssh_host.as_ref().unwrap_or(&"".to_string()),
-            conn.ssh_port.unwrap_or(22),
-            conn.host.as_ref().unwrap_or(&"".to_string()),
-            conn.port.unwrap_or(5432)
+        // Create SSH config
+        let ssh_config = Arc::new(SshConfig::default());
+        let handler = SshClientHandler {};
+
+        // Connect to SSH server
+        let mut session = russh_client::connect(
+            ssh_config,
+            (self.config.ssh_host.as_str(), self.config.ssh_port),
+            handler,
         )
-    }
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to connect to SSH server: {}", e))?;
 
-    /// Create a new SSH tunnel (simplified implementation for now)
-    pub async fn create_tunnel(&self, conn: &crate::app_database::ConnectionData) -> Result<u16> {
-        let tunnel_key = self.create_tunnel_key(conn);
-        let local_port = self.assign_local_port();
+        // Handle authentication
+        if let Some(key_path) = &self.config.ssh_private_key_path {
+            let key = load_secret_key(&key_path, self.config.ssh_private_key_password.as_deref())
+                .map_err(|e| anyhow::anyhow!("Failed to load private key: {}", e))?;
 
-        let config = SshTunnelConfig::from_connection_data(conn, local_port)?;
-
-        // Store tunnel info
-        {
-            let mut tunnels = self.tunnels.lock().unwrap();
-            tunnels.insert(
-                tunnel_key.clone(),
-                TunnelInfo {
-                    config,
-                    status: TunnelStatus::Connected, // Simplified - assume it works for now
-                    created_at: Instant::now(),
-                    last_activity: Instant::now(),
-                },
-            );
+            session
+                .authenticate_publickey(&self.config.ssh_user, Arc::new(key))
+                .await
+                .map_err(|e| anyhow::anyhow!("SSH key authentication failed: {}", e))?;
+        } else if let Some(password) = &self.config.ssh_password {
+            session
+                .authenticate_password(&self.config.ssh_user, password)
+                .await
+                .map_err(|e| anyhow::anyhow!("SSH password authentication failed: {}", e))?;
+        } else {
+            anyhow::bail!("No authentication method provided");
         }
 
-        // Note: This is a simplified implementation. In a real scenario,
-        // you would need to implement the actual SSH tunneling logic here
-        // with proper port forwarding using russh
-
-        Ok(local_port)
-    }
-
-    /// Get tunnel status
-    pub fn get_tunnel_status(&self, conn: &crate::app_database::ConnectionData) -> TunnelStatus {
-        let tunnel_key = self.create_tunnel_key(conn);
-        let tunnels = self.tunnels.lock().unwrap();
-        tunnels
-            .get(&tunnel_key)
-            .map(|info| info.status.clone())
-            .unwrap_or(TunnelStatus::Disconnected)
-    }
-
-    /// Close a tunnel
-    pub fn close_tunnel(&self, conn: &crate::app_database::ConnectionData) -> Result<()> {
-        let tunnel_key = self.create_tunnel_key(conn);
-        let mut tunnels = self.tunnels.lock().unwrap();
-        tunnels.remove(&tunnel_key);
+        self.session = Some(session);
+        *self.status.lock().unwrap() = TunnelStatus::Connected;
         Ok(())
     }
 
-    /// List all active tunnels
-    pub fn list_active_tunnels(&self) -> Vec<(String, TunnelInfo)> {
-        let tunnels = self.tunnels.lock().unwrap();
-        tunnels
-            .iter()
-            .filter(|(_, info)| matches!(info.status, TunnelStatus::Connected))
-            .map(|(key, info)| (key.clone(), info.clone()))
-            .collect()
-    }
+    pub async fn setup_tcp_forwarding(&mut self) -> Result<()> {
+        let remote_host = self.config.remote_host.clone();
+        let remote_port = self.config.remote_port;
+        let local_port = self.local_port;
+        let is_running = Arc::clone(&self.is_running);
+        let status = Arc::clone(&self.status);
 
-    /// Test SSH connection configuration
-    pub async fn test_ssh_connection(
-        &self,
-        conn: &crate::app_database::ConnectionData,
-    ) -> Result<bool> {
-        if conn.ssh_host.is_none() || conn.ssh_user.is_none() {
-            return Ok(false);
-        }
+        *is_running.lock().unwrap() = true;
 
-        // Simplified test - in a real implementation, you would
-        // attempt to establish an actual SSH connection here
-        Ok(true)
-    }
+        // Create local listener
+        let listener = TcpListener::bind(format!("127.0.0.1:{}", local_port))
+            .await
+            .map_err(|e| {
+                *status.lock().unwrap() =
+                    TunnelStatus::Failed(format!("Failed to bind local port: {}", e));
+                anyhow::anyhow!("Failed to bind local port: {}", e)
+            })?;
 
-    /// Create tunnel using GPUI background_spawn (for integration with GPUI)
-    pub async fn create_tunnel_gpui(
-        &self,
-        conn: &crate::app_database::ConnectionData,
-    ) -> Result<u16> {
-        // Simplified GPUI integration - will be expanded later
-        self.create_tunnel(conn).await
-    }
-}
-
-impl Clone for SshTunnelManager {
-    fn clone(&self) -> Self {
-        Self {
-            tunnels: Arc::clone(&self.tunnels),
-            port_counter: Arc::clone(&self.port_counter),
-        }
-    }
-}
-
-impl Default for SshTunnelManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_assign_local_port() {
-        let manager = SshTunnelManager::new();
-        let port1 = manager.assign_local_port();
-        let port2 = manager.assign_local_port();
-
-        assert_eq!(port1, 15432);
-        assert_eq!(port2, 15433);
-    }
-
-    #[test]
-    fn test_tunnel_key_creation() {
-        let conn = crate::app_database::ConnectionData::new_postgres_with_ssh(
-            "test".to_string(),
-            "localhost".to_string(),
-            5432,
-            "testdb".to_string(),
-            "testuser".to_string(),
-            "testpass".to_string(),
-            "ssh.example.com".to_string(),
-            22,
-            "sshuser".to_string(),
-            Some("sshpass".to_string()),
-            None,
-            None,
+        log::info!(
+            "SSH tunnel listening on 127.0.0.1:{} (remote port: {})",
+            local_port,
+            remote_port
         );
 
-        let manager = SshTunnelManager::new();
-        let key = manager.create_tunnel_key(&conn);
+        // Wrap the session in Arc<TokioMutex<>> so it can be shared between connection tasks
+        let session = Arc::new(TokioMutex::new(self.session.take().unwrap()));
+        let active_connections = Arc::clone(&self.active_connections);
 
-        assert_eq!(key, "sshuser@ssh.example.com:22->localhost:5432");
+        // Use the global tokio runtime handle if available, otherwise fall back to tokio::spawn
+        if let Some(handle) = Tokio::global_handle() {
+            log::debug!("Using global tokio runtime for SSH tunnel spawn");
+            handle.spawn(async move {
+                // Handle incoming connections
+                while *is_running.lock().unwrap() {
+                    match listener.accept().await {
+                        Ok((mut local_socket, _)) => {
+                            let remote_host = remote_host.clone();
+                            let remote_port = remote_port;
+                            let local_port = local_port;
+                            let session = Arc::clone(&session);
+                            let active_connections = Arc::clone(&active_connections);
+
+                            // Generate a unique connection ID
+                            let connection_id = ConnectionId(format!("{}:{}->{}:{}-{}",
+                                "127.0.0.1", local_port, remote_host, remote_port,
+                                uuid::Uuid::new_v4().to_string()));
+
+                            // Add connection to tracking
+                            {
+                                let mut connections = active_connections.lock().unwrap();
+                                connections.insert(connection_id.clone());
+                                log::debug!("Added connection {} to tunnel. Active connections: {}",
+                                    connection_id.0, connections.len());
+                            }
+
+                            // Spawn a separate task for each connection
+                            handle.spawn(async move {
+                                log::debug!("Processing connection {}", connection_id.0);
+
+                                // Open SSH channel to remote host:port
+                                let ssh_channel = {
+                                    let session = session.lock().await;
+                                    session.channel_open_direct_tcpip(
+                                        &remote_host,
+                                        remote_port as u32,
+                                        "127.0.0.1",
+                                        local_port as u32
+                                    ).await
+                                };
+
+                                match ssh_channel {
+                                    Ok(ssh_channel) => {
+                                        let mut ssh_stream = ssh_channel.into_stream();
+
+                                        // Copy data bidirectionally between local socket and SSH stream
+                                        match copy_bidirectional(&mut local_socket, &mut ssh_stream).await {
+                                            Ok((bytes_to_local, bytes_to_remote)) => {
+                                                log::debug!("Connection {} completed. {} bytes to local, {} bytes to remote",
+                                                    connection_id.0, bytes_to_local, bytes_to_remote);
+                                            }
+                                            Err(e) => {
+                                                log::error!("Error copying data for connection {}: {}", connection_id.0, e);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        log::error!("Failed to open SSH forwarding channel for connection {}: {}", connection_id.0, e);
+                                    }
+                                }
+
+                                // Remove connection from tracking
+                                {
+                                    let mut connections = active_connections.lock().unwrap();
+                                    connections.remove(&connection_id);
+                                    let connection_count = connections.len();
+                                    log::debug!("Removed connection {} from tunnel. Active connections: {}",
+                                        connection_id.0, connection_count);
+
+                                    // If no more active connections, consider closing the tunnel
+                                    if connection_count == 0 {
+                                        log::info!("No more active connections for tunnel on port {}", local_port);
+                                        // Note: We don't close the tunnel automatically here as the DbService
+                                        // should manage the tunnel lifecycle based on its own logic
+                                    }
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            log::error!("Failed to accept local connection: {}", e);
+                            break;
+                        }
+                    }
+                }
+                log::warn!("Tunnel is not running anymore");
+            });
+        }
+
+        Ok(())
+    }
+
+    pub fn status(&self) -> TunnelStatus {
+        self.status.lock().unwrap().clone()
+    }
+
+    pub fn local_port(&self) -> u16 {
+        self.local_port
+    }
+
+    pub async fn close(&mut self) -> Result<()> {
+        *self.status.lock().unwrap() = TunnelStatus::Disconnected;
+        *self.is_running.lock().unwrap() = false;
+        if let Some(session) = self.session.take() {
+            // The session will be closed when dropped
+            drop(session);
+        }
+        Ok(())
+    }
+
+    /// Get the number of active connections for this tunnel
+    pub fn active_connection_count(&self) -> usize {
+        self.active_connections.lock().unwrap().len()
+    }
+
+    /// Check if there are any active connections
+    pub fn has_active_connections(&self) -> bool {
+        !self.active_connections.lock().unwrap().is_empty()
+    }
+
+    /// Get a copy of the active connection IDs
+    pub fn get_active_connections(&self) -> std::collections::HashSet<ConnectionId> {
+        self.active_connections.lock().unwrap().clone()
     }
 }

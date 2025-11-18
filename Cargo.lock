@@ -970,6 +970,7 @@ dependencies = [
  "futures",
  "gpui",
  "gpui-component",
+ "gpui_tokio",
  "http",
  "http_client",
  "log",
@@ -989,6 +990,7 @@ dependencies = [
  "sql-parse",
  "sqlite",
  "sqlx",
+ "ssh-key",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -3347,7 +3349,7 @@ dependencies = [
 
 [[package]]
 name = "gpui-component"
-version = "0.4.0-preview2"
+version = "0.4.0"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -3415,7 +3417,7 @@ dependencies = [
 
 [[package]]
 name = "gpui-component-macros"
-version = "0.4.0-preview2"
+version = "0.4.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3536,6 +3538,15 @@ dependencies = [
  "arrayvec",
  "log",
  "rayon",
+]
+
+[[package]]
+name = "gpui_tokio"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "tokio",
 ]
 
 [[package]]
@@ -6073,6 +6084,7 @@ dependencies = [
  "blanco-core",
  "chrono",
  "env_logger 0.10.2",
+ "futures",
  "gpui",
  "gpui-component",
  "log",
@@ -7844,6 +7856,7 @@ dependencies = [
  "blanco-core",
  "chrono",
  "env_logger 0.10.2",
+ "futures",
  "gpui",
  "gpui-component",
  "log",

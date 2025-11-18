@@ -7,6 +7,7 @@ members = [
     "crates/postgres",
     "crates/sqlite",
     "crates/openai",
+    "crates/gpui_tokio",
 ]
 
 [workspace.dependencies]
@@ -16,7 +17,7 @@ gpui-macros = "0.2.2"
 gpui-component = { path = "vendor/gpui-component/crates/ui", features = [
     "tree-sitter-languages",
 ] }
-gpui-component-macros = { path = "vendor/gpui-component/crates/macros", version = "0.4.0-preview1" }
+gpui-component-macros = { path = "vendor/gpui-component/crates/macros", version = "0.4.0" }
 
 # Additional dependencies for gpui-component compatibility
 notify = "7.0.0"
@@ -41,6 +42,7 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 thiserror = "1.0"
 regex = "1.10"
+async-trait = "0.1"
 
 # SSH tunnel support
 russh = "0.44"
@@ -57,7 +59,6 @@ sqlx = { version = "0.8", features = [
     "bigdecimal",
 ] }
 async-std = { version = "1.13", features = ["attributes"] }
-async-trait = "0.1"
 
 # SQL parsing
 sql-parse = "0.2"

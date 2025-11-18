@@ -258,7 +258,7 @@ impl BlancoApp {
                     // Refresh connections panel to mark connection as connected if query was successful
                     if *success {
                         if let Some(conn_id) = connection_id {
-                            log::info!("Query execution completed successfully for connection {}, refreshing connections panel", conn_id);
+                            log::info!("Query execution completed successfully for connection {} ({:?}), refreshing connections panel", conn_id, database_name);
                             sidebar_clone.update(cx, |sidebar, cx| {
                                 // Mark the connection as connected and refresh the sidebar view
                                 sidebar.validate_connection_as_connected(*conn_id, cx);
@@ -287,7 +287,7 @@ impl BlancoApp {
                         log::info!("🔄 New sidebar_collapsed state: {}", app.sidebar_collapsed);
 
                         // Update sidebar's collapse state
-                        sidebar_clone.update(cx, |sidebar, cx| {
+                        sidebar_clone.update(cx, |_sidebar, _cx| {
                             log::info!(
                                 "🔄 Calling sidebar.set_collapsed with: {}",
                                 app.sidebar_collapsed
