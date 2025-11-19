@@ -114,7 +114,10 @@ impl LoadingState {
     }
 
     pub fn show_spinner(&self) -> bool {
-        matches!(self, LoadingState::Connecting | LoadingState::Streaming | LoadingState::ProcessingTools)
+        matches!(
+            self,
+            LoadingState::Connecting | LoadingState::Streaming | LoadingState::ProcessingTools
+        )
     }
 }
 
@@ -158,12 +161,7 @@ pub enum ChatEvent {
 // Chat commands
 #[derive(Clone, Debug, PartialEq)]
 pub enum ChatCommand {
-    Explain,
-    Optimize,
-    Fix,
-    Schema(Option<String>),
-    Export,
-    Clear,
+    New,
     Help,
 }
 
@@ -174,19 +172,10 @@ impl ChatCommand {
             return None;
         }
 
-        let parts: Vec<&str> = text.splitn(2, ' ').collect();
-        let command = parts[0].to_lowercase();
+        let command = text.to_lowercase();
 
         match command.as_str() {
-            "/explain" => Some(Self::Explain),
-            "/optimize" => Some(Self::Optimize),
-            "/fix" => Some(Self::Fix),
-            "/schema" => {
-                let table_name = parts.get(1).map(|s| s.to_string());
-                Some(Self::Schema(table_name))
-            }
-            "/export" => Some(Self::Export),
-            "/clear" => Some(Self::Clear),
+            "/new" => Some(Self::New),
             "/help" => Some(Self::Help),
             _ => None,
         }
@@ -195,13 +184,7 @@ impl ChatCommand {
     pub fn help_text() -> &'static str {
         r#"
 Available commands:
-/explain - Explain the current SQL query
-/optimize - Suggest optimizations for the current query
-/fix - Help fix errors in the current query
-/schema [table] - Show schema information for entire database or specific table
-/export - Export the current conversation to a file
-/clear - Clear the current chat history
-/help - Show this help message
+/new - Start a new chat session by clearing the message history
 "#
     }
 }

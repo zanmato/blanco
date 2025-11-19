@@ -135,107 +135,10 @@ impl ChatSession {
     ) -> Task<Result<String>> {
         let response = match command {
             ChatCommand::Help => ChatCommand::help_text().to_string(),
-            ChatCommand::Clear => {
+            ChatCommand::New => {
                 self.clear_messages();
                 cx.emit(ChatEvent::SessionCleared);
-                "Chat history cleared.".to_string()
-            }
-            ChatCommand::Explain => {
-                if self.sql_context.current_query.is_empty() {
-                    "No SQL query to explain. Please write a query first.".to_string()
-                } else {
-                    format!(
-                        "Analyzing your SQL query:\n```\n{}\n```\n\nThis query appears to be a valid SQL statement. Here's what I can tell you:\n\n* The query is syntactically correct\n* It targets the current database context\n* Execution would depend on your table structure\n\nWould you like me to suggest optimizations or help debug any issues?",
-                        self.sql_context.current_query
-                    )
-                }
-            }
-            ChatCommand::Optimize => {
-                if self.sql_context.current_query.is_empty() {
-                    "No SQL query to optimize. Please write a query first.".to_string()
-                } else {
-                    format!(
-                        r"Here are some optimization suggestions for your query:
-
-```
-{}
-```
-
-**Performance Tips:**
-
-1. **Indexes**: Consider adding indexes on frequently filtered columns
-2. **SELECT ***: Avoid selecting all columns - specify only what you need
-3. **WHERE clauses**: Add proper filtering to reduce result sets
-4. **JOINs**: Ensure join columns are indexed
-5. **EXPLAIN**: Use `EXPLAIN` to analyze the query execution plan
-
-Would you like me to help you implement any of these optimizations?",
-                        self.sql_context.current_query
-                    )
-                }
-            }
-            ChatCommand::Fix => {
-                if let Some(error) = &self.sql_context.error_message {
-                    format!(
-                        "I see there's an error in your SQL query:\n\n**Error:** {}\n\n**Current Query:**\n```\n{}\n```\n\n**Common Issues to Check:**\n\n1. **Syntax errors** - Check for missing commas, parentheses, or keywords\n2. **Table/Column names** - Verify they exist in your schema\n3. **Data types** - Ensure compatible data types in operations\n4. **Reserved words** - Some words need to be quoted\n\nWould you like me to help you fix this specific error?",
-                        error, self.sql_context.current_query
-                    )
-                } else {
-                    "No recent error found. Please run your query first so I can help debug any issues.".to_string()
-                }
-            }
-            ChatCommand::Schema(table_name) => {
-                if let Some(table) = table_name {
-                    format!(
-                        "Showing schema for table: {}\n\n*Schema information would be displayed here with columns, data types, and constraints.*\n\nThis will be implemented once database schema introspection is available.",
-                        table
-                    )
-                } else if self.sql_context.tables.is_empty() {
-                    "No table information available. Connect to a database first to see available tables.".to_string()
-                } else {
-                    let mut response = "Available tables:\n\n".to_string();
-                    for table in &self.sql_context.tables {
-                        response.push_str(&format!(
-                            "• {}.{} ({} columns)\n",
-                            table.schema.as_deref().unwrap_or("public"),
-                            table.name,
-                            table.columns.len()
-                        ));
-                    }
-                    response.push_str(
-                        "\nUse `/schema <table_name>` to see detailed schema for a specific table.",
-                    );
-                    response
-                }
-            }
-            ChatCommand::Export => {
-                let mut export = "Chat History Export\n".to_string();
-                export.push_str(&format!(
-                    "Generated: {}\n",
-                    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
-                ));
-                export.push_str(&format!(
-                    "Provider: {} ({})\n\n",
-                    self.provider_name, self.model_name
-                ));
-
-                for message in &self.messages {
-                    let role = match message.role {
-                        MessageRole::User => "You",
-                        MessageRole::Assistant => "Assistant",
-                        MessageRole::System => "System",
-                        MessageRole::Tool => "Tool",
-                    };
-                    export.push_str(&format!(
-                        "**{}** ({}):\n{}\n\n",
-                        role,
-                        message.timestamp.format("%H:%M:%S"),
-                        message.content
-                    ));
-                }
-
-                export.push_str("---\nExported from Blanco SQL Editor");
-                export
+                "Started a new chat session. Message history cleared.".to_string()
             }
         };
 
