@@ -112,7 +112,7 @@ impl IconName {
             Self::Bot => "icons/bot.svg",
             Self::Building2 => "icons/building-2.svg",
             Self::Braces => "icons/braces.svg",
-            Self::Cat => "icons/cat.svg",
+            Self::Cat => "icons/blanco-app.svg",
             Self::Calendar => "icons/calendar.svg",
             Self::CaseSensitive => "icons/case-sensitive.svg",
             Self::ChartPie => "icons/chart-pie.svg",
