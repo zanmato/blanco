@@ -3,14 +3,12 @@ use crate::app_events::{AppEvent, TreeItemType};
 use crate::db_service::DbService;
 use blanco_ui::IconName;
 use gpui::{
-    AppContext, Bounds, ClickEvent, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
-    ParentElement, Point, Render, StatefulInteractiveElement, Styled, Task, TitlebarOptions,
-    Window, WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowKind, WindowOptions,
-    div, prelude::FluentBuilder, px, size,
+    AppContext, ClickEvent, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
+    ParentElement, Render, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::menu::ContextMenuExt;
 use gpui_component::{
-    ActiveTheme as _, Icon, Root, StyledExt, WindowExt,
+    ActiveTheme as _, Icon, StyledExt, WindowExt,
     button::{Button, ButtonVariants},
     h_flex,
     label::Label,

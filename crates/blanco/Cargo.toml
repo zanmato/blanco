@@ -24,6 +24,7 @@ blanco_ui = { path = "../ui", package = "blanco-ui" }
 blanco-core = { path = "../blanco-core" }
 postgres = { path = "../postgres" }
 sqlite = { path = "../sqlite" }
+mysql = { path = "../mysql" }
 blanco-openai = { path = "../openai" }
 gpui_tokio = { path = "../gpui_tokio" }
 

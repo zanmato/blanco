@@ -3,6 +3,44 @@ use std::collections::HashMap;
 use std::fmt;
 use futures::Stream;
 
+/// Database driver types supported by the application
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DriverType {
+    SQLite,
+    PostgreSQL,
+    MySQL,
+}
+
+impl DriverType {
+    /// Convert from string representation to DriverType
+    pub fn from_string(s: &str) -> Option<Self> {
+        match s {
+            "SQLite" => Some(Self::SQLite),
+            "PostgreSQL" => Some(Self::PostgreSQL),
+            "MySQL" => Some(Self::MySQL),
+            _ => None,
+        }
+    }
+
+    /// Convert to string representation
+    pub fn to_string(&self) -> &'static str {
+        match self {
+            Self::SQLite => "SQLite",
+            Self::PostgreSQL => "PostgreSQL",
+            Self::MySQL => "MySQL",
+        }
+    }
+
+    /// Get the icon name for this driver type
+    pub fn get_icon_name(&self) -> IconName {
+        match self {
+            Self::SQLite => IconName::Sqlite,
+            Self::PostgreSQL => IconName::Postgres,
+            Self::MySQL => IconName::MySQL,
+        }
+    }
+}
+
 /// Icon types for database connections
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IconName {
@@ -10,6 +48,7 @@ pub enum IconName {
     DatabaseConnected,
     Sqlite,
     Postgres,
+    MySQL,
     Table,
     Column,
     Key,

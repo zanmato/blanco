@@ -813,6 +813,106 @@ impl ConnectionData {
         } else {
             None
         }
+      }
+
+    pub fn new_mysql(
+        name: String,
+        host: String,
+        port: i32,
+        database: String,
+        username: String,
+        password: String,
+    ) -> Self {
+        let connection_string = if password.is_empty() {
+            format!("mysql://{}@{}:{}/{}", username, host, port, database)
+        } else {
+            format!(
+                "mysql://{}:{}@{}:{}/{}",
+                username, password, host, port, database
+            )
+        };
+
+        Self {
+            id: None,
+            name,
+            db_type: "MySQL".to_string(),
+            host: Some(host.clone()),
+            port: Some(port),
+            database_name: Some(database.clone()),
+            username: Some(username.clone()),
+            password: Some(password),
+            database_path: None,
+            connection_string: Some(connection_string),
+            is_active: Some(true),
+            connection_params: Some(serde_json::json!({
+                "host": host,
+                "port": port,
+                "database": database,
+                "username": username
+            })),
+            last_used_at: None,
+            ssh_host: None,
+            ssh_port: None,
+            ssh_user: None,
+            ssh_password: None,
+            ssh_private_key_path: None,
+            ssh_private_key_password: None,
+            local_tunnel_port: None,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_mysql_with_ssh(
+        name: String,
+        host: String,
+        port: i32,
+        database: String,
+        username: String,
+        password: String,
+        ssh_host: String,
+        ssh_port: i32,
+        ssh_user: String,
+        ssh_password: Option<String>,
+        ssh_private_key_path: Option<String>,
+        ssh_private_key_password: Option<String>,
+    ) -> Self {
+        let connection_string = if password.is_empty() {
+            format!("mysql://{}@{}:{}/{}", username, host, port, database)
+        } else {
+            format!(
+                "mysql://{}:{}@{}:{}/{}",
+                username, password, host, port, database
+            )
+        };
+
+        Self {
+            id: None,
+            name,
+            db_type: "MySQL".to_string(),
+            host: Some(host.clone()),
+            port: Some(port),
+            database_name: Some(database.clone()),
+            username: Some(username.clone()),
+            password: Some(password),
+            database_path: None,
+            connection_string: Some(connection_string),
+            is_active: Some(true),
+            connection_params: Some(serde_json::json!({
+                "host": host,
+                "port": port,
+                "database": database,
+                "username": username,
+                "ssh_enabled": true
+            })),
+            last_used_at: None,
+            ssh_host: Some(ssh_host),
+            ssh_port: Some(ssh_port),
+            ssh_user: Some(ssh_user),
+            ssh_password,
+            ssh_private_key_path,
+            ssh_private_key_password,
+            local_tunnel_port: Some(13306), // Default port for MySQL, will be auto-assigned
+        }
     }
 }
 

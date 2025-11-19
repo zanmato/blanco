@@ -1,0 +1,51 @@
+[package]
+name = "mysql"
+version = "0.1.0"
+edition = "2021"
+description = "MySQL/MariaDB database implementation for Blanco SQL editor"
+
+[dependencies]
+# Core dependencies
+blanco-core = { path = "../blanco-core" }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+async-std = { workspace = true }
+
+# GPUI dependencies
+gpui = { workspace = true }
+gpui-component = { workspace = true }
+
+# Database dependencies
+sqlx = { workspace = true, features = ["mysql", "chrono", "uuid", "json"] }
+
+# Async runtime
+tokio = { workspace = true, features = ["sync"] }
+
+# SQL parsing
+sql-parse = { workspace = true }
+
+# Common dependencies
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+log = { workspace = true }
+futures = { workspace = true }
+
+# Rope handling for completion/hover
+ropey = { workspace = true }
+
+# URL parsing for connection strings
+url = { workspace = true }
+
+# LSP types for completion/hover
+lsp-types = { workspace = true }
+
+# Additional dependencies
+mysql_common = "0.32"
+rust_decimal = "1.32"
+
+[dev-dependencies]
+# Dependencies for integration tests
+async-std = { workspace = true }
+env_logger = "0.10"

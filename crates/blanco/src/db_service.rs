@@ -6,6 +6,7 @@ use blanco_core::{Connection, ConnectionFactory, ConnectionRegistry};
 use gpui::{App, Global};
 use postgres::{PgConnectionKey, PostgresConnection, connection::PostgresSshConfig};
 use sqlite::{SqliteConnection, SqliteConnectionKey};
+use mysql::{MysqlConnectionKey, MysqlConnection, connection::MysqlSshConfig};
 use sqlx::Row;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -36,6 +37,33 @@ fn replace_database_in_postgres_connection_string(
             }
         } else {
             // Not a PostgreSQL URL, return as-is
+            connection_string.to_string()
+        }
+    }
+}
+
+/// Replace the database name in a MySQL connection string
+fn replace_database_in_mysql_connection_string(
+    connection_string: &str,
+    new_database: &str,
+) -> String {
+    if let Ok(mut url) = Url::parse(connection_string) {
+        // Set the new database path
+        url.set_path(&format!("/{}", new_database));
+        url.to_string()
+    } else {
+        // If URL parsing fails, try a simple string replacement for mysql:// URLs
+        if connection_string.starts_with("mysql://") {
+            // Find the database part (last segment after the last /)
+            if let Some(last_slash_pos) = connection_string.rfind('/') {
+                let before_db = &connection_string[..last_slash_pos];
+                format!("{}/{}", before_db, new_database)
+            } else {
+                // No slash found, append the database
+                format!("{}/{}", connection_string, new_database)
+            }
+        } else {
+            // Not a MySQL URL, return as-is
             connection_string.to_string()
         }
     }
@@ -119,6 +147,63 @@ impl ConnectionFactory for PostgresConnectionFactory {
     }
 }
 
+/// MySQL connection factory using the mysql crate implementation
+pub struct MysqlConnectionFactory {}
+
+impl MysqlConnectionFactory {
+    pub fn new() -> Self {
+        Self {}
+    }
+
+    /// Create MySQL connection with optional SSH configuration
+    async fn create_mysql_connection(
+        &self,
+        connection_string: &str,
+        ssh_config: Option<MysqlSshConfig>,
+    ) -> Result<Box<dyn Connection>> {
+        // If SSH configuration is provided, reject connection (tunnels must be established separately)
+        if ssh_config.is_some() {
+            return Err(anyhow::anyhow!(
+                "SSH configuration provided but SSH tunnels must be established separately. \
+                Call establish_ssh_tunnel_with_gpui_context() first, then use tunneled connection strings."
+            ));
+        }
+
+        // No SSH configuration - use connection string as-is
+        let final_connection_string = connection_string.to_string();
+
+        let key = MysqlConnectionKey::from_connection_string(&final_connection_string)?;
+
+        // Create regular MysqlConnection (no SSH config needed now)
+        let mut conn = MysqlConnection::from_key(key);
+
+        Connection::connect(&mut conn, &final_connection_string).await?;
+        Ok(Box::new(conn))
+    }
+}
+
+impl Default for MysqlConnectionFactory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl ConnectionFactory for MysqlConnectionFactory {
+    async fn create_connection(&self, connection_string: &str) -> Result<Box<dyn Connection>> {
+        self.create_mysql_connection(connection_string, None)
+            .await
+    }
+
+    fn parse_connection_string(&self, connection_string: &str) -> Result<String> {
+        Ok(connection_string.to_string())
+    }
+
+    fn get_connection_type(&self) -> &'static str {
+        "MySQL"
+    }
+}
+
 /// A unified connection manager that can handle multiple database types
 /// through a common interface while maintaining type-specific functionality
 #[derive(Clone)]
@@ -135,16 +220,24 @@ impl UnifiedConnectionManager {
         let postgres_factory = PostgresConnectionFactory::new();
         let postgres_factory_arc: Arc<PostgresConnectionFactory> = Arc::new(postgres_factory);
 
+        let mysql_factory = MysqlConnectionFactory::new();
+        let mysql_factory_arc: Arc<MysqlConnectionFactory> = Arc::new(mysql_factory);
+
         let mut registry = ConnectionRegistry::new();
         registry.register_factory("SQLite".to_string(), Box::new(SqliteConnectionFactory));
         registry.register_factory(
             "PostgreSQL".to_string(),
             Box::new(SqliteConnectionFactory), // Use a simple factory for the registry
         );
+        registry.register_factory(
+            "MySQL".to_string(),
+            Box::new(SqliteConnectionFactory), // Use a simple factory for the registry
+        );
 
         let mut factories: HashMap<String, Arc<dyn ConnectionFactory>> = HashMap::new();
         factories.insert("SQLite".to_string(), Arc::new(SqliteConnectionFactory));
         factories.insert("PostgreSQL".to_string(), postgres_factory_arc.clone());
+        factories.insert("MySQL".to_string(), mysql_factory_arc.clone());
 
         Self {
             registry: Arc::new(registry),
@@ -265,6 +358,11 @@ impl UnifiedConnectionManager {
         {
             log::debug!("Detected PostgreSQL connection type");
             Ok("PostgreSQL".to_string())
+        } else if connection_lower.starts_with("mysql://")
+            || connection_lower.starts_with("mariadb://")
+        {
+            log::debug!("Detected MySQL connection type");
+            Ok("MySQL".to_string())
         } else if connection_lower.starts_with("sqlite:")
             || connection_lower.contains(".db")
             || connection_lower == ":memory:"
@@ -568,6 +666,19 @@ impl DbService {
         {
             connection_string =
                 replace_database_in_postgres_connection_string(&connection_string, database_name);
+            log::debug!(
+                "Applied database override '{}' to connection string: {}",
+                database_name,
+                connection_string
+            );
+        }
+
+        // Apply database override for MySQL connections
+        if db_type == "MySQL"
+            && let Some(database_name) = database_name
+        {
+            connection_string =
+                replace_database_in_mysql_connection_string(&connection_string, database_name);
             log::debug!(
                 "Applied database override '{}' to connection string: {}",
                 database_name,

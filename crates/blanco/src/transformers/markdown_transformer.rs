@@ -125,7 +125,7 @@ impl DataTransformer for MarkdownTransformer {
     fn transform_stream_row(
         &self,
         row_data: &[String],
-        columns: &[String],
+        _columns: &[String],
         _column_types: &[String],
     ) -> Result<String, TransformError> {
         // Markdown streaming is not well-supported due to column width calculation,

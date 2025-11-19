@@ -104,10 +104,18 @@ impl DataTransformer for JsonTransformer {
             .map_err(|e| TransformError::FormatError(e.to_string()))?;
 
         // Add indentation to match array structure
-        let indented = json_str.lines().map(|line| format!("  {}", line)).collect::<Vec<_>>().join("\n");
+        let indented = json_str
+            .lines()
+            .map(|line| format!("  {}", line))
+            .collect::<Vec<_>>()
+            .join("\n");
 
         // Add comma separator if this is not the first row
-        if self.first_row.compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+        if self
+            .first_row
+            .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
             // This was the first row and we successfully set it to false
             Ok(indented)
         } else {
@@ -121,7 +129,7 @@ impl DataTransformer for JsonTransformer {
         Ok("\n]".to_string())
     }
 
-    fn transform_header_row(&self, columns: &[String]) -> Result<String, TransformError> {
+    fn transform_header_row(&self, _columns: &[String]) -> Result<String, TransformError> {
         // JSON doesn't need headers as a separate row
         Ok(String::new())
     }
@@ -201,9 +209,10 @@ fn parse_numeric(value: &str) -> Option<serde_json::Value> {
 
     // Try float
     if let Ok(float_val) = value.parse::<f64>()
-        && let Some(num) = serde_json::Number::from_f64(float_val) {
-            return Some(serde_json::Value::Number(num));
-        }
+        && let Some(num) = serde_json::Number::from_f64(float_val)
+    {
+        return Some(serde_json::Value::Number(num));
+    }
 
     None
 }

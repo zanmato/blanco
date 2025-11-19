@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use futures::{Stream, StreamExt};
 
 use crate::results_panel::SelectedTableData;
 
@@ -57,7 +56,7 @@ pub trait DataTransformer: Send + Sync {
     fn initialize_stream(
         &self,
         columns: &[String],
-        column_types: &[String],
+        _column_types: &[String],
     ) -> Result<String, TransformError> {
         // Default implementation - transformers can override this
         self.transform_header_row(columns)
