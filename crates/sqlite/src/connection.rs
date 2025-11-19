@@ -7,7 +7,7 @@ use blanco_core::{
 };
 use futures::{Stream, StreamExt};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
-use sqlx::{Column, ConnectOptions, Row, TypeInfo};
+use sqlx::{Column, ConnectOptions, Row, TypeInfo, ValueRef};
 use std::str::FromStr;
 
 /// SQLite connection implementation of the Connection trait
@@ -828,61 +828,226 @@ impl Connection for SqliteConnection {
     }
 }
 
-// Helper function for SQLite type conversion
+// Helper functions for SQLite type conversion
+
+/// Check if a column type is an integer affinity type
+fn is_integer_affinity_type(column_type: &str) -> bool {
+    matches!(column_type.to_lowercase().as_str(),
+        "integer" | "int" | "tinyint" | "smallint" | "mediumint" | "bigint" |
+        "int2" | "int8" | "boolean" | "date" | "datetime" | "timestamp"
+    )
+}
+
+/// Check if a column type is a text affinity type
+fn is_text_affinity_type(column_type: &str) -> bool {
+    matches!(column_type.to_lowercase().as_str(),
+        "text" | "char" | "character" | "varchar" | "varying character" |
+        "nchar" | "native character" | "nvarchar" | "clob"
+    )
+}
+
+/// Check if a column type is a numeric affinity type
+fn is_numeric_affinity_type(column_type: &str) -> bool {
+    matches!(column_type.to_lowercase().as_str(),
+        "numeric" | "decimal" | "real" | "double" | "double precision" | "float"
+    )
+}
+
+/// Check if a column type is a blob affinity type
+fn is_blob_affinity_type(column_type: &str) -> bool {
+    matches!(column_type.to_lowercase().as_str(),
+        "blob" | "binary" | "varbinary" | "image"
+    )
+}
+
+/// Check if a column type is a date/time type
+fn is_datetime_type(column_type: &str) -> bool {
+    matches!(column_type.to_lowercase().as_str(),
+        "date" | "time" | "datetime" | "timestamp"
+    )
+}
+
+/// Check if a value is NULL without attempting type conversion
+fn is_null_value(row: &sqlx::sqlite::SqliteRow, column_index: usize) -> bool {
+    if let Ok(raw_value) = row.try_get_raw(column_index) {
+        raw_value.is_null()
+    } else {
+        false // If we can't even get raw value, assume it's not NULL
+    }
+}
+
+/// Handle integer affinity types (SQLite dynamic typing)
+fn handle_integer_affinity(
+    row: &sqlx::sqlite::SqliteRow,
+    column_index: usize,
+    column_type: &str,
+) -> String {
+    // For different integer sizes, try them in order from most specific to least specific
+    match column_type.to_lowercase().as_str() {
+        "tinyint" => {
+            if let Ok(val) = row.try_get::<Option<i8>, _>(column_index) {
+                return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+            }
+        }
+        "smallint" => {
+            if let Ok(val) = row.try_get::<Option<i16>, _>(column_index) {
+                return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+            }
+        }
+        "boolean" => {
+            // SQLite doesn't have native boolean, but stores as INTEGER
+            if let Ok(val) = row.try_get::<Option<bool>, _>(column_index) {
+                return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+            }
+        }
+        _ => {} // Fall through to standard integer handling
+    }
+
+    // Try i32 first, then i64 for larger integers
+    if let Ok(val) = row.try_get::<Option<i32>, _>(column_index) {
+        val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
+    } else if let Ok(val) = row.try_get::<Option<i64>, _>(column_index) {
+        val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
+    } else {
+        "NULL".to_string()
+    }
+}
+
+/// Handle text affinity types
+fn handle_text_affinity(
+    row: &sqlx::sqlite::SqliteRow,
+    column_index: usize,
+    _column_type: &str,
+) -> String {
+    if let Ok(val) = row.try_get::<Option<String>, _>(column_index) {
+        val.unwrap_or_else(|| "NULL".to_string())
+    } else {
+        "NULL".to_string()
+    }
+}
+
+/// Handle numeric affinity types
+fn handle_numeric_affinity(
+    row: &sqlx::sqlite::SqliteRow,
+    column_index: usize,
+    _column_type: &str,
+) -> String {
+    // Try f64 for numeric types
+    if let Ok(val) = row.try_get::<Option<f64>, _>(column_index) {
+        val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
+    } else {
+        "NULL".to_string()
+    }
+}
+
+/// Handle blob affinity types
+fn handle_blob_affinity(
+    row: &sqlx::sqlite::SqliteRow,
+    column_index: usize,
+    _column_type: &str,
+) -> String {
+    if let Ok(val) = row.try_get::<Option<Vec<u8>>, _>(column_index) {
+        val.map(|v| {
+            // Convert to hex string for readability
+            format!("0x{}", v.iter()
+                .map(|byte| format!("{:02x}", byte))
+                .collect::<String>())
+        }).unwrap_or_else(|| "NULL".to_string())
+    } else {
+        "NULL".to_string()
+    }
+}
+
+/// Handle date/time types
+fn handle_datetime_type(
+    row: &sqlx::sqlite::SqliteRow,
+    column_index: usize,
+    column_type: &str,
+) -> String {
+    match column_type.to_lowercase().as_str() {
+        "date" => {
+            if let Ok(val) = row.try_get::<Option<chrono::NaiveDate>, _>(column_index) {
+                return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+            }
+        }
+        "time" => {
+            if let Ok(val) = row.try_get::<Option<chrono::NaiveTime>, _>(column_index) {
+                return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+            }
+        }
+        "datetime" | "timestamp" => {
+            if let Ok(val) = row.try_get::<Option<chrono::NaiveDateTime>, _>(column_index) {
+                return val.map(|v| v.format("%Y-%m-%d %H:%M:%S").to_string())
+                    .unwrap_or_else(|| "NULL".to_string());
+            }
+        }
+        _ => {}
+    }
+    "NULL".to_string()
+}
+
+/// Handle JSON types (SQLite 3.38.0+)
+fn handle_json_type(
+    row: &sqlx::sqlite::SqliteRow,
+    column_index: usize,
+    _column_type: &str,
+) -> String {
+    if let Ok(val) = row.try_get::<Option<serde_json::Value>, _>(column_index) {
+        val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
+    } else {
+        // Fallback to string conversion for older SQLite versions
+        if let Ok(val) = row.try_get::<Option<String>, _>(column_index) {
+            val.unwrap_or_else(|| "NULL".to_string())
+        } else {
+            "NULL".to_string()
+        }
+    }
+}
+
+/// Helper function for SQLite type conversion using column-type-first approach
 fn convert_sqlite_row_value_to_string(
     row: &sqlx::sqlite::SqliteRow,
     column_index: usize,
-    _column_types: &[String],
+    column_types: &[String],
 ) -> String {
-    // SQLite type conversion - simpler than PostgreSQL
-    if let Ok(val) = row.try_get::<Option<String>, _>(column_index) {
-        // String support
-        val.unwrap_or_else(|| "NULL".to_string())
-    } else if let Ok(val) = row.try_get::<Option<i32>, _>(column_index) {
-        // INTEGER support
-        val.map(|v| v.to_string())
-            .unwrap_or_else(|| "NULL".to_string())
-    } else if let Ok(val) = row.try_get::<Option<i64>, _>(column_index) {
-        // BIGINT support
-        val.map(|v| v.to_string())
-            .unwrap_or_else(|| "NULL".to_string())
-    } else if let Ok(val) = row.try_get::<Option<f64>, _>(column_index) {
-        // FLOAT/REAL support
-        val.map(|v| v.to_string())
-            .unwrap_or_else(|| "NULL".to_string())
-    } else if let Ok(val) = row.try_get::<Option<bool>, _>(column_index) {
-        // BOOLEAN support (SQLite 3.23+)
-        val.map(|v| v.to_string())
-            .unwrap_or_else(|| "NULL".to_string())
-    } else if let Ok(val) = row.try_get::<Option<chrono::NaiveDateTime>, _>(column_index) {
-        // DATETIME support
-        val.map(|v| {
-            // Format in a consistent, readable format
-            v.format("%Y-%m-%d %H:%M:%S").to_string()
-        })
-        .unwrap_or_else(|| "NULL".to_string())
-    } else if let Ok(val) = row.try_get::<Option<chrono::NaiveDate>, _>(column_index) {
-        // DATE support
-        val.map(|v| v.to_string())
-            .unwrap_or_else(|| "NULL".to_string())
-    } else if let Ok(val) = row.try_get::<Option<chrono::NaiveTime>, _>(column_index) {
-        // TIME support
-        val.map(|v| v.to_string())
-            .unwrap_or_else(|| "NULL".to_string())
-    } else if let Ok(val) = row.try_get::<Option<serde_json::Value>, _>(column_index) {
-        // JSON support
-        val.map(|v| {
-            // For compact display, use regular to_string instead of pretty printing
-            v.to_string()
-        })
-        .unwrap_or_else(|| "NULL".to_string())
-    } else {
-        // For unknown types, try basic conversion
-        match row.try_get::<Option<String>, _>(column_index) {
-            Ok(val) => val.unwrap_or_else(|| "NULL".to_string()),
-            Err(_) => {
-                // Last resort: try to get as string directly
-                format!("NULL")
+    // Get column type first for type-based routing
+    let column_type = column_types
+        .get(column_index)
+        .map(|s| s.as_str())
+        .unwrap_or("unknown");
+
+    // 1. Handle NULL values immediately
+    if is_null_value(row, column_index) {
+        return "NULL".to_string();
+    }
+
+    // 2. Route based on SQLite type affinity (column-type-first approach)
+    match column_type.to_lowercase().as_str() {
+        // Integer affinity types
+        ct if is_integer_affinity_type(ct) => handle_integer_affinity(row, column_index, ct),
+
+        // Text affinity types
+        ct if is_text_affinity_type(ct) => handle_text_affinity(row, column_index, ct),
+
+        // Numeric affinity types
+        ct if is_numeric_affinity_type(ct) => handle_numeric_affinity(row, column_index, ct),
+
+        // Blob affinity types
+        ct if is_blob_affinity_type(ct) => handle_blob_affinity(row, column_index, ct),
+
+        // Date/Time types
+        ct if is_datetime_type(ct) => handle_datetime_type(row, column_index, ct),
+
+        // JSON types
+        "json" | "jsonb" => handle_json_type(row, column_index, column_type),
+
+        // Unknown/custom types - use string conversion
+        _ => {
+            // For unknown types, try basic string conversion
+            if let Ok(val) = row.try_get::<Option<String>, _>(column_index) {
+                val.unwrap_or_else(|| "NULL".to_string())
+            } else {
+                "NULL".to_string()
             }
         }
     }

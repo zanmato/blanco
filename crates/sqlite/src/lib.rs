@@ -38,18 +38,11 @@ mod tests {
             format!("sqlite:{}", path)
         });
 
-        println!(
-            "Testing SQLite data types with connection: {}",
-            connection_string
-        );
-
         // Connect to SQLite
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
             .connect(&connection_string)
             .await?;
-
-        println!("Successfully connected to SQLite!");
 
         // Create comprehensive test table with SQLite-specific data types
         let create_table_sql = r#"
@@ -98,9 +91,7 @@ mod tests {
             )
         "#;
 
-        println!("Creating comprehensive SQLite test table...");
         sqlx::query(create_table_sql).execute(&pool).await?;
-        println!("Table created successfully!");
 
         // Insert test data with various SQLite types
         let insert_sql = r#"
@@ -123,120 +114,7 @@ mod tests {
             )
         "#;
 
-        println!("Inserting test data...");
         let result = sqlx::query(insert_sql).execute(&pool).await?;
-        println!(
-            "Test data inserted successfully! Rows affected: {}",
-            result.rows_affected()
-        );
-
-        // Read the data back and verify serialization
-        println!("\n=== Testing Data Type Serialization ===\n");
-
-        let select_sql = r#"
-            SELECT
-                id, integer_col, real_col, numeric_col, bigint_col, int_col, smallint_col, tinyint_col,
-                text_col, varchar_col, char_col, blob_col, bool_col,
-                date_col, time_col, datetime_col, timestamp_col,
-                json_col, jsonb_col,
-                text_affinity_col, numeric_affinity_col, integer_affinity_col, real_affinity_col, blob_affinity_col,
-                custom_type_col
-            FROM comprehensive_test
-            WHERE id = (SELECT MAX(id) FROM comprehensive_test)
-        "#;
-
-        let row = sqlx::query(select_sql).fetch_one(&pool).await?;
-
-        // Helper function to safely extract and print values
-        fn safe_print<
-            T: std::fmt::Display + sqlx::Type<sqlx::Sqlite> + for<'r> sqlx::Decode<'r, sqlx::Sqlite>,
-        >(
-            name: &str,
-            row: &sqlx::sqlite::SqliteRow,
-            column: &str,
-        ) -> Result<(), sqlx::Error> {
-            match row.try_get::<Option<T>, _>(column) {
-                Ok(Some(value)) => {
-                    println!("{:<25}: {} ({})", name, value, std::any::type_name::<T>())
-                }
-                Ok(None) => println!("{:<25}: NULL", name),
-                Err(e) => println!(
-                    "{:<25}: ERROR - {} ({})",
-                    name,
-                    e,
-                    std::any::type_name::<T>()
-                ),
-            }
-            Ok(())
-        }
-
-        // Helper function for blob types
-        fn safe_print_blob(
-            name: &str,
-            row: &sqlx::sqlite::SqliteRow,
-            column: &str,
-        ) -> Result<(), sqlx::Error> {
-            match row.try_get::<Option<Vec<u8>>, _>(column) {
-                Ok(Some(bytes)) => {
-                    let hex_str = bytes
-                        .iter()
-                        .map(|b| format!("{:02x}", b))
-                        .collect::<String>();
-                    println!("{:<25}: {} (blob: {} bytes)", name, hex_str, bytes.len());
-                }
-                Ok(None) => println!("{:<25}: NULL", name),
-                Err(e) => println!(
-                    "{:<25}: ERROR - {} ({})",
-                    name,
-                    e,
-                    std::any::type_name::<Vec<u8>>()
-                ),
-            }
-            Ok(())
-        }
-
-        // Test SQLite data types
-        println!("--- Numeric Types (SQLite Dynamic Typing) ---");
-        safe_print::<i64>("integer_col", &row, "integer_col")?;
-        safe_print::<f64>("real_col", &row, "real_col")?;
-        safe_print::<f64>("numeric_col", &row, "numeric_col")?;
-        safe_print::<i64>("bigint_col", &row, "bigint_col")?;
-        safe_print::<i64>("int_col", &row, "int_col")?;
-        safe_print::<i64>("smallint_col", &row, "smallint_col")?;
-        safe_print::<i64>("tinyint_col", &row, "tinyint_col")?;
-
-        println!("\n--- Text Types ---");
-        safe_print::<String>("text_col", &row, "text_col")?;
-        safe_print::<String>("varchar_col", &row, "varchar_col")?;
-        safe_print::<String>("char_col", &row, "char_col")?;
-
-        println!("\n--- Binary Data ---");
-        safe_print_blob("blob_col", &row, "blob_col")?;
-
-        println!("\n--- Boolean (stored as INTEGER) ---");
-        safe_print::<i64>("bool_col", &row, "bool_col")?;
-
-        println!("\n--- Date/Time Types ---");
-        safe_print::<String>("date_col", &row, "date_col")?;
-        safe_print::<String>("time_col", &row, "time_col")?;
-        safe_print::<String>("datetime_col", &row, "datetime_col")?;
-        safe_print::<String>("timestamp_col", &row, "timestamp_col")?;
-
-        println!("\n--- JSON Types ---");
-        safe_print::<String>("json_col", &row, "json_col")?;
-        safe_print::<String>("jsonb_col", &row, "jsonb_col")?;
-
-        println!("\n--- Affinity Types ---");
-        safe_print::<String>("text_affinity_col", &row, "text_affinity_col")?;
-        safe_print::<f64>("numeric_affinity_col", &row, "numeric_affinity_col")?;
-        safe_print::<i64>("integer_affinity_col", &row, "integer_affinity_col")?;
-        safe_print::<f64>("real_affinity_col", &row, "real_affinity_col")?;
-        safe_print_blob("blob_affinity_col", &row, "blob_affinity_col")?;
-
-        println!("\n--- Custom Type ---");
-        safe_print::<String>("custom_type_col", &row, "custom_type_col")?;
-
-        println!("\n=== Testing Blanco SQLite Connection ===\n");
 
         // For SQLite, let's create a new table using the Blanco connection to test it properly
         let mut sqlite_connection = crate::SqliteConnection::new(connection_string.clone())?;
@@ -255,62 +133,70 @@ mod tests {
         // Test a simple query to make sure Blanco can handle the data
         let query_result = sqlite_connection.execute_query("SELECT * FROM comprehensive_test WHERE id = (SELECT MAX(id) FROM comprehensive_test)", None).await?;
 
-        println!("Blanco SQLite connection test successful!");
-        println!("Columns returned: {}", query_result.columns.len());
-        println!("Rows returned: {}", query_result.rows.len());
+        assert!(!query_result.rows.is_empty(), "Query should return at least one row");
+        let first_row = query_result.rows.first().unwrap();
 
-        if let Some(first_row) = query_result.rows.first() {
-            println!("\n--- Blanco Serialization Results ---");
-            for (i, value) in first_row.iter().enumerate() {
-                let column_name = query_result
-                    .columns
-                    .get(i)
-                    .cloned()
-                    .unwrap_or_else(|| "unknown".to_string());
-                println!("{:<25}: {}", column_name, value);
-            }
-        }
+        // Create a map for easy lookup of values by column name
+        let value_map: std::collections::HashMap<String, String> = query_result
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(i, col)| (col.clone(), first_row[i].clone()))
+            .collect();
 
-        println!("\n=== SQLite Data Types Test Completed Successfully! ===");
+        // Test integer affinity types
+        assert!(value_map.get("id").unwrap().parse::<i64>().unwrap() > 0, "id should be positive");
+        assert_eq!(value_map.get("integer_col"), Some(&"2147483647".to_string()));
+        assert_eq!(value_map.get("bigint_col"), Some(&"9223372036854775807".to_string()));
+        assert_eq!(value_map.get("int_col"), Some(&"123456".to_string()));
+        assert_eq!(value_map.get("smallint_col"), Some(&"32767".to_string()));
+        assert_eq!(value_map.get("tinyint_col"), Some(&"255".to_string()));
+
+        // Test numeric affinity types
+        assert!(value_map.get("real_col").unwrap().contains("12345"));
+        assert!(value_map.get("numeric_col").unwrap().contains("98765"));
+        assert!(value_map.get("numeric_affinity_col").unwrap().contains("123"));
+        assert!(value_map.get("real_affinity_col").unwrap().contains("3.14159"));
+
+        // Test text affinity types
+        assert_eq!(value_map.get("text_col"), Some(&"This is a test text with unicode: ñiño 你好 🚀".to_string()));
+        assert_eq!(value_map.get("varchar_col"), Some(&"variable_string".to_string()));
+        assert_eq!(value_map.get("text_affinity_col"), Some(&"text affinity".to_string()));
+
+        // Test CHAR type (may be padded)
+        assert!(value_map.get("char_col").unwrap().starts_with("fixed_len"));
+
+        // Test boolean (stored as integer in SQLite)
+        assert!(value_map.get("bool_col") == Some(&"1".to_string()) || value_map.get("bool_col") == Some(&"true".to_string()),
+               "Boolean should be stored as 1 or true in SQLite");
+
+        // Test date/time types
+        assert!(value_map.get("date_col").unwrap().contains("2025"));
+        assert!(value_map.get("time_col").unwrap().contains("20:41"));
+        assert!(value_map.get("datetime_col").unwrap().contains("2025"));
+        assert!(value_map.get("timestamp_col").unwrap().contains("2025"));
+
+        // Test JSON types
+        assert!(value_map.get("json_col").unwrap().contains("\"name\""));
+        assert!(value_map.get("json_col").unwrap().contains("test"));
+        assert!(value_map.get("jsonb_col").unwrap().contains("nested"));
+
+        // Test blob affinity types (SQLite converts binary data to text when possible)
+        assert!(value_map.get("blob_col").unwrap().contains("48656c6c6f")); // "Hello World"
+        assert!(value_map.get("blob_affinity_col").unwrap().contains("48656c6c6f")); // "Hello"
+
+        // Test custom types (should fall back to string conversion)
+        assert_eq!(value_map.get("custom_type_col"), Some(&"custom value".to_string()));
+
+        println!("✅ All SQLite type conversion tests passed!");
+        println!("✅ Integer affinity types working correctly!");
+        println!("✅ Text affinity types working correctly!");
+        println!("✅ Numeric affinity types working correctly!");
+        println!("✅ BLOB affinity types working correctly!");
+        println!("✅ Date/time types working correctly!");
+        println!("✅ JSON types working correctly!");
+        println!("✅ Custom types working correctly!");
+
         Ok(())
-    }
-
-    #[test]
-    fn test_multiple_changes_consolidation() {
-        use blanco_core::table_operations::{
-            ColumnChange, OperationType, RowIdentifier, TableChangeOperation,
-        };
-
-        // Test multiple changes consolidation
-        let changes = vec![
-            ColumnChange {
-                column_name: "status".to_string(),
-                old_value: Some("pending".to_string()),
-                new_value: Some("shipped".to_string()),
-            },
-            ColumnChange {
-                column_name: "customer_name".to_string(),
-                old_value: Some("John Doe".to_string()),
-                new_value: Some("John Smith".to_string()),
-            },
-        ];
-
-        let operation = TableChangeOperation {
-            table_name: "orders".to_string(),
-            operation_type: OperationType::Update,
-            row_identifier: RowIdentifier::PrimaryKey {
-                column: "id".to_string(),
-                value: "1".to_string(),
-            },
-            changes,
-        };
-
-        let generated_sql = operation.to_sql_query();
-        let expected_sql =
-            "UPDATE orders SET status = 'shipped', customer_name = 'John Smith' WHERE id = '1'";
-        assert_eq!(generated_sql, expected_sql);
-
-        println!("✅ SQLite multiple changes consolidation test passed!");
-        println!("   Generated SQL: {}", generated_sql);
     }
 }

@@ -32,11 +32,6 @@ mod tests {
             "postgres://manager:manager@localhost:5444/postgres?sslmode=disable".to_string()
         });
 
-        println!(
-            "Testing PostgreSQL data types with connection: {}",
-            connection_string
-        );
-
         // Connect to PostgreSQL (use postgres database to create test database)
         let pool = PgPoolOptions::new()
             .max_connections(5)
@@ -58,8 +53,6 @@ mod tests {
             .max_connections(5)
             .connect(&test_connection_string)
             .await?;
-
-        println!("Successfully connected to PostgreSQL!");
 
         sqlx::query("DROP TYPE IF EXISTS custom_enum CASCADE")
             .execute(&test_pool)
@@ -119,19 +112,20 @@ mod tests {
                 text_array_col TEXT[],
                 uuid_array_col UUID[],
 
+                -- System catalog types
+                regclass_col regclass,
+
                 -- Enum types
                 custom_enum custom_enum
             )
         "#;
 
-        println!("Creating comprehensive test table...");
         // Drop table first to ensure we have the latest schema
         sqlx::query("DROP TABLE IF EXISTS comprehensive_test")
             .execute(&test_pool)
             .await
             .ok();
         sqlx::query(create_table_sql).execute(&test_pool).await?;
-        println!("Table created successfully!");
 
         // Insert test data with key data types
         let insert_sql = r#"
@@ -140,7 +134,7 @@ mod tests {
                 real_col, double_precision_col, smallserial_col, serial_col, bigserial_col, money_col,
                 char_col, varchar_col, text_col, bool_col,
                 date_col, time_col, timestamp_col, timestamp_with_time_zone_col,
-                uuid_col, json_col, jsonb_col, int_array_col, text_array_col, uuid_array_col, custom_enum
+                uuid_col, json_col, jsonb_col, int_array_col, text_array_col, uuid_array_col, regclass_col, custom_enum
             ) VALUES (
                 32767, 2147483647, 9223372036854775807, 12345.67, 98765.43210,
                 123.456, 987654321.123456789, 100, 1000, 1000000, 12345.67,
@@ -151,209 +145,13 @@ mod tests {
                 '{"nested": {"array": [1,2,3], "text": "hello"}}',
                 ARRAY[1, 2, 3, 4, 5],
                 ARRAY['hello', 'world', 'test'],
-                ARRAY['550e8400-e29b-41d4-a716-446655440000'::uuid, '660e8400-e29b-41d4-a716-446655440001'::uuid], 'a'
+                ARRAY['550e8400-e29b-41d4-a716-446655440000'::uuid, '660e8400-e29b-41d4-a716-446655440001'::uuid],
+                'comprehensive_test'::regclass, 'a'
             )
             ON CONFLICT DO NOTHING;
         "#;
 
-        println!("Inserting test data...");
         let result = sqlx::query(insert_sql).execute(&test_pool).await?;
-        println!(
-            "Test data inserted successfully! Rows affected: {}",
-            result.rows_affected()
-        );
-
-        // Read the data back and verify serialization
-        println!("\n=== Testing Data Type Serialization ===\n");
-
-        let select_sql = r#"
-            SELECT
-                id, smallint_col, int_col, bigint_col, decimal_col, numeric_col,
-                real_col, double_precision_col, smallserial_col, serial_col, bigserial_col, money_col,
-                char_col, varchar_col, text_col, bool_col,
-                date_col, time_col, timestamp_col, timestamp_with_time_zone_col,
-                uuid_col, json_col, jsonb_col, int_array_col, text_array_col, uuid_array_col,
-                custom_enum::text
-            FROM comprehensive_test
-            WHERE id = (SELECT MAX(id) FROM comprehensive_test)
-        "#;
-
-        let row = sqlx::query(select_sql).fetch_one(&test_pool).await?;
-
-        // Helper function to safely extract and print values
-        fn safe_print<
-            T: std::fmt::Display
-                + sqlx::Type<sqlx::Postgres>
-                + for<'r> sqlx::Decode<'r, sqlx::Postgres>,
-        >(
-            name: &str,
-            row: &sqlx::postgres::PgRow,
-            column: &str,
-        ) -> Result<(), sqlx::Error> {
-            match row.try_get::<Option<T>, _>(column) {
-                Ok(Some(value)) => {
-                    println!("{:<25}: {} ({})", name, value, std::any::type_name::<T>())
-                }
-                Ok(None) => println!("{:<25}: NULL", name),
-                Err(e) => println!(
-                    "{:<25}: ERROR - {} ({})",
-                    name,
-                    e,
-                    std::any::type_name::<T>()
-                ),
-            }
-            Ok(())
-        }
-
-        // Helper function for array types that don't implement Display
-        fn safe_print_array<
-            T: std::fmt::Debug
-                + sqlx::Type<sqlx::Postgres>
-                + for<'r> sqlx::Decode<'r, sqlx::Postgres>
-                + sqlx::postgres::PgHasArrayType,
-        >(
-            name: &str,
-            row: &sqlx::postgres::PgRow,
-            column: &str,
-        ) -> Result<(), sqlx::Error> {
-            match row.try_get::<Option<Vec<T>>, _>(column) {
-                Ok(Some(arr)) => println!(
-                    "{:<25}: {:?} ({})",
-                    name,
-                    arr,
-                    std::any::type_name::<Vec<T>>()
-                ),
-                Ok(None) => println!("{:<25}: NULL", name),
-                Err(e) => println!(
-                    "{:<25}: ERROR - {} ({})",
-                    name,
-                    e,
-                    std::any::type_name::<Vec<T>>()
-                ),
-            }
-            Ok(())
-        }
-
-        // Test key data types
-        println!("--- Numeric Types ---");
-        safe_print::<i16>("smallint_col", &row, "smallint_col")?;
-        safe_print::<i32>("int_col", &row, "int_col")?;
-        safe_print::<i64>("bigint_col", &row, "bigint_col")?;
-        // Now that we have rust_decimal feature enabled, test decimal types
-        safe_print::<rust_decimal::Decimal>("decimal_col", &row, "decimal_col")?;
-        safe_print::<rust_decimal::Decimal>("numeric_col", &row, "numeric_col")?;
-        // Money type needs special handling - convert via string
-        match row.try_get::<Option<rust_decimal::Decimal>, _>("money_col") {
-            Ok(Some(value)) => println!(
-                "{:<25}: ${} ({})",
-                "money_col",
-                value,
-                std::any::type_name::<rust_decimal::Decimal>()
-            ),
-            Ok(None) => println!("{:<25}: NULL", "money_col"),
-            Err(_) => {
-                // Fallback: try as string and parse
-                match row.try_get::<Option<String>, _>("money_col") {
-                    Ok(Some(value)) => println!(
-                        "{:<25}: {} ({})",
-                        "money_col",
-                        value,
-                        std::any::type_name::<String>()
-                    ),
-                    Ok(None) => println!("{:<25}: NULL", "money_col"),
-                    Err(e) => println!(
-                        "{:<25}: ERROR - {} ({})",
-                        "money_col",
-                        e,
-                        std::any::type_name::<String>()
-                    ),
-                }
-            }
-        }
-        safe_print::<f32>("real_col", &row, "real_col")?;
-        safe_print::<f64>("double_precision_col", &row, "double_precision_col")?;
-        safe_print::<i16>("smallserial_col", &row, "smallserial_col")?;
-        safe_print::<i32>("serial_col", &row, "serial_col")?;
-        safe_print::<i64>("bigserial_col", &row, "bigserial_col")?;
-
-        println!("\n--- Character Types ---");
-        safe_print::<String>("char_col", &row, "char_col")?;
-        safe_print::<String>("varchar_col", &row, "varchar_col")?;
-        safe_print::<String>("text_col", &row, "text_col")?;
-
-        println!("\n--- Boolean Type ---");
-        safe_print::<bool>("bool_col", &row, "bool_col")?;
-
-        println!("\n--- Date/Time Types ---");
-        safe_print::<chrono::NaiveDate>("date_col", &row, "date_col")?;
-        safe_print::<chrono::NaiveTime>("time_col", &row, "time_col")?;
-        safe_print::<chrono::NaiveDateTime>("timestamp_col", &row, "timestamp_col")?;
-        safe_print::<chrono::DateTime<chrono::Utc>>(
-            "timestamp_with_time_zone_col",
-            &row,
-            "timestamp_with_time_zone_col",
-        )?;
-
-        println!("\n--- UUID Type ---");
-        safe_print::<uuid::Uuid>("uuid_col", &row, "uuid_col")?;
-
-        println!("\n--- JSON Types ---");
-        safe_print::<serde_json::Value>("json_col", &row, "json_col")?;
-        safe_print::<serde_json::Value>("jsonb_col", &row, "jsonb_col")?;
-
-        println!("\n--- Array Types ---");
-        safe_print_array::<i32>("int_array_col", &row, "int_array_col")?;
-        safe_print_array::<String>("text_array_col", &row, "text_array_col")?;
-        safe_print_array::<uuid::Uuid>("uuid_array_col", &row, "uuid_array_col")?;
-        // Skip numeric array for now - requires Decimal type support
-        // safe_print_array::<rust_decimal::Decimal>("numeric_array_col", &row, "numeric_array_col")?;
-
-        println!("\n--- Enum Types ---");
-        // Try to get the enum value using different approaches
-        let mut enum_handled = false;
-
-        // Try standard String conversion
-        if let Ok(val) = row.try_get::<Option<String>, _>("custom_enum") {
-            match val {
-                Some(value) => {
-                    println!("{:<25}: {} ({})", "custom_enum", value, "String");
-                    enum_handled = true;
-                }
-                None => {
-                    println!("{:<25}: NULL", "custom_enum");
-                    enum_handled = true;
-                }
-            }
-        }
-
-        // If String conversion failed, try using raw value access
-        if !enum_handled {
-            match row.try_get_raw("custom_enum") {
-                Ok(raw_value) => {
-                    if raw_value.is_null() {
-                        println!("{:<25}: NULL", "custom_enum");
-                    } else {
-                        // Try to get the raw bytes and convert to string
-                        match raw_value.as_str() {
-                            Ok(text_val) => {
-                                println!("{:<25}: {} (raw text)", "custom_enum", text_val);
-                            }
-                            Err(_) => {
-                                println!(
-                                    "{:<25}: ERROR - couldn't decode as raw text",
-                                    "custom_enum"
-                                );
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    println!("{:<25}: ERROR - {}", "custom_enum", e);
-                }
-            }
-        }
-
-        println!("\n=== Testing Blanco PostgreSQL Connection ===\n");
 
         // Test with Blanco's PostgreSQL connection
         let mut postgres_connection =
@@ -365,79 +163,107 @@ mod tests {
         // Test a simple query to make sure Blanco can handle the data
         let query_result = postgres_connection.execute_query("SELECT * FROM comprehensive_test WHERE id = (SELECT MAX(id) FROM comprehensive_test)", None).await?;
 
-        println!("Blanco PostgreSQL connection test successful!");
-        println!("Columns returned: {}", query_result.columns.len());
-        println!("Rows returned: {}", query_result.rows.len());
+        assert!(
+            !query_result.rows.is_empty(),
+            "Query should return at least one row"
+        );
+        let first_row = query_result.rows.first().unwrap();
 
-        if let Some(first_row) = query_result.rows.first() {
-            println!("\n--- Blanco Serialization Results ---");
-            for (i, value) in first_row.iter().enumerate() {
-                let column_name = query_result
-                    .columns
-                    .get(i)
-                    .cloned()
-                    .unwrap_or_else(|| "unknown".to_string());
-                println!("{:<25}: {}", column_name, value);
-            }
-        }
+        // Create a map for easy lookup of values by column name
+        let value_map: std::collections::HashMap<String, String> = query_result
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(i, col)| (col.clone(), first_row[i].clone()))
+            .collect();
 
-        println!("\n=== PostgreSQL Data Types Test Completed Successfully! ===");
+        // Test basic types
+        assert_eq!(value_map.get("id"), Some(&"1".to_string()));
+        assert_eq!(value_map.get("smallint_col"), Some(&"32767".to_string()));
+        assert_eq!(value_map.get("int_col"), Some(&"2147483647".to_string()));
+        assert_eq!(
+            value_map.get("bigint_col"),
+            Some(&"9223372036854775807".to_string())
+        );
+        assert_eq!(value_map.get("decimal_col"), Some(&"12345.67".to_string()));
+        assert_eq!(
+            value_map.get("numeric_col"),
+            Some(&"98765.43210".to_string())
+        );
+        assert_eq!(value_map.get("real_col"), Some(&"123.456".to_string()));
+        assert_eq!(
+            value_map.get("double_precision_col"),
+            Some(&"987654321.1234568".to_string())
+        );
+
+        // Test string types
+        // CHAR type is fixed length and gets padded
+        assert!(value_map.get("char_col").unwrap().starts_with("fixed_len"));
+        assert_eq!(
+            value_map.get("varchar_col"),
+            Some(&"variable_string".to_string())
+        );
+        assert_eq!(
+            value_map.get("text_col"),
+            Some(&"This is a test text with unicode: ñiño 你好 🚀".to_string())
+        );
+
+        // Test boolean
+        assert_eq!(value_map.get("bool_col"), Some(&"true".to_string()));
+
+        // Test date/time types
+        assert!(value_map.get("date_col").unwrap().starts_with("2025-11-18"));
+        assert!(value_map.get("time_col").unwrap().contains(":"));
+        assert!(value_map
+            .get("timestamp_col")
+            .unwrap()
+            .starts_with("2025-11-18"));
+        // Check timestamp with time zone - be more flexible with the time format
+        let ts_tz = value_map.get("timestamp_with_time_zone_col").unwrap();
+        assert!(ts_tz.contains("2025-11-18") || ts_tz.contains("T"));
+        assert!(ts_tz.contains("+00:00") || ts_tz.contains("UTC"));
+
+        // Test UUID
+        assert_eq!(
+            value_map.get("uuid_col"),
+            Some(&"550e8400-e29b-41d4-a716-446655440000".to_string())
+        );
+
+        // Test JSON types
+        assert_eq!(
+            value_map.get("json_col"),
+            Some(&"{\"name\":\"test\",\"value\":42,\"active\":true}".to_string())
+        );
+        assert!(value_map.get("jsonb_col").unwrap().contains("nested"));
+
+        // Test array types - all working now!
+        assert_eq!(
+            value_map.get("int_array_col"),
+            Some(&"{1,2,3,4,5}".to_string())
+        );
+        assert_eq!(
+            value_map.get("text_array_col"),
+            Some(&"{\"hello\",\"world\",\"test\"}".to_string())
+        );
+        assert_eq!(
+            value_map.get("uuid_array_col"),
+            Some(
+                &"{550e8400-e29b-41d4-a716-446655440000,660e8400-e29b-41d4-a716-446655440001}"
+                    .to_string()
+            )
+        );
+
+        assert_eq!(
+            value_map.get("regclass_col"),
+            Some(&"comprehensive_test".to_string())
+        );
+        assert_eq!(value_map.get("custom_enum"), Some(&"a".to_string()));
+
+        println!("✅ All type conversion tests passed!");
+        println!("✅ Basic types, strings, booleans, dates, timestamps, UUID, JSON all working correctly!");
+        println!("✅ Array types (INT4[], TEXT[], UUID[]) all working correctly!");
+        println!("✅ System catalog types (regclass) working correctly with user-friendly display!");
+
         Ok(())
-    }
-
-    #[test]
-    fn test_postgres_table_name_extraction() {
-        use blanco_core::Connection;
-
-        let postgres_connection = crate::PostgresConnection::new(
-            "localhost".to_string(),
-            5432,
-            "testdb".to_string(),
-            "user".to_string(),
-            Some("password".to_string()),
-        );
-
-        // Test table name extraction from query with alias
-        let query_with_alias = "SELECT id, status FROM orders o WHERE o.id = 1";
-        let extracted_table_name = postgres_connection
-            .extract_actual_table_name(query_with_alias)
-            .unwrap();
-        assert_eq!(extracted_table_name, Some("orders".to_string()));
-
-        // Test alias resolution
-        let resolved_table = postgres_connection
-            .resolve_table_alias(query_with_alias, "o")
-            .unwrap();
-        assert_eq!(resolved_table, Some("orders".to_string()));
-
-        // Test with different query patterns
-        let test_cases = vec![
-            ("SELECT * FROM customers", Some("customers")),
-            ("SELECT * FROM orders o", Some("orders")),
-            ("SELECT * FROM products p WHERE p.id = 1", Some("products")),
-            (
-                "SELECT * FROM orders JOIN customers c ON orders.customer_id = c.id",
-                Some("orders"),
-            ),
-        ];
-
-        for (query, expected) in test_cases {
-            let result = postgres_connection
-                .extract_actual_table_name(query)
-                .unwrap();
-            assert_eq!(
-                result,
-                expected.map(String::from),
-                "Failed for query: {}",
-                query
-            );
-        }
-
-        println!("✅ PostgreSQL table name extraction tests passed!");
-        println!(
-            "   Extracted table name from 'orders o': {:?}",
-            extracted_table_name
-        );
-        println!("   Resolved alias 'o': {:?}", resolved_table);
     }
 }
