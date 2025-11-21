@@ -992,6 +992,10 @@ impl CompletionProvider for SqlCompletionProvider {
                                     .collect()
                             };
 
+                            // Sort by shortest first to prioritize shorter names
+                            let mut filtered_columns = filtered_columns;
+                            filtered_columns.sort_by(|a, b| a.len().cmp(&b.len()));
+
                             // Convert to LSP completion items
                             let completion_items = filtered_columns
                                 .into_iter()
@@ -1039,13 +1043,16 @@ impl CompletionProvider for SqlCompletionProvider {
                     Ok(tables) => {
                         log::debug!("SQL Completion: Fetched {} tables: {:?}", tables.len(), tables);
                         // Filter tables based on current input
-                        let filtered_tables: Vec<String> = if current_word_clone.is_empty() {
+                        let mut filtered_tables: Vec<String> = if current_word_clone.is_empty() {
                             tables.clone()
                         } else {
                             tables.into_iter()
                                 .filter(|table| table.to_lowercase().starts_with(&current_word_clone.to_lowercase()))
                                 .collect()
                         };
+
+                        // Sort by shortest first to prioritize shorter names
+                        filtered_tables.sort_by(|a, b| a.len().cmp(&b.len()));
 
                         log::debug!("SQL Completion: Filter logic - current_word_is_empty: {}, filtered_tables: {:?}", current_word_clone.is_empty(), filtered_tables);
 

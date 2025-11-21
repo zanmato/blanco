@@ -209,7 +209,7 @@ impl SqliteConnection {
                     columns,
                     column_types,
                     rows: data_rows,
-                    rows_affected: 0,
+                    rows_affected: rows.len() as u64,
                     query_text: None,
                     execution_time_ms: None,
                     is_error: false,
@@ -769,12 +769,20 @@ impl Connection for SqliteConnection {
         &self,
         query: &str,
         _database_name: Option<&str>, // SQLite doesn't support multiple databases
-    ) -> Result<(Vec<String>, Vec<String>, Box<dyn Stream<Item = Result<Vec<String>, anyhow::Error>> + Send + Unpin>), anyhow::Error> {
+    ) -> Result<
+        (
+            Vec<String>,
+            Vec<String>,
+            Box<dyn Stream<Item = Result<Vec<String>, anyhow::Error>> + Send + Unpin>,
+        ),
+        anyhow::Error,
+    > {
         log::debug!("Executing SQLite streaming query: {}", query);
 
-        let pool = self.pool.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("SQLite connection not established")
-        })?;
+        let pool = self
+            .pool
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("SQLite connection not established"))?;
 
         // Use sqlx::query().fetch() for true streaming
         let rows_stream = sqlx::query(query).fetch(pool);
@@ -793,11 +801,13 @@ impl Connection for SqliteConnection {
 
             if first_row_data.is_none() {
                 // Extract column names and types from the first row
-                columns = row.columns()
+                columns = row
+                    .columns()
                     .iter()
                     .map(|col| col.name().to_string())
                     .collect();
-                column_types = row.columns()
+                column_types = row
+                    .columns()
                     .iter()
                     .map(|col| col.type_info().name().to_string())
                     .collect();
@@ -832,37 +842,59 @@ impl Connection for SqliteConnection {
 
 /// Check if a column type is an integer affinity type
 fn is_integer_affinity_type(column_type: &str) -> bool {
-    matches!(column_type.to_lowercase().as_str(),
-        "integer" | "int" | "tinyint" | "smallint" | "mediumint" | "bigint" |
-        "int2" | "int8" | "boolean" | "date" | "datetime" | "timestamp"
+    matches!(
+        column_type.to_lowercase().as_str(),
+        "integer"
+            | "int"
+            | "tinyint"
+            | "smallint"
+            | "mediumint"
+            | "bigint"
+            | "int2"
+            | "int8"
+            | "boolean"
+            | "date"
+            | "datetime"
+            | "timestamp"
     )
 }
 
 /// Check if a column type is a text affinity type
 fn is_text_affinity_type(column_type: &str) -> bool {
-    matches!(column_type.to_lowercase().as_str(),
-        "text" | "char" | "character" | "varchar" | "varying character" |
-        "nchar" | "native character" | "nvarchar" | "clob"
+    matches!(
+        column_type.to_lowercase().as_str(),
+        "text"
+            | "char"
+            | "character"
+            | "varchar"
+            | "varying character"
+            | "nchar"
+            | "native character"
+            | "nvarchar"
+            | "clob"
     )
 }
 
 /// Check if a column type is a numeric affinity type
 fn is_numeric_affinity_type(column_type: &str) -> bool {
-    matches!(column_type.to_lowercase().as_str(),
+    matches!(
+        column_type.to_lowercase().as_str(),
         "numeric" | "decimal" | "real" | "double" | "double precision" | "float"
     )
 }
 
 /// Check if a column type is a blob affinity type
 fn is_blob_affinity_type(column_type: &str) -> bool {
-    matches!(column_type.to_lowercase().as_str(),
+    matches!(
+        column_type.to_lowercase().as_str(),
         "blob" | "binary" | "varbinary" | "image"
     )
 }
 
 /// Check if a column type is a date/time type
 fn is_datetime_type(column_type: &str) -> bool {
-    matches!(column_type.to_lowercase().as_str(),
+    matches!(
+        column_type.to_lowercase().as_str(),
         "date" | "time" | "datetime" | "timestamp"
     )
 }
@@ -886,18 +918,24 @@ fn handle_integer_affinity(
     match column_type.to_lowercase().as_str() {
         "tinyint" => {
             if let Ok(val) = row.try_get::<Option<i8>, _>(column_index) {
-                return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                return val
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "NULL".to_string());
             }
         }
         "smallint" => {
             if let Ok(val) = row.try_get::<Option<i16>, _>(column_index) {
-                return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                return val
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "NULL".to_string());
             }
         }
         "boolean" => {
             // SQLite doesn't have native boolean, but stores as INTEGER
             if let Ok(val) = row.try_get::<Option<bool>, _>(column_index) {
-                return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                return val
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "NULL".to_string());
             }
         }
         _ => {} // Fall through to standard integer handling
@@ -905,9 +943,11 @@ fn handle_integer_affinity(
 
     // Try i32 first, then i64 for larger integers
     if let Ok(val) = row.try_get::<Option<i32>, _>(column_index) {
-        val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
+        val.map(|v| v.to_string())
+            .unwrap_or_else(|| "NULL".to_string())
     } else if let Ok(val) = row.try_get::<Option<i64>, _>(column_index) {
-        val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
+        val.map(|v| v.to_string())
+            .unwrap_or_else(|| "NULL".to_string())
     } else {
         "NULL".to_string()
     }
@@ -934,7 +974,8 @@ fn handle_numeric_affinity(
 ) -> String {
     // Try f64 for numeric types
     if let Ok(val) = row.try_get::<Option<f64>, _>(column_index) {
-        val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
+        val.map(|v| v.to_string())
+            .unwrap_or_else(|| "NULL".to_string())
     } else {
         "NULL".to_string()
     }
@@ -949,10 +990,14 @@ fn handle_blob_affinity(
     if let Ok(val) = row.try_get::<Option<Vec<u8>>, _>(column_index) {
         val.map(|v| {
             // Convert to hex string for readability
-            format!("0x{}", v.iter()
-                .map(|byte| format!("{:02x}", byte))
-                .collect::<String>())
-        }).unwrap_or_else(|| "NULL".to_string())
+            format!(
+                "0x{}",
+                v.iter()
+                    .map(|byte| format!("{:02x}", byte))
+                    .collect::<String>()
+            )
+        })
+        .unwrap_or_else(|| "NULL".to_string())
     } else {
         "NULL".to_string()
     }
@@ -967,17 +1012,22 @@ fn handle_datetime_type(
     match column_type.to_lowercase().as_str() {
         "date" => {
             if let Ok(val) = row.try_get::<Option<chrono::NaiveDate>, _>(column_index) {
-                return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                return val
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "NULL".to_string());
             }
         }
         "time" => {
             if let Ok(val) = row.try_get::<Option<chrono::NaiveTime>, _>(column_index) {
-                return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+                return val
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "NULL".to_string());
             }
         }
         "datetime" | "timestamp" => {
             if let Ok(val) = row.try_get::<Option<chrono::NaiveDateTime>, _>(column_index) {
-                return val.map(|v| v.format("%Y-%m-%d %H:%M:%S").to_string())
+                return val
+                    .map(|v| v.format("%Y-%m-%d %H:%M:%S").to_string())
                     .unwrap_or_else(|| "NULL".to_string());
             }
         }
@@ -993,7 +1043,8 @@ fn handle_json_type(
     _column_type: &str,
 ) -> String {
     if let Ok(val) = row.try_get::<Option<serde_json::Value>, _>(column_index) {
-        val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string())
+        val.map(|v| v.to_string())
+            .unwrap_or_else(|| "NULL".to_string())
     } else {
         // Fallback to string conversion for older SQLite versions
         if let Ok(val) = row.try_get::<Option<String>, _>(column_index) {

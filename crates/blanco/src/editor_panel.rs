@@ -873,6 +873,10 @@ impl EditorPanel {
                 // Create chat provider info first
                 match create_chat_provider_info(query_tab.connection_id, cx) {
                     Ok(provider_info) => {
+                        // For now, we'll pass None and implement a simpler approach
+                        // The tab content will be accessed through the existing SqlContext mechanism
+                        let read_tab_callback: Option<Box<dyn Fn() -> String + Send + Sync>> = None;
+
                         // Create chat panel with the provider info
                         let chat_panel = cx.new(|cx| {
                             ChatPanel::new(
@@ -880,6 +884,7 @@ impl EditorPanel {
                                 provider_info.provider,
                                 provider_info.provider_name.clone(),
                                 provider_info.model_name.clone(),
+                                read_tab_callback,
                                 window,
                                 cx,
                             )
@@ -1042,6 +1047,7 @@ impl Render for EditorPanel {
                                                 div()
                                                     .text_xs()
                                                     .text_color(cx.theme().muted_foreground)
+                                                    .pr_2()
                                                     .child(
                                                         query_tab.connection_name.clone()
                                                             .unwrap_or_else(|| "No Connection".to_string())
@@ -1142,8 +1148,6 @@ impl Render for EditorPanel {
                                                             div()
                                                                 .flex_1()
                                                                 .min_h_0()
-                                                                .border_t_1()
-                                                                .border_color(cx.theme().border)
                                                                 .on_key_down(cx.listener(|this, evt: &gpui::KeyDownEvent, window, cx| {
                                                                     if evt.keystroke.should_match(&this.run_query_keystroke) {
                                                                         log::debug!("Matches keystroke {:?}", evt.keystroke);
@@ -1185,7 +1189,7 @@ impl Render for EditorPanel {
                                                                             .outline()
                                                                             .small()
                                                                             .label("Run Current")
-                                                                            .children(vec![Kbd::new(self.run_query_keystroke.inner().clone()).into_any_element()])
+                                                                            .children(vec![Kbd::new(self.run_query_keystroke.inner().clone()).text_xs().into_any_element()])
                                                                             .on_click(cx.listener(|panel, _, window, cx| panel.run_query(window, cx))),
                                                                     )
                                                         )
@@ -1259,7 +1263,7 @@ impl Render for EditorPanel {
                                                                         .small()
                                                                         .icon(IconName::Check)
                                                                         .label("Commit")
-                                                                        .children(vec![Kbd::new(Keystroke::parse("cmd-shift-c").unwrap()).into_any_element()])
+                                                                        .children(vec![Kbd::new(Keystroke::parse("cmd-shift-c").unwrap()).text_xs().into_any_element()])
                                                                         .on_click(cx.listener(|this, _, window, cx| {
                                                                             if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
                                                                                 // Execute the actual commit in the results panel with SQL logging
@@ -1275,7 +1279,7 @@ impl Render for EditorPanel {
                                                                         .small()
                                                                         .icon(IconName::CircleX)
                                                                         .label("Rollback")
-                                                                        .children(vec![Kbd::new(Keystroke::parse("cmd-shift-r").unwrap()).into_any_element()])
+                                                                        .children(vec![Kbd::new(Keystroke::parse("cmd-shift-r").unwrap()).text_xs().into_any_element()])
                                                                         .on_click(cx.listener(|this, _, _window, cx| {
                                                                             if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
                                                                                 query_tab.results_panel.update(cx, |panel, cx| {

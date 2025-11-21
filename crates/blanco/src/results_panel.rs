@@ -2190,7 +2190,7 @@ impl Render for ResultsPanel {
                     .flex_1() // Allow table to fill available space
                     .overflow_hidden()
                     .min_h(px(200.0)) // Minimum height for table
-                    .child(Table::new(&self.table_state)),
+                    .child(Table::new(&self.table_state).bordered(false)),
             )
     }
 }
