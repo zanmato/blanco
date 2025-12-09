@@ -214,10 +214,11 @@ impl SqlCompletionProvider {
         // First, check if we have valid cached data
         if let Ok(cache) = self.cache.lock()
             && let Some(cached_tables) = &cache.tables
-            && !cached_tables.is_expired(Self::CACHE_TTL_SECONDS) {
-                log::debug!("Using cached tables for database '{}'", self.database_name);
-                return Ok(cached_tables.data.clone());
-            } // Lock released here
+            && !cached_tables.is_expired(Self::CACHE_TTL_SECONDS)
+        {
+            log::debug!("Using cached tables for database '{}'", self.database_name);
+            return Ok(cached_tables.data.clone());
+        } // Lock released here
 
         // No valid cache, fetch fresh data
         log::debug!(
@@ -240,14 +241,15 @@ impl SqlCompletionProvider {
         // First, check if we have valid cached data
         if let Ok(cache) = self.cache.lock()
             && let Some(cached_columns) = cache.columns.get(table_name)
-                && !cached_columns.is_expired(Self::CACHE_TTL_SECONDS) {
-                    log::debug!(
-                        "Using cached columns for table '{}', database '{}'",
-                        table_name,
-                        self.database_name
-                    );
-                    return Ok(cached_columns.data.clone());
-                } // Lock released here
+            && !cached_columns.is_expired(Self::CACHE_TTL_SECONDS)
+        {
+            log::debug!(
+                "Using cached columns for table '{}', database '{}'",
+                table_name,
+                self.database_name
+            );
+            return Ok(cached_columns.data.clone());
+        } // Lock released here
 
         // No valid cache, fetch fresh data
         log::debug!(
@@ -280,14 +282,15 @@ impl SqlCompletionProvider {
         // First, check if we have valid cached data
         if let Ok(cache) = self.cache.lock()
             && let Some(cached_info) = cache.table_info.get(&cache_key)
-                && !cached_info.is_expired(Self::CACHE_TTL_SECONDS) {
-                    log::debug!(
-                        "Using cached table info for '{}' in database '{}'",
-                        table_name,
-                        self.database_name
-                    );
-                    return Ok(cached_info.data.clone());
-                } // Lock released here
+            && !cached_info.is_expired(Self::CACHE_TTL_SECONDS)
+        {
+            log::debug!(
+                "Using cached table info for '{}' in database '{}'",
+                table_name,
+                self.database_name
+            );
+            return Ok(cached_info.data.clone());
+        } // Lock released here
 
         // No valid cache, fetch fresh data using connection trait
         log::debug!(
@@ -314,15 +317,16 @@ impl SqlCompletionProvider {
         // First, check if we have valid cached data
         if let Ok(cache) = self.cache.lock()
             && let Some(cached_info) = cache.column_info.get(&cache_key)
-                && !cached_info.is_expired(Self::CACHE_TTL_SECONDS) {
-                    log::debug!(
-                        "Using cached column info for '{}.{}' in database '{}'",
-                        table_name,
-                        column_name,
-                        self.database_name
-                    );
-                    return Ok(cached_info.data.clone());
-                } // Lock released here
+            && !cached_info.is_expired(Self::CACHE_TTL_SECONDS)
+        {
+            log::debug!(
+                "Using cached column info for '{}.{}' in database '{}'",
+                table_name,
+                column_name,
+                self.database_name
+            );
+            return Ok(cached_info.data.clone());
+        } // Lock released here
 
         // No valid cache, fetch fresh data using connection trait
         log::debug!(
@@ -912,10 +916,11 @@ impl SqlCompletionProvider {
         for keyword in &keywords {
             if let Some(pos) = text_upper.rfind(keyword)
                 && pos as i32 > last_pos
-                && let Some(table) = self.find_table_after_keyword(text, keyword) {
-                    last_pos = pos as i32;
-                    last_table = Some(table);
-                }
+                && let Some(table) = self.find_table_after_keyword(text, keyword)
+            {
+                last_pos = pos as i32;
+                last_table = Some(table);
+            }
         }
 
         // If we found a table, try to resolve it through aliases
@@ -1209,9 +1214,10 @@ async fn get_cached_hover_info(
     if let Some(table_name) = provider_clone
         .extract_table_for_columns(&text_before_cursor_clone)
         .await
-        && let Ok(column_info) = provider.get_cached_column_info(&table_name, word).await {
-            return Some(column_info);
-        }
+        && let Ok(column_info) = provider.get_cached_column_info(&table_name, word).await
+    {
+        return Some(column_info);
+    }
 
     // If no column context found, try table lookup
     if let Ok(table_info) = provider.get_cached_table_info(word).await {
@@ -1260,8 +1266,11 @@ mod tests {
 
     #[test]
     fn test_find_last_keyword() {
-        let provider =
-            SqlCompletionProvider::new_with_database(1, "test_db".to_string(), DbService::new());
+        let provider = SqlCompletionProvider::new_with_database(
+            1,
+            "test_db".to_string(),
+            DbService::new(None),
+        );
 
         // Test basic keyword detection
         assert_eq!(
@@ -1311,8 +1320,11 @@ mod tests {
 
     #[test]
     fn test_extract_table_aliases() {
-        let provider =
-            SqlCompletionProvider::new_with_database(1, "test_db".to_string(), DbService::new());
+        let provider = SqlCompletionProvider::new_with_database(
+            1,
+            "test_db".to_string(),
+            DbService::new(None),
+        );
 
         // Test basic alias patterns
         let aliases = provider.extract_table_aliases("FROM users u");
@@ -1342,8 +1354,11 @@ mod tests {
 
     #[test]
     fn test_resolve_table_alias() {
-        let provider =
-            SqlCompletionProvider::new_with_database(1, "test_db".to_string(), DbService::new());
+        let provider = SqlCompletionProvider::new_with_database(
+            1,
+            "test_db".to_string(),
+            DbService::new(None),
+        );
         let aliases = vec![
             TableAlias {
                 table_name: "users".to_string(),
@@ -1368,8 +1383,11 @@ mod tests {
 
     #[test]
     fn test_generate_table_abbreviation() {
-        let provider =
-            SqlCompletionProvider::new_with_database(1, "test_db".to_string(), DbService::new());
+        let provider = SqlCompletionProvider::new_with_database(
+            1,
+            "test_db".to_string(),
+            DbService::new(None),
+        );
 
         // Test simple table name
         assert_eq!(
@@ -1398,8 +1416,11 @@ mod tests {
 
     #[async_std::test]
     async fn test_should_show_tables() {
-        let provider =
-            SqlCompletionProvider::new_with_database(1, "test_db".to_string(), DbService::new());
+        let provider = SqlCompletionProvider::new_with_database(
+            1,
+            "test_db".to_string(),
+            DbService::new(None),
+        );
 
         // Should show tables with FROM
         assert!(provider.should_show_tables("SELECT * FROM "));
@@ -1422,8 +1443,11 @@ mod tests {
 
     #[async_std::test]
     async fn test_should_show_columns() {
-        let provider =
-            SqlCompletionProvider::new_with_database(1, "test_db".to_string(), DbService::new());
+        let provider = SqlCompletionProvider::new_with_database(
+            1,
+            "test_db".to_string(),
+            DbService::new(None),
+        );
 
         // Should show columns with dot notation
         assert!(provider.should_show_columns("SELECT users."));
@@ -1449,8 +1473,11 @@ mod tests {
 
     #[async_std::test]
     async fn test_extract_table_for_columns() {
-        let provider =
-            SqlCompletionProvider::new_with_database(1, "test_db".to_string(), DbService::new());
+        let provider = SqlCompletionProvider::new_with_database(
+            1,
+            "test_db".to_string(),
+            DbService::new(None),
+        );
 
         // Test basic dot notation
         assert_eq!(
@@ -1519,8 +1546,11 @@ mod tests {
     // Test the 6 scenarios mentioned in the plan
     #[async_std::test]
     async fn test_six_scenarios() {
-        let provider =
-            SqlCompletionProvider::new_with_database(1, "test_db".to_string(), DbService::new());
+        let provider = SqlCompletionProvider::new_with_database(
+            1,
+            "test_db".to_string(),
+            DbService::new(None),
+        );
 
         // Scenario 1: Basic dot notation - "SELECT users." should show columns from users table
         assert!(provider.should_show_columns("SELECT users."));

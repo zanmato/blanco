@@ -9,7 +9,7 @@ description = "OpenAI chat completions API client with tool calling support"
 anyhow = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { workspace = true }
-zed-reqwest = { workspace = true }
+reqwest = { workspace = true }
 http = { workspace = true }
 async-std = { workspace = true }
 async-trait = { workspace = true }

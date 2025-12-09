@@ -7,8 +7,8 @@
 use anyhow::Result;
 use std::sync::Arc;
 
-// Use zed-reqwest as reqwest
-use zed_reqwest as reqwest;
+// Use reqwest
+use reqwest;
 
 use crate::db_service::DbService;
 use crate::settings::{ChatSettings, Settings};

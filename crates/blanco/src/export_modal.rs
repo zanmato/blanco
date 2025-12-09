@@ -1,13 +1,14 @@
 use chrono::Utc;
 use gpui::{
-    App, AppContext, Axis, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
-    Render, Styled, Subscription, Task, Window, div, prelude::FluentBuilder, px,
+    App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
+    Styled, Subscription, Task, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    ActiveTheme, IndexPath, StyledExt,
+    ActiveTheme, IndexPath,
     button::Button,
     h_flex,
     input::{Input, InputState},
+    scroll::ScrollableElement,
     select::{Select, SelectEvent, SelectState},
     v_flex,
 };
@@ -384,7 +385,7 @@ impl Render for ExportModal {
                     .child(Input::new(&self.filename_input)),
             )
             .child(self.render_progress_bar(cx))
-            .scrollable(Axis::Vertical)
+            .overflow_y_scrollbar()
     }
 }
 

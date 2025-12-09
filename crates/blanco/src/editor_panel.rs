@@ -17,8 +17,8 @@ use gpui_component::{
 use log::{debug, error, info};
 use std::{rc::Rc, sync::Arc};
 
-// Use zed-reqwest as reqwest
-use zed_reqwest as reqwest;
+// Use reqwest
+use reqwest;
 
 use crate::agent::{ChatPanel, SqlContext};
 use crate::app::RenameTab;

@@ -22,13 +22,12 @@ use super::chat_types::{ChatEvent, LoadingState, SqlContext};
 use blanco_core::chat_provider::{ChatProvider, ProviderError};
 use blanco_ui::IconName;
 use gpui::ScrollHandle;
-use gpui_component::scroll::{Scrollbar, ScrollbarState};
+use gpui_component::scroll::Scrollbar;
 
 actions!(agent_chat, [SendMessage, ClearChat]);
 
 pub struct ChatPanel {
     pub focus_handle: FocusHandle,
-    pub scroll_state: ScrollbarState,
     pub scroll_handle: ScrollHandle,
     pub session: Entity<ChatSession>,
     pub input_state: Entity<InputState>,
@@ -57,7 +56,7 @@ impl ChatPanel {
 
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
-                .multi_line()
+                .multi_line(true)
                 .rows(3)
                 .auto_grow(2, 6) // Auto-grow between 2 and 6 rows
                 .placeholder("Ask me anything about your SQL query...")
@@ -132,7 +131,6 @@ impl ChatPanel {
 
         Self {
             focus_handle: cx.focus_handle(),
-            scroll_state: ScrollbarState::default(),
             scroll_handle: ScrollHandle::new(),
             session,
             input_state,
@@ -306,7 +304,7 @@ impl Render for ChatPanel {
                             .left_0()
                             .right_0()
                             .bottom_0()
-                            .child(Scrollbar::vertical(&self.scroll_state, &self.scroll_handle)),
+                            .child(Scrollbar::vertical(&self.scroll_handle)),
                     ),
             )
             // Input area

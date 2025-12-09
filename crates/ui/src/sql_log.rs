@@ -3,7 +3,7 @@ use gpui::{
     SharedString, StatefulInteractiveElement, Styled, StyledText, Window,
 };
 use gpui_component::highlighter::{HighlightTheme, SyntaxHighlighter};
-use gpui_component::scroll::{Scrollbar, ScrollbarState};
+use gpui_component::scroll::Scrollbar;
 use gpui_component::ActiveTheme;
 use ropey::{LineType, Rope};
 use std::sync::Arc;
@@ -21,7 +21,6 @@ pub struct SqlLog {
     highlighter: SyntaxHighlighter,
     theme: Arc<HighlightTheme>,
     scroll_handle: ScrollHandle,
-    scroll_state: ScrollbarState,
 }
 
 impl SqlLog {
@@ -35,7 +34,6 @@ impl SqlLog {
             highlighter,
             theme,
             scroll_handle: ScrollHandle::default(),
-            scroll_state: ScrollbarState::default(),
         }
     }
 
@@ -165,7 +163,7 @@ impl Render for SqlLog {
                     .left_0()
                     .right_0()
                     .bottom_0()
-                    .child(Scrollbar::vertical(&self.scroll_state, &self.scroll_handle)),
+                    .child(Scrollbar::vertical(&self.scroll_handle)),
             )
     }
 }

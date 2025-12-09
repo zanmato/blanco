@@ -855,12 +855,12 @@ impl TableDelegate for ResultsTableDelegate {
         self.rows.len()
     }
 
-    fn column(&self, col_ix: usize, _: &App) -> &Column {
-        &self.columns[col_ix]
+    fn column(&self, col_ix: usize, _: &App) -> Column {
+        self.columns[col_ix].clone()
     }
 
     fn render_th(
-        &self,
+        &mut self,
         col_ix: usize,
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
@@ -887,7 +887,7 @@ impl TableDelegate for ResultsTableDelegate {
     }
 
     fn render_td(
-        &self,
+        &mut self,
         row_ix: usize,
         col_ix: usize,
         _window: &mut Window,
@@ -1083,18 +1083,22 @@ impl TableDelegate for ResultsTableDelegate {
     ) {
     }
 
-    fn render_last_empty_col(&self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render_last_empty_col(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
         // Add extra space to ensure all columns are scrollable
         // This compensates for any viewport calculation issues
         div().w(px(30.0)).h_full().flex_shrink_0()
     }
 
     fn context_menu(
-        &self,
+        &mut self,
         row_ix: usize,
         menu: PopupMenu,
         _window: &mut Window,
-        _cx: &mut App,
+        _cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
         // Basic copy operations - always show "Copy as" format
         let menu = menu

@@ -2,13 +2,13 @@ use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 use http::StatusCode;
 use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use std::str::FromStr;
 
-// Use zed-reqwest as reqwest
-use zed_reqwest as reqwest;
+// Use reqwest
 use bytes::Bytes;
+use reqwest;
 
 use crate::config::OpenAIConfig;
 use crate::error::{OpenAIError, OpenAIResult};
@@ -102,7 +102,13 @@ impl OpenAIClient {
     }
 
     /// Send an HTTP request to the OpenAI API
-    async fn send_request(&self, url: &str, method: &str, headers: Vec<(&str, &str)>, body: Vec<u8>) -> OpenAIResult<String> {
+    async fn send_request(
+        &self,
+        url: &str,
+        method: &str,
+        headers: Vec<(&str, &str)>,
+        body: Vec<u8>,
+    ) -> OpenAIResult<String> {
         let timeout = Duration::from_secs(self.config.timeout_seconds);
 
         // Convert method string to reqwest::Method
@@ -122,13 +128,11 @@ impl OpenAIClient {
         // Use async_std's timeout function with async-compat wrapper for the entire async block
         let response = async_std::future::timeout(
             timeout,
-            async_compat::Compat::new(async move {
-                req_builder.send().await
-            })
+            async_compat::Compat::new(async move { req_builder.send().await }),
         )
-            .await
-            .map_err(|_| OpenAIError::Timeout)?
-            .map_err(|err| OpenAIError::HttpError(err.to_string()))?;
+        .await
+        .map_err(|_| OpenAIError::Timeout)?
+        .map_err(|err| OpenAIError::HttpError(err.to_string()))?;
 
         // Check the status code
         let status = response.status();
@@ -165,11 +169,11 @@ impl OpenAIClient {
 
         if !status.is_success() {
             // Try to parse the error response
-            let body = async_compat::Compat::new(async {
-                response.text().await
-            }).await.map_err(|err| {
-                OpenAIError::HttpError(format!("Failed to read error response: {}", err))
-            })?;
+            let body = async_compat::Compat::new(async { response.text().await })
+                .await
+                .map_err(|err| {
+                    OpenAIError::HttpError(format!("Failed to read error response: {}", err))
+                })?;
 
             // Log the error response for debugging
             log::debug!("OpenAI API error response ({}): {}", status, body);
@@ -187,11 +191,9 @@ impl OpenAIClient {
         }
 
         // Read the response body
-        async_compat::Compat::new(async {
-                response.text().await
-            }).await.map_err(|err| {
-            OpenAIError::HttpError(format!("Failed to read response: {}", err))
-        })
+        async_compat::Compat::new(async { response.text().await })
+            .await
+            .map_err(|err| OpenAIError::HttpError(format!("Failed to read response: {}", err)))
     }
 
     /// Handle tool calls in a response
@@ -304,8 +306,8 @@ impl ChatProvider for OpenAIClient {
         );
 
         // Send the request
-        let response_body =
-            self.send_request(
+        let response_body = self
+            .send_request(
                 &self.config.chat_completions_url(),
                 "POST",
                 headers,
@@ -396,15 +398,13 @@ impl ChatProvider for OpenAIClient {
         // Send the request with timeout
         let response = async_std::future::timeout(
             timeout,
-            async_compat::Compat::new(async move {
-                req_builder.send().await
-            })
+            async_compat::Compat::new(async move { req_builder.send().await }),
         )
-            .await
-            .map_err(|_| -> ProviderError { anyhow::anyhow!("Request timeout").into() })?
-            .map_err(|err| -> ProviderError {
-                anyhow::anyhow!("HTTP request failed: {}", err).into()
-            })?;
+        .await
+        .map_err(|_| -> ProviderError { anyhow::anyhow!("Request timeout").into() })?
+        .map_err(|err| -> ProviderError {
+            anyhow::anyhow!("HTTP request failed: {}", err).into()
+        })?;
 
         // Check the status code
         if response.status() == StatusCode::UNAUTHORIZED {
@@ -424,11 +424,11 @@ impl ChatProvider for OpenAIClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = async_compat::Compat::new(async {
-                response.text().await
-            }).await.map_err(|e| -> ProviderError {
-                anyhow::anyhow!("Failed to read error response: {}", e).into()
-            })?;
+            let body = async_compat::Compat::new(async { response.text().await })
+                .await
+                .map_err(|e| -> ProviderError {
+                    anyhow::anyhow!("Failed to read error response: {}", e).into()
+                })?;
 
             // Log the streaming error response for debugging
             log::debug!("OpenAI streaming API error response ({}): {}", status, body);

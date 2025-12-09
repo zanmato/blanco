@@ -11,14 +11,17 @@ members = [
     "crates/gpui_tokio",
 ]
 
+[workspace.package]
+edition = "2024"
+
 [workspace.dependencies]
 # Core GPUI dependencies
-gpui = { version = "0.2.2" }
+gpui = { git = "https://github.com/zed-industries/zed" }
 gpui-macros = "0.2.2"
 gpui-component = { path = "vendor/gpui-component/crates/ui", features = [
     "tree-sitter-languages",
 ] }
-gpui-component-macros = { path = "vendor/gpui-component/crates/macros", version = "0.4.0" }
+gpui-component-macros = { path = "vendor/gpui-component/crates/macros", version = "0.5.0" }
 
 # Additional dependencies for gpui-component compatibility
 notify = "7.0.0"
@@ -30,7 +33,7 @@ smallvec = "1"
 sum-tree = { version = "0.2.0", package = "zed-sum-tree" }
 
 # LSP dependencies (needed by gpui-component)
-lsp-types = "0.97.0"
+lsp-types = { version = "0.97.0", features = ["proposed"] }
 
 # Common dependencies
 anyhow = { version = "1", features = ["backtrace"] }
@@ -39,8 +42,8 @@ serde_json = "1"
 log = "0.4"
 uuid = { version = "1.0", features = ["v4"] }
 chrono = "0.4"
-tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 thiserror = "1.0"
 regex = "1.10"
 async-trait = "0.1"
@@ -48,6 +51,7 @@ async-trait = "0.1"
 # SSH tunnel support
 russh = "0.44"
 russh-keys = "0.44"
+reqwest = { version = "0.12", features = ["json", "stream"] }
 
 # Database dependencies
 sqlx = { version = "0.8", features = [
@@ -68,7 +72,6 @@ sql-parse = "0.2"
 pulldown-cmark = "0.9"
 
 # HTTP client
-zed-reqwest = "0.12.15-zed"
 http = "1.0"
 tempfile = "3.8"
 dirs = "5"
