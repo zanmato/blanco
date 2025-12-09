@@ -27,6 +27,7 @@ pub struct ToolCallData {
     pub tool_name: String,
     pub arguments: String,
     pub result: Option<String>,
+    pub summary: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

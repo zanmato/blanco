@@ -9,7 +9,6 @@ use super::chat_types::{
 };
 use blanco_core::chat_provider::{ChatCompletionRequest, ChatProvider, ProviderError};
 
-#[derive(Clone)]
 pub struct ChatSession {
     pub messages: Vec<ChatMessage>,
     pub provider: Option<Arc<dyn ChatProvider<Error = ProviderError>>>,
@@ -19,6 +18,7 @@ pub struct ChatSession {
     pub sql_context: SqlContext,
     #[allow(dead_code)]
     pub streaming_message_id: Option<String>,
+    pub read_tab_callback: Option<Box<dyn Fn() -> String + Send + Sync>>,
 }
 
 #[allow(dead_code)]
@@ -28,6 +28,7 @@ impl ChatSession {
         provider: Arc<dyn ChatProvider<Error = ProviderError>>,
         provider_name: String,
         model_name: String,
+        read_tab_callback: Option<Box<dyn Fn() -> String + Send + Sync>>,
     ) -> Self {
         Self {
             messages: Vec::new(),
@@ -37,6 +38,7 @@ impl ChatSession {
             loading_state: LoadingState::Idle,
             sql_context: SqlContext::empty(),
             streaming_message_id: None,
+            read_tab_callback,
         }
     }
 
@@ -50,6 +52,7 @@ impl ChatSession {
             loading_state: LoadingState::Idle,
             sql_context: SqlContext::empty(),
             streaming_message_id: None,
+            read_tab_callback: None,
         }
     }
 
@@ -63,6 +66,7 @@ impl ChatSession {
             loading_state: LoadingState::Idle,
             sql_context: SqlContext::empty(),
             streaming_message_id: None,
+            read_tab_callback: None,
         }
     }
 
@@ -120,6 +124,14 @@ impl ChatSession {
             return self.handle_command(command, cx);
         }
 
+        // Check for "read-tab" tool request
+        // TODO: implement correctly instead of intercepting here
+        if user_message.to_lowercase().contains("read-tab")
+            || user_message.to_lowercase().contains("read tab")
+        {
+            return self.handle_read_tab_tool(cx);
+        }
+
         // Handle regular message based on available provider
         if let Some(provider) = &self.provider {
             self.send_provider_message(provider.clone(), &user_message, cx)
@@ -141,6 +153,25 @@ impl ChatSession {
                 "Started a new chat session. Message history cleared.".to_string()
             }
         };
+
+        let message = ChatMessage::assistant(response.clone(), self.model_name.clone());
+        self.add_message(message.clone(), cx);
+        cx.emit(ChatEvent::MessageAdded { message });
+
+        Task::ready(Ok(response))
+    }
+
+    fn handle_read_tab_tool(&mut self, cx: &mut Context<Self>) -> Task<Result<String>> {
+        // Get current query from SqlContext
+        let current_query = if !self.sql_context.current_query.is_empty() {
+            self.sql_context.current_query.clone()
+        } else if let Some(callback) = &self.read_tab_callback {
+            callback()
+        } else {
+            "No SQL query found in the current tab.".to_string()
+        };
+
+        let response = format!("Current tab content:\n```sql\n{}\n```", current_query);
 
         let message = ChatMessage::assistant(response.clone(), self.model_name.clone());
         self.add_message(message.clone(), cx);
@@ -388,14 +419,15 @@ impl ChatSession {
         let mut failed_tool_calls = 0;
 
         // Create tool call data for UI display
-        let tool_call_data: Vec<crate::agent::chat_types::ToolCallData> = tool_calls
+        let mut tool_call_data: Vec<crate::agent::chat_types::ToolCallData> = tool_calls
             .iter()
             .map(|tc| {
                 crate::agent::chat_types::ToolCallData {
                     id: tc.id.clone(),
                     tool_name: tc.function.name.clone(),
                     arguments: tc.function.arguments.clone(),
-                    result: None, // Will be filled after execution
+                    result: None,  // Will be filled after execution
+                    summary: None, // Will be filled after execution
                 }
             })
             .collect();
@@ -426,7 +458,7 @@ impl ChatSession {
             );
 
             let tool_call = tool_call.clone();
-            let tool_call_clone = tool_call.clone();
+            let tool_call_for_error = tool_call.clone();
 
             match provider.call_tool(tool_call).await {
                 Ok(result) => {
@@ -438,9 +470,17 @@ impl ChatSession {
                         result.content.len()
                     );
 
+                    // Update tool call data with result and summary
+                    if let Some(tc_data) = tool_call_data.get_mut(index) {
+                        tc_data.result = Some(result.content.clone());
+                        tc_data.summary = result.summary.clone();
+                    }
+
                     // Create and immediately emit tool result message for UI
+                    // Use the summary if available, otherwise use the raw content
+                    let display_content = result.summary.clone().unwrap_or(result.content.clone());
                     let tool_ui_message = ChatMessage::tool(
-                        result.content.clone(),
+                        display_content,
                         result.tool_call_id.clone(),
                         model_name.to_string(),
                     );
@@ -460,11 +500,18 @@ impl ChatSession {
                 Err(e) => {
                     log::error!("Tool call {}/{} failed: {}", index + 1, tool_calls.len(), e);
 
+                    // Update tool call data with error
+                    if let Some(tc_data) = tool_call_data.get_mut(index) {
+                        tc_data.result = Some(format!("Error: {}", e));
+                        tc_data.summary =
+                            Some(format!("{} (Failed)", tool_call_for_error.function.name));
+                    }
+
                     // Create and immediately emit error message for UI
                     let error_content = format!("Tool call failed: {}", e);
                     let tool_ui_message = ChatMessage::tool(
                         error_content.clone(),
-                        tool_call_clone.id.clone(),
+                        tool_call_for_error.id.clone(),
                         model_name.to_string(),
                     );
                     let _ = ui_sender.send(tool_ui_message).await;
@@ -473,7 +520,7 @@ impl ChatSession {
                     current_messages.push(blanco_core::chat_provider::Message {
                         role: "tool".to_string(),
                         content: error_content,
-                        tool_call_id: Some(tool_call_clone.id.clone()),
+                        tool_call_id: Some(tool_call_for_error.id.clone()),
                         tool_calls: None,
                         additional_data: None,
                     });

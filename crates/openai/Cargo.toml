@@ -9,16 +9,18 @@ description = "OpenAI chat completions API client with tool calling support"
 anyhow = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { workspace = true }
-http_client = { workspace = true }
+zed-reqwest = { workspace = true }
 http = { workspace = true }
 async-std = { workspace = true }
 async-trait = { workspace = true }
+async-compat = { workspace = true }
 futures = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 thiserror = { workspace = true }
 async-stream = { workspace = true }
 log = { workspace = true }
+bytes = "1.0"
 
 # Internal dependencies
 blanco-core = { path = "../blanco-core" }

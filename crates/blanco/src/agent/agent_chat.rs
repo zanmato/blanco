@@ -37,6 +37,7 @@ pub struct ChatPanel {
     pub loading_state: LoadingState,
     pub tab_id: usize,
     pub send_message_keystroke: KeybindingKeystroke,
+    pub read_tab_callback: Option<Box<dyn Fn() -> String + Send + Sync>>,
 }
 
 impl ChatPanel {
@@ -45,10 +46,14 @@ impl ChatPanel {
         provider: Arc<dyn ChatProvider<Error = ProviderError>>,
         provider_name: String,
         model_name: String,
+        read_tab_callback: Option<Box<dyn Fn() -> String + Send + Sync>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let session = cx.new(|_cx| ChatSession::new(provider, provider_name, model_name));
+        let session = cx.new(|_cx| ChatSession::new(provider, provider_name, model_name, None));
+
+        // If we have a callback, we'll need to set it after session creation
+        // For now, we'll skip this since the simple approach doesn't need the callback
 
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
@@ -69,12 +74,7 @@ impl ChatPanel {
                     let message_state = cx.new(|cx| {
                         ChatMessageState::new(
                             panel.messages.len(),
-                            match message.role {
-                                MessageRole::Tool => {
-                                    message.tool_call_id.unwrap_or("tool".to_owned())
-                                }
-                                _ => message.content.into(),
-                            },
+                            message.content.into(),
                             message.role.clone(),
                             cx,
                         )
@@ -143,6 +143,7 @@ impl ChatPanel {
             send_message_keystroke: KeybindingKeystroke::from_keystroke(
                 Keystroke::parse("shift-enter").unwrap(),
             ),
+            read_tab_callback,
         }
     }
 
@@ -212,8 +213,6 @@ impl Render for ChatPanel {
             .min_h_0()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
-            .border_t_1()
-            .border_color(cx.theme().border)
             // Header
             .child(
                 h_flex()

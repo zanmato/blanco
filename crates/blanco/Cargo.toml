@@ -43,9 +43,13 @@ regex = { workspace = true }
 rust_decimal = "1.32"
 ropey = { workspace = true }
 
+# Tree-sitter for SQL parsing
+tree-sitter = "0.25.4"
+tree-sitter-sequel = "0.3.8"
+once_cell = "1.19.0"
+
 # HTTP client for AI chat
-http_client = { workspace = true }
-reqwest_client = { workspace = true }
+zed-reqwest = { workspace = true }
 async-stream = { workspace = true }
 tokio = { workspace = true }
 http = { workspace = true }

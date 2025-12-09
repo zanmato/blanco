@@ -264,6 +264,8 @@ pub struct ToolResult {
     pub success: bool,
     /// Error message if unsuccessful
     pub error: Option<String>,
+    /// Human-readable summary of the tool call
+    pub summary: Option<String>,
 }
 
 impl Default for ChatCompletionRequest {
@@ -358,6 +360,7 @@ impl ToolResult {
             content: content.into(),
             success: true,
             error: None,
+            summary: None,
         }
     }
 
@@ -368,6 +371,7 @@ impl ToolResult {
             content: String::new(),
             success: false,
             error: Some(error.into()),
+            summary: None,
         }
     }
 }

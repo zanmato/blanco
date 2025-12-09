@@ -90,6 +90,9 @@ pub trait ToolHandler: Send + Sync {
 
     /// Get the tool definition
     fn definition(&self) -> ToolDefinition;
+
+    /// Generate a human-readable summary of the tool call
+    fn call_summary(&self, arguments: &Value, result: &ToolResult) -> String;
 }
 
 /// A tool executor that can run tools
@@ -144,9 +147,14 @@ impl ToolExecutor {
                 };
 
                 // Execute the tool with database service if available
-                handler
-                    .execute_with_db(arguments, self.database_service.clone())
-                    .await
+                let mut result = handler
+                    .execute_with_db(arguments.clone(), self.database_service.clone())
+                    .await;
+
+                // Add human-readable summary to the result
+                result.summary = Some(handler.call_summary(&arguments, &result));
+
+                result
             }
             None => ToolResult::error(
                 tool_call.id.clone(),
@@ -365,5 +373,102 @@ impl ToolHandler for ListTablesTool {
                 }),
             },
         }
+    }
+
+    /// Generate a human-readable summary of the tool call
+    fn call_summary(&self, arguments: &Value, _result: &ToolResult) -> String {
+        // Extract table_names from arguments for summary
+        let table_names = arguments
+            .get("table_names")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if table_names.is_empty() {
+            "List Tables".to_string()
+        } else {
+            // Parse comma-separated table names and truncate if too long
+            let names: Vec<&str> = table_names.split(',').map(|s| s.trim()).collect();
+            let summary = if names.len() > 3 {
+                format!("List Tables: {}, ...", names[0..3].join(", "))
+            } else {
+                format!("List Tables: {}", names.join(", "))
+            };
+            summary
+        }
+    }
+}
+
+/// Read tab tool for reading current query tab content
+pub struct ReadTabTool {
+    tab_content_resolver: Option<Box<dyn Fn() -> String + Send + Sync>>,
+}
+
+impl Default for ReadTabTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ReadTabTool {
+    pub fn new() -> Self {
+        Self {
+            tab_content_resolver: None,
+        }
+    }
+
+    /// Create a new read tab tool with a tab content resolver
+    pub fn with_tab_resolver<F>(resolver: F) -> Self
+    where
+        F: Fn() -> String + Send + Sync + 'static,
+    {
+        Self {
+            tab_content_resolver: Some(Box::new(resolver)),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ToolHandler for ReadTabTool {
+    async fn execute_with_db(
+        &self,
+        _arguments: Value,
+        _database_service: Option<Arc<dyn DatabaseService>>,
+    ) -> ToolResult {
+        log::debug!("ReadTabTool execute_with_db called");
+
+        // Get tab content using the resolver or return a default message
+        let tab_content = if let Some(resolver) = &self.tab_content_resolver {
+            resolver()
+        } else {
+            "No tab content resolver available. Please ensure the chat session is properly connected to a query tab.".to_string()
+        };
+
+        ToolResult {
+            tool_call_id: "read-tab".to_string(),
+            success: true,
+            content: tab_content,
+            error: None,
+            summary: None,
+        }
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "read-tab".to_string(),
+                description: "Read the current query tab content including the SQL query text. Returns the SQL content from the active tab connected to this chat session.".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }),
+            },
+        }
+    }
+
+    /// Generate a human-readable summary of the tool call
+    fn call_summary(&self, _arguments: &Value, _result: &ToolResult) -> String {
+        "Read Tab".to_string()
     }
 }

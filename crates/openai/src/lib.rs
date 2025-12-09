@@ -8,13 +8,14 @@
 //! - Tool calling support
 //! - Robust error handling
 //! - Configuration management
-//! - Support for `zed-http-client`
+//! - Support for `zed-reqwest`
 //!
 //! ## Quick Start
 //!
 //! ```ignore
 //! use blanco_openai::{OpenAIClient, OpenAIConfig};
 //! use blanco_core::chat_provider::*;
+//! use zed_reqwest as reqwest;
 //! use std::sync::Arc;
 //!
 //! #[async_std::main]
@@ -22,8 +23,8 @@
 //!     // Create configuration
 //!     let config = OpenAIConfig::new("your-api-key-here");
 //!
-//!     // Create HTTP client (using zed-http-client)
-//!     let http_client = Arc::new(/* your HTTP client implementation */);
+//!     // Create HTTP client using zed-reqwest
+//!     let http_client = Arc::new(reqwest::Client::new());
 //!
 //!     // Create OpenAI client
 //!     let client = OpenAIClient::new(http_client, config)?;
@@ -61,7 +62,7 @@ pub mod types;
 pub use client::OpenAIClient;
 pub use config::{ConfigError, OpenAIConfig};
 pub use error::{OpenAIError, OpenAIResult};
-pub use tools::{ListTablesTool, ToolExecutor, ToolHandler, ToolRegistry};
+pub use tools::{ListTablesTool, ReadTabTool, ToolExecutor, ToolHandler, ToolRegistry};
 pub use types::*;
 
 /// Current version of the crate

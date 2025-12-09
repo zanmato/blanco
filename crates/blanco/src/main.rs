@@ -15,6 +15,7 @@ mod rename_form;
 mod results_panel;
 mod settings;
 mod sql_completion_provider;
+mod sql_statement_parser;
 mod ssh_tunnel;
 mod time_format;
 mod transformers;

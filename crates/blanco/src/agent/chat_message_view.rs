@@ -34,7 +34,7 @@ impl Render for ChatMessageState {
                     TextView::markdown(self.id.clone(), self.message.clone(), window, cx)
                         .text_sm()
                         .scrollable(false)
-                        .selectable(false),
+                        .selectable(true),
                 )
             }
             MessageRole::Tool => {
@@ -67,7 +67,7 @@ impl Render for ChatMessageState {
                         TextView::markdown(self.id.clone(), self.message.clone(), window, cx)
                             .text_sm()
                             .scrollable(false)
-                            .selectable(false),
+                            .selectable(true),
                     )
             }
             MessageRole::System => {

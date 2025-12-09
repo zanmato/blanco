@@ -1,10 +1,14 @@
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
-use http::{Method, Request, StatusCode};
-use http_client::{AsyncBody, HttpClient};
+use http::StatusCode;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
+use std::str::FromStr;
+
+// Use zed-reqwest as reqwest
+use zed_reqwest as reqwest;
+use bytes::Bytes;
 
 use crate::config::OpenAIConfig;
 use crate::error::{OpenAIError, OpenAIResult};
@@ -21,13 +25,13 @@ use blanco_core::DatabaseService;
 /// OpenAI client that implements the ChatProvider trait
 pub struct OpenAIClient {
     config: OpenAIConfig,
-    http_client: Arc<dyn HttpClient>,
+    http_client: Arc<reqwest::Client>,
     tool_executor: Option<ToolExecutor>,
 }
 
 impl OpenAIClient {
     /// Create a new OpenAI client
-    pub fn new(http_client: Arc<dyn HttpClient>, config: OpenAIConfig) -> OpenAIResult<Self> {
+    pub fn new(http_client: Arc<reqwest::Client>, config: OpenAIConfig) -> OpenAIResult<Self> {
         config.validate()?;
 
         Ok(Self {
@@ -39,7 +43,7 @@ impl OpenAIClient {
 
     /// Create a new OpenAI client with a tool executor
     pub fn with_tool_executor(
-        http_client: Arc<dyn HttpClient>,
+        http_client: Arc<reqwest::Client>,
         config: OpenAIConfig,
         tool_executor: ToolExecutor,
     ) -> OpenAIResult<Self> {
@@ -54,7 +58,7 @@ impl OpenAIClient {
 
     /// Create a new OpenAI client with a tool executor and database service
     pub fn with_tool_executor_and_db(
-        http_client: Arc<dyn HttpClient>,
+        http_client: Arc<reqwest::Client>,
         config: OpenAIConfig,
         _tool_executor: ToolExecutor,
         database_service: Arc<dyn DatabaseService>,
@@ -98,24 +102,43 @@ impl OpenAIClient {
     }
 
     /// Send an HTTP request to the OpenAI API
-    async fn send_request(&self, request: Request<AsyncBody>) -> OpenAIResult<String> {
+    async fn send_request(&self, url: &str, method: &str, headers: Vec<(&str, &str)>, body: Vec<u8>) -> OpenAIResult<String> {
         let timeout = Duration::from_secs(self.config.timeout_seconds);
 
-        // Use async_std's timeout function
-        let response =
-            async_std::future::timeout(timeout, async { self.http_client.send(request).await })
-                .await
-                .map_err(|_| OpenAIError::Timeout)?
-                .map_err(|err| OpenAIError::HttpError(err.to_string()))?;
+        // Convert method string to reqwest::Method
+        let method = reqwest::Method::from_str(method)
+            .map_err(|err| OpenAIError::HttpError(format!("Invalid method: {}", err)))?;
+
+        let mut req_builder = self.http_client.request(method, url);
+
+        // Add headers
+        for (key, value) in headers {
+            req_builder = req_builder.header(key, value);
+        }
+
+        // Add body
+        let req_builder = req_builder.body(body);
+
+        // Use async_std's timeout function with async-compat wrapper for the entire async block
+        let response = async_std::future::timeout(
+            timeout,
+            async_compat::Compat::new(async move {
+                req_builder.send().await
+            })
+        )
+            .await
+            .map_err(|_| OpenAIError::Timeout)?
+            .map_err(|err| OpenAIError::HttpError(err.to_string()))?;
 
         // Check the status code
-        if response.status() == StatusCode::UNAUTHORIZED {
+        let status = response.status();
+        if status == StatusCode::UNAUTHORIZED {
             return Err(OpenAIError::AuthenticationError(
                 "Invalid API key".to_string(),
             ));
         }
 
-        if response.status() == StatusCode::TOO_MANY_REQUESTS {
+        if status == StatusCode::TOO_MANY_REQUESTS {
             let reset_time = response
                 .headers()
                 .get("x-ratelimit-reset")
@@ -133,17 +156,20 @@ impl OpenAIClient {
             };
         }
 
-        if response.status().is_server_error() {
+        if status.is_server_error() {
             return Err(OpenAIError::server_error(
-                response.status(),
-                format!("Server error: {}", response.status()),
+                status,
+                format!("Server error: {}", status),
             ));
         }
 
-        if !response.status().is_success() {
+        if !status.is_success() {
             // Try to parse the error response
-            let status = response.status();
-            let body = self.read_response_body(response).await?;
+            let body = async_compat::Compat::new(async {
+                response.text().await
+            }).await.map_err(|err| {
+                OpenAIError::HttpError(format!("Failed to read error response: {}", err))
+            })?;
 
             // Log the error response for debugging
             log::debug!("OpenAI API error response ({}): {}", status, body);
@@ -161,22 +187,11 @@ impl OpenAIClient {
         }
 
         // Read the response body
-        self.read_response_body(response).await
-    }
-
-    /// Read the response body from an HTTP response
-    async fn read_response_body(
-        &self,
-        response: http::Response<AsyncBody>,
-    ) -> OpenAIResult<String> {
-        let mut body = response.into_body();
-        let mut content = String::new();
-
-        futures::io::AsyncReadExt::read_to_string(&mut body, &mut content)
-            .await
-            .map_err(|err| OpenAIError::IoError(err.to_string()))?;
-
-        Ok(content)
+        async_compat::Compat::new(async {
+                response.text().await
+            }).await.map_err(|err| {
+            OpenAIError::HttpError(format!("Failed to read response: {}", err))
+        })
     }
 
     /// Handle tool calls in a response
@@ -209,32 +224,37 @@ impl OpenAIClient {
         }
     }
 
-    /// Create a streaming response from a server-sent events stream
-    fn create_sse_stream(
+    /// Create a streaming response from a bytes stream
+    fn create_sse_stream_from_bytes(
         &self,
-        response_body: AsyncBody,
+        byte_stream: Pin<Box<dyn futures::Stream<Item = Result<Bytes, reqwest::Error>> + Send>>,
     ) -> Pin<Box<dyn Stream<Item = OpenAIResult<String>> + Send>> {
         Box::pin(async_stream::stream! {
-            let mut reader = async_std::io::BufReader::new(response_body);
-            let mut line = String::new();
+            let mut buffer = Vec::new();
+            futures::pin_mut!(byte_stream);
 
-            while futures::io::AsyncBufReadExt::read_line(&mut reader, &mut line).await
-                .map_err(|err| OpenAIError::IoError(err.to_string()))? > 0
-            {
-                if let Some(stripped) = line.strip_prefix("data: ") {
-                    let data = &stripped.trim();
+            while let Some(chunk_result) = byte_stream.next().await {
+                let chunk = chunk_result.map_err(|err| OpenAIError::IoError(err.to_string()))?;
+                buffer.extend_from_slice(&chunk);
 
-                    // Skip "data: [DONE]" which signals the end of the stream
-                    if *data == "[DONE]" {
-                        break;
-                    }
+                // Process complete lines
+                while let Some(newline_pos) = buffer.iter().position(|&b| b == b'\n') {
+                    let line = String::from_utf8_lossy(&buffer[..newline_pos]).to_string();
+                    buffer.drain(..=newline_pos);
 
-                    if !data.is_empty() {
-                        yield Ok(data.to_string());
+                    if let Some(stripped) = line.strip_prefix("data: ") {
+                        let data = stripped.trim();
+
+                        // Skip "data: [DONE]" which signals the end of the stream
+                        if data == "[DONE]" {
+                            return;
+                        }
+
+                        if !data.is_empty() {
+                            yield Ok(data.to_string());
+                        }
                     }
                 }
-
-                line.clear();
             }
         })
     }
@@ -260,12 +280,22 @@ impl ChatProvider for OpenAIClient {
         // Log the request body for debugging
         log::debug!("OpenAI chat completion request body: {}", request_body);
 
-        // Build the HTTP request
-        let mut http_request = Request::builder()
-            .method(Method::POST)
-            .uri(self.config.chat_completions_url())
-            .header("Content-Type", "application/json")
-            .header("Authorization", format!("Bearer {}", self.config.api_key));
+        // Prepare headers and auth string
+        let auth_header = format!("Bearer {}", self.config.api_key);
+        let mut headers = vec![
+            ("Content-Type", "application/json"),
+            ("Authorization", auth_header.as_str()),
+        ];
+
+        // Add organization header if present
+        if let Some(organization) = &self.config.organization {
+            headers.push(("OpenAI-Organization", organization));
+        }
+
+        // Add additional headers
+        for (key, value) in &self.config.additional_headers {
+            headers.push((key, value));
+        }
 
         // Log the request URL for debugging
         log::debug!(
@@ -273,30 +303,18 @@ impl ChatProvider for OpenAIClient {
             self.config.chat_completions_url()
         );
 
-        // Add organization header if present
-        if let Some(organization) = &self.config.organization {
-            http_request = http_request.header("OpenAI-Organization", organization);
-        }
-
-        // Add additional headers
-        for (key, value) in &self.config.additional_headers {
-            http_request = http_request.header(key, value);
-        }
-
-        let http_request =
-            http_request
-                .body(AsyncBody::from(request_body))
-                .map_err(|err| -> ProviderError {
-                    anyhow::anyhow!("HTTP request error: {}", err).into()
-                })?;
-
         // Send the request
         let response_body =
-            self.send_request(http_request)
-                .await
-                .map_err(|err| -> ProviderError {
-                    anyhow::anyhow!("HTTP request failed: {}", err).into()
-                })?;
+            self.send_request(
+                &self.config.chat_completions_url(),
+                "POST",
+                headers,
+                request_body.into_bytes(),
+            )
+            .await
+            .map_err(|err| -> ProviderError {
+                anyhow::anyhow!("HTTP request failed: {}", err).into()
+            })?;
 
         // Log the response body for debugging
         log::debug!("OpenAI chat completion response body: {}", response_body);
@@ -336,13 +354,23 @@ impl ChatProvider for OpenAIClient {
             request_body
         );
 
-        // Build the HTTP request
-        let mut http_request = Request::builder()
-            .method(Method::POST)
-            .uri(self.config.chat_completions_url())
-            .header("Content-Type", "application/json")
-            .header("Authorization", format!("Bearer {}", self.config.api_key))
-            .header("Accept", "text/event-stream");
+        // Prepare headers and auth string
+        let auth_header = format!("Bearer {}", self.config.api_key);
+        let mut headers = vec![
+            ("Content-Type", "application/json"),
+            ("Authorization", auth_header.as_str()),
+            ("Accept", "text/event-stream"),
+        ];
+
+        // Add organization header if present
+        if let Some(organization) = &self.config.organization {
+            headers.push(("OpenAI-Organization", organization));
+        }
+
+        // Add additional headers
+        for (key, value) in &self.config.additional_headers {
+            headers.push((key, value));
+        }
 
         // Log the streaming request URL for debugging
         log::debug!(
@@ -350,34 +378,33 @@ impl ChatProvider for OpenAIClient {
             self.config.chat_completions_url()
         );
 
-        // Add organization header if present
-        if let Some(organization) = &self.config.organization {
-            http_request = http_request.header("OpenAI-Organization", organization);
-        }
-
-        // Add additional headers
-        for (key, value) in &self.config.additional_headers {
-            http_request = http_request.header(key, value);
-        }
-
-        let http_request =
-            http_request
-                .body(AsyncBody::from(request_body))
-                .map_err(|err| -> ProviderError {
-                    anyhow::anyhow!("HTTP request error: {}", err).into()
-                })?;
-
         let timeout = Duration::from_secs(self.config.timeout_seconds);
 
+        // Build request with reqwest directly
+        let method = reqwest::Method::POST;
+        let url = &self.config.chat_completions_url();
+        let mut req_builder = self.http_client.request(method, url);
+
+        // Add headers
+        for (key, value) in &headers {
+            req_builder = req_builder.header(*key, *value);
+        }
+
+        // Add body
+        let req_builder = req_builder.body(request_body.into_bytes());
+
         // Send the request with timeout
-        let response = async_std::future::timeout(timeout, async {
-            self.http_client.send(http_request).await
-        })
-        .await
-        .map_err(|_| -> ProviderError { anyhow::anyhow!("Request timeout").into() })?
-        .map_err(|err| -> ProviderError {
-            anyhow::anyhow!("HTTP request failed: {}", err).into()
-        })?;
+        let response = async_std::future::timeout(
+            timeout,
+            async_compat::Compat::new(async move {
+                req_builder.send().await
+            })
+        )
+            .await
+            .map_err(|_| -> ProviderError { anyhow::anyhow!("Request timeout").into() })?
+            .map_err(|err| -> ProviderError {
+                anyhow::anyhow!("HTTP request failed: {}", err).into()
+            })?;
 
         // Check the status code
         if response.status() == StatusCode::UNAUTHORIZED {
@@ -397,7 +424,11 @@ impl ChatProvider for OpenAIClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = self.read_response_body(response).await?;
+            let body = async_compat::Compat::new(async {
+                response.text().await
+            }).await.map_err(|e| -> ProviderError {
+                anyhow::anyhow!("Failed to read error response: {}", e).into()
+            })?;
 
             // Log the streaming error response for debugging
             log::debug!("OpenAI streaming API error response ({}): {}", status, body);
@@ -415,8 +446,9 @@ impl ChatProvider for OpenAIClient {
             )));
         }
 
-        // Create the SSE stream
-        let sse_stream = self.create_sse_stream(response.into_body());
+        // Create the SSE stream from bytes stream
+        let byte_stream = response.bytes_stream();
+        let sse_stream = self.create_sse_stream_from_bytes(Box::pin(byte_stream));
 
         // Parse SSE data and convert to StreamChunk
         let parsed_stream = sse_stream.map(|data_result| match data_result {

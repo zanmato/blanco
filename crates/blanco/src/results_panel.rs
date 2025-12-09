@@ -870,6 +870,7 @@ impl TableDelegate for ResultsTableDelegate {
         div()
             .font_family("Fira Code")
             .text_sm()
+            .pt(px(1.))
             .child(col.name.to_string())
             .when(is_row_number_col, |this| {
                 this.on_mouse_down(
@@ -2187,6 +2188,8 @@ impl Render for ResultsPanel {
             .child(
                 div()
                     .id("results-table")
+                    .border_b_1()
+                    .border_color(cx.theme().border)
                     .flex_1() // Allow table to fill available space
                     .overflow_hidden()
                     .min_h(px(200.0)) // Minimum height for table

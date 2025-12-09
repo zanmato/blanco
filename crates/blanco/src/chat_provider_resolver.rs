@@ -5,13 +5,17 @@
 //! for the UI layer to get appropriately configured chat providers.
 
 use anyhow::Result;
-use http_client::HttpClient;
 use std::sync::Arc;
+
+// Use zed-reqwest as reqwest
+use zed_reqwest as reqwest;
 
 use crate::db_service::DbService;
 use crate::settings::{ChatSettings, Settings};
-use blanco_core::chat_provider::{ChatProvider, ProviderError};
 use blanco_core::DatabaseService;
+use blanco_core::chat_provider::{ChatProvider, ProviderError};
+
+use blanco_openai::{ListTablesTool, OpenAIClient, OpenAIConfig, ReadTabTool, ToolExecutor};
 
 /// Provider cache entry with configuration hash
 #[derive(Clone)]
@@ -28,7 +32,7 @@ struct CachedProvider {
 /// based on current application settings. It can handle runtime changes
 /// to settings and will recreate providers when necessary.
 pub struct ChatProviderResolver {
-    http_client: Arc<dyn HttpClient>,
+    http_client: Arc<reqwest::Client>,
     db_service: DbService,
     current_connection_id: Option<i64>,
     cached_provider: Option<CachedProvider>,
@@ -36,7 +40,7 @@ pub struct ChatProviderResolver {
 
 impl ChatProviderResolver {
     /// Create a new chat provider resolver
-    pub fn new(http_client: Arc<dyn HttpClient>, db_service: DbService) -> Self {
+    pub fn new(http_client: Arc<reqwest::Client>, db_service: DbService) -> Self {
         Self {
             http_client,
             db_service,
@@ -61,13 +65,14 @@ impl ChatProviderResolver {
 
         // Check if we can reuse the cached provider
         if let Some(cached) = &self.cached_provider
-            && cached.config_hash == config_hash {
-                return Ok(ProviderInfo {
-                    provider: cached.provider.clone(),
-                    provider_name: cached.provider_name.clone(),
-                    model_name: cached.model_name.clone(),
-                });
-            }
+            && cached.config_hash == config_hash
+        {
+            return Ok(ProviderInfo {
+                provider: cached.provider.clone(),
+                provider_name: cached.provider_name.clone(),
+                model_name: cached.model_name.clone(),
+            });
+        }
 
         // Create new provider based on settings
         let provider_info = self.create_provider_from_settings(&settings.chat)?;
@@ -87,8 +92,6 @@ impl ChatProviderResolver {
     fn create_provider_from_settings(&self, chat_settings: &ChatSettings) -> Result<ProviderInfo> {
         match chat_settings.provider.to_lowercase().as_str() {
             "openai" => self.create_openai_provider(chat_settings),
-            "anthropic" => self.create_anthropic_provider(chat_settings),
-            "mock" => self.create_mock_provider(chat_settings),
             _ => Err(anyhow::anyhow!(
                 "Unsupported chat provider: {}",
                 chat_settings.provider
@@ -101,8 +104,6 @@ impl ChatProviderResolver {
         if chat_settings.api_key.is_empty() {
             return Err(anyhow::anyhow!("OpenAI API key is required"));
         }
-
-        use blanco_openai::{ListTablesTool, OpenAIClient, OpenAIConfig, ToolExecutor};
 
         let mut config = OpenAIConfig::new(&chat_settings.api_key)
             .with_model(&chat_settings.model)
@@ -126,6 +127,10 @@ impl ChatProviderResolver {
         ));
         tool_executor.register_tool(list_tables_tool);
 
+        // Register the read tab tool
+        let read_tab_tool = Box::new(ReadTabTool::new());
+        tool_executor.register_tool(read_tab_tool);
+
         let client =
             OpenAIClient::with_tool_executor(self.http_client.clone(), config, tool_executor)
                 .map_err(|e| anyhow::anyhow!("Failed to create OpenAI client: {}", e))?;
@@ -135,18 +140,6 @@ impl ChatProviderResolver {
             provider_name: "OpenAI".to_string(),
             model_name: chat_settings.model.clone(),
         })
-    }
-
-    /// Create an Anthropic provider (placeholder for future implementation)
-    fn create_anthropic_provider(&self, _chat_settings: &ChatSettings) -> Result<ProviderInfo> {
-        Err(anyhow::anyhow!("Anthropic provider is not yet implemented"))
-    }
-
-    /// Create a mock provider for testing
-    fn create_mock_provider(&self, _chat_settings: &ChatSettings) -> Result<ProviderInfo> {
-        // This would create a mock provider for testing
-        // For now, we'll return an error since we don't have a mock implementation
-        Err(anyhow::anyhow!("Mock provider is not yet implemented"))
     }
 
     /// Calculate a configuration hash for caching purposes

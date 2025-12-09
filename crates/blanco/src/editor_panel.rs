@@ -17,6 +17,9 @@ use gpui_component::{
 use log::{debug, error, info};
 use std::{rc::Rc, sync::Arc};
 
+// Use zed-reqwest as reqwest
+use zed_reqwest as reqwest;
+
 use crate::agent::{ChatPanel, SqlContext};
 use crate::app::RenameTab;
 use crate::app_database::QueryTabData;
@@ -1361,8 +1364,8 @@ fn create_chat_provider_info(connection_id: i64, cx: &mut App) -> anyhow::Result
         ));
     }
 
-    // Create HTTP client using reqwest_client from zed
-    let http_client = Arc::new(reqwest_client::ReqwestClient::new());
+    // Create HTTP client using zed-reqwest
+    let http_client = Arc::new(reqwest::Client::new());
 
     // Get db_service
     let db_service = DbService::global(cx).clone();
