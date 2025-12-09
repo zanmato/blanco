@@ -1,10 +1,13 @@
 use gpui::{
-    div, px, Context, IntoElement, ParentElement, Render, SharedString, Styled, StyledText, Window,
+    div, px, Context, InteractiveElement, IntoElement, ParentElement, Render, ScrollHandle,
+    SharedString, StatefulInteractiveElement, Styled, StyledText, Window,
 };
 use gpui_component::highlighter::{HighlightTheme, SyntaxHighlighter};
+use gpui_component::scroll::{Scrollbar, ScrollbarState};
 use gpui_component::ActiveTheme;
 use ropey::{LineType, Rope};
 use std::sync::Arc;
+use std::time::Duration;
 
 pub enum SqlLogMessage {
     SqlStatement(String),
@@ -17,6 +20,8 @@ pub struct SqlLog {
     max_lines: usize,
     highlighter: SyntaxHighlighter,
     theme: Arc<HighlightTheme>,
+    scroll_handle: ScrollHandle,
+    scroll_state: ScrollbarState,
 }
 
 impl SqlLog {
@@ -29,6 +34,8 @@ impl SqlLog {
             max_lines,
             highlighter,
             theme,
+            scroll_handle: ScrollHandle::default(),
+            scroll_state: ScrollbarState::default(),
         }
     }
 
@@ -54,6 +61,16 @@ impl SqlLog {
 
         // Update the highlighter with the new text
         self.highlighter.update(None, &self.text);
+
+        let scroll_handle = self.scroll_handle.clone();
+
+        // Schedule scroll to bottom after render
+        cx.spawn(async move |_, _cx| {
+            // Small delay to ensure content is rendered
+            gpui::Timer::after(Duration::from_millis(50)).await;
+            scroll_handle.scroll_to_bottom();
+        })
+        .detach();
 
         // Notify that the view needs to be re-rendered
         cx.notify();
@@ -121,18 +138,34 @@ impl Render for SqlLog {
 
         // Create a container with syntax-highlighted text
         div()
-            .w_full()
-            .h_full()
+            .size_full()
             .bg(cx
                 .theme()
                 .highlight_theme
                 .style
                 .editor_background
                 .unwrap_or(cx.theme().background))
-            .p_4()
-            .font_family("Fira Code")
-            .text_size(px(12.))
-            .text_color(cx.theme().foreground)
-            .child(StyledText::new(shared_text).with_highlights(highlights))
+            .child(
+                div()
+                    .id("sql-log")
+                    .w_full()
+                    .h_full()
+                    .p_4()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.scroll_handle)
+                    .font_family(cx.theme().mono_font_family.clone())
+                    .text_size(px(12.))
+                    .text_color(cx.theme().foreground)
+                    .child(StyledText::new(shared_text).with_highlights(highlights)),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .child(Scrollbar::vertical(&self.scroll_state, &self.scroll_handle)),
+            )
     }
 }

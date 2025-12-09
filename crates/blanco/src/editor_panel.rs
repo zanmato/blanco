@@ -9,6 +9,7 @@ use gpui_component::{
     h_flex,
     input::{Input, InputState, TabSize},
     kbd::Kbd,
+    notification::NotificationType,
     resizable::{ResizableState, h_resizable, resizable_panel, v_resizable},
     tab::{Tab, TabBar},
     v_flex,
@@ -26,6 +27,7 @@ use crate::rename_form::RenameTabForm;
 use crate::results_panel::ResultsPanel;
 use crate::settings::{Settings, load_settings};
 use crate::sql_completion_provider::SqlCompletionProvider;
+use crate::sql_statement_parser::extract_current_query;
 use blanco_core::chat_provider::{ChatProvider, ProviderError};
 use blanco_ui::{IconName, SqlLog};
 use gpui_component::Icon;
@@ -270,76 +272,6 @@ impl EditorPanel {
         }
     }
 
-    /// Extract the query to execute based on selection or cursor position
-    fn extract_current_query(text: &str, cursor_pos: usize, _has_selection: bool) -> String {
-        let chars: Vec<char> = text.chars().collect();
-
-        // If there's a selection, we can't easily get it due to API limitations
-        // For now, we'll just use cursor position
-
-        // Find start: read backward until we hit an empty line (double newline) or semicolon or start of text
-        let mut start = cursor_pos.min(chars.len());
-        let mut found_content = false;
-        let mut prev_was_newline = false;
-
-        for i in (0..start).rev() {
-            if let Some(&ch) = chars.get(i) {
-                if ch == ';' {
-                    // Found a semicolon, start after it
-                    start = (i + 1).min(chars.len());
-                    break;
-                } else if ch == '\n' {
-                    if prev_was_newline && found_content {
-                        // Found empty line (double newline) after some content
-                        start = (i + 1).min(chars.len());
-                        break;
-                    }
-                    prev_was_newline = true;
-                } else if !ch.is_whitespace() {
-                    found_content = true;
-                    prev_was_newline = false;
-                }
-            }
-            if i == 0 {
-                start = 0;
-                break;
-            }
-        }
-
-        // Find end: read forward until we hit a semicolon or empty line or end of text
-        let mut end = cursor_pos;
-        prev_was_newline = false;
-
-        for i in cursor_pos..chars.len() {
-            if let Some(&ch) = chars.get(i) {
-                if ch == ';' {
-                    end = i + 1;
-                    break;
-                } else if ch == '\n' {
-                    if prev_was_newline {
-                        // Found empty line (double newline)
-                        end = i;
-                        break;
-                    }
-                    prev_was_newline = true;
-                } else if !ch.is_whitespace() {
-                    prev_was_newline = false;
-                }
-            }
-            if i == chars.len() - 1 {
-                end = chars.len();
-                break;
-            }
-        }
-
-        // Extract the query and trim whitespace
-        chars[start..end]
-            .iter()
-            .collect::<String>()
-            .trim()
-            .to_string()
-    }
-
     /// Run query through the async pipeline
     pub fn run_query(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(tab) = self.tabs.get(self.active_tab_ix) {
@@ -395,18 +327,28 @@ impl EditorPanel {
                     // Use the connection_id to get the connection from db_service
                     let connection_id = query_tab.connection_id;
 
-                    // Get text and cursor position from editor
+                    // Get text, cursor position, and selection from editor
                     let editor = query_tab.editor.read(cx);
                     let full_text = editor.text().to_string();
                     let cursor_pos = editor.cursor();
 
-                    let query = Self::extract_current_query(
-                        &full_text, cursor_pos,
-                        false, // TODO: Detect actual selection state when API is available
-                    );
+                    // Check if there's a selection
+                    let selected_text = editor.selected_text().to_string();
+                    let query = if !selected_text.trim().is_empty() {
+                        // Use the selected text
+                        selected_text
+                    } else {
+                        // Fall back to extracting query at cursor position
+                        extract_current_query(
+                            &full_text, cursor_pos, false, // Selection is handled above
+                        )
+                    };
 
                     if query.is_empty() {
-                        println!("No query to execute");
+                        _window.push_notification(
+                            (NotificationType::Error, "No query to execute"),
+                            cx,
+                        );
                         return;
                     }
 
@@ -1189,7 +1131,7 @@ impl Render for EditorPanel {
                                                                             .outline()
                                                                             .small()
                                                                             .label("Run Current")
-                                                                            .children(vec![Kbd::new(self.run_query_keystroke.inner().clone()).text_xs().into_any_element()])
+                                                                            .children(vec![Kbd::new(self.run_query_keystroke.inner().clone()).into_any_element()])
                                                                             .on_click(cx.listener(|panel, _, window, cx| panel.run_query(window, cx))),
                                                                     )
                                                         )
@@ -1211,11 +1153,7 @@ impl Render for EditorPanel {
                                                                         .max_h(px(160.))
                                                                         .overflow_hidden()
                                                                         .bg(cx.theme().highlight_theme.style.editor_background.unwrap_or(cx.theme().background))
-                                                                        .child(
-                                                                            div()
-                                                                                .child(query_tab.sql_log.clone())
-                                                                                .scrollable(Axis::Vertical)
-                                                                        )
+                                                                        .child(query_tab.sql_log.clone())
                                                                 )
                                                         )
                                                         // Row operation buttons
@@ -1263,7 +1201,7 @@ impl Render for EditorPanel {
                                                                         .small()
                                                                         .icon(IconName::Check)
                                                                         .label("Commit")
-                                                                        .children(vec![Kbd::new(Keystroke::parse("cmd-shift-c").unwrap()).text_xs().into_any_element()])
+                                                                        .children(vec![Kbd::new(Keystroke::parse("cmd-shift-c").unwrap()).into_any_element()])
                                                                         .on_click(cx.listener(|this, _, window, cx| {
                                                                             if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
                                                                                 // Execute the actual commit in the results panel with SQL logging
@@ -1279,7 +1217,7 @@ impl Render for EditorPanel {
                                                                         .small()
                                                                         .icon(IconName::CircleX)
                                                                         .label("Rollback")
-                                                                        .children(vec![Kbd::new(Keystroke::parse("cmd-shift-r").unwrap()).text_xs().into_any_element()])
+                                                                        .children(vec![Kbd::new(Keystroke::parse("cmd-shift-r").unwrap()).into_any_element()])
                                                                         .on_click(cx.listener(|this, _, _window, cx| {
                                                                             if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
                                                                                 query_tab.results_panel.update(cx, |panel, cx| {
