@@ -701,8 +701,27 @@ impl ResultsTableDelegate {
                 // Check if this is a new row - if so, don't create UPDATE changes
                 // New rows should be handled by INSERT operations only
                 if !self.edit_state.is_new_row(row) {
-                    // Get primary key value using the detected primary key column
-                    let primary_key_value = self.get_primary_key_value(row);
+                    // Get primary key value - if updating the PK column itself, use the original value
+                    let primary_key_value = if let Some(pk_column) = &self.primary_key_column {
+                        // Find the index of the primary key column
+                        if let Some(pk_index) = self
+                            .columns
+                            .iter()
+                            .position(|col| col.name.as_str() == pk_column)
+                        {
+                            // If we're updating the primary key column itself, get the original value
+                            if pk_index == col {
+                                self.edit_state.original_values.get(&(row, col)).cloned()
+                            } else {
+                                // Otherwise get the current value from the row
+                                self.rows.get(row).and_then(|r| r.get(pk_index)).cloned()
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
 
                     // Validate change before creating
                     let _validation_status = if primary_key_value.is_none() {
@@ -1360,8 +1379,27 @@ impl ResultsPanel {
                 // Check if this is a new row - if so, don't create UPDATE changes
                 // New rows should be handled by INSERT operations only
                 if !delegate.edit_state.is_new_row(row) {
-                    // Get primary key value (assuming first column is primary key)
-                    let primary_key_value = delegate.get_primary_key_value(row);
+                    // Get primary key value - if updating the PK column itself, use the original value
+                    let primary_key_value = if let Some(pk_column) = &delegate.primary_key_column {
+                        // Find the index of the primary key column
+                        if let Some(pk_index) = delegate
+                            .columns
+                            .iter()
+                            .position(|col| col.name.as_str() == pk_column)
+                        {
+                            // If we're updating the primary key column itself, get the original value
+                            if pk_index == col {
+                                delegate.edit_state.original_values.get(&(row, col)).cloned()
+                            } else {
+                                // Otherwise get the current value from the row
+                                delegate.rows.get(row).and_then(|r| r.get(pk_index)).cloned()
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
                     let primary_key_column = delegate.primary_key_column.clone();
 
                     // Validate change data before creating
@@ -2280,5 +2318,60 @@ mod tests {
         assert!(!edit_state.is_edited(0, 0));
         assert!(!edit_state.has_unsaved_changes());
         assert!(edit_state.pending_new_rows.is_empty());
+    }
+
+    #[test]
+    fn test_primary_key_update_preserves_original_value() {
+        let mut delegate = ResultsTableDelegate::default();
+
+        // Set up test data with primary key as first column
+        delegate.table_name = Some("test_table".to_string());
+        delegate.primary_key_column = Some("id".to_string());
+
+        // Create columns: row_number, id, name
+        delegate.columns = vec![
+            Column::new("row_number".to_string(), "#".to_string()),
+            Column::new("id".to_string(), "id".to_string()),
+            Column::new("name".to_string(), "name".to_string()),
+        ];
+
+        // Add a row with id=2
+        delegate.rows = vec![
+            vec!["1".to_string(), "2".to_string(), "test".to_string()]
+        ];
+
+        // Simulate editing the primary key column (id) from 2 to 4
+        let row = 0;
+        let col = 1; // id column
+
+        // Store original value
+        delegate.edit_state.original_values.insert((row, col), "2".to_string());
+        delegate.edit_state.edited_values.insert((row, col), "4".to_string());
+
+        // Commit the edit
+        delegate.commit_cell_edit(row, col);
+
+        // Check that the change was created with the correct primary key value
+        assert_eq!(delegate.edit_state.changes.len(), 1);
+        let change = &delegate.edit_state.changes[0];
+
+        // The primary key value should be the original value (2), not the new value (4)
+        assert_eq!(change.primary_key_value, Some("2".to_string()));
+        assert_eq!(change.old_value, Some("2".to_string()));
+        assert_eq!(change.new_value, Some("4".to_string()));
+
+        // Verify the SQL generation would use the correct WHERE clause
+        let operations = delegate.create_change_operations();
+        assert_eq!(operations.len(), 1);
+
+        if let blanco_core::table_operations::OperationType::Update = &operations[0].operation_type {
+            if let blanco_core::table_operations::RowIdentifier::PrimaryKey { value, .. } = &operations[0].row_identifier {
+                assert_eq!(value, "2"); // Should use original ID in WHERE clause
+            } else {
+                panic!("Expected PrimaryKey row identifier");
+            }
+        } else {
+            panic!("Expected Update operation");
+        }
     }
 }
