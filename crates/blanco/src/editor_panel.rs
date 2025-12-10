@@ -20,7 +20,6 @@ use std::{rc::Rc, sync::Arc};
 // Use reqwest
 use reqwest;
 
-use crate::app::RenameTab;
 use crate::app_database::QueryTabData;
 use crate::app_events::AppEvent;
 use crate::chat_provider_resolver::ChatProviderResolver;
@@ -34,6 +33,7 @@ use crate::{
     agent::{ChatPanel, SqlContext},
     app_database::AppDatabase,
 };
+use crate::{app::RenameTab, app_settings::AppSettings};
 use blanco_core::chat_provider::{ChatProvider, ProviderError};
 use blanco_ui::{IconName, SqlLog};
 use gpui_component::Icon;
@@ -726,10 +726,8 @@ impl EditorPanel {
             });
         }
     }
-}
 
-/// Toggle chat for the active tab
-/* TODO: Re-implement this function with new settings loading
+    /// Toggle chat for the active tab
     pub fn toggle_chat_for_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(TabType::Query(query_tab)) = self.tabs.get_mut(self.active_tab_ix) {
             query_tab.chat_enabled = !query_tab.chat_enabled;
@@ -794,8 +792,6 @@ impl EditorPanel {
         }
     }
 }
-}
-*/
 
 impl Focusable for EditorPanel {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -1150,8 +1146,7 @@ impl Render for EditorPanel {
                                                                             btn.primary()
                                                                         })
                                                                         .on_click(cx.listener(|this, _, _window, cx| {
-                                                                            // TODO: Re-implement chat toggle
-                                                                            // this.toggle_chat_for_active_tab(_window, cx);
+                                                                            this.toggle_chat_for_active_tab(_window, cx);
                                                                         }))
                                                                 ),
                                                             ),
@@ -1201,35 +1196,28 @@ struct ChatProviderInfo {
     model_name: String,
 }
 
-// TODO: Update this function to use the new async settings loading
-// fn create_chat_provider_info(connection_id: i64, cx: &mut App) -> anyhow::Result<ChatProviderInfo> {
-//     // Load current settings
-//     let settings =
-//         load_settings().map_err(|e| anyhow::anyhow!("Failed to load settings: {}", e))?;
-//
-//     // Validate settings
-//     let validation_errors = ChatProviderResolver::validate_settings(&settings);
-//     if !validation_errors.is_empty() {
-//         return Err(anyhow::anyhow!(
-//             "Invalid chat settings: {}",
-//             validation_errors.join(", ")
-//         ));
-//     }
-//
-//     // Create HTTP client using zed-reqwest
-//     let http_client = Arc::new(reqwest::Client::new());
-//
-//     // Get db_service
-//     let db_service = DbService::global(cx).clone();
-//
-//     // Create chat provider
-//     let mut resolver = ChatProviderResolver::new(http_client.clone(), db_service);
-//     resolver.set_connection_id(connection_id);
-//     let provider_info = resolver.get_provider(&settings)?;
-//
-//     Ok(ChatProviderInfo {
-//         provider: provider_info.provider,
-//         provider_name: provider_info.provider_name,
-//         model_name: provider_info.model_name,
-//     })
-// }
+fn create_chat_provider_info(connection_id: i64, cx: &mut App) -> anyhow::Result<ChatProviderInfo> {
+    let app_settings = AppSettings::global(cx);
+
+    // Validate settings
+    let validation_errors = ChatProviderResolver::validate_settings(&app_settings.settings);
+    if !validation_errors.is_empty() {
+        return Err(anyhow::anyhow!(
+            "Invalid chat settings: {}",
+            validation_errors.join(", ")
+        ));
+    }
+    // Create HTTP client using zed-reqwest
+    let http_client = Arc::new(reqwest::Client::new());
+    // Get db_service
+    let db_service = DbService::global(cx).clone();
+    // Create chat provider
+    let mut resolver = ChatProviderResolver::new(http_client.clone(), db_service);
+    resolver.set_connection_id(connection_id);
+    let provider_info = resolver.get_provider(&app_settings.settings)?;
+    Ok(ChatProviderInfo {
+        provider: provider_info.provider,
+        provider_name: provider_info.provider_name,
+        model_name: provider_info.model_name,
+    })
+}
