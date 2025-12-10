@@ -928,7 +928,6 @@ dependencies = [
  "futures",
  "gpui",
  "gpui-component",
- "gpui_tokio",
  "http",
  "log",
  "lsp-types",
@@ -3232,15 +3231,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.110",
-]
-
-[[package]]
-name = "gpui_tokio"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "gpui",
- "tokio",
 ]
 
 [[package]]

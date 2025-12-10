@@ -8,7 +8,6 @@ members = [
     "crates/sqlite",
     "crates/mysql",
     "crates/openai",
-    "crates/gpui_tokio",
 ]
 
 [workspace.package]
