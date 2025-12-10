@@ -21,7 +21,7 @@ gpui-macros = "0.2.2"
 gpui-component = { path = "vendor/gpui-component/crates/ui", features = [
     "tree-sitter-languages",
 ] }
-gpui-component-macros = { path = "vendor/gpui-component/crates/macros", version = "0.5.0" }
+gpui-component-macros = { path = "vendor/gpui-component/crates/macros" }
 
 # Additional dependencies for gpui-component compatibility
 notify = "7.0.0"
@@ -89,6 +89,7 @@ futures = "0.3"
 ropey = { version = "=2.0.0-beta.1", features = [
     "metric_lines_lf",
     "metric_utf16",
+    "metric_chars",
 ] }
 async-stream = "0.3"
 tokio = { version = "1.0", features = ["full"] }

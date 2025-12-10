@@ -3,7 +3,9 @@ use gpui::{
     Context, ElementId, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
     Window, div, px,
 };
-use gpui_component::{ActiveTheme, Icon, StyledExt as _, h_flex, text::TextView, v_flex};
+use gpui_component::{
+    ActiveTheme, Icon, StyledExt as _, clipboard::Clipboard, h_flex, text::TextView, v_flex,
+};
 
 use super::chat_types::MessageRole;
 
@@ -34,7 +36,14 @@ impl Render for ChatMessageState {
                     TextView::markdown(self.id.clone(), self.message.clone(), window, cx)
                         .text_sm()
                         .scrollable(false)
-                        .selectable(true),
+                        .selectable(true)
+                        .code_block_actions(move |code_block, _window, _cx| {
+                            let code = code_block.code();
+
+                            h_flex()
+                                .gap_1()
+                                .child(Clipboard::new(code.clone()).value(code.clone()))
+                        }),
                 )
             }
             MessageRole::Tool => {

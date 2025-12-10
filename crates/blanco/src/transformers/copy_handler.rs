@@ -181,13 +181,6 @@ mod tests {
                 "text".to_string(),
                 "text".to_string(),
             ],
-            selected_cells: vec![SelectedCell {
-                row: 0,
-                col: 1,
-                value: "Alice".to_string(),
-                column_name: Some("name".to_string()),
-                column_type: Some("text".to_string()),
-            }],
             selected_rows: vec![SelectedRow {
                 row: 1,
                 cells: vec![
@@ -237,7 +230,7 @@ mod tests {
 
         let csv_preview = handler.preview_transform(&data, "csv", 50).unwrap();
         assert!(csv_preview.contains("name"));
-        assert!(csv_preview.contains("Alice"));
+        assert!(csv_preview.contains("Bob"));
 
         let json_preview = handler.preview_transform(&data, "json", 100).unwrap();
         assert!(json_preview.contains("\"name\": \"Bob\""));

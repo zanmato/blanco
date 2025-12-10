@@ -1,8 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use gpui::App;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
@@ -11,6 +8,102 @@ pub struct Settings {
     pub database: DatabaseSettings,
     pub appearance: AppearanceSettings,
     pub chat: ChatSettings,
+}
+
+impl Settings {
+    /// Convert settings to key-value pairs for database storage
+    pub fn to_key_values(&self) -> Vec<(String, String)> {
+        let mut values = Vec::new();
+
+        // General settings
+        values.push(("general.check_for_updates".to_string(), self.general.check_for_updates.to_string()));
+
+        // Editor settings
+        values.push(("editor.font_family".to_string(), self.editor.font_family.clone()));
+        values.push(("editor.word_wrap".to_string(), self.editor.word_wrap.to_string()));
+
+        // Database settings
+        values.push(("database.default_connection_timeout_seconds".to_string(), self.database.default_connection_timeout_seconds.to_string()));
+        values.push(("database.query_timeout_seconds".to_string(), self.database.query_timeout_seconds.to_string()));
+        values.push(("database.max_rows".to_string(), self.database.max_rows.to_string()));
+        values.push(("database.auto_limit_results".to_string(), self.database.auto_limit_results.to_string()));
+        values.push(("database.show_connection_notifications".to_string(), self.database.show_connection_notifications.to_string()));
+
+        // Appearance settings
+        values.push(("appearance.theme".to_string(), self.appearance.theme.clone()));
+
+        // Chat settings (excluding API key which is secret)
+        values.push(("chat.provider".to_string(), self.chat.provider.clone()));
+        values.push(("chat.model".to_string(), self.chat.model.clone()));
+        values.push(("chat.base_url".to_string(), self.chat.base_url.clone()));
+        values.push(("chat.max_tokens".to_string(), self.chat.max_tokens.to_string()));
+        values.push(("chat.temperature".to_string(), self.chat.temperature.to_string()));
+        values.push(("chat.auto_execute_queries".to_string(), self.chat.auto_execute_queries.to_string()));
+        values.push(("chat.show_thinking_process".to_string(), self.chat.show_thinking_process.to_string()));
+
+        values
+    }
+
+    /// Load settings from key-value pairs
+    pub fn from_key_values(values: &[(String, String)]) -> Self {
+        let mut settings = Settings::default();
+
+        for (key, value) in values {
+            match key.as_str() {
+                "general.check_for_updates" => {
+                    settings.general.check_for_updates = value.parse().unwrap_or_default();
+                }
+                "editor.font_family" => {
+                    settings.editor.font_family = value.clone();
+                }
+                "editor.word_wrap" => {
+                    settings.editor.word_wrap = value.parse().unwrap_or_default();
+                }
+                "database.default_connection_timeout_seconds" => {
+                    settings.database.default_connection_timeout_seconds = value.parse().unwrap_or_default();
+                }
+                "database.query_timeout_seconds" => {
+                    settings.database.query_timeout_seconds = value.parse().unwrap_or_default();
+                }
+                "database.max_rows" => {
+                    settings.database.max_rows = value.parse().unwrap_or_default();
+                }
+                "database.auto_limit_results" => {
+                    settings.database.auto_limit_results = value.parse().unwrap_or_default();
+                }
+                "database.show_connection_notifications" => {
+                    settings.database.show_connection_notifications = value.parse().unwrap_or_default();
+                }
+                "appearance.theme" => {
+                    settings.appearance.theme = value.clone();
+                }
+                "chat.provider" => {
+                    settings.chat.provider = value.clone();
+                }
+                "chat.model" => {
+                    settings.chat.model = value.clone();
+                }
+                "chat.base_url" => {
+                    settings.chat.base_url = value.clone();
+                }
+                "chat.max_tokens" => {
+                    settings.chat.max_tokens = value.parse().unwrap_or_default();
+                }
+                "chat.temperature" => {
+                    settings.chat.temperature = value.parse().unwrap_or_default();
+                }
+                "chat.auto_execute_queries" => {
+                    settings.chat.auto_execute_queries = value.parse().unwrap_or_default();
+                }
+                "chat.show_thinking_process" => {
+                    settings.chat.show_thinking_process = value.parse().unwrap_or_default();
+                }
+                _ => {}
+            }
+        }
+
+        settings
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,45 +195,46 @@ impl Default for ChatSettings {
     }
 }
 
-pub fn get_settings_path() -> PathBuf {
-    let config_dir = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
-    config_dir.join("blanco").join("settings.json")
-}
+/// Load settings from database
+pub async fn load_settings(db: &crate::app_database::AppDatabase, _cx: &mut App) -> Result<Settings, Box<dyn std::error::Error>> {
+    // Load non-secret settings from database
+    let db_values = db.load_all_settings().await?;
+    let mut settings = Settings::from_key_values(&db_values);
 
-pub fn load_settings() -> Result<Settings, Box<dyn std::error::Error>> {
-    let settings_path = get_settings_path();
+    // Secret API key will be loaded from credentials in AppSettings::new
+    // This happens after the settings are initialized
 
-    if !settings_path.exists() {
-        create_default_settings()?;
-        return Ok(Settings::default());
-    }
-
-    let content = fs::read_to_string(&settings_path)?;
-    let settings: Settings = serde_json::from_str(&content)?;
     Ok(settings)
 }
 
-pub fn save_settings(settings: &Settings) -> Result<(), Box<dyn std::error::Error>> {
-    let settings_path = get_settings_path();
-
-    // Create directory if it doesn't exist
-    if let Some(parent) = settings_path.parent() {
-        fs::create_dir_all(parent)?;
+/// Save settings to database and credentials
+pub async fn save_settings(settings: &Settings, db: &crate::app_database::AppDatabase, cx: &mut App) -> Result<(), Box<dyn std::error::Error>> {
+    // Save non-secret settings to database
+    let key_values = settings.to_key_values();
+    for (key, value) in key_values {
+        db.save_setting(&key, &value, false).await?;
     }
 
-    let json_content = serde_json::to_string_pretty(settings)?;
-    let mut file = fs::File::create(&settings_path)?;
-    file.write_all(json_content.as_bytes())?;
-
-    // Set file permissions to 600 (read/write for owner only)
-    let mut perms = fs::metadata(&settings_path)?.permissions();
-    perms.set_mode(0o600);
-    fs::set_permissions(&settings_path, perms)?;
+    // Save secret API key to credentials
+    // Note: This is handled in real-time in settings_view.rs with debouncing
+    // The API key is stored using cx.write_credentials when changed
 
     Ok(())
 }
 
-pub fn create_default_settings() -> Result<(), Box<dyn std::error::Error>> {
-    let default_settings = Settings::default();
-    save_settings(&default_settings)
+/// Get just the API key (placeholder implementation)
+pub fn get_api_key(_cx: &App) -> Option<String> {
+    // TODO: Implement credential retrieval when GPUI Credential is available
+    None
+}
+
+/// Save just the API key (placeholder implementation)
+pub fn save_api_key(api_key: &str, _cx: &mut App) {
+    // TODO: Implement credential storage when GPUI Credential is available
+    // For now, this is a no-op
+    if api_key.is_empty() {
+        // Clear the API key
+    } else {
+        // Save the API key
+    }
 }

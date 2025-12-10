@@ -1269,7 +1269,7 @@ mod tests {
         let provider = SqlCompletionProvider::new_with_database(
             1,
             "test_db".to_string(),
-            DbService::new(None),
+            DbService::new(None, None),
         );
 
         // Test basic keyword detection
@@ -1323,7 +1323,7 @@ mod tests {
         let provider = SqlCompletionProvider::new_with_database(
             1,
             "test_db".to_string(),
-            DbService::new(None),
+            DbService::new(None, None),
         );
 
         // Test basic alias patterns
@@ -1357,7 +1357,7 @@ mod tests {
         let provider = SqlCompletionProvider::new_with_database(
             1,
             "test_db".to_string(),
-            DbService::new(None),
+            DbService::new(None, None),
         );
         let aliases = vec![
             TableAlias {
@@ -1386,7 +1386,7 @@ mod tests {
         let provider = SqlCompletionProvider::new_with_database(
             1,
             "test_db".to_string(),
-            DbService::new(None),
+            DbService::new(None, None),
         );
 
         // Test simple table name
@@ -1419,7 +1419,7 @@ mod tests {
         let provider = SqlCompletionProvider::new_with_database(
             1,
             "test_db".to_string(),
-            DbService::new(None),
+            DbService::new(None, None),
         );
 
         // Should show tables with FROM
@@ -1446,7 +1446,7 @@ mod tests {
         let provider = SqlCompletionProvider::new_with_database(
             1,
             "test_db".to_string(),
-            DbService::new(None),
+            DbService::new(None, None),
         );
 
         // Should show columns with dot notation
@@ -1476,7 +1476,7 @@ mod tests {
         let provider = SqlCompletionProvider::new_with_database(
             1,
             "test_db".to_string(),
-            DbService::new(None),
+            DbService::new(None, None),
         );
 
         // Test basic dot notation
@@ -1549,7 +1549,7 @@ mod tests {
         let provider = SqlCompletionProvider::new_with_database(
             1,
             "test_db".to_string(),
-            DbService::new(None),
+            DbService::new(None, None),
         );
 
         // Scenario 1: Basic dot notation - "SELECT users." should show columns from users table

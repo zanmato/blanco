@@ -1,11 +1,21 @@
+use gpui::{App, Global};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use sqlx::{ConnectOptions, Row};
 use std::path::PathBuf;
 use std::str::FromStr;
 
 /// Application database for persisting query tabs, history, and connections
+#[derive(Clone)]
 pub struct AppDatabase {
     pool: SqlitePool,
+}
+
+impl Global for AppDatabase {}
+
+impl AppDatabase {
+    pub fn global(cx: &App) -> &Self {
+        cx.global::<Self>()
+    }
 }
 
 impl AppDatabase {
@@ -20,20 +30,7 @@ impl AppDatabase {
 
         let mut db = Self { pool };
         db.init_schema().await?;
-        Ok(db)
-    }
 
-    /// Create a new AppDatabase with a custom connection string (for testing)
-    #[allow(dead_code)]
-    pub async fn new_with_path(connection_string: &str) -> Result<Self, sqlx::Error> {
-        let options = SqliteConnectOptions::from_str(connection_string)?
-            .create_if_missing(true)
-            .disable_statement_logging();
-
-        let pool = SqlitePool::connect_with(options).await?;
-
-        let mut db = Self { pool };
-        db.init_schema().await?;
         Ok(db)
     }
 
@@ -324,6 +321,21 @@ impl AppDatabase {
 
         // Note: database_path NOT NULL constraint has been manually fixed
         // The database schema now allows NULL database_path for PostgreSQL connections
+
+        // Settings table
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                is_secret INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
 
         Ok(())
     }
@@ -813,7 +825,7 @@ impl ConnectionData {
         } else {
             None
         }
-      }
+    }
 
     pub fn new_mysql(
         name: String,
@@ -963,5 +975,70 @@ impl AppDatabase {
         } else {
             Ok(None)
         }
+    }
+
+    // Settings
+    pub async fn save_setting(
+        &self,
+        key: &str,
+        value: &str,
+        is_secret: bool,
+    ) -> Result<(), sqlx::Error> {
+        let now = chrono::Utc::now().timestamp();
+
+        sqlx::query(
+            r#"
+            INSERT OR REPLACE INTO settings (key, value, is_secret, created_at, updated_at)
+            VALUES (?, ?, ?, COALESCE((SELECT created_at FROM settings WHERE key = ?), ?), ?)
+            "#,
+        )
+        .bind(key)
+        .bind(value)
+        .bind(is_secret as i64)
+        .bind(key)
+        .bind(now)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn load_setting(&self, key: &str) -> Result<Option<String>, sqlx::Error> {
+        let row = sqlx::query(
+            r#"
+            SELECT value FROM settings WHERE key = ? AND is_secret = 0
+            "#,
+        )
+        .bind(key)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| r.get(0)))
+    }
+
+    pub async fn load_all_settings(&self) -> Result<Vec<(String, String)>, sqlx::Error> {
+        let rows = sqlx::query(
+            r#"
+            SELECT key, value FROM settings WHERE is_secret = 0
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(|r| (r.get(0), r.get(1))).collect())
+    }
+
+    pub async fn delete_setting(&self, key: &str) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            DELETE FROM settings WHERE key = ?
+            "#,
+        )
+        .bind(key)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
     }
 }

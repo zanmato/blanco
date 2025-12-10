@@ -1,7 +1,9 @@
+use std::time::Duration;
+
 use gpui::{
     Action, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, Menu, MenuItem, ParentElement, Render, Styled, Subscription,
-    Window, actions, div, prelude::FluentBuilder, px,
+    Task, Window, actions, div, prelude::FluentBuilder, px, svg,
 };
 use gpui_component::{
     ActiveTheme, Root, TITLE_BAR_HEIGHT, TitleBar, WindowExt as _, button::Button, menu::AppMenuBar,
@@ -9,11 +11,11 @@ use gpui_component::{
 use log::{debug, error, info};
 use serde::Deserialize;
 
-use blanco_ui::IconName;
-use gpui_component::Icon;
-
 use crate::{
+    app,
+    app_database::AppDatabase,
     app_events::AppEvent,
+    app_settings::AppSettings,
     connection_modal::NewConnectionModal,
     connections_panel::ConnectionsPanel,
     db_service::DbService,
@@ -120,41 +122,31 @@ impl BlancoApp {
 
         // Load saved tabs from database
         info!("Loading saved tabs from database");
-        let db_service = DbService::global(cx).clone();
-        let app_db = db_service.app_db_handle();
 
         // Synchronously load tabs from database - wait for database to be initialized
-        let saved_tabs = std::thread::spawn(move || {
-            async_std::task::block_on(async {
-                // Database should already be initialized synchronously
-                if let Some(db) = app_db.read().await.as_ref() {
-                    match db.load_query_tabs().await {
-                        Ok(tabs) => {
-                            info!("Loaded {} tabs from database", tabs.len());
-                            for tab in &tabs {
-                                debug!(
-                                    "Tab '{}' (db_id: {:?}, connection_id: {:?}, content_len: {})",
-                                    tab.title,
-                                    tab.id,
-                                    tab.connection_id,
-                                    tab.content.len()
-                                );
-                            }
-                            tabs
-                        }
-                        Err(e) => {
-                            error!("Failed to load tabs: {}", e);
-                            Vec::new()
-                        }
+        let app_database = AppDatabase::global(cx);
+        let saved_tabs = async_std::task::block_on(async {
+            // Database should already be initialized synchronously{
+            match app_database.load_query_tabs().await {
+                Ok(tabs) => {
+                    info!("Loaded {} tabs from database", tabs.len());
+                    for tab in &tabs {
+                        debug!(
+                            "Tab '{}' (db_id: {:?}, connection_id: {:?}, content_len: {})",
+                            tab.title,
+                            tab.id,
+                            tab.connection_id,
+                            tab.content.len()
+                        );
                     }
-                } else {
-                    error!("App database not initialized");
+                    tabs
+                }
+                Err(e) => {
+                    error!("Failed to load tabs: {}", e);
                     Vec::new()
                 }
-            })
-        })
-        .join()
-        .unwrap_or_else(|_| Vec::new());
+            }
+        });
 
         let editor_panel =
             cx.new(|cx| EditorPanel::new_with_saved_tabs(window, cx, false, saved_tabs));
@@ -405,26 +397,16 @@ impl BlancoApp {
                             let conn_type = conn_data.db_type.clone();
                             let db_name = conn_data.database_name.clone();
 
-                            // Save connection to database
-                            let db_service = DbService::global(cx).clone();
-                            let app_db = db_service.app_db_handle();
-
                             // Start the async save operation
+                            let app_database = AppDatabase::global(cx).clone();
                             cx.spawn(async move |_cx| {
-                                if let Some(db) = app_db.read().await.as_ref() {
-                                    match db.save_connection(&conn_data).await {
-                                        Ok(connection_id) => {
-                                            log::info!(
-                                                "Connection saved with ID: {}",
-                                                connection_id
-                                            );
-                                        }
-                                        Err(e) => {
-                                            log::error!("Failed to save connection: {}", e);
-                                        }
+                                match app_database.save_connection(&conn_data.clone()).await {
+                                    Ok(connection_id) => {
+                                        log::info!("Connection saved with ID: {}", connection_id);
                                     }
-                                } else {
-                                    log::error!("App database not initialized");
+                                    Err(e) => {
+                                        log::error!("Failed to save connection: {}", e);
+                                    }
                                 }
                             })
                             .detach();
@@ -507,8 +489,6 @@ impl Render for BlancoApp {
         let dialog_layer = Root::render_dialog_layer(window, cx);
         let notification_layer = Root::render_notification_layer(window, cx);
 
-        let blanco_icon = Icon::new(IconName::Cat);
-
         let window_bounds = window.bounds();
 
         div()
@@ -532,8 +512,14 @@ impl Render for BlancoApp {
                     div()
                         .flex()
                         .items_center()
-                        .gap_4()
-                        .child(blanco_icon)
+                        .gap_x_3()
+                        .child(
+                            svg()
+                                .h(px(32.))
+                                .w(px(103.))
+                                .text_color(window.text_style().color)
+                                .path("images/blanco.svg"),
+                        )
                         .child(self.app_menu_bar.clone()),
                 ),
             )

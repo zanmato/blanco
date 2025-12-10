@@ -1,12 +1,13 @@
 use crate::app_database::AppDatabase;
-use anyhow::Result;
+use anyhow::{Result, anyhow};
+use async_compat;
 use async_std::sync::RwLock;
 use async_trait::async_trait;
 use blanco_core::{Connection, ConnectionFactory, ConnectionRegistry};
-use gpui::{App, Global};
+use gpui::{App, BackgroundExecutor, Global};
+use mysql::{MysqlConnection, MysqlConnectionKey, connection::MysqlSshConfig};
 use postgres::{PgConnectionKey, PostgresConnection, connection::PostgresSshConfig};
 use sqlite::{SqliteConnection, SqliteConnectionKey};
-use mysql::{MysqlConnectionKey, MysqlConnection, connection::MysqlSshConfig};
 use sqlx::Row;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -191,8 +192,7 @@ impl Default for MysqlConnectionFactory {
 #[async_trait]
 impl ConnectionFactory for MysqlConnectionFactory {
     async fn create_connection(&self, connection_string: &str) -> Result<Box<dyn Connection>> {
-        self.create_mysql_connection(connection_string, None)
-            .await
+        self.create_mysql_connection(connection_string, None).await
     }
 
     fn parse_connection_string(&self, connection_string: &str) -> Result<String> {
@@ -409,33 +409,31 @@ pub struct SshTunnelConnection {
 /// Global database service that holds app database and unified connection manager
 #[derive(Clone)]
 pub struct DbService {
-    pub app_db: Arc<RwLock<Option<AppDatabase>>>,
+    pub app_db: Option<AppDatabase>,
     pub unified_manager: Arc<RwLock<UnifiedConnectionManager>>,
     // SSH tunnel management
     ssh_tunnels: Arc<async_std::sync::Mutex<HashMap<String, SshTunnelConnection>>>,
-    // GPUI tokio runtime handle for automatic SSH tunnel establishment
-    runtime_handle: Option<tokio::runtime::Handle>,
+    // GPUI background executor for automatic SSH tunnel establishment
+    background_executor: Option<BackgroundExecutor>,
 }
 
 impl Global for DbService {}
 
 impl DbService {
-    pub fn new(runtime_handle: Option<tokio::runtime::Handle>) -> Self {
+    pub fn new(
+        background_executor: Option<BackgroundExecutor>,
+        app_db: Option<AppDatabase>,
+    ) -> Self {
         Self {
-            app_db: Arc::new(RwLock::new(None)),
+            app_db,
             unified_manager: Arc::new(RwLock::new(UnifiedConnectionManager::new())),
             ssh_tunnels: Arc::new(async_std::sync::Mutex::new(HashMap::new())),
-            runtime_handle,
+            background_executor,
         }
     }
 
     pub fn global(cx: &App) -> &Self {
         cx.global::<Self>()
-    }
-
-    /// Get a clone of the app database lock
-    pub fn app_db_handle(&self) -> Arc<RwLock<Option<AppDatabase>>> {
-        self.app_db.clone()
     }
 
     /// Get a clone of the unified connection manager
@@ -464,7 +462,7 @@ impl DbService {
         )
     }
 
-    /// Establish SSH tunnel automatically using stored runtime handle
+    /// Establish SSH tunnel automatically using background executor
     fn establish_ssh_tunnel_automatic(
         &self,
         ssh_host: String,
@@ -476,12 +474,6 @@ impl DbService {
         remote_host: String,
         remote_port: u16,
     ) -> Result<u16, anyhow::Error> {
-        let Some(runtime_handle) = &self.runtime_handle else {
-            return Err(anyhow::anyhow!(
-                "No runtime handle available for automatic SSH tunnel establishment"
-            ));
-        };
-
         log::info!(
             "Automatically establishing SSH tunnel for {}@{}:{} -> {}:{}",
             ssh_user,
@@ -506,7 +498,7 @@ impl DbService {
             local_port,
         };
 
-        // Spawn SSH tunnel establishment on the stored runtime handle
+        // Spawn SSH tunnel establishment on the background executor with async-compat
         let ssh_tunnels = self.ssh_tunnels.clone();
         let tunnel_key =
             self.create_ssh_tunnel_key(&ssh_host, ssh_port, &ssh_user, &remote_host, remote_port);
@@ -514,47 +506,65 @@ impl DbService {
         let remote_host_clone = remote_host.clone();
         let remote_port_clone = remote_port;
 
-        let _ = runtime_handle.spawn(async move {
-            match SshTunnel::create(tunnel_config).await {
-                Ok(mut tunnel) => {
-                    log::info!("SSH tunnel established automatically: {}", tunnel_key);
+        if self.background_executor.is_none() {
+            return Err(anyhow!("no background executor"));
+        }
 
-                    // Store tunnel connection info
-                    {
-                        let mut tunnels = ssh_tunnels.lock().await;
-                        tunnels.insert(
-                            tunnel_key.clone(),
-                            SshTunnelConnection {
-                                local_port: local_port_for_async,
-                                remote_host: remote_host_clone,
-                                remote_port: remote_port_clone,
-                                created_at: std::time::Instant::now(),
-                            },
-                        );
+        let background_executor = self.background_executor.clone().unwrap();
+        self.background_executor
+            .clone()
+            .unwrap()
+            .spawn(async move {
+                match async_compat::Compat::new(async move {
+                    SshTunnel::create(tunnel_config, background_executor).await
+                })
+                .await
+                {
+                    Ok(mut tunnel) => {
+                        log::info!("SSH tunnel established automatically: {}", tunnel_key);
+
+                        // Store tunnel connection info
+                        {
+                            let mut tunnels = ssh_tunnels.lock().await;
+                            tunnels.insert(
+                                tunnel_key.clone(),
+                                SshTunnelConnection {
+                                    local_port: local_port_for_async,
+                                    remote_host: remote_host_clone,
+                                    remote_port: remote_port_clone,
+                                    created_at: std::time::Instant::now(),
+                                },
+                            );
+                        }
+
+                        // Set up TCP forwarding - this keeps the tunnel alive
+                        if let Err(e) =
+                            async_compat::Compat::new(
+                                async move { tunnel.setup_tcp_forwarding().await },
+                            )
+                            .await
+                        {
+                            log::error!(
+                                "Failed to setup TCP forwarding for auto-established tunnel {}: {}",
+                                tunnel_key,
+                                e
+                            );
+
+                            // Remove failed tunnel
+                            let mut tunnels = ssh_tunnels.lock().await;
+                            tunnels.remove(&tunnel_key);
+                        }
                     }
-
-                    // Set up TCP forwarding - this keeps the tunnel alive
-                    if let Err(e) = tunnel.setup_tcp_forwarding().await {
+                    Err(e) => {
                         log::error!(
-                            "Failed to setup TCP forwarding for auto-established tunnel {}: {}",
+                            "Failed to establish SSH tunnel automatically {}: {}",
                             tunnel_key,
                             e
                         );
-
-                        // Remove failed tunnel
-                        let mut tunnels = ssh_tunnels.lock().await;
-                        tunnels.remove(&tunnel_key);
                     }
                 }
-                Err(e) => {
-                    log::error!(
-                        "Failed to establish SSH tunnel automatically {}: {}",
-                        tunnel_key,
-                        e
-                    );
-                }
-            }
-        });
+            })
+            .detach();
 
         Ok(local_port)
     }
@@ -632,9 +642,9 @@ impl DbService {
         database_name: Option<&str>,
     ) -> Result<std::sync::Arc<dyn blanco_core::Connection>, anyhow::Error> {
         // Get the app database
-        let app_db_lock = self.app_db.read().await;
-        let app_db = app_db_lock
-            .as_ref()
+        let app_db = self
+            .app_db
+            .clone()
             .ok_or_else(|| anyhow::anyhow!("App database not initialized"))?;
 
         // Query the connections table to get connection data including SSH configuration

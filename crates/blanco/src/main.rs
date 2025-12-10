@@ -2,6 +2,7 @@ mod agent;
 mod app;
 mod app_database;
 mod app_events;
+mod app_settings;
 mod assets;
 mod chat_provider_resolver;
 mod connection;
@@ -14,7 +15,9 @@ mod export_service;
 mod rename_form;
 mod results_panel;
 mod settings;
+mod settings_view;
 mod sql_completion_provider;
+mod sql_document_color_provider;
 mod sql_statement_parser;
 mod ssh_tunnel;
 mod time_format;
@@ -24,9 +27,10 @@ use assets::Assets;
 use db_service::DbService;
 use gpui::{AppContext, Application, SharedString, WindowBounds, WindowOptions, px, size};
 use gpui_component::{Theme, ThemeRegistry};
-use gpui_tokio;
 use std::path::PathBuf;
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
+
+use crate::{app_database::AppDatabase, app_settings::AppSettings, settings::Settings};
 
 fn main() {
     let app = Application::new().with_assets(Assets);
@@ -41,16 +45,11 @@ fn main() {
             .init();
 
         gpui_component::init(cx);
-        gpui_tokio::init(cx);
 
-        // Get the tokio runtime handle for automatic SSH tunnel establishment
-        let runtime_handle = gpui_tokio::Tokio::handle(cx);
-
-        // Load and watch themes from ./themes directory
-        let settings = settings::load_settings().unwrap();
-        let theme_name = SharedString::from(settings.appearance.theme);
+        // Use default theme for now
+        // Settings will be loaded asynchronously
+        let theme_name = SharedString::from("One Dark - Darkened");
         if let Err(err) = ThemeRegistry::watch_dir(PathBuf::from("./themes"), cx, move |cx| {
-            log::info!("themes {:?}", ThemeRegistry::global(cx).themes());
             if let Some(theme) = ThemeRegistry::global(cx).themes().get(&theme_name).cloned() {
                 Theme::global_mut(cx).apply_config(&theme);
                 log::info!("Applying theme {}", theme_name);
@@ -59,33 +58,27 @@ fn main() {
             log::error!("Failed to watch themes directory: {}", err);
         }
 
-        // Initialize database service with tokio runtime handle for automatic SSH tunnel establishment
-        let db_service = DbService::new(Some(runtime_handle));
-
         // Initialize app database (for query tabs, history, connections) synchronously
-        let app_db_handle = db_service.app_db_handle();
-        let db = async_std::task::block_on(async {
-            match app_database::AppDatabase::new().await {
-                Ok(db) => {
-                    let mut app_db = app_db_handle.write().await;
-                    *app_db = Some(db);
-                    log::info!("App database initialized");
-
-                    // Drop the write lock before migration
-                    drop(app_db);
-
-                    Ok(())
-                }
-                Err(e) => {
-                    log::error!("Failed to initialize app database: {}", e);
-                    Err(anyhow::anyhow!("App database init failed: {}", e))
-                }
-            }
-        });
+        let db = async_std::task::block_on(async { AppDatabase::new().await });
 
         if let Err(e) = db {
             log::error!("Critical: Failed to initialize database: {}", e);
+        } else {
+            log::info!("Global DB bro!");
+            cx.set_global(db.unwrap());
         }
+
+        // Initialize database service with background executor for automatic SSH tunnel establishment
+        let app_database = AppDatabase::global(cx).clone();
+        let db_service = DbService::new(Some(cx.background_executor().clone()), Some(app_database));
+
+        let app_database = AppDatabase::global(cx).clone();
+        let settings =
+            async_std::task::block_on(async move { app_database.load_all_settings().await })
+                .unwrap_or(Vec::new());
+
+        let app_settings = AppSettings::new(cx, Settings::from_key_values(&settings));
+        cx.set_global(app_settings);
 
         // Store the async event sender globally for components to use
         cx.set_global(db_service);

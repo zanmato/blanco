@@ -20,7 +20,6 @@ use std::{rc::Rc, sync::Arc};
 // Use reqwest
 use reqwest;
 
-use crate::agent::{ChatPanel, SqlContext};
 use crate::app::RenameTab;
 use crate::app_database::QueryTabData;
 use crate::app_events::AppEvent;
@@ -28,9 +27,13 @@ use crate::chat_provider_resolver::ChatProviderResolver;
 use crate::db_service::DbService;
 use crate::rename_form::RenameTabForm;
 use crate::results_panel::ResultsPanel;
-use crate::settings::{Settings, load_settings};
+use crate::settings::Settings;
 use crate::sql_completion_provider::SqlCompletionProvider;
 use crate::sql_statement_parser::extract_current_query;
+use crate::{
+    agent::{ChatPanel, SqlContext},
+    app_database::AppDatabase,
+};
 use blanco_core::chat_provider::{ChatProvider, ProviderError};
 use blanco_ui::{IconName, SqlLog};
 use gpui_component::Icon;
@@ -93,11 +96,7 @@ pub struct SettingsTab {
     #[allow(dead_code)]
     pub id: usize,
     pub title: String,
-    pub editor: Entity<InputState>,
-    pub original_settings: Settings,
-    pub is_valid: bool,
-    pub validation_error: Option<String>,
-    pub pending_text: Option<String>,
+    pub settings_view: Entity<crate::settings_view::SettingsView>,
 }
 
 pub struct EditorPanel {
@@ -151,18 +150,12 @@ impl EditorPanel {
 
             // Delete from database if it has a db_id
             if let Some(db_id) = db_id {
-                let db_service = DbService::global(cx).clone();
-                let app_db = db_service.app_db_handle();
-
+                let app_database = AppDatabase::global(cx).clone();
                 cx.spawn(async move |_, _cx| {
-                    if let Some(app_db) = app_db.read().await.as_ref() {
-                        app_db
-                            .delete_query_tab(db_id)
-                            .await
-                            .map_err(|e| anyhow::anyhow!("Failed to delete tab: {}", e))
-                    } else {
-                        Err(anyhow::anyhow!("App database not initialized"))
-                    }
+                    app_database
+                        .delete_query_tab(db_id)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("Failed to delete tab: {}", e))
                 })
                 .detach();
             }
@@ -180,25 +173,20 @@ impl EditorPanel {
 
             // Update database if this tab has a db_id
             if let Some(db_id) = query_tab.db_id {
-                let db_service = DbService::global(cx).clone();
-                let app_db = db_service.app_db_handle();
+                let app_database = AppDatabase::global(cx).clone();
                 let new_name = new_name.to_string(); // Convert to owned String
 
                 cx.spawn(async move |_, _cx| {
-                    if let Some(app_db) = app_db.read().await.as_ref() {
-                        // Load existing tab data to preserve all fields
-                        if let Ok(Some(existing_tab)) = app_db.load_query_tab_by_id(db_id).await {
-                            let mut updated_tab = existing_tab;
-                            updated_tab.title = new_name;
+                    // Load existing tab data to preserve all fields
+                    if let Ok(Some(existing_tab)) = app_database.load_query_tab_by_id(db_id).await {
+                        let mut updated_tab = existing_tab;
+                        updated_tab.title = new_name;
 
-                            if let Err(e) = app_db.save_query_tab(&updated_tab).await {
-                                log::error!("Failed to update tab name in database: {}", e);
-                            }
-                        } else {
-                            log::error!("Failed to load existing tab data for tab ID: {}", db_id);
+                        if let Err(e) = app_database.save_query_tab(&updated_tab).await {
+                            log::error!("Failed to update tab name in database: {}", e);
                         }
                     } else {
-                        log::error!("App database not initialized for tab rename");
+                        log::error!("Failed to load existing tab data for tab ID: {}", db_id);
                     }
                 })
                 .detach();
@@ -235,31 +223,13 @@ impl EditorPanel {
         let tab_id = self.next_tab_id;
         self.next_tab_id += 1;
 
-        let settings = crate::settings::load_settings().unwrap_or_default();
-        let json_content = serde_json::to_string_pretty(&settings).unwrap();
-
-        let editor = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("json".to_string())
-                .line_number(true)
-                .tab_size(TabSize {
-                    tab_size: 2,
-                    hard_tabs: false,
-                })
-                .soft_wrap(true)
-                .placeholder("Settings JSON will appear here...")
-        });
-
-        // Text will be set in render method where we have window access
+        // Settings are now stored in the global AppDatabase
+        let settings_view = cx.new(|cx| crate::settings_view::SettingsView::new(cx));
 
         let settings_tab = SettingsTab {
             id: tab_id,
             title: "Settings".to_string(),
-            editor,
-            original_settings: settings,
-            is_valid: true,
-            validation_error: None,
-            pending_text: Some(json_content),
+            settings_view,
         };
 
         self.tabs.push(TabType::Settings(settings_tab));
@@ -299,31 +269,27 @@ impl EditorPanel {
                     };
 
                     // Trigger the save operation in background
-                    let db_service = DbService::global(cx).clone();
-                    let app_db = db_service.app_db_handle();
+                    let app_database = AppDatabase::global(cx).clone();
                     let _title = query_tab.title.clone();
                     let connection_id = query_tab.connection_id;
 
                     cx.spawn(async move |_entity_handle, _cx| {
-                        if let Some(app_db) = app_db.read().await.as_ref() {
-                            // Use the existing connection_id from the query_tab
+                        // Create the final tab data with connection_id
+                        let mut final_tab_data = tab_data;
+                        final_tab_data.connection_id = Some(connection_id);
 
-                            // Create the final tab data with connection_id
-                            let mut final_tab_data = tab_data;
-                            final_tab_data.connection_id = Some(connection_id);
-
-                            // First save to get or create the database ID
-                            let _final_db_id = match app_db.save_query_tab(&final_tab_data).await {
-                                Ok(db_id) => {
-                                    debug!("Tab saved successfully with db_id: {}", db_id);
-                                    db_id
-                                }
-                                Err(e) => {
-                                    error!("Failed to save tab: {}", e);
-                                    return;
-                                }
-                            };
-                        }
+                        // First save to get or create the database ID
+                        let _final_db_id = match app_database.save_query_tab(&final_tab_data).await
+                        {
+                            Ok(db_id) => {
+                                debug!("Tab saved successfully with db_id: {}", db_id);
+                                db_id
+                            }
+                            Err(e) => {
+                                error!("Failed to save tab: {}", e);
+                                return;
+                            }
+                        };
                     })
                     .detach();
 
@@ -370,7 +336,6 @@ impl EditorPanel {
                     let results_panel_clone = query_tab.results_panel.clone();
                     let sql_log_clone = query_tab.sql_log.clone();
                     let db_service = DbService::global(cx).clone();
-                    let _app_db_handle = db_service.app_db_handle();
                     let database_name = query_tab.database_name.clone();
 
                     cx.spawn(async move |editor_panel_entity, cx| {
@@ -549,53 +514,6 @@ impl EditorPanel {
                 }
             }
         }
-    }
-
-    fn save_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(TabType::Settings(settings_tab)) = self.tabs.get_mut(self.active_tab_ix) {
-            let json_text = settings_tab.editor.read(cx).text().to_string();
-
-            match serde_json::from_str::<Settings>(&json_text) {
-                Ok(settings) => match crate::settings::save_settings(&settings) {
-                    Ok(()) => {
-                        settings_tab.original_settings = settings.clone();
-                        settings_tab.validation_error = None;
-                        settings_tab.is_valid = true;
-                        self.apply_settings(&settings, cx);
-                        println!("Settings saved successfully!");
-                    }
-                    Err(e) => {
-                        settings_tab.validation_error =
-                            Some(format!("Failed to save settings: {}", e));
-                        settings_tab.is_valid = false;
-                    }
-                },
-                Err(e) => {
-                    settings_tab.validation_error = Some(format!("Invalid JSON: {}", e));
-                    settings_tab.is_valid = false;
-                }
-            }
-            cx.notify();
-        }
-    }
-
-    fn reset_settings(&mut self, cx: &mut Context<Self>) {
-        if let Some(TabType::Settings(settings_tab)) = self.tabs.get_mut(self.active_tab_ix) {
-            let default_settings = Settings::default();
-            let json_content = serde_json::to_string_pretty(&default_settings).unwrap();
-
-            settings_tab.pending_text = Some(json_content);
-            settings_tab.validation_error = None;
-            settings_tab.is_valid = true;
-            cx.notify();
-        }
-    }
-
-    fn apply_settings(&self, settings: &Settings, _cx: &mut Context<Self>) {
-        // Apply settings to application
-        // For now, we'll just log the settings
-        // In a real implementation, this would update the theme, editor settings, etc.
-        println!("Applied settings: {:?}", settings);
     }
 
     /// Load saved query tabs from the app database
@@ -808,8 +726,10 @@ impl EditorPanel {
             });
         }
     }
+}
 
-    /// Toggle chat for the active tab
+/// Toggle chat for the active tab
+/* TODO: Re-implement this function with new settings loading
     pub fn toggle_chat_for_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(TabType::Query(query_tab)) = self.tabs.get_mut(self.active_tab_ix) {
             query_tab.chat_enabled = !query_tab.chat_enabled;
@@ -874,6 +794,8 @@ impl EditorPanel {
         }
     }
 }
+}
+*/
 
 impl Focusable for EditorPanel {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -886,15 +808,6 @@ impl EventEmitter<AppEvent> for EditorPanel {}
 
 impl Render for EditorPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Handle pending text for settings tabs first
-        if let Some(TabType::Settings(settings_tab)) = self.tabs.get_mut(self.active_tab_ix)
-            && let Some(pending_text) = settings_tab.pending_text.take()
-        {
-            settings_tab.editor.update(cx, |state, cx| {
-                state.replace(&pending_text, window, cx);
-            });
-        }
-
         let current_tab = self.tabs.get(self.active_tab_ix);
 
         div()
@@ -1013,10 +926,7 @@ impl Render for EditorPanel {
                                     )
                             }
                             TabType::Settings(settings_tab) => {
-                                let mut label = settings_tab.title.clone();
-                                if !settings_tab.is_valid {
-                                    label.push_str(" ⚠️");
-                                }
+                                let label = settings_tab.title.clone();
                                 let show_close_button = self.tabs.len() > 1;
                                 let tab_index = ix;
 
@@ -1240,8 +1150,8 @@ impl Render for EditorPanel {
                                                                             btn.primary()
                                                                         })
                                                                         .on_click(cx.listener(|this, _, _window, cx| {
-                                                                            // Toggle chat for the current query tab
-                                                                            this.toggle_chat_for_active_tab(_window, cx);
+                                                                            // TODO: Re-implement chat toggle
+                                                                            // this.toggle_chat_for_active_tab(_window, cx);
                                                                         }))
                                                                 ),
                                                             ),
@@ -1270,72 +1180,13 @@ impl Render for EditorPanel {
                         )
                     }
                     TabType::Settings(settings_tab) => {
-                        // Settings tab: Just editor + buttons
+                        // Settings tab: Show the new settings view
                         this.child(
-                            v_flex()
+                            div()
                                 .flex_1()
                                 .h_full()
                                 .overflow_hidden()
-                                // Editor
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_h_0()
-                                        .border_t_1()
-                                        .border_color(cx.theme().border)
-                                        .relative()
-                                        .child(
-                                            Input::new(&settings_tab.editor)
-                                                .bordered(false)
-                                                .p_0()
-                                                .h_full()
-                                                .font_family("Fira Code")
-                                                .text_size(px(14.))
-                                                .focus_bordered(false),
-                                        )
-                                        // Show validation error
-                                        .when_some(settings_tab.validation_error.as_ref(), |this, error| {
-                                            this.child(
-                                                div()
-                                                    .p_2()
-                                                    .bg(cx.theme().red.opacity(0.1))
-                                                    .border_1()
-                                                    .border_color(cx.theme().red)
-                                                    .text_color(cx.theme().red)
-                                                    .child(format!("❌ JSON Error: {}", error))
-                                            )
-                                        })
-                                )
-                                // Button bar
-                                .child(
-                                    h_flex()
-                                        .p_2()
-                                        .gap_2()
-                                        .border_t_1()
-                                        .border_color(cx.theme().border)
-                                        .bg(cx.theme().muted.opacity(0.5))
-                                        .child(
-                                            Button::new("reset-settings")
-                                                .outline()
-                                                .small()
-                                                .icon(IconName::Asterisk)
-                                                .label("Reset to Defaults")
-                                                .on_click(cx.listener(|this, _, _window, cx| {
-                                                    this.reset_settings(cx);
-                                                })),
-                                        )
-                                        .child(div().flex_1())
-                                        .child(
-                                            Button::new("save-settings")
-                                                .outline()
-                                                .small()
-                                                .icon(IconName::Save)
-                                                .label("Save Settings")
-                                                .on_click(cx.listener(|this, _, window, cx| {
-                                                    this.save_settings(window, cx);
-                                                })),
-                                        )
-                                )
+                                .child(settings_tab.settings_view.clone())
                         )
                     }
                 }
@@ -1350,34 +1201,35 @@ struct ChatProviderInfo {
     model_name: String,
 }
 
-fn create_chat_provider_info(connection_id: i64, cx: &mut App) -> anyhow::Result<ChatProviderInfo> {
-    // Load current settings
-    let settings =
-        load_settings().map_err(|e| anyhow::anyhow!("Failed to load settings: {}", e))?;
-
-    // Validate settings
-    let validation_errors = ChatProviderResolver::validate_settings(&settings);
-    if !validation_errors.is_empty() {
-        return Err(anyhow::anyhow!(
-            "Invalid chat settings: {}",
-            validation_errors.join(", ")
-        ));
-    }
-
-    // Create HTTP client using zed-reqwest
-    let http_client = Arc::new(reqwest::Client::new());
-
-    // Get db_service
-    let db_service = DbService::global(cx).clone();
-
-    // Create chat provider
-    let mut resolver = ChatProviderResolver::new(http_client.clone(), db_service);
-    resolver.set_connection_id(connection_id);
-    let provider_info = resolver.get_provider(&settings)?;
-
-    Ok(ChatProviderInfo {
-        provider: provider_info.provider,
-        provider_name: provider_info.provider_name,
-        model_name: provider_info.model_name,
-    })
-}
+// TODO: Update this function to use the new async settings loading
+// fn create_chat_provider_info(connection_id: i64, cx: &mut App) -> anyhow::Result<ChatProviderInfo> {
+//     // Load current settings
+//     let settings =
+//         load_settings().map_err(|e| anyhow::anyhow!("Failed to load settings: {}", e))?;
+//
+//     // Validate settings
+//     let validation_errors = ChatProviderResolver::validate_settings(&settings);
+//     if !validation_errors.is_empty() {
+//         return Err(anyhow::anyhow!(
+//             "Invalid chat settings: {}",
+//             validation_errors.join(", ")
+//         ));
+//     }
+//
+//     // Create HTTP client using zed-reqwest
+//     let http_client = Arc::new(reqwest::Client::new());
+//
+//     // Get db_service
+//     let db_service = DbService::global(cx).clone();
+//
+//     // Create chat provider
+//     let mut resolver = ChatProviderResolver::new(http_client.clone(), db_service);
+//     resolver.set_connection_id(connection_id);
+//     let provider_info = resolver.get_provider(&settings)?;
+//
+//     Ok(ChatProviderInfo {
+//         provider: provider_info.provider,
+//         provider_name: provider_info.provider_name,
+//         model_name: provider_info.model_name,
+//     })
+// }

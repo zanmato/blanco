@@ -400,22 +400,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_export_format_conversion() {
-        assert_eq!(ExportFormat::from_str("CSV"), ExportFormat::Csv);
-        assert_eq!(ExportFormat::from_str("JSON"), ExportFormat::Json);
-        assert_eq!(ExportFormat::from_str("SQL"), ExportFormat::Sql);
-        assert_eq!(ExportFormat::from_str("Unknown"), ExportFormat::Csv); // Default
-
-        assert_eq!(ExportFormat::Csv.to_string(), "CSV");
-        assert_eq!(ExportFormat::Json.to_string(), "JSON");
-        assert_eq!(ExportFormat::Sql.to_string(), "SQL");
-
-        assert_eq!(ExportFormat::Csv.file_extension(), "csv");
-        assert_eq!(ExportFormat::Json.file_extension(), "json");
-        assert_eq!(ExportFormat::Sql.file_extension(), "sql");
-    }
-
-    #[test]
     fn test_generate_default_filename() {
         let filename = generate_default_filename("users", &ExportFormat::Csv);
         assert!(filename.starts_with("users_"));

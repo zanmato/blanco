@@ -1,4 +1,4 @@
-use crate::app_database::ConnectionData;
+use crate::app_database::{AppDatabase, ConnectionData};
 use crate::app_events::{AppEvent, TreeItemType};
 use crate::db_service::DbService;
 use blanco_ui::IconName;
@@ -103,8 +103,20 @@ impl ConnectionsPanel {
     pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
         let tree_state = cx.new(|cx| TreeState::new(cx));
 
+        // Load initial connections
+        let app_database = AppDatabase::global(cx);
+        let connections = async_std::task::block_on(async {
+            match app_database.load_connections().await {
+                Ok(connections) => connections,
+                Err(e) => {
+                    log::error!("Failed to load connections: {}", e);
+                    vec![]
+                }
+            }
+        });
+
         let panel = Self {
-            connections: Vec::new(),
+            connections,
             selected_connection_id: None,
             database_metadata: std::collections::HashMap::new(),
             tree_state,
@@ -114,26 +126,8 @@ impl ConnectionsPanel {
             next_item_id: 1, // Start with 1 to avoid potential issues with 0
         };
 
-        // Load initial connections
-        let db_service = DbService::global(cx);
-        let app_db_handle = db_service.app_db_handle();
-        cx.spawn(async move |this_handle, cx| {
-            let connections = match *app_db_handle.read().await {
-                Some(ref app_db) => match app_db.load_connections().await {
-                    Ok(connections) => connections,
-                    Err(e) => {
-                        log::error!("Failed to load connections: {}", e);
-                        vec![]
-                    }
-                },
-                None => {
-                    log::warn!("App database not initialized");
-                    vec![]
-                }
-            };
-
+        cx.spawn(async |this_handle, cx| {
             let _ = this_handle.update(cx, |this, cx| {
-                this.connections = connections;
                 this.update_tree_items(cx);
                 cx.notify();
             });

@@ -1,14 +1,13 @@
 use anyhow::Result;
+use async_compat;
 use russh::client as russh_client;
 use russh::client::{Config as SshConfig, Handle as SshHandle};
 use russh::keys::load_secret_key;
 use std::sync::{Arc, Mutex};
 use tokio::io::copy_bidirectional;
 use tokio::net::TcpListener;
-use tokio::sync::Mutex as TokioMutex;
 
-// Import the global tokio handle
-use gpui_tokio::Tokio;
+use gpui::BackgroundExecutor;
 
 /// SSH tunnel configuration
 #[derive(Debug, Clone)]
@@ -86,10 +85,14 @@ pub struct SshTunnel {
     status: Arc<Mutex<TunnelStatus>>,
     is_running: Arc<Mutex<bool>>,
     active_connections: Arc<Mutex<std::collections::HashSet<ConnectionId>>>,
+    background_executor: BackgroundExecutor,
 }
 
 impl SshTunnel {
-    pub async fn create(config: SshTunnelConfig) -> Result<Self> {
+    pub async fn create(
+        config: SshTunnelConfig,
+        background_executor: BackgroundExecutor,
+    ) -> Result<Self> {
         let mut tunnel = Self {
             session: None,
             local_port: config.local_port,
@@ -97,6 +100,7 @@ impl SshTunnel {
             status: Arc::new(Mutex::new(TunnelStatus::Disconnected)),
             is_running: Arc::new(Mutex::new(false)),
             active_connections: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            background_executor,
         };
 
         tunnel.connect().await?;
@@ -167,13 +171,14 @@ impl SshTunnel {
         );
 
         // Wrap the session in Arc<TokioMutex<>> so it can be shared between connection tasks
-        let session = Arc::new(TokioMutex::new(self.session.take().unwrap()));
+        let session = Arc::new(tokio::sync::Mutex::new(self.session.take().unwrap()));
         let active_connections = Arc::clone(&self.active_connections);
 
-        // Use the global tokio runtime handle if available, otherwise fall back to tokio::spawn
-        if let Some(handle) = Tokio::global_handle() {
-            log::debug!("Using global tokio runtime for SSH tunnel spawn");
-            handle.spawn(async move {
+        log::debug!("Using background executor for SSH tunnel spawn");
+        let background_executor = self.background_executor.clone();
+        let bg_executor_for_connections = self.background_executor.clone();
+        background_executor.spawn(async move {
+            async_compat::Compat::new(async move {
                 // Handle incoming connections
                 while *is_running.lock().unwrap() {
                     match listener.accept().await {
@@ -198,56 +203,59 @@ impl SshTunnel {
                             }
 
                             // Spawn a separate task for each connection
-                            handle.spawn(async move {
-                                log::debug!("Processing connection {}", connection_id.0);
+                            let bg_executor_inner = bg_executor_for_connections.clone();
+                            bg_executor_inner.spawn(async move {
+                                async_compat::Compat::new(async move {
+                                    log::debug!("Processing connection {}", connection_id.0);
 
-                                // Open SSH channel to remote host:port
-                                let ssh_channel = {
-                                    let session = session.lock().await;
-                                    session.channel_open_direct_tcpip(
-                                        &remote_host,
-                                        remote_port as u32,
-                                        "127.0.0.1",
-                                        local_port as u32
-                                    ).await
-                                };
+                                    // Open SSH channel to remote host:port
+                                    let ssh_channel = {
+                                        let session = session.lock().await;
+                                        session.channel_open_direct_tcpip(
+                                            &remote_host,
+                                            remote_port as u32,
+                                            "127.0.0.1",
+                                            local_port as u32
+                                        ).await
+                                    };
 
-                                match ssh_channel {
-                                    Ok(ssh_channel) => {
-                                        let mut ssh_stream = ssh_channel.into_stream();
+                                    match ssh_channel {
+                                        Ok(ssh_channel) => {
+                                            let mut ssh_stream = ssh_channel.into_stream();
 
-                                        // Copy data bidirectionally between local socket and SSH stream
-                                        match copy_bidirectional(&mut local_socket, &mut ssh_stream).await {
-                                            Ok((bytes_to_local, bytes_to_remote)) => {
-                                                log::debug!("Connection {} completed. {} bytes to local, {} bytes to remote",
-                                                    connection_id.0, bytes_to_local, bytes_to_remote);
-                                            }
-                                            Err(e) => {
-                                                log::error!("Error copying data for connection {}: {}", connection_id.0, e);
+                                            // Copy data bidirectionally between local socket and SSH stream
+                                            match copy_bidirectional(&mut local_socket, &mut ssh_stream).await {
+                                                Ok((bytes_to_local, bytes_to_remote)) => {
+                                                    log::debug!("Connection {} completed. {} bytes to local, {} bytes to remote",
+                                                        connection_id.0, bytes_to_local, bytes_to_remote);
+                                                }
+                                                Err(e) => {
+                                                    log::error!("Error copying data for connection {}: {}", connection_id.0, e);
+                                                }
                                             }
                                         }
+                                        Err(e) => {
+                                            log::error!("Failed to open SSH forwarding channel for connection {}: {}", connection_id.0, e);
+                                        }
                                     }
-                                    Err(e) => {
-                                        log::error!("Failed to open SSH forwarding channel for connection {}: {}", connection_id.0, e);
-                                    }
-                                }
 
-                                // Remove connection from tracking
-                                {
-                                    let mut connections = active_connections.lock().unwrap();
-                                    connections.remove(&connection_id);
-                                    let connection_count = connections.len();
-                                    log::debug!("Removed connection {} from tunnel. Active connections: {}",
-                                        connection_id.0, connection_count);
+                                    // Remove connection from tracking
+                                    {
+                                        let mut connections = active_connections.lock().unwrap();
+                                        connections.remove(&connection_id);
+                                        let connection_count = connections.len();
+                                        log::debug!("Removed connection {} from tunnel. Active connections: {}",
+                                            connection_id.0, connection_count);
 
-                                    // If no more active connections, consider closing the tunnel
-                                    if connection_count == 0 {
-                                        log::info!("No more active connections for tunnel on port {}", local_port);
-                                        // Note: We don't close the tunnel automatically here as the DbService
-                                        // should manage the tunnel lifecycle based on its own logic
+                                        // If no more active connections, consider closing the tunnel
+                                        if connection_count == 0 {
+                                            log::info!("No more active connections for tunnel on port {}", local_port);
+                                            // Note: We don't close the tunnel automatically here as the DbService
+                                            // should manage the tunnel lifecycle based on its own logic
+                                        }
                                     }
-                                }
-                            });
+                            }).await
+                        }).detach();
                         }
                         Err(e) => {
                             log::error!("Failed to accept local connection: {}", e);
@@ -256,8 +264,8 @@ impl SshTunnel {
                     }
                 }
                 log::warn!("Tunnel is not running anymore");
-            });
-        }
+            }).await
+        }).detach();
 
         Ok(())
     }

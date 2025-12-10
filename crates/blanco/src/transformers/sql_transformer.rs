@@ -1,6 +1,6 @@
 use crate::transformers::{DataTransformer, SelectedTableData, TransformError};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub struct SqlTransformer {
     table_name: Option<String>,
@@ -156,7 +156,11 @@ impl DataTransformer for SqlTransformer {
         let row_str = format!("  ({})", values.join(", "));
 
         // Add comma separator if this is not the first row
-        if self.first_row.compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+        if self
+            .first_row
+            .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
             // This was the first row and we successfully set it to false
             Ok(row_str)
         } else {
@@ -170,7 +174,7 @@ impl DataTransformer for SqlTransformer {
         Ok(";\n".to_string())
     }
 
-    fn transform_header_row(&self, columns: &[String]) -> Result<String, TransformError> {
+    fn transform_header_row(&self, _columns: &[String]) -> Result<String, TransformError> {
         // SQL doesn't need headers as a separate row
         Ok(String::new())
     }

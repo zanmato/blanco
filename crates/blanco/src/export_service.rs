@@ -234,16 +234,3 @@ impl Default for ExportService {
         Self::new()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::transformers::CsvTransformer;
-
-    #[test]
-    fn test_export_service_creation() {
-        let service = ExportService::new();
-        // Just verify it can be created
-        assert!(true);
-    }
-}
