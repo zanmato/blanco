@@ -7,7 +7,7 @@ use gpui_component::{
     input::{Input, InputState},
     v_flex,
 };
-use log::error;
+use tracing::error;
 
 use crate::app_events::AppEvent;
 
@@ -60,7 +60,7 @@ impl RenameTabForm {
 
     pub fn rename_tab(&self, _window: &mut Window, cx: &mut Context<Self>) {
         let current_value = self.get_value(cx);
-        log::info!(
+        tracing::info!(
             "RenameTabForm::rename_tab called - tab_index={}, current_value='{}'",
             self.tab_index,
             current_value
@@ -75,7 +75,7 @@ impl RenameTabForm {
         let new_name = self.get_value(cx);
         let tab_index = self.tab_index;
 
-        log::info!(
+        tracing::info!(
             "Emitting RenameTabRequested - tab_index={}, new_name='{}'",
             tab_index,
             new_name

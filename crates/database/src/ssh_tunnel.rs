@@ -69,7 +69,7 @@ impl russh_client::Handler for SshClientHandler {
     ) -> Result<bool, Self::Error> {
         // In production, you should verify the server key against a known hosts file
         // For now, accept all keys
-        log::debug!("Accepting SSH server key");
+        tracing::debug!("Accepting SSH server key");
         Ok(true)
     }
 }
@@ -94,9 +94,12 @@ impl SshTunnel {
         config: SshTunnelConfig,
         background_executor: BackgroundExecutor,
     ) -> Result<Self> {
-        log::info!(
+        tracing::info!(
             "Creating SSH tunnel to {}:{} -> {}:{}",
-            config.ssh_host, config.ssh_port, config.remote_host, config.remote_port
+            config.ssh_host,
+            config.ssh_port,
+            config.remote_host,
+            config.remote_port
         );
 
         let tunnel = Self {
@@ -140,9 +143,11 @@ impl SshTunnel {
 
     /// Establish the SSH connection and set up TCP forwarding
     pub async fn connect(&mut self) -> Result<()> {
-        log::info!(
+        tracing::info!(
             "Connecting SSH tunnel to {}@{}:{}",
-            self.config.ssh_user, self.config.ssh_host, self.config.ssh_port
+            self.config.ssh_user,
+            self.config.ssh_host,
+            self.config.ssh_port
         );
 
         *self.status.lock().unwrap() = TunnelStatus::Connecting;
@@ -185,7 +190,7 @@ impl SshTunnel {
         let task = self.setup_tcp_forwarding().await?;
         self.tunnel_task = Some(task);
 
-        log::info!("SSH tunnel established successfully");
+        tracing::info!("SSH tunnel established successfully");
         Ok(())
     }
 
@@ -208,7 +213,7 @@ impl SshTunnel {
                 anyhow::anyhow!("Failed to bind local port: {}", e)
             })?;
 
-        log::info!(
+        tracing::info!(
             "SSH tunnel listening on 127.0.0.1:{} (remote port: {})",
             local_port,
             remote_port
@@ -218,7 +223,7 @@ impl SshTunnel {
         let session = Arc::new(tokio::sync::Mutex::new(self.session.take().unwrap()));
         let active_connections = Arc::clone(&self.active_connections);
 
-        log::debug!("Using background executor for SSH tunnel spawn");
+        tracing::debug!("Using background executor for SSH tunnel spawn");
         let background_executor = self.background_executor.clone();
         let task = background_executor.clone().spawn(async move {
             async_compat::Compat::new(async move {
@@ -251,7 +256,7 @@ impl SshTunnel {
                             // Handle connection in background task
                             background_executor.spawn(async move {
                                 async_compat::Compat::new(async move {
-                                    log::debug!("Processing connection {}", connection_id.0);
+                                    tracing::debug!("Processing connection {}", connection_id.0);
 
                                     // Open SSH channel to remote host:port
                                     let ssh_channel = {
@@ -271,16 +276,16 @@ impl SshTunnel {
                                             // Copy data bidirectionally between local socket and SSH stream
                                             match copy_bidirectional(&mut local_socket, &mut ssh_stream).await {
                                                 Ok((bytes_to_local, bytes_to_remote)) => {
-                                                    log::debug!("Connection {} completed. {} bytes to local, {} bytes to remote",
+                                                    tracing::debug!("Connection {} completed. {} bytes to local, {} bytes to remote",
                                                         connection_id.0, bytes_to_local, bytes_to_remote);
                                                 }
                                                 Err(e) => {
-                                                    log::error!("Error copying data for connection {}: {}", connection_id.0, e);
+                                                    tracing::error!("Error copying data for connection {}: {}", connection_id.0, e);
                                                 }
                                             }
                                         }
                                         Err(e) => {
-                                            log::error!("Failed to open SSH forwarding channel for connection {}: {}", connection_id.0, e);
+                                            tracing::error!("Failed to open SSH forwarding channel for connection {}: {}", connection_id.0, e);
                                         }
                                     }
 
@@ -293,12 +298,12 @@ impl SshTunnel {
                             }).detach();
                         }
                         Err(e) => {
-                            log::error!("Failed to accept SSH tunnel connection: {}", e);
+                            tracing::error!("Failed to accept SSH tunnel connection: {}", e);
                         }
                     }
                 }
 
-                log::info!("SSH tunnel listener stopped");
+                tracing::info!("SSH tunnel listener stopped");
             }).await
         });
 
@@ -307,7 +312,7 @@ impl SshTunnel {
 
     /// Disconnect the tunnel
     pub async fn disconnect(&mut self) -> Result<()> {
-        log::info!("Disconnecting SSH tunnel");
+        tracing::info!("Disconnecting SSH tunnel");
         *self.is_running.lock().unwrap() = false;
         *self.status.lock().unwrap() = TunnelStatus::Disconnected;
         self.session = None;
@@ -319,7 +324,7 @@ impl SshTunnel {
 
 impl Drop for SshTunnel {
     fn drop(&mut self) {
-        log::debug!("Dropping SSH tunnel");
+        tracing::debug!("Dropping SSH tunnel");
         *self.is_running.lock().unwrap() = false;
         // Drop the task to stop the TCP forwarding
         self.tunnel_task = None;

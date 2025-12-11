@@ -32,7 +32,7 @@ impl AppSettings {
                                 loaded_settings.chat.api_key = value_str;
                             }
                             _ => {
-                                log::warn!("Unknown secret setting key: {}", key);
+                                tracing::warn!("Unknown secret setting key: {}", key);
                             }
                         }
                     }

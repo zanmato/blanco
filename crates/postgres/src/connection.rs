@@ -90,14 +90,14 @@ impl PgServerKey {
             url = format!("{}@localhost:{}", url, self.port);
         } else {
             // No host specified - this is an error case
-            log::error!("No host specified in PostgreSQL connection string");
+            tracing::error!("No host specified in PostgreSQL connection string");
             return format!("postgresql://{}@localhost:{}", self.username, self.port);
         }
 
         // Add application_name parameter
         url = format!("{}?application_name=Blanco", url);
 
-        log::debug!("Generated server connection string: {}", url);
+        tracing::debug!("Generated server connection string: {}", url);
         url
     }
 
@@ -112,14 +112,14 @@ impl PgServerKey {
             url = format!("{}@localhost:{}", url, self.port);
         } else {
             // No host specified - this is an error case
-            log::error!("No host specified in PostgreSQL connection string");
+            tracing::error!("No host specified in PostgreSQL connection string");
             return format!("postgresql://{}@localhost:{}", self.username, self.port);
         }
 
         // Add database and application_name parameter
         url = format!("{}/{}?application_name=Blanco", url, database);
 
-        log::debug!("Generated database connection string: {}", url);
+        tracing::debug!("Generated database connection string: {}", url);
         url
     }
 
@@ -134,7 +134,7 @@ impl PgServerKey {
         // Add application_name parameter
         url = format!("{}?application_name=Blanco", url);
 
-        log::debug!("Generated SSH tunnel server connection string: {}", url);
+        tracing::debug!("Generated SSH tunnel server connection string: {}", url);
         url
     }
 
@@ -153,7 +153,7 @@ impl PgServerKey {
         // Add database and application_name parameter
         url = format!("{}/{}?application_name=Blanco", url, database);
 
-        log::debug!("Generated SSH tunnel database connection string: {}", url);
+        tracing::debug!("Generated SSH tunnel database connection string: {}", url);
         url
     }
 }
@@ -271,18 +271,18 @@ impl PostgresConnection {
 
     /// Create a new PostgreSQL connection from a connection string
     pub fn from_connection_string(connection_string: &str) -> Result<Self> {
-        log::info!(
+        tracing::info!(
             "🔗 Creating PostgreSQL connection from: {}",
             connection_string
         );
 
         let connection_key = PgConnectionKey::from_connection_string(connection_string)?;
-        log::info!("📋 Parsed connection key:");
-        log::info!("   - host: {}", connection_key.host);
-        log::info!("   - port: {}", connection_key.port);
-        log::info!("   - database: {}", connection_key.database);
-        log::info!("   - username: {}", connection_key.username);
-        log::info!(
+        tracing::info!("📋 Parsed connection key:");
+        tracing::info!("   - host: {}", connection_key.host);
+        tracing::info!("   - port: {}", connection_key.port);
+        tracing::info!("   - database: {}", connection_key.database);
+        tracing::info!("   - username: {}", connection_key.username);
+        tracing::info!(
             "   - password: [{}]",
             if connection_key.password.is_some() {
                 "present"
@@ -295,11 +295,11 @@ impl PostgresConnection {
         let display_name = Self::generate_server_display_name(&server_key);
         let server_connection_string = server_key.to_server_connection_string();
 
-        log::info!("🏢 Server key created:");
-        log::info!("   - host: {}", server_key.host);
-        log::info!("   - port: {}", server_key.port);
-        log::info!("   - username: {}", server_key.username);
-        log::info!("   - initial_database: {}", connection_key.database);
+        tracing::info!("🏢 Server key created:");
+        tracing::info!("   - host: {}", server_key.host);
+        tracing::info!("   - port: {}", server_key.port);
+        tracing::info!("   - username: {}", server_key.username);
+        tracing::info!("   - initial_database: {}", connection_key.database);
 
         Ok(Self {
             pools: Arc::new(RwLock::new(HashMap::new())),
@@ -410,18 +410,18 @@ impl PostgresConnection {
     async fn get_available_database(&self) -> Result<String> {
         // Try the initial database from the connection string first
         if let Some(ref initial_db) = self.initial_database {
-            log::debug!(
+            tracing::debug!(
                 "Trying initial database '{}' from connection string",
                 initial_db
             );
             if self.try_connect_to_database(initial_db).await {
-                log::info!(
+                tracing::info!(
                     "Using initial database '{}' for metadata queries",
                     initial_db
                 );
                 return Ok(initial_db.clone());
             } else {
-                log::warn!(
+                tracing::warn!(
                     "Initial database '{}' is not accessible, trying alternatives",
                     initial_db
                 );
@@ -430,11 +430,11 @@ impl PostgresConnection {
 
         // Common PostgreSQL databases that are likely to exist and be accessible
         let common_databases = ["postgres", "template1", "template0"];
-        log::debug!("Trying common databases: {}", common_databases.join(", "));
+        tracing::debug!("Trying common databases: {}", common_databases.join(", "));
 
         for &db_name in &common_databases {
             if self.try_connect_to_database(db_name).await {
-                log::info!(
+                tracing::info!(
                     "Successfully connected to common database '{}' for metadata queries",
                     db_name
                 );
@@ -462,27 +462,27 @@ impl PostgresConnection {
         } else {
             self.server_key.to_database_connection_string(database)
         };
-        log::debug!(
+        tracing::debug!(
             "Trying to connect to database '{}' for metadata queries",
             database
         );
-        log::debug!("Connection string: {}", database_connection_string);
+        tracing::debug!("Connection string: {}", database_connection_string);
 
-        log::debug!("Attempting connection with 5-second timeout...");
+        tracing::debug!("Attempting connection with 5-second timeout...");
         match PgPoolOptions::new()
             .max_connections(1) // Just for testing connectivity
             .connect(&database_connection_string)
             .await
         {
             Ok(pool) => {
-                log::debug!(
+                tracing::debug!(
                     "Connected to database '{}', testing query execution",
                     database
                 );
                 // Test if we can actually execute queries
                 match sqlx::query("SELECT 1").fetch_one(&pool).await {
                     Ok(_) => {
-                        log::info!(
+                        tracing::info!(
                             "✅ Successfully connected to database '{}' for metadata queries",
                             database
                         );
@@ -494,7 +494,7 @@ impl PostgresConnection {
                         true
                     }
                     Err(e) => {
-                        log::warn!(
+                        tracing::warn!(
                             "⚠️ Connected to database '{}' but query test failed: {}",
                             database,
                             e
@@ -504,17 +504,19 @@ impl PostgresConnection {
                 }
             }
             Err(e) => {
-                log::warn!("❌ Failed to connect to database '{}': {}", database, e);
+                tracing::warn!("❌ Failed to connect to database '{}': {}", database, e);
                 // Provide additional diagnostic info for common connection issues
                 let error_str = e.to_string().to_lowercase();
                 if error_str.contains("timeout") {
-                    log::warn!("   → Connection timeout - check network connectivity and firewall");
+                    tracing::warn!(
+                        "   → Connection timeout - check network connectivity and firewall"
+                    );
                 } else if error_str.contains("authentication") || error_str.contains("password") {
-                    log::warn!("   → Authentication failed - check username/password");
+                    tracing::warn!("   → Authentication failed - check username/password");
                 } else if error_str.contains("database") && error_str.contains("not exist") {
-                    log::warn!("   → Database does not exist");
+                    tracing::warn!("   → Database does not exist");
                 } else if error_str.contains("connection") && error_str.contains("refused") {
-                    log::warn!("   → Connection refused - check if PostgreSQL is running and accepting connections");
+                    tracing::warn!("   → Connection refused - check if PostgreSQL is running and accepting connections");
                 }
                 false
             }
@@ -535,7 +537,7 @@ impl PostgresConnection {
         } else {
             self.server_key.to_database_connection_string(database)
         };
-        log::info!("Creating new connection pool for database: {}", database);
+        tracing::info!("Creating new connection pool for database: {}", database);
 
         let pool = PgPoolOptions::new()
             .max_connections(1)
@@ -544,7 +546,7 @@ impl PostgresConnection {
             .map_err(|e| anyhow::anyhow!("Failed to connect to database '{}': {}", database, e))?;
 
         pools.insert(database.to_string(), pool.clone());
-        log::info!(
+        tracing::info!(
             "Successfully created connection pool for database: {}",
             database
         );
@@ -656,7 +658,7 @@ impl PostgresConnection {
                                     .collect::<Vec<_>>()
                                     .join(",")
                             );
-                            log::debug!(
+                            tracing::debug!(
                                 "Successfully converted array to Vec<i32> for column type '{}': {}",
                                 column_type,
                                 result
@@ -677,7 +679,7 @@ impl PostgresConnection {
                                     .collect::<Vec<_>>()
                                     .join(",")
                             );
-                            log::debug!(
+                            tracing::debug!(
                                 "Successfully converted array to Vec<i64> for column type '{}': {}",
                                 column_type,
                                 result
@@ -698,7 +700,7 @@ impl PostgresConnection {
                                     .collect::<Vec<_>>()
                                     .join(",")
                             );
-                            log::debug!(
+                            tracing::debug!(
                                 "Successfully converted array to Vec<i16> for column type '{}': {}",
                                 column_type,
                                 result
@@ -719,7 +721,7 @@ impl PostgresConnection {
                                     .collect::<Vec<_>>()
                                     .join(",")
                             );
-                            log::debug!(
+                            tracing::debug!(
                                 "Successfully converted array to Vec<f32> for column type '{}': {}",
                                 column_type,
                                 result
@@ -740,7 +742,7 @@ impl PostgresConnection {
                                     .collect::<Vec<_>>()
                                     .join(",")
                             );
-                            log::debug!(
+                            tracing::debug!(
                                 "Successfully converted array to Vec<f64> for column type '{}': {}",
                                 column_type,
                                 result
@@ -757,7 +759,7 @@ impl PostgresConnection {
                             .map(|x| x.to_string())
                             .collect::<Vec<_>>()
                             .join(","));
-                        log::debug!("Successfully converted array to Vec<bool> for column type '{}': {}", column_type, result);
+                        tracing::debug!("Successfully converted array to Vec<bool> for column type '{}': {}", column_type, result);
                         result
                     }).unwrap_or_else(|| "NULL".to_string());
                 }
@@ -769,7 +771,7 @@ impl PostgresConnection {
                             .map(|x| x.to_string())
                             .collect::<Vec<_>>()
                             .join(","));
-                        log::debug!("Successfully converted array to Vec<uuid::Uuid> for column type '{}': {}", column_type, result);
+                        tracing::debug!("Successfully converted array to Vec<uuid::Uuid> for column type '{}': {}", column_type, result);
                         result
                     }).unwrap_or_else(|| "NULL".to_string());
                 }
@@ -779,7 +781,7 @@ impl PostgresConnection {
                 if let Ok(array_val) = row.try_get::<Option<String>, _>(column_index) {
                     return array_val
                         .map(|v| {
-                            log::debug!(
+                            tracing::debug!(
                                 "Successfully converted array '{}' to String for column type '{}'",
                                 v,
                                 column_type
@@ -791,7 +793,7 @@ impl PostgresConnection {
             }
         }
 
-        log::warn!(
+        tracing::warn!(
             "Array column type '{}' couldn't be converted to any supported array type",
             column_type
         );
@@ -1102,7 +1104,7 @@ impl PostgresConnection {
         }
 
         // If all specific attempts fail, log and return NULL
-        log::warn!("Failed to convert column type '{}' to string", column_type);
+        tracing::warn!("Failed to convert column type '{}' to string", column_type);
         "NULL".to_string()
     }
 
@@ -1122,7 +1124,7 @@ impl PostgresConnection {
             // Try to extract as text using raw value
             match raw_value.as_str() {
                 Ok(text_val) => {
-                    log::debug!(
+                    tracing::debug!(
                         "Successfully converted unknown type '{}' to string via raw access: {}",
                         column_type,
                         text_val
@@ -1136,7 +1138,7 @@ impl PostgresConnection {
                             // Try UTF-8 conversion first
                             match String::from_utf8(bytes.to_vec()) {
                                 Ok(string_val) => {
-                                    log::debug!("Successfully converted unknown type '{}' to string via bytes: {}", column_type, string_val);
+                                    tracing::debug!("Successfully converted unknown type '{}' to string via bytes: {}", column_type, string_val);
                                     string_val
                                 }
                                 Err(_) => {
@@ -1145,7 +1147,7 @@ impl PostgresConnection {
                                         .iter()
                                         .map(|b| format!("{:02x}", b))
                                         .collect::<String>();
-                                    log::warn!("Unable to convert column type '{}' to valid UTF-8, showing hex: {}...", column_type, &hex_repr[..hex_repr.len().min(40)]);
+                                    tracing::warn!("Unable to convert column type '{}' to valid UTF-8, showing hex: {}...", column_type, &hex_repr[..hex_repr.len().min(40)]);
                                     format!(
                                         "[binary data: {} bytes, starts with: {}]",
                                         bytes.len(),
@@ -1155,14 +1157,14 @@ impl PostgresConnection {
                             }
                         }
                         Err(_) => {
-                            log::warn!("Unable to access raw bytes for column type '{}' at index {}, falling back to NULL", column_type, column_index);
+                            tracing::warn!("Unable to access raw bytes for column type '{}' at index {}, falling back to NULL", column_type, column_index);
                             "NULL".to_string()
                         }
                     }
                 }
             }
         } else {
-            log::warn!(
+            tracing::warn!(
                 "Unmatched PostgreSQL column type '{}' at index {}, falling back to NULL",
                 column_type,
                 column_index
@@ -1250,7 +1252,7 @@ impl PostgresConnection {
 
             // Unknown/custom types - use optimized raw value access
             _ => {
-                log::warn!(
+                tracing::warn!(
                     "Unknown column type '{}' falling back to raw value access",
                     column_type
                 );
@@ -1489,7 +1491,7 @@ impl Connection for PostgresConnection {
     }
 
     async fn connect(&mut self, connection_string: &str) -> Result<()> {
-        log::info!(
+        tracing::info!(
             "Connecting to PostgreSQL server: {}@{}:{}",
             self.server_key.username,
             self.server_key.host,
@@ -1512,13 +1514,13 @@ impl Connection for PostgresConnection {
         pools.clear();
         drop(pools);
 
-        log::info!("PostgreSQL server connection configured (pools will be created on demand)");
-        log::info!("Connection string: {}", self.server_connection_string);
+        tracing::info!("PostgreSQL server connection configured (pools will be created on demand)");
+        tracing::info!("Connection string: {}", self.server_connection_string);
         Ok(())
     }
 
     async fn disconnect(&mut self) {
-        log::info!(
+        tracing::info!(
             "Disconnecting from PostgreSQL server: {}",
             self.display_name
         );
@@ -1538,14 +1540,14 @@ impl Connection for PostgresConnection {
 
     async fn ensure_connected(&mut self, connection_string: &str) -> Result<()> {
         if !self.is_connected() || !self.is_connection_healthy().await {
-            log::info!("Reconnecting to PostgreSQL database");
+            tracing::info!("Reconnecting to PostgreSQL database");
             self.connect(connection_string).await?;
         }
         Ok(())
     }
 
     async fn execute_query(&self, query: &str, database_name: Option<&str>) -> Result<QueryResult> {
-        log::debug!(
+        tracing::debug!(
             "Executing PostgreSQL query: {} (database: {:?})",
             query,
             database_name
@@ -1578,7 +1580,7 @@ impl Connection for PostgresConnection {
             .await
             .map_err(|e| anyhow::anyhow!("PostgreSQL query execution failed: {}", e))?;
 
-        log::debug!(
+        tracing::debug!(
             "Query executed successfully on database '{}', {} rows returned",
             target_database,
             result.row_count()
@@ -1592,7 +1594,7 @@ impl Connection for PostgresConnection {
         sql_template: &str,
         parameters: &[String],
     ) -> Result<QueryResult> {
-        log::debug!(
+        tracing::debug!(
             "Executing prepared PostgreSQL query with {} parameters",
             parameters.len()
         );
@@ -1757,7 +1759,7 @@ impl Connection for PostgresConnection {
         schema: Option<&str>,
     ) -> Result<Vec<ColumnInfo>> {
         let schema_name = schema.unwrap_or("public");
-        log::debug!(
+        tracing::debug!(
             "Getting columns for PostgreSQL table '{}.{}",
             schema_name,
             table_name
@@ -1815,7 +1817,7 @@ impl Connection for PostgresConnection {
             }
         }
 
-        log::debug!(
+        tracing::debug!(
             "Found {} columns for table '{}.{}",
             columns.len(),
             schema_name,
@@ -1830,7 +1832,7 @@ impl Connection for PostgresConnection {
         schema: Option<&str>,
     ) -> Result<TableMetadata> {
         let schema_name = schema.unwrap_or("public");
-        log::debug!(
+        tracing::debug!(
             "Getting metadata for PostgreSQL table '{}.{}",
             schema_name,
             table_name
@@ -1871,7 +1873,7 @@ impl Connection for PostgresConnection {
         metadata.row_count = row_count;
         metadata.primary_keys = primary_keys;
 
-        log::debug!(
+        tracing::debug!(
             "Retrieved metadata for table '{}.{}': {} columns, {} PKs",
             schema_name,
             table_name,
@@ -1923,7 +1925,7 @@ impl Connection for PostgresConnection {
         ),
         anyhow::Error,
     > {
-        log::debug!(
+        tracing::debug!(
             "Executing PostgreSQL streaming query: {} (database: {:?})",
             query,
             database_name
@@ -2011,23 +2013,23 @@ impl Connection for PostgresConnection {
     }
 
     fn extract_table_name_from_query(&self, query: &str, alias: bool) -> Result<Option<String>> {
-        log::debug!("Extracting table name from PostgreSQL query: {}", query);
+        tracing::debug!("Extracting table name from PostgreSQL query: {}", query);
 
         let extractor = PostgresTableExtractor::new();
         match extractor.extract_table(query, alias) {
             Ok(table_name) => {
-                log::debug!("Successfully extracted table name: {}", table_name);
+                tracing::debug!("Successfully extracted table name: {}", table_name);
                 Ok(Some(table_name))
             }
             Err(e) => {
-                log::debug!("Could not extract table name from query: {}", e);
+                tracing::debug!("Could not extract table name from query: {}", e);
                 Ok(None)
             }
         }
     }
 
     fn resolve_table_alias(&self, query: &str, alias: &str) -> Result<Option<String>> {
-        log::debug!(
+        tracing::debug!(
             "Resolving table alias '{}' from PostgreSQL query: {}",
             alias,
             query
@@ -2038,7 +2040,7 @@ impl Connection for PostgresConnection {
             Ok(aliases) => {
                 for (table_name, alias_name) in aliases {
                     if alias_name == alias {
-                        log::debug!(
+                        tracing::debug!(
                             "Successfully resolved alias '{}' to table '{}'",
                             alias,
                             table_name
@@ -2046,11 +2048,11 @@ impl Connection for PostgresConnection {
                         return Ok(Some(table_name));
                     }
                 }
-                log::debug!("Alias '{}' not found in query", alias);
+                tracing::debug!("Alias '{}' not found in query", alias);
                 Ok(None)
             }
             Err(e) => {
-                log::debug!("Could not resolve table alias from query: {}", e);
+                tracing::debug!("Could not resolve table alias from query: {}", e);
                 Ok(None)
             }
         }

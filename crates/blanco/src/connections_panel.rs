@@ -1,8 +1,7 @@
 use crate::app_database::{AppDatabase, ConnectionData};
 use crate::app_events::{AppEvent, TreeItemType};
-use database::{DatabaseService, DatabaseServiceTrait};
 use blanco_ui::IconName;
-use std::sync::Arc;
+use database::{DatabaseService, DatabaseServiceTrait};
 use gpui::{
     AppContext, ClickEvent, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
     ParentElement, Render, Styled, Window, div, prelude::FluentBuilder, px,
@@ -18,6 +17,7 @@ use gpui_component::{
     tree::{TreeEntry, TreeItem, TreeState, tree},
     v_flex,
 };
+use std::sync::Arc;
 
 /// Icon and color combination for tree items
 #[derive(Clone)]
@@ -110,7 +110,7 @@ impl ConnectionsPanel {
             match app_database.load_connections().await {
                 Ok(connections) => connections,
                 Err(e) => {
-                    log::error!("Failed to load connections: {}", e);
+                    tracing::error!("Failed to load connections: {}", e);
                     vec![]
                 }
             }
@@ -275,9 +275,12 @@ impl ConnectionsPanel {
         let db_service = DatabaseService::global(cx).clone();
 
         cx.spawn(async move |this_handle, cx| {
-            match db_service.get_or_create_connection(connection_id, None).await {
+            match db_service
+                .get_or_create_connection(connection_id, None)
+                .await
+            {
                 Ok(connection) => {
-                    log::debug!("Connected to database: {}", connection.get_display_name());
+                    tracing::debug!("Connected to database: {}", connection.get_display_name());
 
                     // Check if the connection supports schemas
                     let supports_schemas = connection.supports_schemas();
@@ -286,7 +289,7 @@ impl ConnectionsPanel {
                         // For PostgreSQL: Load databases only (schemas will be loaded lazily)
                         let databases = match connection.get_databases().await {
                             Ok(db_list) => {
-                                log::info!(
+                                tracing::info!(
                                     "Connection {} supports schemas. Loaded {} databases: {:?}",
                                     connection_id,
                                     db_list.len(),
@@ -295,7 +298,7 @@ impl ConnectionsPanel {
                                 db_list
                             }
                             Err(e) => {
-                                log::error!(
+                                tracing::error!(
                                     "Failed to load databases for connection {}: {}",
                                     connection_id,
                                     e
@@ -321,7 +324,7 @@ impl ConnectionsPanel {
                         // For SQLite: Load schemas and their tables (no databases level)
                         let schemas = match connection.get_schemas().await {
                             Ok(schema_list) => {
-                                log::info!(
+                                tracing::info!(
                                     "Connection {} loaded {} schemas: {:?}",
                                     connection_id,
                                     schema_list.len(),
@@ -330,7 +333,7 @@ impl ConnectionsPanel {
                                 schema_list
                             }
                             Err(e) => {
-                                log::error!(
+                                tracing::error!(
                                     "Failed to load schemas for connection {}: {}",
                                     connection_id,
                                     e
@@ -351,7 +354,7 @@ impl ConnectionsPanel {
                                     })
                                     .collect(),
                                 Err(e) => {
-                                    log::error!(
+                                    tracing::error!(
                                         "Failed to load tables for schema {}: {}",
                                         schema_name,
                                         e
@@ -392,7 +395,7 @@ impl ConnectionsPanel {
                     });
                 }
                 Err(e) => {
-                    log::error!("Failed to get connection {}: {}", connection_id, e);
+                    tracing::error!("Failed to get connection {}: {}", connection_id, e);
                 }
             }
         })
@@ -414,7 +417,7 @@ impl ConnectionsPanel {
                 .await
             {
                 Ok(connection) => {
-                    log::debug!(
+                    tracing::debug!(
                         "Loading schemas for database: {} on connection {}",
                         database_name,
                         connection_id
@@ -423,7 +426,7 @@ impl ConnectionsPanel {
                     // Load schemas for this specific database
                     let schemas = match connection.get_schemas().await {
                         Ok(schema_list) => {
-                            log::info!(
+                            tracing::info!(
                                 "Loaded {} schemas for database {} on connection {}: {:?}",
                                 schema_list.len(),
                                 database_name,
@@ -433,7 +436,7 @@ impl ConnectionsPanel {
                             schema_list
                         }
                         Err(e) => {
-                            log::error!(
+                            tracing::error!(
                                 "Failed to load schemas for database {} on connection {}: {}",
                                 database_name,
                                 connection_id,
@@ -455,7 +458,7 @@ impl ConnectionsPanel {
                                 })
                                 .collect(),
                             Err(e) => {
-                                log::error!(
+                                tracing::error!(
                                     "Failed to load tables for schema {} in database {}: {}",
                                     schema_name,
                                     database_name,
@@ -500,7 +503,7 @@ impl ConnectionsPanel {
                     });
                 }
                 Err(e) => {
-                    log::error!(
+                    tracing::error!(
                         "Failed to get connection for database {} on connection {}: {}",
                         database_name,
                         connection_id,
@@ -525,12 +528,12 @@ impl ConnectionsPanel {
         cx.spawn(async move |this_handle, cx| {
             match db_service.get_or_create_connection(connection_id, Some(&database_name)).await {
                 Ok(connection) => {
-                    log::debug!("Loading tables for schema: {} in database: {} on connection {}", schema_name, database_name, connection_id);
+                    tracing::debug!("Loading tables for schema: {} in database: {} on connection {}", schema_name, database_name, connection_id);
 
                     // Load tables for this specific schema
                     let tables = match connection.get_tables(Some(&schema_name)).await {
                         Ok(table_list) => {
-                            log::info!(
+                            tracing::info!(
                                 "Loaded {} tables for schema {} in database {} on connection {}: {:?}",
                                 table_list.len(),
                                 schema_name,
@@ -547,7 +550,7 @@ impl ConnectionsPanel {
                                 .collect()
                         }
                         Err(e) => {
-                            log::error!(
+                            tracing::error!(
                                 "Failed to load tables for schema {} in database {} on connection {}: {}",
                                 schema_name,
                                 database_name,
@@ -576,7 +579,7 @@ impl ConnectionsPanel {
                     });
                 }
                 Err(e) => {
-                    log::error!("Failed to get connection for schema {} in database {} on connection {}: {}", schema_name, database_name, connection_id, e);
+                    tracing::error!("Failed to get connection for schema {} in database {} on connection {}: {}", schema_name, database_name, connection_id, e);
                 }
             }
         })
@@ -592,11 +595,11 @@ impl ConnectionsPanel {
                 TreeItemKind::Connection => {
                     // Check if already loaded, if not load first
                     if !self.loaded_connections.contains(&connection_id) {
-                        log::debug!("Loading connection {} for first time", connection_id);
+                        tracing::debug!("Loading connection {} for first time", connection_id);
                         self.load_connection_children(connection_id, true, cx);
                     } else {
                         // Already loaded, toggle expand/collapse the tree
-                        log::debug!("Toggling expansion for connection {}", connection_id);
+                        tracing::debug!("Toggling expansion for connection {}", connection_id);
                         self.toggle_connection_expansion(connection_id, cx);
                     }
                     cx.emit(AppEvent::TreeItemExpanded {
@@ -616,7 +619,10 @@ impl ConnectionsPanel {
                                 .find(|db| db.name == *database_name)
                             {
                                 if database.schemas.is_empty() {
-                                    log::debug!("Loading schemas for database: {}", database_name);
+                                    tracing::debug!(
+                                        "Loading schemas for database: {}",
+                                        database_name
+                                    );
                                     self.load_database_children(
                                         connection_id,
                                         database_name.clone(),
@@ -624,7 +630,7 @@ impl ConnectionsPanel {
                                     );
                                 } else {
                                     // Already loaded, toggle expansion
-                                    log::debug!(
+                                    tracing::debug!(
                                         "Toggling expansion for database: {}",
                                         database_name
                                     );
@@ -659,7 +665,7 @@ impl ConnectionsPanel {
                                     database.schemas.iter().find(|s| s.name == *schema_name)
                                 {
                                     if schema.tables.is_empty() {
-                                        log::debug!(
+                                        tracing::debug!(
                                             "Loading tables for schema: {} in database: {}",
                                             schema_name,
                                             database_name
@@ -672,7 +678,7 @@ impl ConnectionsPanel {
                                         );
                                     } else {
                                         // Already loaded, toggle expansion
-                                        log::debug!(
+                                        tracing::debug!(
                                             "Toggling expansion for schema: {} in database: {}",
                                             schema_name,
                                             database_name
@@ -712,10 +718,10 @@ impl ConnectionsPanel {
     fn toggle_connection_expansion(&mut self, connection_id: i64, cx: &mut Context<Self>) {
         // Toggle the expansion state
         if self.expanded_connections.contains(&connection_id) {
-            log::debug!("Collapsing connection {}", connection_id);
+            tracing::debug!("Collapsing connection {}", connection_id);
             self.expanded_connections.remove(&connection_id);
         } else {
-            log::debug!("Expanding connection {}", connection_id);
+            tracing::debug!("Expanding connection {}", connection_id);
             self.expanded_connections.insert(connection_id);
         }
 
@@ -737,7 +743,7 @@ impl ConnectionsPanel {
                 .find(|db| db.name == database_name)
             {
                 database.is_expanded = !database.is_expanded;
-                log::debug!(
+                tracing::debug!(
                     "Toggling database '{}' expansion to: {}",
                     database_name,
                     database.is_expanded
@@ -765,7 +771,7 @@ impl ConnectionsPanel {
             {
                 if let Some(schema) = database.schemas.iter_mut().find(|s| s.name == schema_name) {
                     schema.is_expanded = !schema.is_expanded;
-                    log::debug!(
+                    tracing::debug!(
                         "Toggling schema '{}' in database '{}' expansion to: {}",
                         schema_name,
                         database_name,
@@ -810,7 +816,7 @@ impl ConnectionsPanel {
 
                 this.item(
                     PopupMenuItem::new("Refresh").on_click(move |_, _window, cx| {
-                        log::info!("Refresh connection: {}", refresh_label_refresh);
+                        tracing::info!("Refresh connection: {}", refresh_label_refresh);
                         if let Some(panel) = weak_panel_clone.upgrade() {
                             panel.update(cx, |_this, _cx| {
                                 // cx.emit(AppEvent::CreateNewQueryTab {})
@@ -821,7 +827,7 @@ impl ConnectionsPanel {
                 .separator()
                 .item(
                     PopupMenuItem::new("Disconnect").on_click(move |_, _window, cx| {
-                        log::info!("Disconnect connection: {}", disconnect_label);
+                        tracing::info!("Disconnect connection: {}", disconnect_label);
                         if let Some(panel) = weak_panel_disconnect.upgrade() {
                             panel.update(cx, |this, cx| {
                                 this.disconnect_connection(connection_id, cx);
@@ -831,7 +837,7 @@ impl ConnectionsPanel {
                 )
                 .item(
                     PopupMenuItem::new("Edit Connection").on_click(move |_, _window, _cx| {
-                        log::info!("Edit connection: {}", edit_label);
+                        tracing::info!("Edit connection: {}", edit_label);
                         // TODO: Implement edit connection functionality
                     }),
                 )
@@ -853,7 +859,7 @@ impl ConnectionsPanel {
 
                 this.item(
                     PopupMenuItem::new("New Query").on_click(move |_, _window, cx| {
-                        log::info!("New Query for database: {}", new_query_label);
+                        tracing::info!("New Query for database: {}", new_query_label);
                         if let Some(panel) = weak_panel_clone.upgrade() {
                             panel.update(cx, |_this, cx| {
                                 cx.emit(AppEvent::CreateNewQueryTab {
@@ -869,7 +875,7 @@ impl ConnectionsPanel {
                 )
                 .item(
                     PopupMenuItem::new("Refresh Database").on_click(move |_, _window, _cx| {
-                        log::info!("Refresh database: {}", refresh_label);
+                        tracing::info!("Refresh database: {}", refresh_label);
                         // TODO: Implement database refresh functionality
                     }),
                 )
@@ -895,7 +901,7 @@ impl ConnectionsPanel {
 
                 this.item(
                     PopupMenuItem::new("New Query").on_click(move |_, _window, cx| {
-                        log::info!("New Query for schema: {}", new_query_label);
+                        tracing::info!("New Query for schema: {}", new_query_label);
                         if let Some(panel) = weak_panel_clone.upgrade() {
                             panel.update(cx, |_, cx| {
                                 cx.emit(AppEvent::CreateNewQueryTab {
@@ -911,7 +917,7 @@ impl ConnectionsPanel {
                 )
                 .item(
                     PopupMenuItem::new("Refresh Schema").on_click(move |_, _window, _cx| {
-                        log::info!("Refresh schema: {}", refresh_label);
+                        tracing::info!("Refresh schema: {}", refresh_label);
                         // TODO: Implement refresh schema functionality
                     }),
                 )
@@ -956,7 +962,7 @@ impl ConnectionsPanel {
 
                 this.item(
                     PopupMenuItem::new("New Query").on_click(move |_, _window, cx| {
-                        log::info!("New Query for table: {}", select_label_new_query);
+                        tracing::info!("New Query for table: {}", select_label_new_query);
                         if let Some(panel) = weak_panel_new_query.upgrade() {
                             panel.update(cx, |_, cx| {
                                 cx.emit(AppEvent::CreateNewQueryTab {
@@ -972,7 +978,7 @@ impl ConnectionsPanel {
                 )
                 .item(
                     PopupMenuItem::new("Export Data").on_click(move |_, window, cx| {
-                        log::info!("Export data for table: {}", select_label_export);
+                        tracing::info!("Export data for table: {}", select_label_export);
                         if let Some(panel) = weak_panel_export.upgrade() {
                             panel.update(cx, |panel, cx| {
                                 panel.export_table_data(
@@ -1150,7 +1156,7 @@ impl ConnectionsPanel {
 
     /// Disconnect and remove a connection
     pub fn disconnect_connection(&mut self, connection_id: i64, cx: &mut Context<Self>) {
-        log::info!("Disconnecting connection {}", connection_id);
+        tracing::info!("Disconnecting connection {}", connection_id);
 
         // Remove connection from the connections list
         self.connections
@@ -1194,7 +1200,7 @@ impl ConnectionsPanel {
     pub fn validate_connection_as_connected(&mut self, connection_id: i64, cx: &mut Context<Self>) {
         self.load_connection_children(connection_id, false, cx);
 
-        log::info!(
+        tracing::info!(
             "Validated and marked connection {} as connected",
             connection_id
         );
@@ -1341,7 +1347,7 @@ impl ConnectionsPanel {
                     })
             })
         } else {
-            log::error!("Cannot export: No table name provided");
+            tracing::error!("Cannot export: No table name provided");
         }
     }
 }

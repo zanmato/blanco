@@ -309,7 +309,7 @@ impl Connection for SqliteConnection {
     }
 
     async fn connect(&mut self, connection_string: &str) -> Result<()> {
-        log::info!(
+        tracing::info!(
             "Connecting to SQLite database: {}",
             self.get_sanitize_path(connection_string)
         );
@@ -330,12 +330,12 @@ impl Connection for SqliteConnection {
         let pool = self.connect_async(&database_path).await?;
         self.pool = Some(pool);
 
-        log::info!("Successfully connected to SQLite database");
+        tracing::info!("Successfully connected to SQLite database");
         Ok(())
     }
 
     async fn disconnect(&mut self) {
-        log::info!("Disconnecting from SQLite database: {}", self.display_name);
+        tracing::info!("Disconnecting from SQLite database: {}", self.display_name);
         if let Some(pool) = self.pool.take() {
             pool.close().await;
         }
@@ -347,7 +347,7 @@ impl Connection for SqliteConnection {
 
     async fn ensure_connected(&mut self, connection_string: &str) -> Result<()> {
         if !self.is_connected() || !self.is_connection_healthy().await {
-            log::info!("Reconnecting to SQLite database");
+            tracing::info!("Reconnecting to SQLite database");
             self.connect(connection_string).await?;
         }
         Ok(())
@@ -358,7 +358,7 @@ impl Connection for SqliteConnection {
         sql_template: &str,
         parameters: &[String],
     ) -> Result<QueryResult> {
-        log::debug!(
+        tracing::debug!(
             "Executing prepared SQLite query with {} parameters",
             parameters.len()
         );
@@ -518,7 +518,7 @@ impl Connection for SqliteConnection {
                 }
             }
             Err(e) => {
-                log::debug!("Could not get database list: {}", e);
+                tracing::debug!("Could not get database list: {}", e);
             }
         }
 
@@ -539,7 +539,7 @@ impl Connection for SqliteConnection {
             .filter_map(|row| row.into_iter().next())
             .collect();
 
-        log::debug!(
+        tracing::debug!(
             "Found {} tables in schema '{}'",
             tables.len(),
             schema_filter
@@ -565,7 +565,7 @@ impl Connection for SqliteConnection {
 
                         // SQLite uses 1 for primary key, 0 for non-primary key
                         if pk_info == "1" {
-                            log::debug!(
+                            tracing::debug!(
                                 "Found primary key '{}' for table '{}'",
                                 column_name,
                                 table_name
@@ -574,11 +574,11 @@ impl Connection for SqliteConnection {
                         }
                     }
                 }
-                log::debug!("No primary key found for table '{}'", table_name);
+                tracing::debug!("No primary key found for table '{}'", table_name);
                 Ok(None)
             }
             Err(e) => {
-                log::error!(
+                tracing::error!(
                     "Failed to query primary key for table '{}': {}",
                     table_name,
                     e
@@ -593,7 +593,7 @@ impl Connection for SqliteConnection {
         table_name: &str,
         _schema: Option<&str>,
     ) -> Result<Vec<ColumnInfo>> {
-        log::debug!("Getting columns for SQLite table '{}'", table_name);
+        tracing::debug!("Getting columns for SQLite table '{}'", table_name);
 
         // Use PRAGMA table_info to get column information
         let query = format!("PRAGMA table_info({})", table_name);
@@ -626,7 +626,7 @@ impl Connection for SqliteConnection {
             }
         }
 
-        log::debug!("Found {} columns for table '{}'", columns.len(), table_name);
+        tracing::debug!("Found {} columns for table '{}'", columns.len(), table_name);
         Ok(columns)
     }
 
@@ -636,7 +636,7 @@ impl Connection for SqliteConnection {
         schema: Option<&str>,
     ) -> Result<TableMetadata> {
         let schema_name = schema.unwrap_or("main");
-        log::debug!("Getting metadata for SQLite table '{}'", table_name);
+        tracing::debug!("Getting metadata for SQLite table '{}'", table_name);
 
         // Get basic table information
         let columns = self
@@ -666,7 +666,7 @@ impl Connection for SqliteConnection {
         metadata.row_count = row_count;
         metadata.primary_keys = primary_keys;
 
-        log::debug!(
+        tracing::debug!(
             "Retrieved metadata for table '{}': {} columns, {} PKs",
             table_name,
             metadata.columns.len(),
@@ -720,23 +720,23 @@ impl Connection for SqliteConnection {
     }
 
     fn extract_table_name_from_query(&self, query: &str, alias: bool) -> Result<Option<String>> {
-        log::debug!("Extracting table name from SQLite query: {}", query);
+        tracing::debug!("Extracting table name from SQLite query: {}", query);
 
         let extractor = SqliteTableExtractor::new();
         match extractor.extract_table(query, alias) {
             Ok(table_name) => {
-                log::debug!("Successfully extracted table name: {}", table_name);
+                tracing::debug!("Successfully extracted table name: {}", table_name);
                 Ok(Some(table_name))
             }
             Err(e) => {
-                log::debug!("Could not extract table name from query: {}", e);
+                tracing::debug!("Could not extract table name from query: {}", e);
                 Ok(None)
             }
         }
     }
 
     fn resolve_table_alias(&self, query: &str, alias: &str) -> Result<Option<String>> {
-        log::debug!(
+        tracing::debug!(
             "Resolving table alias '{}' from SQLite query: {}",
             alias,
             query
@@ -747,7 +747,7 @@ impl Connection for SqliteConnection {
             Ok(aliases) => {
                 for (table_name, alias_name) in aliases {
                     if alias_name == alias {
-                        log::debug!(
+                        tracing::debug!(
                             "Successfully resolved alias '{}' to table '{}'",
                             alias,
                             table_name
@@ -755,11 +755,11 @@ impl Connection for SqliteConnection {
                         return Ok(Some(table_name));
                     }
                 }
-                log::debug!("Alias '{}' not found in query", alias);
+                tracing::debug!("Alias '{}' not found in query", alias);
                 Ok(None)
             }
             Err(e) => {
-                log::debug!("Could not resolve table alias from query: {}", e);
+                tracing::debug!("Could not resolve table alias from query: {}", e);
                 Ok(None)
             }
         }
@@ -777,7 +777,7 @@ impl Connection for SqliteConnection {
         ),
         anyhow::Error,
     > {
-        log::debug!("Executing SQLite streaming query: {}", query);
+        tracing::debug!("Executing SQLite streaming query: {}", query);
 
         let pool = self
             .pool

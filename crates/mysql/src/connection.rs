@@ -14,7 +14,7 @@ use std::sync::Arc;
 /// This uses SQLX directly to provide a unified interface with database-specific connection pools
 pub struct MysqlConnection {
     pools: Arc<RwLock<HashMap<String, sqlx::MySqlPool>>>, // database_name -> connection pool
-    server_key: MysqlServerKey,                           // Server-level connection key (no database)
+    server_key: MysqlServerKey, // Server-level connection key (no database)
     display_name: String,
     server_connection_string: String, // Connection string without database
     initial_database: Option<String>, // Original database from connection string
@@ -57,12 +57,7 @@ pub struct MysqlServerKey {
 }
 
 impl MysqlServerKey {
-    pub fn new(
-        host: String,
-        port: u16,
-        username: String,
-        password: Option<String>,
-    ) -> Self {
+    pub fn new(host: String, port: u16, username: String, password: Option<String>) -> Self {
         Self {
             host,
             port,
@@ -79,10 +74,7 @@ impl MysqlServerKey {
                 self.username, password, self.host, self.port
             )
         } else {
-            format!(
-                "mysql://{}@{}:{}/",
-                self.username, self.host, self.port
-            )
+            format!("mysql://{}@{}:{}/", self.username, self.host, self.port)
         }
     }
 }
@@ -143,7 +135,9 @@ impl MysqlConnectionKey {
         }
 
         if database.is_empty() {
-            return Err(anyhow::anyhow!("Database name is required in connection string"));
+            return Err(anyhow::anyhow!(
+                "Database name is required in connection string"
+            ));
         }
 
         Ok(MysqlConnectionKey {
@@ -183,18 +177,15 @@ impl MysqlConnectionKey {
 impl MysqlConnection {
     /// Create a new MySQL connection from a connection string
     pub fn from_connection_string(connection_string: &str) -> Result<Self> {
-        log::info!(
-            "🔗 Creating MySQL connection from: {}",
-            connection_string
-        );
+        tracing::info!("🔗 Creating MySQL connection from: {}", connection_string);
 
         let connection_key = MysqlConnectionKey::from_connection_string(connection_string)?;
-        log::info!("📋 Parsed connection key:");
-        log::info!("   - host: {}", connection_key.host);
-        log::info!("   - port: {}", connection_key.port);
-        log::info!("   - database: {}", connection_key.database);
-        log::info!("   - username: {}", connection_key.username);
-        log::info!(
+        tracing::info!("📋 Parsed connection key:");
+        tracing::info!("   - host: {}", connection_key.host);
+        tracing::info!("   - port: {}", connection_key.port);
+        tracing::info!("   - database: {}", connection_key.database);
+        tracing::info!("   - username: {}", connection_key.username);
+        tracing::info!(
             "   - password: [{}]",
             if connection_key.password.is_some() {
                 "REDACTED"
@@ -255,7 +246,10 @@ impl MysqlConnection {
     }
 
     fn generate_server_display_name(server_key: &MysqlServerKey) -> String {
-        format!("MySQL: {}@{}:{}", server_key.username, server_key.host, server_key.port)
+        format!(
+            "MySQL: {}@{}:{}",
+            server_key.username, server_key.host, server_key.port
+        )
     }
 
     fn generate_server_display_name_with_ssh(
@@ -264,27 +258,28 @@ impl MysqlConnection {
     ) -> String {
         format!(
             "MySQL via SSH: {}@{}:{} (via {}@{}:{})",
-            server_key.username, server_key.host, server_key.port,
-            ssh_config.ssh_user, ssh_config.ssh_host, ssh_config.ssh_port
+            server_key.username,
+            server_key.host,
+            server_key.port,
+            ssh_config.ssh_user,
+            ssh_config.ssh_host,
+            ssh_config.ssh_port
         )
     }
 
     /// Get or create a connection pool for the specified database
-    pub async fn get_or_create_pool(
-        &self,
-        database_name: &str,
-    ) -> Result<sqlx::MySqlPool> {
+    pub async fn get_or_create_pool(&self, database_name: &str) -> Result<sqlx::MySqlPool> {
         let pools = self.pools.read().await;
 
         if let Some(pool) = pools.get(database_name) {
-            log::debug!("🔄 Using existing pool for database: {}", database_name);
+            tracing::debug!("🔄 Using existing pool for database: {}", database_name);
             return Ok(pool.clone());
         }
 
         // Release the read lock before acquiring write lock
         drop(pools);
 
-        log::info!("🚀 Creating new pool for database: {}", database_name);
+        tracing::info!("🚀 Creating new pool for database: {}", database_name);
         let mut pools = self.pools.write().await;
 
         // Check again in case another thread created it while we were waiting
@@ -293,7 +288,11 @@ impl MysqlConnection {
         }
 
         let connection_string = format!("{}{}", self.server_connection_string, database_name);
-        log::debug!("📡 Connection string for {}: {}", database_name, connection_string);
+        tracing::debug!(
+            "📡 Connection string for {}: {}",
+            database_name,
+            connection_string
+        );
 
         let pool = MySqlPoolOptions::new()
             .max_connections(5)
@@ -302,7 +301,10 @@ impl MysqlConnection {
 
         pools.insert(database_name.to_string(), pool.clone());
 
-        log::info!("✅ Successfully created pool for database: {}", database_name);
+        tracing::info!(
+            "✅ Successfully created pool for database: {}",
+            database_name
+        );
         Ok(pool)
     }
 
@@ -314,11 +316,15 @@ impl MysqlConnection {
         let database = if !url.path().is_empty() {
             url.path().trim_start_matches('/').to_string()
         } else {
-            return Err(anyhow::anyhow!("No database name found in connection string"));
+            return Err(anyhow::anyhow!(
+                "No database name found in connection string"
+            ));
         };
 
         if database.is_empty() {
-            return Err(anyhow::anyhow!("Database name is required in connection string"));
+            return Err(anyhow::anyhow!(
+                "Database name is required in connection string"
+            ));
         }
 
         Ok(database)
@@ -337,23 +343,33 @@ impl MysqlConnection {
         }
 
         if let Ok(val) = row.try_get::<Option<i64>, _>(column_index) {
-            return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+            return val
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "NULL".to_string());
         }
 
         if let Ok(val) = row.try_get::<Option<f64>, _>(column_index) {
-            return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+            return val
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "NULL".to_string());
         }
 
         if let Ok(val) = row.try_get::<Option<bool>, _>(column_index) {
-            return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+            return val
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "NULL".to_string());
         }
 
         if let Ok(val) = row.try_get::<Option<chrono::NaiveDate>, _>(column_index) {
-            return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+            return val
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "NULL".to_string());
         }
 
         if let Ok(val) = row.try_get::<Option<chrono::NaiveDateTime>, _>(column_index) {
-            return val.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+            return val
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "NULL".to_string());
         }
 
         // Fallback: try to get as raw string
@@ -384,7 +400,7 @@ impl Connection for MysqlConnection {
     }
 
     async fn connect(&mut self, connection_string: &str) -> Result<(), anyhow::Error> {
-        log::info!(
+        tracing::info!(
             "🔌 Connecting to MySQL server: {}@{}:{}",
             self.server_key.username,
             self.server_key.host,
@@ -407,16 +423,16 @@ impl Connection for MysqlConnection {
             self.get_or_create_pool(&key.database).await?;
         }
 
-        log::info!("✅ MySQL connection established successfully");
+        tracing::info!("✅ MySQL connection established successfully");
         Ok(())
     }
 
     async fn disconnect(&mut self) {
-        log::info!("🔌 Disconnecting from MySQL: {}", self.display_name);
+        tracing::info!("🔌 Disconnecting from MySQL: {}", self.display_name);
 
         let pools = self.pools.read().await;
         for (database, pool) in pools.iter() {
-            log::debug!("🔄 Closing pool for database: {}", database);
+            tracing::debug!("🔄 Closing pool for database: {}", database);
             pool.close().await;
         }
     }
@@ -447,16 +463,18 @@ impl Connection for MysqlConnection {
 
         let start_time = std::time::Instant::now();
 
-        log::debug!("🎯 Executing MySQL query on database '{}': {}", database, query);
+        tracing::debug!(
+            "🎯 Executing MySQL query on database '{}': {}",
+            database,
+            query
+        );
 
-        let rows = sqlx::query(query)
-            .fetch_all(&pool)
-            .await?;
+        let rows = sqlx::query(query).fetch_all(&pool).await?;
 
         let execution_time = start_time.elapsed().as_millis() as i64;
 
         if rows.is_empty() {
-            log::debug!("✅ Query returned no rows");
+            tracing::debug!("✅ Query returned no rows");
             return Ok(QueryResult {
                 columns: vec![],
                 column_types: vec![],
@@ -498,7 +516,10 @@ impl Connection for MysqlConnection {
             .collect();
 
         let rows_count = result_rows.len();
-        log::debug!("✅ Query executed successfully: {} rows returned", rows_count);
+        tracing::debug!(
+            "✅ Query executed successfully: {} rows returned",
+            rows_count
+        );
 
         Ok(QueryResult {
             columns,
@@ -519,8 +540,8 @@ impl Connection for MysqlConnection {
         sql_template: &str,
         parameters: &[String],
     ) -> Result<QueryResult, anyhow::Error> {
-        log::debug!("🎯 Executing MySQL prepared query: {}", sql_template);
-        log::debug!("📋 Parameters: {:?}", parameters);
+        tracing::debug!("🎯 Executing MySQL prepared query: {}", sql_template);
+        tracing::debug!("📋 Parameters: {:?}", parameters);
 
         // For now, implement simple parameter substitution
         // In a production environment, you'd want to use actual prepared statements
@@ -529,11 +550,12 @@ impl Connection for MysqlConnection {
             query = query.replacen('?', &format!("'{}'", param), 1);
         }
 
-        self.execute_query(&query, self.initial_database.as_deref()).await
+        self.execute_query(&query, self.initial_database.as_deref())
+            .await
     }
 
     async fn get_databases(&self) -> Result<Vec<String>, anyhow::Error> {
-        log::debug!("🗄️ Getting MySQL databases");
+        tracing::debug!("🗄️ Getting MySQL databases");
 
         let pool = if let Some(database) = &self.initial_database {
             self.get_or_create_pool(database).await?
@@ -541,17 +563,20 @@ impl Connection for MysqlConnection {
             return Err(anyhow::anyhow!("No initial database available"));
         };
 
-        let rows = sqlx::query("SHOW DATABASES")
-            .fetch_all(&pool)
-            .await?;
+        let rows = sqlx::query("SHOW DATABASES").fetch_all(&pool).await?;
 
         let databases: Vec<String> = rows
             .iter()
             .map(|row| row.try_get::<String, _>(0).unwrap_or_default())
-            .filter(|db| !db.is_empty() && db != "information_schema" && db != "mysql" && db != "performance_schema")
+            .filter(|db| {
+                !db.is_empty()
+                    && db != "information_schema"
+                    && db != "mysql"
+                    && db != "performance_schema"
+            })
             .collect();
 
-        log::debug!("✅ Found {} databases", databases.len());
+        tracing::debug!("✅ Found {} databases", databases.len());
         Ok(databases)
     }
 
@@ -566,16 +591,16 @@ impl Connection for MysqlConnection {
     }
 
     async fn get_tables(&self, _schema: Option<&str>) -> Result<Vec<String>, anyhow::Error> {
-        log::debug!("📋 Getting MySQL tables");
+        tracing::debug!("📋 Getting MySQL tables");
 
-        let database = self.initial_database.as_ref()
+        let database = self
+            .initial_database
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
 
         let pool = self.get_or_create_pool(database).await?;
 
-        let rows = sqlx::query("SHOW TABLES")
-            .fetch_all(&pool)
-            .await?;
+        let rows = sqlx::query("SHOW TABLES").fetch_all(&pool).await?;
 
         let tables: Vec<String> = rows
             .iter()
@@ -583,7 +608,7 @@ impl Connection for MysqlConnection {
             .filter(|table| !table.is_empty())
             .collect();
 
-        log::debug!("✅ Found {} tables", tables.len());
+        tracing::debug!("✅ Found {} tables", tables.len());
         Ok(tables)
     }
 
@@ -595,9 +620,11 @@ impl Connection for MysqlConnection {
         &self,
         table_name: &str,
     ) -> Result<Option<String>, anyhow::Error> {
-        log::debug!("🔑 Getting primary key for table: {}", table_name);
+        tracing::debug!("🔑 Getting primary key for table: {}", table_name);
 
-        let database = self.initial_database.as_ref()
+        let database = self
+            .initial_database
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
 
         let pool = self.get_or_create_pool(database).await?;
@@ -615,10 +642,10 @@ impl Connection for MysqlConnection {
 
         if let Some(row) = rows.first() {
             let pk_column: String = row.try_get(0)?;
-            log::debug!("✅ Found primary key: {}", pk_column);
+            tracing::debug!("✅ Found primary key: {}", pk_column);
             Ok(Some(pk_column))
         } else {
-            log::debug!("ℹ️ No primary key found for table: {}", table_name);
+            tracing::debug!("ℹ️ No primary key found for table: {}", table_name);
             Ok(None)
         }
     }
@@ -628,9 +655,11 @@ impl Connection for MysqlConnection {
         table_name: &str,
         _schema: Option<&str>,
     ) -> Result<Vec<ColumnInfo>, anyhow::Error> {
-        log::debug!("📋 Getting columns for table: {}", table_name);
+        tracing::debug!("📋 Getting columns for table: {}", table_name);
 
-        let database = self.initial_database.as_ref()
+        let database = self
+            .initial_database
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
 
         let pool = self.get_or_create_pool(database).await?;
@@ -670,7 +699,11 @@ impl Connection for MysqlConnection {
             });
         }
 
-        log::debug!("✅ Found {} columns for table: {}", columns.len(), table_name);
+        tracing::debug!(
+            "✅ Found {} columns for table: {}",
+            columns.len(),
+            table_name
+        );
         Ok(columns)
     }
 
@@ -753,7 +786,9 @@ impl Connection for MysqlConnection {
         _changes: &[TableChangeOperation],
     ) -> Result<QueryResult, anyhow::Error> {
         // For now, return an error indicating this isn't implemented
-        Err(anyhow::anyhow!("Table changes are not yet implemented for MySQL"))
+        Err(anyhow::anyhow!(
+            "Table changes are not yet implemented for MySQL"
+        ))
     }
 
     fn get_file_safe_name(&self) -> String {

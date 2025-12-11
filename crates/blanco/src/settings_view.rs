@@ -51,11 +51,11 @@ impl SettingsView {
         let task = cx.spawn(async move |_, _| {
             gpui::Timer::after(Duration::from_millis(500)).await;
             if let Err(e) = db.save_setting(&key_clone, &value, is_secret).await {
-                log::error!("Failed to save setting {}: {}", key_clone, e);
+                tracing::error!("Failed to save setting {}: {}", key_clone, e);
             }
 
             if let Err(e) = secret_task.await {
-                log::error!("Failed to write secret {}: {}", key_clone, e);
+                tracing::error!("Failed to write secret {}: {}", key_clone, e);
             }
         });
 

@@ -3,17 +3,19 @@
 use anyhow::Result;
 use async_std::sync::RwLock;
 use async_trait::async_trait;
-use blanco_core::{Connection, DatabaseService as DatabaseServiceTrait, ConnectionFactory};
+use blanco_core::{Connection, ConnectionFactory, DatabaseService as DatabaseServiceTrait};
 use gpui::{BackgroundExecutor, Global};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
 
-use crate::factories::{SqliteConnectionFactory, PostgresConnectionFactory, MysqlConnectionFactory};
-use crate::ssh_tunnel::{SshTunnel, SshTunnelConfig, TunnelInfo};
 use crate::connection_config::{ConnectionConfig, DatabaseType};
+use crate::factories::{
+    MysqlConnectionFactory, PostgresConnectionFactory, SqliteConnectionFactory,
+};
+use crate::ssh_tunnel::{SshTunnel, SshTunnelConfig, TunnelInfo};
 
 // Type aliases for clarity
-pub type DatabaseConfigId = i64;  // Connection ID from app_database
+pub type DatabaseConfigId = i64; // Connection ID from app_database
 pub type ConnectionId = (DatabaseConfigId, String); // (config_id, database_name)
 
 /// Main database service that manages connections and SSH tunnels internally
@@ -37,9 +39,18 @@ impl DatabaseService {
     pub fn new(background_executor: BackgroundExecutor) -> Self {
         // Initialize connection factories
         let mut factories: HashMap<String, Arc<dyn ConnectionFactory>> = HashMap::new();
-        factories.insert(DatabaseType::SQLite.to_string(), Arc::new(SqliteConnectionFactory));
-        factories.insert(DatabaseType::PostgreSQL.to_string(), Arc::new(PostgresConnectionFactory::new()));
-        factories.insert(DatabaseType::MySQL.to_string(), Arc::new(MysqlConnectionFactory::new()));
+        factories.insert(
+            DatabaseType::SQLite.to_string(),
+            Arc::new(SqliteConnectionFactory),
+        );
+        factories.insert(
+            DatabaseType::PostgreSQL.to_string(),
+            Arc::new(PostgresConnectionFactory::new()),
+        );
+        factories.insert(
+            DatabaseType::MySQL.to_string(),
+            Arc::new(MysqlConnectionFactory::new()),
+        );
 
         Self {
             connection_configs: Arc::new(RwLock::new(HashMap::new())),
@@ -55,7 +66,11 @@ impl DatabaseService {
     pub async fn add_connection_config(&self, config: ConnectionConfig) {
         let mut configs = self.connection_configs.write().await;
         configs.insert(config.id, config.clone());
-        log::info!("Added connection configuration: {} ({})", config.name, config.db_type);
+        tracing::info!(
+            "Added connection configuration: {} ({})",
+            config.name,
+            config.db_type
+        );
     }
 
     /// Get a connection configuration
@@ -71,20 +86,20 @@ impl DatabaseService {
         database: Option<&str>,
     ) -> Result<Arc<dyn Connection>> {
         // Check if connection is in active_connections
-        let connection_id = (
-            config_id,
-            database.unwrap_or("default").to_string(),
-        );
+        let connection_id = (config_id, database.unwrap_or("default").to_string());
 
         {
             let connections = self.active_connections.read().await;
             if let Some(existing_conn) = connections.get(&connection_id) {
                 // Check if the connection is still healthy
                 if existing_conn.test_connection().await.unwrap_or(false) {
-                    log::debug!("Using existing healthy connection: {:?}", connection_id);
+                    tracing::debug!("Using existing healthy connection: {:?}", connection_id);
                     return Ok(Arc::clone(existing_conn));
                 } else {
-                    log::info!("Existing connection is unhealthy, will recreate: {:?}", connection_id);
+                    tracing::info!(
+                        "Existing connection is unhealthy, will recreate: {:?}",
+                        connection_id
+                    );
                     drop(connections);
                 }
             }
@@ -92,8 +107,11 @@ impl DatabaseService {
 
         // Get connection configuration
         let configs = self.connection_configs.read().await;
-        let config = configs.get(&config_id)
-            .ok_or_else(|| anyhow::anyhow!("Connection configuration not found for ID: {}", config_id))?
+        let config = configs
+            .get(&config_id)
+            .ok_or_else(|| {
+                anyhow::anyhow!("Connection configuration not found for ID: {}", config_id)
+            })?
             .clone();
         drop(configs);
 
@@ -107,25 +125,41 @@ impl DatabaseService {
             let remote_port = config.port;
 
             // Ensure SSH tunnel exists
-            let tunnel_info = self.ensure_ssh_tunnel(&config, remote_host, remote_port).await?;
+            let tunnel_info = self
+                .ensure_ssh_tunnel(&config, remote_host, remote_port)
+                .await?;
 
             // Override host and port for connection string to use tunnel
             connection_host = Some("localhost");
             connection_port = Some(tunnel_info.local_port);
 
-            log::info!("Created SSH tunnel for {}@{}:{} -> localhost:{}",
-                config.database, remote_host, remote_port, tunnel_info.local_port);
+            tracing::info!(
+                "Created SSH tunnel for {}@{}:{} -> localhost:{}",
+                config.database,
+                remote_host,
+                remote_port,
+                tunnel_info.local_port
+            );
         }
 
         // Get connection string with optional database, host, and port overrides
-        let connection_string = config.connection_string(database, connection_host.as_deref(), connection_port);
+        let connection_string =
+            config.connection_string(database, connection_host.as_deref(), connection_port);
         if let Some(database_name) = database {
-            log::debug!("Applied database override '{}' to connection string: {}", database_name, connection_string);
+            tracing::debug!(
+                "Applied database override '{}' to connection string: {}",
+                database_name,
+                connection_string
+            );
         }
 
         // Create connection via factory
-        let factory = self.connection_factories.get(&config.db_type.to_string())
-            .ok_or_else(|| anyhow::anyhow!("No factory found for connection type: {}", config.db_type))?;
+        let factory = self
+            .connection_factories
+            .get(&config.db_type.to_string())
+            .ok_or_else(|| {
+                anyhow::anyhow!("No factory found for connection type: {}", config.db_type)
+            })?;
 
         let conn = factory.create_connection(&connection_string).await?;
         let conn_arc: Arc<dyn Connection> = Arc::from(conn);
@@ -142,16 +176,20 @@ impl DatabaseService {
             tunnel_connections.insert(connection_id.clone(), config_id);
         }
 
-        log::info!("Successfully created and stored connection: {:?}", connection_id);
+        tracing::info!(
+            "Successfully created and stored connection: {:?}",
+            connection_id
+        );
         Ok(conn_arc)
     }
 
     /// Disconnect a connection
-    pub async fn disconnect(&self, config_id: DatabaseConfigId, database: Option<&str>) -> Result<()> {
-        let connection_id = (
-            config_id,
-            database.unwrap_or("default").to_string(),
-        );
+    pub async fn disconnect(
+        &self,
+        config_id: DatabaseConfigId,
+        database: Option<&str>,
+    ) -> Result<()> {
+        let connection_id = (config_id, database.unwrap_or("default").to_string());
 
         // Remove from active_connections
         {
@@ -166,7 +204,8 @@ impl DatabaseService {
                 let tunnel_config_id = *tunnel_config_id;
 
                 // Check if any other connections are using this tunnel
-                let tunnels_in_use = tunnel_connections.values()
+                let tunnels_in_use = tunnel_connections
+                    .values()
                     .any(|&id| id == tunnel_config_id);
 
                 if !tunnels_in_use {
@@ -174,7 +213,10 @@ impl DatabaseService {
                     let mut tunnels = self.ssh_tunnels.write().await;
                     if let Some(_tunnel_mutex) = tunnels.remove(&tunnel_config_id) {
                         // The tunnel will be disconnected when Arc is dropped
-                        log::info!("Removed SSH tunnel for connection config {}", tunnel_config_id);
+                        tracing::info!(
+                            "Removed SSH tunnel for connection config {}",
+                            tunnel_config_id
+                        );
                     }
                 }
             }
@@ -186,7 +228,7 @@ impl DatabaseService {
             tunnel_connections.remove(&connection_id);
         }
 
-        log::info!("Disconnected connection: {:?}", connection_id);
+        tracing::info!("Disconnected connection: {:?}", connection_id);
         Ok(())
     }
 
@@ -229,7 +271,7 @@ impl DatabaseService {
         }
 
         // Create new tunnel
-        log::info!("Creating SSH tunnel for connection config {}", config.id);
+        tracing::info!("Creating SSH tunnel for connection config {}", config.id);
 
         let local_port = self.assign_local_port();
         let ssh_config = SshTunnelConfig {
@@ -247,12 +289,11 @@ impl DatabaseService {
         // Create tunnel - wrap with async-compat to bridge tokio to async-std
         let mut tunnel = async_compat::Compat::new(async {
             SshTunnel::create(ssh_config, self.background_executor.clone()).await
-        }).await?;
+        })
+        .await?;
 
         // Connect before putting in mutex - wrap with async-compat to bridge tokio to async-std
-        async_compat::Compat::new(async {
-            tunnel.connect().await
-        }).await?;
+        async_compat::Compat::new(async { tunnel.connect().await }).await?;
 
         // Get tunnel info
         let tunnel_info = tunnel.get_info();

@@ -605,23 +605,23 @@ impl ResultsTableDelegate {
         match (&old_table_name, &self.table_name) {
             (Some(old), Some(new)) => {
                 if old != new {
-                    log::info!("Table name changed from '{}' to '{}'", old, new);
+                    tracing::info!("Table name changed from '{}' to '{}'", old, new);
                 } else {
-                    log::debug!("Table name unchanged: '{}'", new);
+                    tracing::debug!("Table name unchanged: '{}'", new);
                 }
             }
             (None, Some(new)) => {
-                log::info!("Table name extracted from metadata: '{}'", new);
+                tracing::info!("Table name extracted from metadata: '{}'", new);
             }
             (Some(old), None) => {
-                log::warn!(
+                tracing::warn!(
                     "Table name lost: '{}' (was extracted before, now None)",
                     old
                 );
             }
             (None, None) => {
                 if result.query_text.is_some() {
-                    log::warn!("Failed to extract table name from query metadata");
+                    tracing::warn!("Failed to extract table name from query metadata");
                 }
             }
         }
@@ -672,14 +672,14 @@ impl ResultsTableDelegate {
     }
 
     pub fn commit_cell_edit(&mut self, row: usize, col: usize) -> Option<String> {
-        log::info!("delegate.commit_cell_edit called for ({}, {})", row, col);
-        log::info!(
+        tracing::info!("delegate.commit_cell_edit called for ({}, {})", row, col);
+        tracing::info!(
             "edited_values contains: {:?}",
             self.edit_state.edited_values
         );
 
         if let Some(new_value) = self.edit_state.edited_values.get(&(row, col)).cloned() {
-            log::info!("Found edited value: '{}' for ({}, {})", new_value, row, col);
+            tracing::info!("Found edited value: '{}' for ({}, {})", new_value, row, col);
 
             // Get the original value
             let original_value = self.edit_state.original_values.get(&(row, col)).cloned();
@@ -687,14 +687,14 @@ impl ResultsTableDelegate {
             // Update the actual row data
             if let Some(row_data) = self.rows.get_mut(row) {
                 if let Some(cell) = row_data.get_mut(col) {
-                    log::info!("Updating cell from '{}' to '{}'", cell, new_value);
+                    tracing::info!("Updating cell from '{}' to '{}'", cell, new_value);
                     *cell = new_value.clone();
-                    log::info!("Cell updated successfully");
+                    tracing::info!("Cell updated successfully");
                 } else {
-                    log::info!("No cell found at column {}", col);
+                    tracing::info!("No cell found at column {}", col);
                 }
             } else {
-                log::info!("No row data found at row {}", row);
+                tracing::info!("No row data found at row {}", row);
             }
 
             // Track the change for SQL generation (but not for new rows)
@@ -852,7 +852,7 @@ impl ResultsTableDelegate {
 
             type_lower == "array" || type_lower.ends_with("[]")
         } else {
-            log::debug!("Array detection: No column type for index {}", col_index);
+            tracing::debug!("Array detection: No column type for index {}", col_index);
             false
         }
     }
@@ -1264,7 +1264,7 @@ impl ResultsPanel {
             .contains(&row);
 
         // Create input state for editing with the current cell value
-        log::debug!("Is this being recreated?");
+        tracing::debug!("Is this being recreated?");
         let input = cx.new(|cx| InputState::new(window, cx).default_value(&current_value));
 
         // Start editing in the delegate with the input
@@ -1287,7 +1287,7 @@ impl ResultsPanel {
             cx.subscribe(&input, move |table, input, event, cx| {
                 if let InputEvent::Change = event {
                     let new_text = input.read(cx).text().to_string();
-                    log::info!(
+                    tracing::info!(
                         "Input change: '{}' at ({}, {})",
                         new_text,
                         row_clone,
@@ -1305,19 +1305,19 @@ impl ResultsPanel {
                     // Handle blur - save current edit to edited_values when input loses focus
                     // Get the current editing cell and value
                     let editing_cell = table.delegate_mut().edit_state.editing_cell;
-                    log::info!("Blur event triggered for editing_cell: {:?}", editing_cell);
+                    tracing::info!("Blur event triggered for editing_cell: {:?}", editing_cell);
 
                     if let Some((row, col)) = editing_cell {
                         let new_value = input.read(cx).text().to_string();
-                        log::info!("Blur: saving value '{}' at ({}, {})", new_value, row, col);
+                        tracing::info!("Blur: saving value '{}' at ({}, {})", new_value, row, col);
 
                         // Commit the cell edit to create a TableChange entry
-                        log::info!("Blur: committing cell edit at ({}, {})", row, col);
+                        tracing::info!("Blur: committing cell edit at ({}, {})", row, col);
                         table.delegate_mut().commit_cell_edit(row, col);
                         table.refresh(cx);
-                        log::info!("Blur: cell edit committed and table refreshed");
+                        tracing::info!("Blur: cell edit committed and table refreshed");
                     } else {
-                        log::info!("Blur: no editing cell found");
+                        tracing::info!("Blur: no editing cell found");
                     }
                 }
             })
@@ -1390,10 +1390,18 @@ impl ResultsPanel {
                         {
                             // If we're updating the primary key column itself, get the original value
                             if pk_index == col {
-                                delegate.edit_state.original_values.get(&(row, col)).cloned()
+                                delegate
+                                    .edit_state
+                                    .original_values
+                                    .get(&(row, col))
+                                    .cloned()
                             } else {
                                 // Otherwise get the current value from the row
-                                delegate.rows.get(row).and_then(|r| r.get(pk_index)).cloned()
+                                delegate
+                                    .rows
+                                    .get(row)
+                                    .and_then(|r| r.get(pk_index))
+                                    .cloned()
                             }
                         } else {
                             None
@@ -1496,7 +1504,7 @@ impl ResultsPanel {
             }
         }
 
-        log::info!(
+        tracing::info!(
             "Commit Changes: Got {} changes from edited_values",
             changes.len()
         );
@@ -1618,11 +1626,11 @@ impl ResultsPanel {
             .create_change_operations();
 
         if change_operations.is_empty() {
-            log::info!("Commit Changes: No changes to commit");
+            tracing::info!("Commit Changes: No changes to commit");
             return;
         }
 
-        log::info!(
+        tracing::info!(
             "Commit Changes: Sending {} operations to async pipeline",
             change_operations.len()
         );
@@ -1666,7 +1674,7 @@ impl ResultsPanel {
             ),
         });
 
-        log::info!("Commit Changes: Starting table operations execution");
+        tracing::info!("Commit Changes: Starting table operations execution");
 
         // Log the operations to SQL log if available
         if let Some(sql_log) = sql_log {
@@ -1696,7 +1704,7 @@ impl ResultsPanel {
                 .await
             {
                 Ok(connection) => {
-                    log::info!("Got connection for table operations");
+                    tracing::info!("Got connection for table operations");
 
                     // Convert table operations to SQL and execute them
                     let mut total_rows_affected = 0u64;
@@ -1705,16 +1713,20 @@ impl ResultsPanel {
                     let mut success = true;
 
                     for operation in &change_operations_for_pipeline {
-                        log::debug!("Got operation {:?}", operation);
+                        tracing::debug!("Got operation {:?}", operation);
                         let sql_query = operation.to_sql_query();
                         match connection.execute_query(&sql_query, None).await {
                             Ok(query_result) => {
                                 total_rows_affected += query_result.rows_affected;
                                 operations_executed += 1;
-                                log::debug!("Successfully executed operation: {}", sql_query);
+                                tracing::debug!("Successfully executed operation: {}", sql_query);
                             }
                             Err(e) => {
-                                log::error!("Failed to execute operation '{}': {}", sql_query, e);
+                                tracing::error!(
+                                    "Failed to execute operation '{}': {}",
+                                    sql_query,
+                                    e
+                                );
                                 success = false;
                                 error_message = Some(e.to_string());
                                 break;
@@ -1732,7 +1744,7 @@ impl ResultsPanel {
                     }
                 }
                 Err(e) => {
-                    log::error!("Failed to get connection for table operations: {}", e);
+                    tracing::error!("Failed to get connection for table operations: {}", e);
                     TableOperationResponse {
                         table_name: table_name_for_logging.clone(),
                         connection_id: connection_id_for_pipeline,
@@ -1744,7 +1756,7 @@ impl ResultsPanel {
                 }
             };
 
-            log::info!(
+            tracing::info!(
                 "Table operations completed in {:?}, success: {}",
                 start_time.elapsed(),
                 result.success
@@ -1752,7 +1764,7 @@ impl ResultsPanel {
 
             // Send response back through the channel
             if let Err(e) = response_tx.send(result.clone()).await {
-                log::error!("Failed to send table operation response: {}", e);
+                tracing::error!("Failed to send table operation response: {}", e);
             }
 
             result
@@ -1764,7 +1776,7 @@ impl ResultsPanel {
         cx.spawn(async move |entity, cx| {
             match response_rx.recv().await {
                 Ok(response) => {
-                    log::info!("Received table operation response: success={}, rows_affected={:?}",
+                    tracing::info!("Received table operation response: success={}, rows_affected={:?}",
                         response.success, response.rows_affected);
 
                     // Handle successful operations
@@ -1827,7 +1839,7 @@ impl ResultsPanel {
                     }
                 }
                 Err(e) => {
-                    log::error!("Failed to receive table operation response: {}", e);
+                    tracing::error!("Failed to receive table operation response: {}", e);
 
                     // Update SQL log with error
                     if let Some(sql_log) = sql_log_response_entity {
@@ -1861,7 +1873,7 @@ impl ResultsPanel {
 
         // TODO: error here instead of fallback to sqlite::memory
 
-        log::info!(
+        tracing::info!(
             "Rollback Changes: Rolling back {} changes on table {}",
             changes.len(),
             table_name
@@ -1903,7 +1915,7 @@ impl ResultsPanel {
             changes_count,
         });
 
-        log::info!(
+        tracing::info!(
             "Rollback Changes: Successfully rolled back {} changes",
             changes_count
         );
@@ -2015,7 +2027,7 @@ impl ResultsPanel {
         cx: &mut Context<Self>,
     ) {
         if success {
-            log::info!(
+            tracing::info!(
                 "Table operation completed successfully: {} operations, {} rows affected",
                 operations_executed,
                 rows_affected.unwrap_or(0)
@@ -2030,7 +2042,7 @@ impl ResultsPanel {
             // Optionally refresh the data or show a success message
             cx.notify();
         } else {
-            log::error!(
+            tracing::error!(
                 "Table operation failed: {}",
                 error_message.unwrap_or_else(|| "Unknown error".to_string())
             );
@@ -2053,14 +2065,14 @@ impl ResultsPanel {
         let delegate = table_state.delegate();
 
         if selected_rows.is_empty() {
-            log::error!("Failed to copy as CSV: No rows selected for copying");
+            tracing::error!("Failed to copy as CSV: No rows selected for copying");
             return;
         }
 
         let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
 
         if let Err(e) = self.copy_handler.copy_as_format(&selected_data, "csv", cx) {
-            log::error!("Failed to copy as CSV: {}", e);
+            tracing::error!("Failed to copy as CSV: {}", e);
         }
     }
 
@@ -2075,14 +2087,14 @@ impl ResultsPanel {
         let delegate = table_state.delegate();
 
         if selected_rows.is_empty() {
-            log::error!("Failed to copy as JSON: No rows selected for copying");
+            tracing::error!("Failed to copy as JSON: No rows selected for copying");
             return;
         }
 
         let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
 
         if let Err(e) = self.copy_handler.copy_as_format(&selected_data, "json", cx) {
-            log::error!("Failed to copy as JSON: {}", e);
+            tracing::error!("Failed to copy as JSON: {}", e);
         }
     }
 
@@ -2097,14 +2109,14 @@ impl ResultsPanel {
         let delegate = table_state.delegate();
 
         if selected_rows.is_empty() {
-            log::error!("Failed to copy as SQL: No rows selected for copying");
+            tracing::error!("Failed to copy as SQL: No rows selected for copying");
             return;
         }
 
         let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
 
         if let Err(e) = self.copy_handler.copy_as_format(&selected_data, "sql", cx) {
-            log::error!("Failed to copy as SQL: {}", e);
+            tracing::error!("Failed to copy as SQL: {}", e);
         }
     }
 
@@ -2119,7 +2131,7 @@ impl ResultsPanel {
         let delegate = table_state.delegate();
 
         if selected_rows.is_empty() {
-            log::error!("Failed to copy as Markdown: No rows selected for copying");
+            tracing::error!("Failed to copy as Markdown: No rows selected for copying");
             return;
         }
 
@@ -2129,7 +2141,7 @@ impl ResultsPanel {
             .copy_handler
             .copy_as_format(&selected_data, "markdown", cx)
         {
-            log::error!("Failed to copy as Markdown: {}", e);
+            tracing::error!("Failed to copy as Markdown: {}", e);
         }
     }
 
@@ -2337,17 +2349,21 @@ mod tests {
         ];
 
         // Add a row with id=2
-        delegate.rows = vec![
-            vec!["1".to_string(), "2".to_string(), "test".to_string()]
-        ];
+        delegate.rows = vec![vec!["1".to_string(), "2".to_string(), "test".to_string()]];
 
         // Simulate editing the primary key column (id) from 2 to 4
         let row = 0;
         let col = 1; // id column
 
         // Store original value
-        delegate.edit_state.original_values.insert((row, col), "2".to_string());
-        delegate.edit_state.edited_values.insert((row, col), "4".to_string());
+        delegate
+            .edit_state
+            .original_values
+            .insert((row, col), "2".to_string());
+        delegate
+            .edit_state
+            .edited_values
+            .insert((row, col), "4".to_string());
 
         // Commit the edit
         delegate.commit_cell_edit(row, col);
@@ -2365,8 +2381,11 @@ mod tests {
         let operations = delegate.create_change_operations();
         assert_eq!(operations.len(), 1);
 
-        if let blanco_core::table_operations::OperationType::Update = &operations[0].operation_type {
-            if let blanco_core::table_operations::RowIdentifier::PrimaryKey { value, .. } = &operations[0].row_identifier {
+        if let blanco_core::table_operations::OperationType::Update = &operations[0].operation_type
+        {
+            if let blanco_core::table_operations::RowIdentifier::PrimaryKey { value, .. } =
+                &operations[0].row_identifier
+            {
                 assert_eq!(value, "2"); // Should use original ID in WHERE clause
             } else {
                 panic!("Expected PrimaryKey row identifier");

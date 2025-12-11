@@ -18,9 +18,6 @@ gpui-component = { workspace = true }
 # Database dependencies
 sqlx = { workspace = true, features = ["mysql", "chrono", "uuid", "json"] }
 
-# Async runtime
-tokio = { workspace = true, features = ["sync"] }
-
 # SQL parsing
 sql-parse = { workspace = true }
 
@@ -29,7 +26,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
-log = { workspace = true }
+tracing = { workspace = true }
 futures = { workspace = true }
 
 # Rope handling for completion/hover

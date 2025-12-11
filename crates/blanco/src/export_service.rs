@@ -101,14 +101,14 @@ impl ExportService {
             while let Some(row_result) = row_stream.next().await {
                 // Check for cancellation
                 if is_cancelled_clone.load(Ordering::Relaxed) == 1 {
-                    log::info!("Export cancelled by user");
+                    tracing::info!("Export cancelled by user");
                     break;
                 }
 
                 let row_data = match row_result {
                     Ok(row) => row,
                     Err(e) => {
-                        log::error!("Error fetching row: {}", e);
+                        tracing::error!("Error fetching row: {}", e);
                         continue;
                     }
                 };
@@ -121,7 +121,7 @@ impl ExportService {
 
                 // Send row through channel
                 if let Err(_) = sender.send(stream_data).await {
-                    log::info!("Export receiver disconnected, stopping producer");
+                    tracing::info!("Export receiver disconnected, stopping producer");
                     break;
                 }
 

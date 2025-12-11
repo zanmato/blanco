@@ -4,9 +4,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use database::{DatabaseService, DatabaseServiceTrait};
 use anyhow::Result;
 use blanco_core::HoverProvider;
+use database::{DatabaseService, DatabaseServiceTrait};
 use gpui::{AppContext, Context, Task, Window};
 use gpui_component::input::{CompletionProvider, InputState, Rope, RopeExt};
 use lsp_types::{
@@ -98,13 +98,13 @@ async fn fetch_tables(
     connection_id: i64,
     database_name: &str,
 ) -> Result<Vec<String>> {
-    log::debug!("Fetching tables for database '{}'", database_name);
+    tracing::debug!("Fetching tables for database '{}'", database_name);
     if let Ok(connection) = db_service
         .get_or_create_connection(connection_id, Some(database_name))
         .await
     {
         let tables = connection.get_tables(None).await?;
-        log::debug!(
+        tracing::debug!(
             "Found {} tables for database '{}': {:?}",
             tables.len(),
             database_name,
@@ -112,7 +112,7 @@ async fn fetch_tables(
         );
         Ok(tables)
     } else {
-        log::warn!(
+        tracing::warn!(
             "Failed to get connection for fetching tables from database '{}'",
             database_name
         );
@@ -127,7 +127,7 @@ async fn fetch_columns(
     table_name: &str,
     database_name: &str,
 ) -> Result<Vec<String>> {
-    log::debug!(
+    tracing::debug!(
         "Fetching columns for table '{}', database '{}'",
         table_name,
         database_name
@@ -138,7 +138,7 @@ async fn fetch_columns(
     {
         let columns = connection.get_columns_for_table(table_name, None).await?;
         let column_names: Vec<String> = columns.into_iter().map(|col| col.name).collect();
-        log::debug!(
+        tracing::debug!(
             "Found {} columns for table '{}': {:?}",
             column_names.len(),
             table_name,
@@ -146,7 +146,7 @@ async fn fetch_columns(
         );
         Ok(column_names)
     } else {
-        log::warn!(
+        tracing::warn!(
             "Failed to get connection for fetching columns from table '{}', database '{}'",
             table_name,
             database_name
@@ -216,12 +216,12 @@ impl SqlCompletionProvider {
             && let Some(cached_tables) = &cache.tables
             && !cached_tables.is_expired(Self::CACHE_TTL_SECONDS)
         {
-            log::debug!("Using cached tables for database '{}'", self.database_name);
+            tracing::debug!("Using cached tables for database '{}'", self.database_name);
             return Ok(cached_tables.data.clone());
         } // Lock released here
 
         // No valid cache, fetch fresh data
-        log::debug!(
+        tracing::debug!(
             "Fetching fresh tables for database '{}'",
             self.database_name
         );
@@ -243,7 +243,7 @@ impl SqlCompletionProvider {
             && let Some(cached_columns) = cache.columns.get(table_name)
             && !cached_columns.is_expired(Self::CACHE_TTL_SECONDS)
         {
-            log::debug!(
+            tracing::debug!(
                 "Using cached columns for table '{}', database '{}'",
                 table_name,
                 self.database_name
@@ -252,7 +252,7 @@ impl SqlCompletionProvider {
         } // Lock released here
 
         // No valid cache, fetch fresh data
-        log::debug!(
+        tracing::debug!(
             "Fetching fresh columns for table '{}', database '{}'",
             table_name,
             self.database_name
@@ -284,7 +284,7 @@ impl SqlCompletionProvider {
             && let Some(cached_info) = cache.table_info.get(&cache_key)
             && !cached_info.is_expired(Self::CACHE_TTL_SECONDS)
         {
-            log::debug!(
+            tracing::debug!(
                 "Using cached table info for '{}' in database '{}'",
                 table_name,
                 self.database_name
@@ -293,7 +293,7 @@ impl SqlCompletionProvider {
         } // Lock released here
 
         // No valid cache, fetch fresh data using connection trait
-        log::debug!(
+        tracing::debug!(
             "Fetching fresh table info for '{}' in database '{}'",
             table_name,
             self.database_name
@@ -319,7 +319,7 @@ impl SqlCompletionProvider {
             && let Some(cached_info) = cache.column_info.get(&cache_key)
             && !cached_info.is_expired(Self::CACHE_TTL_SECONDS)
         {
-            log::debug!(
+            tracing::debug!(
                 "Using cached column info for '{}.{}' in database '{}'",
                 table_name,
                 column_name,
@@ -329,7 +329,7 @@ impl SqlCompletionProvider {
         } // Lock released here
 
         // No valid cache, fetch fresh data using connection trait
-        log::debug!(
+        tracing::debug!(
             "Fetching fresh column info for '{}.{}' in database '{}'",
             table_name,
             column_name,
@@ -724,11 +724,11 @@ impl SqlCompletionProvider {
         // Extract aliases from the full text instead of just text before cursor
         context.table_aliases = self.extract_table_aliases(full_text);
 
-        log::debug!(
+        tracing::debug!(
             "SQL Completion: Using full text for alias extraction: '{}'",
             full_text
         );
-        log::debug!(
+        tracing::debug!(
             "SQL Completion: Extracted aliases from full text: {:?}",
             context.table_aliases
         );
@@ -737,11 +737,11 @@ impl SqlCompletionProvider {
         if context.is_dot_notation
             && let Some(table_name) = &context.dot_table_name
         {
-            log::debug!(
+            tracing::debug!(
                 "SQL Completion: Dot notation detected, table_name='{}'",
                 table_name
             );
-            log::debug!(
+            tracing::debug!(
                 "SQL Completion: Parsed aliases from full text: {:?}",
                 context.table_aliases
             );
@@ -750,7 +750,7 @@ impl SqlCompletionProvider {
             if let Some(resolved_table) =
                 self.resolve_table_alias(&context.table_aliases, table_name)
             {
-                log::debug!(
+                tracing::debug!(
                     "SQL Completion: Resolved alias '{}' to table '{}'",
                     table_name,
                     resolved_table
@@ -758,7 +758,7 @@ impl SqlCompletionProvider {
                 return Some(resolved_table);
             }
 
-            log::debug!(
+            tracing::debug!(
                 "SQL Completion: Alias resolution failed, using table_name='{}' directly",
                 table_name
             );
@@ -1043,10 +1043,10 @@ impl CompletionProvider for SqlCompletionProvider {
             // Spawn background task to fetch tables using cache
             let task = cx.background_spawn(async move {
                 // Fetch tables using cache
-                log::debug!("SQL Completion: Fetching tables...");
+                tracing::debug!("SQL Completion: Fetching tables...");
                 match provider_clone.get_cached_tables().await {
                     Ok(tables) => {
-                        log::debug!("SQL Completion: Fetched {} tables: {:?}", tables.len(), tables);
+                        tracing::debug!("SQL Completion: Fetched {} tables: {:?}", tables.len(), tables);
                         // Filter tables based on current input
                         let mut filtered_tables: Vec<String> = if current_word_clone.is_empty() {
                             tables.clone()
@@ -1059,7 +1059,7 @@ impl CompletionProvider for SqlCompletionProvider {
                         // Sort by shortest first to prioritize shorter names
                         filtered_tables.sort_by(|a, b| a.len().cmp(&b.len()));
 
-                        log::debug!("SQL Completion: Filter logic - current_word_is_empty: {}, filtered_tables: {:?}", current_word_clone.is_empty(), filtered_tables);
+                        tracing::debug!("SQL Completion: Filter logic - current_word_is_empty: {}, filtered_tables: {:?}", current_word_clone.is_empty(), filtered_tables);
 
                         // Convert to LSP completion items
                         let completion_items = filtered_tables.into_iter().take(20).map(|table_name| {
@@ -1077,7 +1077,7 @@ impl CompletionProvider for SqlCompletionProvider {
                             }
                         }).collect::<Vec<_>>();
 
-                        log::debug!("SQL Completion: Returning {} table completion items", completion_items.len());
+                        tracing::debug!("SQL Completion: Returning {} table completion items", completion_items.len());
                         Ok(CompletionResponse::Array(completion_items))
                     }
                     Err(_) => {

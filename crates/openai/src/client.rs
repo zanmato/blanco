@@ -176,7 +176,7 @@ impl OpenAIClient {
                 })?;
 
             // Log the error response for debugging
-            log::debug!("OpenAI API error response ({}): {}", status, body);
+            tracing::debug!("OpenAI API error response ({}): {}", status, body);
 
             if let Ok(error_response) = serde_json::from_str::<OpenAIErrorResponse>(&body) {
                 return Err(OpenAIError::api_error(status, &error_response));
@@ -280,7 +280,7 @@ impl ChatProvider for OpenAIClient {
             })?;
 
         // Log the request body for debugging
-        log::debug!("OpenAI chat completion request body: {}", request_body);
+        tracing::debug!("OpenAI chat completion request body: {}", request_body);
 
         // Prepare headers and auth string
         let auth_header = format!("Bearer {}", self.config.api_key);
@@ -300,7 +300,7 @@ impl ChatProvider for OpenAIClient {
         }
 
         // Log the request URL for debugging
-        log::debug!(
+        tracing::debug!(
             "OpenAI chat completion request URL: {}",
             self.config.chat_completions_url()
         );
@@ -319,12 +319,12 @@ impl ChatProvider for OpenAIClient {
             })?;
 
         // Log the response body for debugging
-        log::debug!("OpenAI chat completion response body: {}", response_body);
+        tracing::debug!("OpenAI chat completion response body: {}", response_body);
 
         // Parse the response
         let openai_response: OpenAIResponse =
             serde_json::from_str(&response_body).map_err(|err| -> ProviderError {
-                log::debug!("JSON parsing errors: {}", err);
+                tracing::debug!("JSON parsing errors: {}", err);
                 anyhow::anyhow!("JSON parsing error: {}", err).into()
             })?;
 
@@ -351,7 +351,7 @@ impl ChatProvider for OpenAIClient {
             })?;
 
         // Log the request body for debugging
-        log::debug!(
+        tracing::debug!(
             "OpenAI stream chat completion request body: {}",
             request_body
         );
@@ -375,7 +375,7 @@ impl ChatProvider for OpenAIClient {
         }
 
         // Log the streaming request URL for debugging
-        log::debug!(
+        tracing::debug!(
             "OpenAI stream chat completion request URL: {}",
             self.config.chat_completions_url()
         );
@@ -431,7 +431,7 @@ impl ChatProvider for OpenAIClient {
                 })?;
 
             // Log the streaming error response for debugging
-            log::debug!("OpenAI streaming API error response ({}): {}", status, body);
+            tracing::debug!("OpenAI streaming API error response ({}): {}", status, body);
 
             if let Ok(error_response) = serde_json::from_str::<OpenAIErrorResponse>(&body) {
                 return Err(ProviderError::from(anyhow::anyhow!(
@@ -455,7 +455,7 @@ impl ChatProvider for OpenAIClient {
             Ok(data) => serde_json::from_str::<OpenAIStreamResponse>(&data)
                 .map(|openai_chunk| openai_chunk.into())
                 .map_err(|err| -> ProviderError {
-                    log::debug!("JSON parsing errors: {}", err);
+                    tracing::debug!("JSON parsing errors: {}", err);
                     anyhow::anyhow!("JSON parsing error: {}", err).into()
                 }),
             Err(err) => Err(ProviderError::from(anyhow::anyhow!("SSE error: {}", err))),

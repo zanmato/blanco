@@ -939,8 +939,6 @@ dependencies = [
  "regex",
  "reqwest",
  "ropey",
- "russh 0.44.1",
- "russh-keys 0.44.0",
  "rust-embed",
  "rust_decimal",
  "serde",
@@ -969,14 +967,12 @@ dependencies = [
  "futures",
  "gpui",
  "gpui-component",
- "log",
  "lsp-types",
  "ropey",
- "russh 0.44.1",
- "russh-keys 0.44.0",
  "serde",
  "serde_json",
  "tokio-util",
+ "tracing",
  "uuid",
 ]
 
@@ -994,11 +990,11 @@ dependencies = [
  "chrono",
  "futures",
  "http",
- "log",
  "reqwest",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "tracing",
  "uuid",
 ]
 
@@ -1882,16 +1878,16 @@ dependencies = [
  "async-trait",
  "blanco-core",
  "gpui",
- "log",
  "mysql",
  "postgres",
- "russh 0.45.0",
+ "russh",
  "serde",
  "serde_json",
  "sqlite",
  "sqlx",
  "tokio",
  "tokio-test",
+ "tracing",
  "url",
  "uuid",
 ]
@@ -4540,7 +4536,6 @@ dependencies = [
  "futures",
  "gpui",
  "gpui-component",
- "log",
  "lsp-types",
  "mysql_common",
  "ropey",
@@ -4549,7 +4544,7 @@ dependencies = [
  "serde_json",
  "sql-parse",
  "sqlx",
- "tokio",
+ "tracing",
  "url",
  "uuid",
 ]
@@ -5578,7 +5573,6 @@ dependencies = [
  "futures",
  "gpui",
  "gpui-component",
- "log",
  "lsp-types",
  "ropey",
  "rust_decimal",
@@ -5587,6 +5581,7 @@ dependencies = [
  "sql-parse",
  "sqlx",
  "tokio",
+ "tracing",
  "url",
  "uuid",
 ]
@@ -6285,48 +6280,6 @@ dependencies = [
 
 [[package]]
 name = "russh"
-version = "0.44.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6500eedfaf8cd81597899d896908a4b9cd5cb566db875e843c04ccf92add2c16"
-dependencies = [
- "aes",
- "aes-gcm",
- "async-trait",
- "bitflags 2.10.0",
- "byteorder",
- "cbc",
- "chacha20",
- "ctr",
- "curve25519-dalek",
- "digest",
- "elliptic-curve",
- "flate2",
- "futures",
- "generic-array",
- "hex-literal",
- "hmac",
- "log",
- "num-bigint",
- "once_cell",
- "p256",
- "p384",
- "p521",
- "poly1305",
- "rand 0.8.5",
- "rand_core 0.6.4",
- "russh-cryptovec",
- "russh-keys 0.44.0",
- "sha1",
- "sha2",
- "ssh-encoding",
- "ssh-key",
- "subtle",
- "thiserror 1.0.69",
- "tokio",
-]
-
-[[package]]
-name = "russh"
 version = "0.45.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0a229f2a03daea3f62cee897b40329ce548600cca615906d98d58b8db3029b19"
@@ -6358,7 +6311,7 @@ dependencies = [
  "rand 0.8.5",
  "rand_core 0.6.4",
  "russh-cryptovec",
- "russh-keys 0.45.0",
+ "russh-keys",
  "sha1",
  "sha2",
  "ssh-encoding",
@@ -6376,57 +6329,6 @@ checksum = "fadd2c0ab350e21c66556f94ee06f766d8bdae3213857ba7610bfd8e10e51880"
 dependencies = [
  "libc",
  "winapi",
-]
-
-[[package]]
-name = "russh-keys"
-version = "0.44.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb8c0bfe024d4edd242f65a2ac6c8bf38a892930050b9eb90909d8fc2c413c8d"
-dependencies = [
- "aes",
- "async-trait",
- "bcrypt-pbkdf",
- "block-padding",
- "byteorder",
- "cbc",
- "ctr",
- "data-encoding",
- "der",
- "digest",
- "dirs 5.0.1",
- "ecdsa",
- "ed25519-dalek",
- "elliptic-curve",
- "futures",
- "hmac",
- "inout",
- "log",
- "md5",
- "num-integer",
- "p256",
- "p384",
- "p521",
- "pbkdf2 0.11.0",
- "pkcs1",
- "pkcs5",
- "pkcs8",
- "rand 0.8.5",
- "rand_core 0.6.4",
- "rsa",
- "russh-cryptovec",
- "sec1",
- "serde",
- "sha1",
- "sha2",
- "spki",
- "ssh-encoding",
- "ssh-key",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "typenum",
- "zeroize",
 ]
 
 [[package]]
@@ -7321,7 +7223,6 @@ dependencies = [
  "futures",
  "gpui",
  "gpui-component",
- "log",
  "lsp-types",
  "ropey",
  "serde",
@@ -7329,6 +7230,7 @@ dependencies = [
  "sql-parse",
  "sqlx",
  "tempfile",
+ "tracing",
  "uuid",
 ]
 

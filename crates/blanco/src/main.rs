@@ -51,19 +51,19 @@ fn main() {
         if let Err(err) = ThemeRegistry::watch_dir(PathBuf::from("./themes"), cx, move |cx| {
             if let Some(theme) = ThemeRegistry::global(cx).themes().get(&theme_name).cloned() {
                 Theme::global_mut(cx).apply_config(&theme);
-                log::info!("Applying theme {}", theme_name);
+                tracing::info!("Applying theme {}", theme_name);
             }
         }) {
-            log::error!("Failed to watch themes directory: {}", err);
+            tracing::error!("Failed to watch themes directory: {}", err);
         }
 
         // Initialize app database (for query tabs, history, connections) synchronously
         let db = async_std::task::block_on(async { AppDatabase::new().await });
 
         if let Err(e) = db {
-            log::error!("Critical: Failed to initialize database: {}", e);
+            tracing::error!("Critical: Failed to initialize database: {}", e);
         } else {
-            log::info!("Global DB bro!");
+            tracing::info!("Global DB bro!");
             cx.set_global(db.unwrap());
         }
 

@@ -249,7 +249,7 @@ impl ToolHandler for ListTablesTool {
         arguments: Value,
         database_service: Option<Arc<dyn DatabaseService>>,
     ) -> ToolResult {
-        log::debug!(
+        tracing::debug!(
             "ListTablesTool execute_with_db called with arguments: {}",
             arguments
         );
@@ -275,7 +275,7 @@ impl ToolHandler for ListTablesTool {
             .and_then(|v| v.as_i64())
             .unwrap_or(0); // Default offset of 0
 
-        log::debug!(
+        tracing::debug!(
             "Extracted parameters - table_names: {:?}, output_format: {:?}, limit: {}, offset: {}",
             table_names,
             output_format,
@@ -292,7 +292,7 @@ impl ToolHandler for ListTablesTool {
 
         if let Some(conn_id) = connection_id {
             if let Some(db_service) = &database_service {
-                log::debug!(
+                tracing::debug!(
                     "Using database service for ListTablesTool with connection: {}",
                     conn_id
                 );
@@ -314,7 +314,7 @@ impl ToolHandler for ListTablesTool {
                             .unwrap_or_else(|_| "Invalid JSON result".to_string()),
                     ),
                     Err(e) => {
-                        log::error!(
+                        tracing::error!(
                             "Failed to query database schema via database service: {}",
                             e
                         );
@@ -331,7 +331,7 @@ impl ToolHandler for ListTablesTool {
                 )
             }
         } else {
-            log::warn!("No connection string available for ListTablesTool");
+            tracing::warn!("No connection string available for ListTablesTool");
             ToolResult::error(
                 "list-tables",
                 "No database connection available. Please connect to a database first.",
@@ -434,7 +434,7 @@ impl ToolHandler for ReadTabTool {
         _arguments: Value,
         _database_service: Option<Arc<dyn DatabaseService>>,
     ) -> ToolResult {
-        log::debug!("ReadTabTool execute_with_db called");
+        tracing::debug!("ReadTabTool execute_with_db called");
 
         // Get tab content using the resolver or return a default message
         let tab_content = if let Some(resolver) = &self.tab_content_resolver {

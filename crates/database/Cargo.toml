@@ -7,9 +7,9 @@ edition = "2021"
 # Core dependencies
 blanco-core = { path = "../blanco-core" }
 gpui = { workspace = true }
-sqlx = { version = "0.8", features = ["runtime-async-std", "sqlite", "postgres", "mysql"] }
+sqlx = { workspace = true }
 russh = "0.45"
-async-trait = "0.1"
+async-trait = { workspace = true }
 
 # Database crates
 postgres = { path = "../postgres" }
@@ -18,22 +18,22 @@ sqlite = { path = "../sqlite" }
 
 # Async and utilities
 tokio = { version = "1.0", features = ["full", "net", "io-util"] }
-async-std = { version = "1.0", features = ["attributes"] }
-async-compat = "0.2"
-anyhow = "1.0"
+async-std = { workspace = true }
+async-compat = { workspace = true }
+anyhow = { workspace = true }
 
 # Logging
-log = "0.4"
+tracing = { workspace = true }
 
 # Serialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 # URL parsing
-url = "2.0"
+url = { workspace = true }
 
 # UUID for generating unique IDs
-uuid = { version = "1.0", features = ["v4"] }
+uuid = { workspace = true }
 
 [dev-dependencies]
 tokio-test = "0.4"

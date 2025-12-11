@@ -68,7 +68,7 @@ impl ChatPanel {
         let subscription = cx.subscribe(&session, |panel, _session, event, cx| {
             match event {
                 ChatEvent::MessageAdded { message } => {
-                    log::info!("Message added! {:?}", message);
+                    tracing::info!("Message added! {:?}", message);
                     let message = message.clone();
                     let message_state = cx.new(|cx| {
                         ChatMessageState::new(
@@ -85,7 +85,7 @@ impl ChatPanel {
                 }
                 ChatEvent::StreamStarted { message_id } => {
                     // Handle stream start
-                    log::debug!("Chat stream started: {}", message_id);
+                    tracing::debug!("Chat stream started: {}", message_id);
                     panel.loading_state = LoadingState::Streaming;
                     cx.notify();
                 }
@@ -107,12 +107,12 @@ impl ChatPanel {
                     cx.notify();
                 }
                 ChatEvent::Error { message } => {
-                    log::error!("Chat error: {}", message);
+                    tracing::error!("Chat error: {}", message);
                     panel.loading_state = LoadingState::Error(message.clone());
                     cx.notify();
                 }
                 ChatEvent::SessionStarted { provider, model } => {
-                    log::info!("Chat session started: {} ({})", provider, model);
+                    tracing::info!("Chat session started: {} ({})", provider, model);
                     cx.notify();
                 }
                 ChatEvent::SessionCleared => {

@@ -9,8 +9,8 @@ use gpui::{
 use gpui_component::{
     ActiveTheme, Root, TITLE_BAR_HEIGHT, TitleBar, WindowExt as _, button::Button, menu::AppMenuBar,
 };
-use log::{debug, error, info};
 use serde::Deserialize;
+use tracing::{debug, error, info};
 
 use crate::{
     app,
@@ -168,7 +168,7 @@ impl BlancoApp {
                         schema_name,
                         table_name,
                     } => {
-                        log::info!(
+                        tracing::info!(
                             "CreateNewQueryTab called: {} (database: {:?}, schema: {:?}, table: {:?})",
                             connection_id,
                             database_name,
@@ -221,16 +221,16 @@ impl BlancoApp {
                         // Optionally refresh editor panel connection options
                         editor_panel_clone.update(cx, |_editor_panel, _cx| {
                             // TODO: Refresh connection options in editor if needed
-                            log::info!("Connection established, refreshing components");
+                            tracing::info!("Connection established, refreshing components");
                         });
                     }
                     AppEvent::ConnectionLost { .. } => {
                         // Handle connection loss
-                        log::info!("Connection lost, updating UI components");
+                        tracing::info!("Connection lost, updating UI components");
                     }
                     AppEvent::ConnectionsLoaded { .. } => {
                         // This is the key event for tab restoration with window access!
-                        log::info!("Connections loaded");
+                        tracing::info!("Connections loaded");
                     }
                     _ => {}
                 }
@@ -245,43 +245,43 @@ impl BlancoApp {
             match event {
                 AppEvent::QueryExecutionStarted { .. } => {
                     // Could show loading indicator or update status
-                    log::info!("Query execution started");
+                    tracing::info!("Query execution started");
                 }
                 AppEvent::QueryExecutionCompleted { connection_id, database_name, success, .. } => {
                     // Refresh connections panel to mark connection as connected if query was successful
                     if *success {
                         if let Some(conn_id) = connection_id {
-                            log::info!("Query execution completed successfully for connection {} ({:?}), refreshing connections panel", conn_id, database_name);
+                            tracing::info!("Query execution completed successfully for connection {} ({:?}), refreshing connections panel", conn_id, database_name);
                             sidebar_clone.update(cx, |sidebar, cx| {
                                 // Mark the connection as connected and refresh the sidebar view
                                 sidebar.validate_connection_as_connected(*conn_id, cx);
                             });
                         }
                     } else {
-                        log::info!("Query execution completed with errors");
+                        tracing::info!("Query execution completed with errors");
                     }
                 }
                 AppEvent::TableOperationCompleted { table_name, success, rows_affected, operations_executed, .. } => {
                     if *success {
-                        log::info!(
+                        tracing::info!(
                             "Table operations completed successfully on '{}': {} operations, {} rows affected",
                             table_name, operations_executed, rows_affected.unwrap_or(0)
                         );
                     } else {
-                        log::info!(
+                        tracing::info!(
                             "Table operations failed on '{}': {} operations attempted",
                             table_name, operations_executed
                         );
                     }
                 }
                 AppEvent::ToggleSidebar => {
-                        log::info!("🔄 ToggleSidebar event received!");
+                        tracing::info!("🔄 ToggleSidebar event received!");
                         app.sidebar_collapsed = !app.sidebar_collapsed;
-                        log::info!("🔄 New sidebar_collapsed state: {}", app.sidebar_collapsed);
+                        tracing::info!("🔄 New sidebar_collapsed state: {}", app.sidebar_collapsed);
 
                         // Update sidebar's collapse state
                         sidebar_clone.update(cx, |_sidebar, _cx| {
-                            log::info!(
+                            tracing::info!(
                                 "🔄 Calling sidebar.set_collapsed with: {}",
                                 app.sidebar_collapsed
                             );
@@ -294,7 +294,7 @@ impl BlancoApp {
                         });
                 }
                 AppEvent::RenameTabRequested { tab_index, new_name } => {
-                        log::info!("📝 RenameTabRequested event received: tab_index={}, new_name={}", tab_index, new_name);
+                        tracing::info!("📝 RenameTabRequested event received: tab_index={}, new_name={}", tab_index, new_name);
 
                         // Dispatch the RenameTab action to handle the rename
                         cx.dispatch_action(&RenameTab {
@@ -331,9 +331,9 @@ impl BlancoApp {
     }
 
     fn toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
-        log::info!("🔄 ToggleSidebar action triggered!");
+        tracing::info!("🔄 ToggleSidebar action triggered!");
         self.sidebar_collapsed = !self.sidebar_collapsed;
-        log::info!("🔄 New sidebar_collapsed state: {}", self.sidebar_collapsed);
+        tracing::info!("🔄 New sidebar_collapsed state: {}", self.sidebar_collapsed);
 
         // Update editor panel's sidebar state
         self.editor_panel.update(cx, |panel, cx| {
@@ -403,10 +403,13 @@ impl BlancoApp {
                             cx.spawn(async move |_cx| {
                                 match app_database.save_connection(&conn_data.clone()).await {
                                     Ok(connection_id) => {
-                                        log::info!("Connection saved with ID: {}", connection_id);
+                                        tracing::info!(
+                                            "Connection saved with ID: {}",
+                                            connection_id
+                                        );
                                     }
                                     Err(e) => {
-                                        log::error!("Failed to save connection: {}", e);
+                                        tracing::error!("Failed to save connection: {}", e);
                                     }
                                 }
                             })
@@ -463,7 +466,7 @@ impl BlancoApp {
     }
 
     fn on_rename_tab(&mut self, action: &RenameTab, _window: &mut Window, cx: &mut Context<Self>) {
-        log::info!(
+        tracing::info!(
             "on_rename_tab called: tab_index={}, new_name={}",
             action.tab_index,
             action.new_name

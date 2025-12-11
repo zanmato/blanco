@@ -1,4 +1,5 @@
 use chrono::Utc;
+use database::{DatabaseService, DatabaseServiceTrait};
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
     Styled, Subscription, Task, Window, div, prelude::FluentBuilder, px,
@@ -13,9 +14,8 @@ use gpui_component::{
     v_flex,
 };
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use database::{DatabaseService, DatabaseServiceTrait};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Export format options
 #[derive(Clone, Debug, PartialEq)]
@@ -233,11 +233,13 @@ impl ExportModal {
                 // Start async export
                 let export_task = cx.spawn(async move |_entity, _cx| {
                     // Get connection
-                    let connection = match db_service.get_or_create_connection(connection_id, None).await
+                    let connection = match db_service
+                        .get_or_create_connection(connection_id, None)
+                        .await
                     {
                         Ok(conn) => conn,
                         Err(e) => {
-                            log::error!("Failed to get connection for export: {}", e);
+                            tracing::error!("Failed to get connection for export: {}", e);
                             return;
                         }
                     };
@@ -271,7 +273,7 @@ impl ExportModal {
                             &file_path,
                             &options,
                             move |progress| {
-                                log::info!(
+                                tracing::info!(
                                     "Export progress: {}/{} rows",
                                     progress.exported_rows,
                                     progress.total_rows
@@ -281,14 +283,14 @@ impl ExportModal {
                         .await
                     {
                         Ok(_) => {
-                            log::info!(
+                            tracing::info!(
                                 "Export completed successfully: {} -> {}",
                                 table_name_for_query,
                                 file_path.display()
                             );
                         }
                         Err(e) => {
-                            log::error!("Export failed: {}", e);
+                            tracing::error!("Export failed: {}", e);
                         }
                     }
                 });
@@ -296,7 +298,7 @@ impl ExportModal {
                 self.export_task = Some(export_task);
             }
             Err(error) => {
-                log::error!("Export error: {}", error);
+                tracing::error!("Export error: {}", error);
             }
         }
     }

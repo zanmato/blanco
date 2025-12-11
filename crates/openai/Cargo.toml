@@ -19,7 +19,7 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 thiserror = { workspace = true }
 async-stream = { workspace = true }
-log = { workspace = true }
+tracing = { workspace = true }
 bytes = "1.0"
 
 # Internal dependencies

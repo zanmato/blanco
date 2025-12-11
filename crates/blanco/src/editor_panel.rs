@@ -14,8 +14,8 @@ use gpui_component::{
     tab::{Tab, TabBar},
     v_flex,
 };
-use log::{debug, error, info};
 use std::{rc::Rc, sync::Arc};
+use tracing::{debug, error, info};
 
 // Use reqwest
 use reqwest;
@@ -183,16 +183,16 @@ impl EditorPanel {
                         updated_tab.title = new_name;
 
                         if let Err(e) = app_database.save_query_tab(&updated_tab).await {
-                            log::error!("Failed to update tab name in database: {}", e);
+                            tracing::error!("Failed to update tab name in database: {}", e);
                         }
                     } else {
-                        log::error!("Failed to load existing tab data for tab ID: {}", db_id);
+                        tracing::error!("Failed to load existing tab data for tab ID: {}", db_id);
                     }
                 })
                 .detach();
             }
 
-            log::info!(
+            tracing::info!(
                 "Tab {} renamed from '{}' to '{}'",
                 tab_index,
                 old_name,
@@ -321,7 +321,7 @@ impl EditorPanel {
                         return;
                     }
 
-                    log::info!("Executing query via async pipeline: {}", query);
+                    tracing::info!("Executing query via async pipeline: {}", query);
 
                     // Log the query to the SQL log
                     query_tab.sql_log.update(cx, |sql_log, cx| {
@@ -342,20 +342,17 @@ impl EditorPanel {
                         let start_time = std::time::Instant::now();
 
                         // Execute query using db_service with connection_id
-                        log::debug!(
+                        tracing::debug!(
                             "Query execution - using connection_id: '{}', database: '{}'",
                             connection_id,
                             database_name
                         );
                         match db_service
-                            .get_or_create_connection(
-                                connection_id,
-                                Some(&database_name),
-                            )
+                            .get_or_create_connection(connection_id, Some(&database_name))
                             .await
                         {
                             Ok(connection) => {
-                                log::debug!(
+                                tracing::debug!(
                                     "Connection retrieved successfully, type: {}",
                                     connection.get_connection_type()
                                 );
@@ -366,7 +363,7 @@ impl EditorPanel {
                                     Ok(mut result) => {
                                         let duration_ms = start_time.elapsed().as_millis() as i64;
 
-                                        log::info!(
+                                        tracing::info!(
                                             "Query executed successfully: {} rows in {}ms",
                                             result.row_count(),
                                             duration_ms
@@ -395,7 +392,7 @@ impl EditorPanel {
                                                 .await
                                             {
                                                 result.primary_key_column = Some(pk_column);
-                                                log::info!(
+                                                tracing::info!(
                                                     "Detected primary key '{}' for table '{}'",
                                                     result.primary_key_column.as_ref().unwrap(),
                                                     table_name
@@ -440,7 +437,7 @@ impl EditorPanel {
                                             .ok();
                                     }
                                     Err(e) => {
-                                        log::error!("Query execution failed: {}", e);
+                                        tracing::error!("Query execution failed: {}", e);
 
                                         // Log execution error to SQL log
                                         let _error_duration =
@@ -485,7 +482,7 @@ impl EditorPanel {
                                 }
                             }
                             Err(e) => {
-                                log::error!("Failed to get connection: {}", e);
+                                tracing::error!("Failed to get connection: {}", e);
                                 editor_panel_entity
                                     .update(cx, |_, cx| {
                                         cx.emit(AppEvent::ErrorOccurred {
@@ -762,7 +759,7 @@ impl EditorPanel {
                         });
                     }
                     Err(e) => {
-                        log::error!(
+                        tracing::error!(
                             "Failed to create chat provider: {}. Not creating chat panel.",
                             e
                         );
@@ -830,11 +827,11 @@ impl Render for EditorPanel {
                                 Icon::new(IconName::PanelLeftClose).size_4()
                             })
                             .on_click(cx.listener(|_this, _event, _window, cx| {
-                                log::info!("🖱️ Sidebar collapse button clicked!");
+                                tracing::info!("🖱️ Sidebar collapse button clicked!");
                                 // Emit the toggle sidebar event
-                                log::info!("🖱️ Emitting ToggleSidebar event...");
+                                tracing::info!("🖱️ Emitting ToggleSidebar event...");
                                 cx.emit(AppEvent::ToggleSidebar);
-                                log::info!("🖱️ ToggleSidebar event emitted");
+                                tracing::info!("🖱️ ToggleSidebar event emitted");
                             }))
                     )
                     .children(self.tabs.iter().enumerate().map(|(ix, tab)| {
@@ -875,7 +872,7 @@ impl Render for EditorPanel {
                                                                 // Get the current value from the form
                                                                 let new_name = form.read(cx).get_value(cx);
 
-                                                                log::info!("Modal OK button clicked - tab_index={}, new_name='{}'", tab_index_clone, new_name);
+                                                                tracing::info!("Modal OK button clicked - tab_index={}, new_name='{}'", tab_index_clone, new_name);
 
                                                                 // Use the app's global action system instead of local context
                                                                 // Create a new RenameTab action and dispatch it through the app
@@ -1001,7 +998,7 @@ impl Render for EditorPanel {
                                                                 .min_h_0()
                                                                 .on_key_down(cx.listener(|this, evt: &gpui::KeyDownEvent, window, cx| {
                                                                     if evt.keystroke.should_match(&this.run_query_keystroke) {
-                                                                        log::debug!("Matches keystroke {:?}", evt.keystroke);
+                                                                        tracing::debug!("Matches keystroke {:?}", evt.keystroke);
                                                                         this.run_query(window, cx);
                                                                     }
                                                                 }))

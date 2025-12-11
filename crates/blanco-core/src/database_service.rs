@@ -33,7 +33,9 @@ pub trait DatabaseService: Send + Sync {
         connection_id: i64,
         sql: &str,
     ) -> Result<crate::QueryResult> {
-        let connection = self.get_or_create_connection_by_id(connection_id, None).await?;
+        let connection = self
+            .get_or_create_connection_by_id(connection_id, None)
+            .await?;
         connection.execute_query(sql, None).await
     }
 
@@ -44,7 +46,9 @@ pub trait DatabaseService: Send + Sync {
         database: Option<&str>,
         sql: &str,
     ) -> Result<crate::QueryResult> {
-        let connection = self.get_or_create_connection_by_id(connection_id, database).await?;
+        let connection = self
+            .get_or_create_connection_by_id(connection_id, database)
+            .await?;
         connection.execute_query(sql, None).await
     }
 
@@ -56,13 +60,15 @@ pub trait DatabaseService: Send + Sync {
         limit: Option<i64>,
         offset: Option<i64>,
     ) -> Result<Value> {
-        let connection = self.get_or_create_connection_by_id(connection_id, None).await?;
+        let connection = self
+            .get_or_create_connection_by_id(connection_id, None)
+            .await?;
 
         // Get basic connection info
         let connection_type = connection.get_connection_type();
         let display_name = connection.get_display_name();
 
-        log::info!(
+        tracing::info!(
             "Getting database schema for {} ({}) with limit={:?}, offset={:?}",
             display_name,
             connection_type,
@@ -93,7 +99,7 @@ pub trait DatabaseService: Send + Sync {
             }
             _ => {
                 // Fallback to the original method for unknown database types
-                log::warn!(
+                tracing::warn!(
                     "Using fallback method for unknown database type: {}",
                     connection_type
                 );
@@ -123,13 +129,15 @@ pub trait DatabaseService: Send + Sync {
         limit: Option<i64>,
         offset: Option<i64>,
     ) -> Result<Value> {
-        let connection = self.get_or_create_connection_by_id(connection_id, database).await?;
+        let connection = self
+            .get_or_create_connection_by_id(connection_id, database)
+            .await?;
 
         // Get basic connection info
         let connection_type = connection.get_connection_type();
         let display_name = connection.get_display_name();
 
-        log::info!(
+        tracing::info!(
             "Getting database schema for {} ({}) with limit={:?}, offset={:?}",
             display_name,
             connection_type,
@@ -160,7 +168,7 @@ pub trait DatabaseService: Send + Sync {
             }
             _ => {
                 // Fallback to the original method for unknown database types
-                log::warn!(
+                tracing::warn!(
                     "Using fallback method for unknown database type: {}",
                     connection_type
                 );
@@ -257,7 +265,7 @@ pub trait DatabaseService: Send + Sync {
             }
         }
 
-        log::info!(
+        tracing::info!(
             "PostgreSQL schema query completed: {} tables found",
             tables.len()
         );
@@ -359,7 +367,7 @@ pub trait DatabaseService: Send + Sync {
             }
         }
 
-        log::info!(
+        tracing::info!(
             "SQLite schema query completed: {} tables found",
             tables.len()
         );
@@ -380,7 +388,7 @@ pub trait DatabaseService: Send + Sync {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<Value>> {
-        log::warn!("Using fallback schema method - making multiple queries");
+        tracing::warn!("Using fallback schema method - making multiple queries");
 
         let mut tables = connection.get_tables(table_names).await?;
 
@@ -426,7 +434,8 @@ pub trait DatabaseService: Send + Sync {
 
     /// Get MySQL database schema
     async fn get_mysql_schema(&self, connection: &Arc<dyn Connection>) -> Result<Vec<Value>> {
-        self.get_mysql_schema_paginated(connection, None, 20, 0).await
+        self.get_mysql_schema_paginated(connection, None, 20, 0)
+            .await
     }
 
     /// Get MySQL database schema with pagination
@@ -447,8 +456,13 @@ pub trait DatabaseService: Send + Sync {
             }
 
             // Parse comma-separated table names
-            let table_names: Vec<&str> = table_names_str.split(',').map(|name| name.trim()).collect();
-            let placeholders = table_names.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let table_names: Vec<&str> =
+                table_names_str.split(',').map(|name| name.trim()).collect();
+            let placeholders = table_names
+                .iter()
+                .map(|_| "?")
+                .collect::<Vec<_>>()
+                .join(",");
             format!(
                 "SELECT table_name FROM information_schema.tables
                  WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE'
@@ -496,7 +510,9 @@ pub trait DatabaseService: Send + Sync {
             let column_result = connection
                 .execute_query(&column_query, Some(&table_name))
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to get columns for table {}: {}", table_name, e))?;
+                .map_err(|e| {
+                    anyhow::anyhow!("Failed to get columns for table {}: {}", table_name, e)
+                })?;
 
             let mut columns_array = Vec::new();
 
@@ -508,7 +524,11 @@ pub trait DatabaseService: Send + Sync {
                 let column_name = col_row[0].clone();
                 let data_type = col_row[1].clone();
                 let is_nullable_str = col_row[2].clone();
-                let default_value = if col_row[3].is_empty() { None } else { Some(col_row[3].clone()) };
+                let default_value = if col_row[3].is_empty() {
+                    None
+                } else {
+                    Some(col_row[3].clone())
+                };
                 let max_length_str = col_row[4].clone();
                 let column_key = col_row[5].clone();
 

@@ -47,10 +47,6 @@ tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 thiserror = "1.0"
 regex = "1.10"
 async-trait = "0.1"
-
-# SSH tunnel support
-russh = "0.44"
-russh-keys = "0.44"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 
 # Database dependencies
@@ -58,6 +54,7 @@ sqlx = { version = "0.8", features = [
     "runtime-async-std",
     "sqlite",
     "postgres",
+    "mysql",
     "uuid",
     "chrono",
     "json",

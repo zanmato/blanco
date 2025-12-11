@@ -274,7 +274,7 @@ impl ChatSession {
             }
             loop_count += 1;
 
-            log::debug!("Starting message loop iteration {}", loop_count);
+            tracing::debug!("Starting message loop iteration {}", loop_count);
 
             // Set loading state to streaming when making request
             let _ = chat_session_handle.update(async_cx, |session, cx| {
@@ -304,7 +304,7 @@ impl ChatSession {
                 anyhow::anyhow!("No response content received on iteration {}", loop_count)
             })?;
 
-            log::debug!(
+            tracing::debug!(
                 "Response received on iteration {}, finish reason: {:?}",
                 loop_count,
                 choice.finish_reason
@@ -320,7 +320,7 @@ impl ChatSession {
                         .map(|t| t.len())
                         .unwrap_or(0);
 
-                    log::debug!(
+                    tracing::debug!(
                         "Tool calls detected on iteration {}, processing {} tool calls",
                         loop_count,
                         tool_calls_count
@@ -355,7 +355,7 @@ impl ChatSession {
                         )
                     })?;
 
-                    log::debug!(
+                    tracing::debug!(
                         "Completed processing {} tool calls on iteration {}, total messages: {}",
                         tool_calls_count,
                         loop_count,
@@ -364,7 +364,7 @@ impl ChatSession {
                 }
                 blanco_core::chat_provider::FinishReason::Stop => {
                     // Normal completion
-                    log::debug!("Normal completion received on iteration {}", loop_count);
+                    tracing::debug!("Normal completion received on iteration {}", loop_count);
                     let final_message =
                         ChatMessage::assistant(choice.message.content.clone(), model_name);
                     let _ = ui_sender.send(final_message).await;
@@ -384,7 +384,7 @@ impl ChatSession {
                 }
                 _ => {
                     // Handle any other finish reasons
-                    log::debug!(
+                    tracing::debug!(
                         "Unknown finish reason {:?} on iteration {}, treating as completion",
                         choice.finish_reason,
                         loop_count
@@ -449,7 +449,7 @@ impl ChatSession {
 
         // Execute each tool call individually with real-time updates
         for (index, tool_call) in tool_calls.iter().enumerate() {
-            log::debug!(
+            tracing::debug!(
                 "Executing tool call {}/{}: {} with args: {}",
                 index + 1,
                 tool_calls.len(),
@@ -462,7 +462,7 @@ impl ChatSession {
 
             match provider.call_tool(tool_call).await {
                 Ok(result) => {
-                    log::debug!(
+                    tracing::debug!(
                         "Tool call {}/{} succeeded - success: {}, content length: {}",
                         index + 1,
                         tool_calls.len(),
@@ -498,7 +498,7 @@ impl ChatSession {
                     successful_tool_calls += 1;
                 }
                 Err(e) => {
-                    log::error!("Tool call {}/{} failed: {}", index + 1, tool_calls.len(), e);
+                    tracing::error!("Tool call {}/{} failed: {}", index + 1, tool_calls.len(), e);
 
                     // Update tool call data with error
                     if let Some(tc_data) = tool_call_data.get_mut(index) {
@@ -530,7 +530,7 @@ impl ChatSession {
             }
         }
 
-        log::debug!(
+        tracing::debug!(
             "Processed {} tool calls: {} successful, {} failed, total messages: {}",
             tool_calls.len(),
             successful_tool_calls,
@@ -548,7 +548,7 @@ impl ChatSession {
 
         // If some tool calls failed, log a warning but continue
         if failed_tool_calls > 0 {
-            log::warn!(
+            tracing::warn!(
                 "{} out of {} tool calls failed",
                 failed_tool_calls,
                 tool_calls.len()

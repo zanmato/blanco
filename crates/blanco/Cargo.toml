@@ -56,8 +56,6 @@ http = { workspace = true }
 futures = { workspace = true }
 
 # SSH tunnel support
-russh = { workspace = true }
-russh-keys = { workspace = true }
 ssh-key = { version = "0.6" }
 
 
