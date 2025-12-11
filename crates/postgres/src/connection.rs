@@ -538,7 +538,7 @@ impl PostgresConnection {
         log::info!("Creating new connection pool for database: {}", database);
 
         let pool = PgPoolOptions::new()
-            .max_connections(10)
+            .max_connections(1)
             .connect(&database_connection_string)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to connect to database '{}': {}", database, e))?;
@@ -983,7 +983,8 @@ impl PostgresConnection {
         // Handle TIMESTAMPTZ (PostgreSQL internal name for timestamp with time zone)
         if column_type == "TIMESTAMPTZ" || column_type.contains("with time zone") {
             // Try DateTime<Utc> for TIMESTAMPTZ
-            if let Ok(val) = row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>(column_index) {
+            if let Ok(val) = row.try_get::<Option<chrono::DateTime<chrono::Local>>, _>(column_index)
+            {
                 return val
                     .map(|v| v.to_rfc3339())
                     .unwrap_or_else(|| "NULL".to_string());
@@ -999,7 +1000,7 @@ impl PostgresConnection {
         }
 
         // Try timestamp with UTC for regular timestamp types
-        if let Ok(val) = row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>(column_index) {
+        if let Ok(val) = row.try_get::<Option<chrono::DateTime<chrono::Local>>, _>(column_index) {
             return val
                 .map(|v| v.format("%Y-%m-%d %H:%M:%S").to_string())
                 .unwrap_or_else(|| "NULL".to_string());
@@ -1217,7 +1218,7 @@ impl PostgresConnection {
                     "NULL".to_string()
                 }
             }
-            "text" | "varchar" | "char" | "BPCHAR" | "CHAR" => {
+            "text" | "varchar" | "char" | "BPCHAR" | "CHAR" | "TEXT" => {
                 self.handle_string_type(row, column_index, column_type)
             }
             "smallint" | "int2" | "INT2" => self.handle_i16_type(row, column_index, column_type),

@@ -14,6 +14,8 @@ use gpui_component::{
 };
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use database::{DatabaseService, DatabaseServiceTrait};
 
 /// Export format options
 #[derive(Clone, Debug, PartialEq)]
@@ -226,12 +228,12 @@ impl ExportModal {
                 let select_query = format!("SELECT * FROM {}", table_name_for_query);
 
                 // Get database service before entering async context
-                let db_service = crate::db_service::DbService::global(cx).clone();
+                let db_service = DatabaseService::global(cx).clone();
 
                 // Start async export
                 let export_task = cx.spawn(async move |_entity, _cx| {
                     // Get connection
-                    let connection = match db_service.get_or_create_connection(connection_id).await
+                    let connection = match db_service.get_or_create_connection(connection_id, None).await
                     {
                         Ok(conn) => conn,
                         Err(e) => {

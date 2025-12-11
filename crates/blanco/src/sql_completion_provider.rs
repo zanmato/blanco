@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::db_service::DbService;
+use database::{DatabaseService, DatabaseServiceTrait};
 use anyhow::Result;
 use blanco_core::HoverProvider;
 use gpui::{AppContext, Context, Task, Window};
@@ -94,13 +94,13 @@ impl MetadataCache {
 
 /// Fetch table names using the DbService
 async fn fetch_tables(
-    db_service: &DbService,
+    db_service: &DatabaseService,
     connection_id: i64,
     database_name: &str,
 ) -> Result<Vec<String>> {
     log::debug!("Fetching tables for database '{}'", database_name);
     if let Ok(connection) = db_service
-        .get_or_create_connection_with_database(connection_id, Some(database_name))
+        .get_or_create_connection(connection_id, Some(database_name))
         .await
     {
         let tables = connection.get_tables(None).await?;
@@ -122,7 +122,7 @@ async fn fetch_tables(
 
 /// Fetch column names for a specific table using the DbService
 async fn fetch_columns(
-    db_service: &DbService,
+    db_service: &DatabaseService,
     connection_id: i64,
     table_name: &str,
     database_name: &str,
@@ -133,7 +133,7 @@ async fn fetch_columns(
         database_name
     );
     if let Ok(connection) = db_service
-        .get_or_create_connection_with_database(connection_id, Some(database_name))
+        .get_or_create_connection(connection_id, Some(database_name))
         .await
     {
         let columns = connection.get_columns_for_table(table_name, None).await?;
@@ -160,12 +160,12 @@ async fn fetch_columns(
 pub struct SqlCompletionProvider {
     connection_id: i64,
     database_name: String,
-    db_service: DbService,
+    db_service: DatabaseService,
     cache: Arc<std::sync::Mutex<MetadataCache>>,
 }
 
 impl SqlCompletionProvider {
-    pub fn new(connection_id: i64, db_service: DbService) -> Self {
+    pub fn new(connection_id: i64, db_service: DatabaseService) -> Self {
         Self {
             connection_id,
             database_name: "default".to_string(), // Fallback to default database
@@ -177,7 +177,7 @@ impl SqlCompletionProvider {
     pub fn new_with_database(
         connection_id: i64,
         database_name: String,
-        db_service: DbService,
+        db_service: DatabaseService,
     ) -> Self {
         Self {
             connection_id,
@@ -351,7 +351,7 @@ impl SqlCompletionProvider {
     async fn get_table_info(&self, table_name: &str) -> Result<String> {
         let columns = if let Ok(connection) = self
             .db_service
-            .get_or_create_connection_with_database(self.connection_id, Some(&self.database_name))
+            .get_or_create_connection(self.connection_id, Some(&self.database_name))
             .await
         {
             connection.get_columns_for_table(table_name, None).await?
@@ -381,7 +381,7 @@ impl SqlCompletionProvider {
     async fn get_column_info(&self, table_name: &str, column_name: &str) -> Result<String> {
         let columns = if let Ok(connection) = self
             .db_service
-            .get_or_create_connection_with_database(self.connection_id, Some(&self.database_name))
+            .get_or_create_connection(self.connection_id, Some(&self.database_name))
             .await
         {
             connection.get_columns_for_table(table_name, None).await?
@@ -1254,6 +1254,14 @@ fn extract_current_word(text_before_cursor: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::BackgroundExecutor;
+
+    // Create a test DatabaseService that won't actually be used
+    fn create_test_db_service() -> DatabaseService {
+        // Use a simple background executor for tests
+        let executor = BackgroundExecutor::new("test".to_string());
+        Arc::new(DatabaseService::new(executor))
+    }
 
     #[test]
     fn test_extract_current_word() {
@@ -1269,7 +1277,7 @@ mod tests {
         let provider = SqlCompletionProvider::new_with_database(
             1,
             "test_db".to_string(),
-            DbService::new(None, None),
+            create_test_db_service(),
         );
 
         // Test basic keyword detection
@@ -1323,7 +1331,7 @@ mod tests {
         let provider = SqlCompletionProvider::new_with_database(
             1,
             "test_db".to_string(),
-            DbService::new(None, None),
+            create_test_db_service(),
         );
 
         // Test basic alias patterns
@@ -1357,7 +1365,7 @@ mod tests {
         let provider = SqlCompletionProvider::new_with_database(
             1,
             "test_db".to_string(),
-            DbService::new(None, None),
+            create_test_db_service(),
         );
         let aliases = vec![
             TableAlias {
@@ -1386,7 +1394,7 @@ mod tests {
         let provider = SqlCompletionProvider::new_with_database(
             1,
             "test_db".to_string(),
-            DbService::new(None, None),
+            create_test_db_service(),
         );
 
         // Test simple table name
@@ -1419,7 +1427,7 @@ mod tests {
         let provider = SqlCompletionProvider::new_with_database(
             1,
             "test_db".to_string(),
-            DbService::new(None, None),
+            create_test_db_service(),
         );
 
         // Should show tables with FROM
@@ -1446,7 +1454,7 @@ mod tests {
         let provider = SqlCompletionProvider::new_with_database(
             1,
             "test_db".to_string(),
-            DbService::new(None, None),
+            create_test_db_service(),
         );
 
         // Should show columns with dot notation
@@ -1476,7 +1484,7 @@ mod tests {
         let provider = SqlCompletionProvider::new_with_database(
             1,
             "test_db".to_string(),
-            DbService::new(None, None),
+            create_test_db_service(),
         );
 
         // Test basic dot notation
@@ -1549,7 +1557,7 @@ mod tests {
         let provider = SqlCompletionProvider::new_with_database(
             1,
             "test_db".to_string(),
-            DbService::new(None, None),
+            create_test_db_service(),
         );
 
         // Scenario 1: Basic dot notation - "SELECT users." should show columns from users table

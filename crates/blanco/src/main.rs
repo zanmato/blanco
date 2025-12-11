@@ -8,7 +8,6 @@ mod chat_provider_resolver;
 mod connection;
 mod connection_modal;
 mod connections_panel;
-mod db_service;
 mod editor_panel;
 mod export_modal;
 mod export_service;
@@ -19,15 +18,15 @@ mod settings_view;
 mod sql_completion_provider;
 mod sql_document_color_provider;
 mod sql_statement_parser;
-mod ssh_tunnel;
 mod time_format;
 mod transformers;
 
 use assets::Assets;
-use db_service::DbService;
+use database::{ConnectionConfig, DatabaseService, DatabaseType};
 use gpui::{AppContext, Application, SharedString, WindowBounds, WindowOptions, px, size};
 use gpui_component::{Theme, ThemeRegistry};
 use std::path::PathBuf;
+use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
 use crate::{app_database::AppDatabase, app_settings::AppSettings, settings::Settings};
@@ -69,8 +68,76 @@ fn main() {
         }
 
         // Initialize database service with background executor for automatic SSH tunnel establishment
+        let db_service = DatabaseService::new(cx.background_executor().clone());
+        cx.set_global(db_service);
+
+        // Load connections from app database and add them to the database service
         let app_database = AppDatabase::global(cx).clone();
-        let db_service = DbService::new(Some(cx.background_executor().clone()), Some(app_database));
+        let connections =
+            async_std::task::block_on(async move { app_database.load_connections().await })
+                .unwrap_or(Vec::new());
+
+        for connection in connections {
+            if let Some(connection_id) = connection.id {
+                // Convert ConnectionData to ConnectionConfig
+                let db_type = match connection.db_type.as_str() {
+                    "SQLite" => DatabaseType::SQLite,
+                    "PostgreSQL" => DatabaseType::PostgreSQL,
+                    "MySQL" => DatabaseType::MySQL,
+                    _ => DatabaseType::PostgreSQL, // Default to PostgreSQL
+                };
+
+                let connection_config = match db_type {
+                    DatabaseType::SQLite => ConnectionConfig::new_sqlite(
+                        connection_id,
+                        connection.name.clone(),
+                        connection
+                            .database_path
+                            .unwrap_or_else(|| format!("{}.db", connection.name)),
+                    ),
+                    _ => {
+                        let default_port = match db_type {
+                            DatabaseType::PostgreSQL => 5432,
+                            DatabaseType::MySQL => 3306,
+                            DatabaseType::SQLite => 0,
+                        };
+
+                        let mut config = ConnectionConfig::new(
+                            connection_id,
+                            connection.name.clone(),
+                            db_type,
+                            connection.host.unwrap_or_else(|| "localhost".to_string()),
+                            connection.port.unwrap_or(default_port) as u16,
+                            connection.database_name.unwrap_or_else(|| "".to_string()),
+                            connection.username.unwrap_or_else(|| "".to_string()),
+                            connection.password,
+                        );
+
+                        // Add SSH configuration if present
+                        if let Some(ssh_host) = connection.ssh_host {
+                            if let Some(ssh_user) = connection.ssh_user {
+                                config = config.with_ssh_config(
+                                    ssh_host,
+                                    ssh_user,
+                                    connection.ssh_password,
+                                    connection.ssh_private_key_path,
+                                    connection.ssh_private_key_password,
+                                    connection.ssh_port,
+                                );
+                            }
+                        }
+
+                        config
+                    }
+                };
+
+                let db_service = DatabaseService::global(cx).clone();
+                cx.spawn(async move |_| {
+                    db_service.add_connection_config(connection_config).await;
+                })
+                .detach();
+            }
+        }
 
         let app_database = AppDatabase::global(cx).clone();
         let settings =
@@ -80,8 +147,7 @@ fn main() {
         let app_settings = AppSettings::new(cx, Settings::from_key_values(&settings));
         cx.set_global(app_settings);
 
-        // Store the async event sender globally for components to use
-        cx.set_global(db_service);
+        // Store the database service globally for components to use
         cx.activate(true);
 
         let window_bounds = gpui::Bounds::centered(None, size(px(1400.), px(900.)), cx);

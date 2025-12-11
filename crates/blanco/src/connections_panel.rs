@@ -1,7 +1,8 @@
 use crate::app_database::{AppDatabase, ConnectionData};
 use crate::app_events::{AppEvent, TreeItemType};
-use crate::db_service::DbService;
+use database::{DatabaseService, DatabaseServiceTrait};
 use blanco_ui::IconName;
+use std::sync::Arc;
 use gpui::{
     AppContext, ClickEvent, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
     ParentElement, Render, Styled, Window, div, prelude::FluentBuilder, px,
@@ -271,10 +272,10 @@ impl ConnectionsPanel {
             return; // Already loaded
         }
 
-        let db_service = DbService::global(cx).clone();
+        let db_service = DatabaseService::global(cx).clone();
 
         cx.spawn(async move |this_handle, cx| {
-            match db_service.get_or_create_connection(connection_id).await {
+            match db_service.get_or_create_connection(connection_id, None).await {
                 Ok(connection) => {
                     log::debug!("Connected to database: {}", connection.get_display_name());
 
@@ -405,11 +406,11 @@ impl ConnectionsPanel {
         database_name: String,
         cx: &mut Context<Self>,
     ) {
-        let db_service = DbService::global(cx).clone();
+        let db_service = DatabaseService::global(cx).clone();
 
         cx.spawn(async move |this_handle, cx| {
             match db_service
-                .get_or_create_connection_with_database(connection_id, Some(&database_name))
+                .get_or_create_connection(connection_id, Some(&database_name))
                 .await
             {
                 Ok(connection) => {
@@ -519,10 +520,10 @@ impl ConnectionsPanel {
         schema_name: String,
         cx: &mut Context<Self>,
     ) {
-        let db_service = DbService::global(cx).clone();
+        let db_service = DatabaseService::global(cx).clone();
 
         cx.spawn(async move |this_handle, cx| {
-            match db_service.get_or_create_connection_with_database(connection_id, Some(&database_name)).await {
+            match db_service.get_or_create_connection(connection_id, Some(&database_name)).await {
                 Ok(connection) => {
                     log::debug!("Loading tables for schema: {} in database: {} on connection {}", schema_name, database_name, connection_id);
 

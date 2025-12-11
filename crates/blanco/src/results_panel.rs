@@ -17,8 +17,9 @@ use gpui_component::{
 
 use crate::app::{AddRow, DuplicateRow};
 use crate::app_events::AppEvent;
-use crate::db_service::DbService;
 use crate::transformers::CopyHandler;
+use database::{DatabaseService, DatabaseServiceTrait};
+use std::sync::Arc;
 
 // Response structure for table operations
 #[derive(Debug, Clone)]
@@ -1682,16 +1683,16 @@ impl ResultsPanel {
         }
 
         // Spawn background task to execute table operations
-        let db_service = cx.global::<DbService>().clone();
+        let db_service = DatabaseService::global(cx).clone();
         let _table_entity = self.table_state.clone();
         let _sql_log_entity: Option<Entity<blanco_ui::SqlLog>> = sql_log.cloned();
 
         cx.background_spawn(async move {
             let start_time = std::time::Instant::now();
 
-            // Execute table operations using DbService
+            // Execute table operations using DatabaseService
             let result = match db_service
-                .get_or_create_connection(connection_id_for_pipeline)
+                .get_or_create_connection(connection_id_for_pipeline, None)
                 .await
             {
                 Ok(connection) => {

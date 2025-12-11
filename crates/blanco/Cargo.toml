@@ -26,6 +26,7 @@ postgres = { path = "../postgres" }
 sqlite = { path = "../sqlite" }
 mysql = { path = "../mysql" }
 blanco-openai = { path = "../openai" }
+database = { path = "../database" }
 
 # Additional dependencies
 env_logger = { workspace = true }

@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
@@ -18,9 +19,9 @@ use crate::{
     app_settings::AppSettings,
     connection_modal::NewConnectionModal,
     connections_panel::ConnectionsPanel,
-    db_service::DbService,
     editor_panel::{EditorPanel, TabCreationParams},
 };
+use database::DatabaseService;
 
 actions!(
     blanco_app,

@@ -10,9 +10,8 @@ use std::sync::Arc;
 // Use reqwest
 use reqwest;
 
-use crate::db_service::DbService;
 use crate::settings::{ChatSettings, Settings};
-use blanco_core::DatabaseService;
+use database::{DatabaseService, DatabaseServiceTrait};
 use blanco_core::chat_provider::{ChatProvider, ProviderError};
 
 use blanco_openai::{ListTablesTool, OpenAIClient, OpenAIConfig, ReadTabTool, ToolExecutor};
@@ -33,14 +32,14 @@ struct CachedProvider {
 /// to settings and will recreate providers when necessary.
 pub struct ChatProviderResolver {
     http_client: Arc<reqwest::Client>,
-    db_service: DbService,
+    db_service: DatabaseService,
     current_connection_id: Option<i64>,
     cached_provider: Option<CachedProvider>,
 }
 
 impl ChatProviderResolver {
     /// Create a new chat provider resolver
-    pub fn new(http_client: Arc<reqwest::Client>, db_service: DbService) -> Self {
+    pub fn new(http_client: Arc<reqwest::Client>, db_service: DatabaseService) -> Self {
         Self {
             http_client,
             db_service,
@@ -117,8 +116,8 @@ impl ChatProviderResolver {
         }
 
         // Create tool executor with database service
-        let database_service: Arc<dyn DatabaseService> = Arc::new(self.db_service.clone());
-        let mut tool_executor = ToolExecutor::with_database_service(database_service);
+        let database_service = self.db_service.clone();
+        let mut tool_executor = ToolExecutor::with_database_service(Arc::new(database_service));
 
         // Register the list-tables tool with connection resolver
         let connection_id = self.current_connection_id;

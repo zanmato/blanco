@@ -1,0 +1,27 @@
+//! SQLite connection factory
+
+use anyhow::Result;
+use async_trait::async_trait;
+use blanco_core::{Connection, ConnectionFactory};
+use sqlite::{SqliteConnection, SqliteConnectionKey};
+
+/// SQLite connection factory
+pub struct SqliteConnectionFactory;
+
+#[async_trait]
+impl ConnectionFactory for SqliteConnectionFactory {
+    async fn create_connection(&self, connection_string: &str) -> Result<Box<dyn Connection>> {
+        let key = SqliteConnectionKey::from_connection_string(connection_string)?;
+        let mut conn = SqliteConnection::from_key(key);
+        Connection::connect(&mut conn, connection_string).await?;
+        Ok(Box::new(conn))
+    }
+
+    fn parse_connection_string(&self, connection_string: &str) -> Result<String> {
+        Ok(connection_string.to_string())
+    }
+
+    fn get_connection_type(&self) -> &'static str {
+        "SQLite"
+    }
+}

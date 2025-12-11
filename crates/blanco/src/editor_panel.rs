@@ -23,7 +23,6 @@ use reqwest;
 use crate::app_database::QueryTabData;
 use crate::app_events::AppEvent;
 use crate::chat_provider_resolver::ChatProviderResolver;
-use crate::db_service::DbService;
 use crate::rename_form::RenameTabForm;
 use crate::results_panel::ResultsPanel;
 use crate::settings::Settings;
@@ -36,6 +35,7 @@ use crate::{
 use crate::{app::RenameTab, app_settings::AppSettings};
 use blanco_core::chat_provider::{ChatProvider, ProviderError};
 use blanco_ui::{IconName, SqlLog};
+use database::{DatabaseService, DatabaseServiceTrait};
 use gpui_component::Icon;
 
 #[derive(Clone)]
@@ -335,7 +335,7 @@ impl EditorPanel {
                     let query_clone = query.clone();
                     let results_panel_clone = query_tab.results_panel.clone();
                     let sql_log_clone = query_tab.sql_log.clone();
-                    let db_service = DbService::global(cx).clone();
+                    let db_service = DatabaseService::global(cx).clone();
                     let database_name = query_tab.database_name.clone();
 
                     cx.spawn(async move |editor_panel_entity, cx| {
@@ -348,7 +348,7 @@ impl EditorPanel {
                             database_name
                         );
                         match db_service
-                            .get_or_create_connection_with_database(
+                            .get_or_create_connection(
                                 connection_id,
                                 Some(&database_name),
                             )
@@ -641,7 +641,7 @@ impl EditorPanel {
                 .placeholder("Enter your SQL query here...");
 
             // Set up completion provider using connection_id, database_name, and DbService
-            let db_service = DbService::global(cx).clone();
+            let db_service = DatabaseService::global(cx).clone();
             let completion_provider = SqlCompletionProvider::new_with_database(
                 params.connection_id,
                 params.database_name.clone(),
@@ -1210,7 +1210,7 @@ fn create_chat_provider_info(connection_id: i64, cx: &mut App) -> anyhow::Result
     // Create HTTP client using zed-reqwest
     let http_client = Arc::new(reqwest::Client::new());
     // Get db_service
-    let db_service = DbService::global(cx).clone();
+    let db_service = DatabaseService::global(cx).clone();
     // Create chat provider
     let mut resolver = ChatProviderResolver::new(http_client.clone(), db_service);
     resolver.set_connection_id(connection_id);

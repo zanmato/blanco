@@ -14,32 +14,17 @@ use crate::Connection;
 /// A trait that provides database connection management for tools and providers
 #[async_trait]
 pub trait DatabaseService: Send + Sync {
-    /// Get or create a database connection using the provided connection string
-    async fn get_or_create_connection(
-        &self,
-        connection_string: &str,
-    ) -> Result<Arc<dyn Connection>>;
-
-    /// Get or create a database connection using the provided connection ID
+    /// Get or create a database connection using the provided connection ID and optional database name
+    /// The database parameter allows switching databases for connections that support it (e.g., PostgreSQL)
     async fn get_or_create_connection_by_id(
         &self,
-        _connection_id: i64,
+        connection_id: i64,
+        database: Option<&str>,
     ) -> Result<Arc<dyn Connection>> {
-        // Default implementation - resolve connection_id to connection_string
-        // This should be overridden by implementations that have access to the app database
+        // Default implementation - should be overridden
         Err(anyhow::anyhow!(
             "get_or_create_connection_by_id not implemented - trait default only"
         ))
-    }
-
-    /// Execute a query using the provided connection string
-    async fn execute_query(
-        &self,
-        connection_string: &str,
-        sql: &str,
-    ) -> Result<crate::QueryResult> {
-        let connection = self.get_or_create_connection(connection_string).await?;
-        connection.execute_query(sql, None).await
     }
 
     /// Execute a query using the provided connection ID
@@ -48,7 +33,18 @@ pub trait DatabaseService: Send + Sync {
         connection_id: i64,
         sql: &str,
     ) -> Result<crate::QueryResult> {
-        let connection = self.get_or_create_connection_by_id(connection_id).await?;
+        let connection = self.get_or_create_connection_by_id(connection_id, None).await?;
+        connection.execute_query(sql, None).await
+    }
+
+    /// Execute a query using the provided connection ID and optional database
+    async fn execute_query_by_id_with_database(
+        &self,
+        connection_id: i64,
+        database: Option<&str>,
+        sql: &str,
+    ) -> Result<crate::QueryResult> {
+        let connection = self.get_or_create_connection_by_id(connection_id, database).await?;
         connection.execute_query(sql, None).await
     }
 
@@ -60,7 +56,74 @@ pub trait DatabaseService: Send + Sync {
         limit: Option<i64>,
         offset: Option<i64>,
     ) -> Result<Value> {
-        let connection = self.get_or_create_connection_by_id(connection_id).await?;
+        let connection = self.get_or_create_connection_by_id(connection_id, None).await?;
+
+        // Get basic connection info
+        let connection_type = connection.get_connection_type();
+        let display_name = connection.get_display_name();
+
+        log::info!(
+            "Getting database schema for {} ({}) with limit={:?}, offset={:?}",
+            display_name,
+            connection_type,
+            limit,
+            offset
+        );
+
+        let limit = limit.unwrap_or(20).min(100); // Default 20, max 100
+        let offset = offset.unwrap_or(0);
+
+        let tables = match connection_type {
+            "PostgreSQL" => {
+                self.get_postgresql_schema_paginated(&connection, table_names, limit, offset)
+                    .await?
+            }
+            "MySQL" => {
+                self.get_mysql_schema_paginated(
+                    &connection,
+                    table_names,
+                    limit as i32,
+                    offset as i32,
+                )
+                .await?
+            }
+            "SQLite" => {
+                self.get_sqlite_schema_paginated(&connection, table_names, limit, offset)
+                    .await?
+            }
+            _ => {
+                // Fallback to the original method for unknown database types
+                log::warn!(
+                    "Using fallback method for unknown database type: {}",
+                    connection_type
+                );
+                self.get_schema_fallback_paginated(&connection, table_names, limit, offset)
+                    .await?
+            }
+        };
+
+        Ok(serde_json::json!({
+            "connection_type": connection_type,
+            "database_name": display_name,
+            "tables": tables,
+            "pagination": {
+                "limit": limit,
+                "offset": offset,
+                "has_more": tables.len() == limit as usize
+            }
+        }))
+    }
+
+    /// Get database schema information as JSON with pagination support for specific database
+    async fn get_database_schema_paginated_with_database(
+        &self,
+        connection_id: i64,
+        database: Option<&str>,
+        table_names: Option<&str>,
+        limit: Option<i64>,
+        offset: Option<i64>,
+    ) -> Result<Value> {
+        let connection = self.get_or_create_connection_by_id(connection_id, database).await?;
 
         // Get basic connection info
         let connection_type = connection.get_connection_type();
