@@ -1,10 +1,10 @@
 use gpui::{
-    App, AppContext, Axis, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, KeybindingKeystroke, Keystroke, MouseButton, ParentElement,
-    Render, Styled, Window, div, prelude::FluentBuilder, px,
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, KeybindingKeystroke, Keystroke, MouseButton, ParentElement, Render, Styled,
+    Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    ActiveTheme, Sizable, StyledExt, WindowExt as _,
+    ActiveTheme, Sizable, WindowExt as _,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputState, TabSize},
@@ -25,7 +25,6 @@ use crate::app_events::AppEvent;
 use crate::chat_provider_resolver::ChatProviderResolver;
 use crate::rename_form::RenameTabForm;
 use crate::results_panel::ResultsPanel;
-use crate::settings::Settings;
 use crate::sql_completion_provider::SqlCompletionProvider;
 use crate::sql_statement_parser::extract_current_query;
 use crate::{
@@ -35,7 +34,7 @@ use crate::{
 use crate::{app::RenameTab, app_settings::AppSettings};
 use blanco_core::chat_provider::{ChatProvider, ProviderError};
 use blanco_ui::{IconName, SqlLog};
-use database::{DatabaseService, DatabaseServiceTrait};
+use database::DatabaseService;
 use gpui_component::Icon;
 
 #[derive(Clone)]
@@ -202,7 +201,7 @@ impl EditorPanel {
         }
     }
 
-    pub fn add_settings_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn add_settings_tab(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         // Check if settings tab already exists
         if self
             .tabs
@@ -273,14 +272,13 @@ impl EditorPanel {
                     let _title = query_tab.title.clone();
                     let connection_id = query_tab.connection_id;
 
-                    cx.spawn(async move |_entity_handle, _cx| {
+                    cx.spawn(async move |entity_handle, cx| {
                         // Create the final tab data with connection_id
                         let mut final_tab_data = tab_data;
                         final_tab_data.connection_id = Some(connection_id);
 
                         // First save to get or create the database ID
-                        let _final_db_id = match app_database.save_query_tab(&final_tab_data).await
-                        {
+                        let tab_db_id = match app_database.save_query_tab(&final_tab_data).await {
                             Ok(db_id) => {
                                 debug!("Tab saved successfully with db_id: {}", db_id);
                                 db_id
@@ -290,6 +288,18 @@ impl EditorPanel {
                                 return;
                             }
                         };
+
+                        let _ = entity_handle.update(cx, |editor_panel: &mut EditorPanel, _| {
+                            if let Some(tab) = editor_panel.tabs.get_mut(editor_panel.active_tab_ix)
+                            {
+                                match tab {
+                                    TabType::Query(query_tab) => {
+                                        query_tab.db_id = Some(tab_db_id);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        });
                     })
                     .detach();
 
@@ -800,7 +810,7 @@ impl EventEmitter<EditorPanelEvent> for EditorPanel {}
 impl EventEmitter<AppEvent> for EditorPanel {}
 
 impl Render for EditorPanel {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let current_tab = self.tabs.get(self.active_tab_ix);
 
         div()
