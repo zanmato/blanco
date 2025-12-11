@@ -631,7 +631,7 @@ impl PostgresConnection {
 
         match base_type {
             Some("text") | Some("varchar") | Some("char") | Some("BPCHAR") | Some("TEXT")
-            | Some("VARCHAR") | Some("CHAR") => {
+            | Some("VARCHAR") | Some("CHAR") | Some("NAME") => {
                 if let Ok(array_val) = row.try_get::<Option<Vec<String>>, _>(column_index) {
                     return array_val
                         .map(|v| {
@@ -1220,7 +1220,7 @@ impl PostgresConnection {
                     "NULL".to_string()
                 }
             }
-            "text" | "varchar" | "char" | "BPCHAR" | "CHAR" | "TEXT" => {
+            "text" | "varchar" | "char" | "BPCHAR" | "CHAR" | "TEXT" | "NAME" => {
                 self.handle_string_type(row, column_index, column_type)
             }
             "smallint" | "int2" | "INT2" => self.handle_i16_type(row, column_index, column_type),

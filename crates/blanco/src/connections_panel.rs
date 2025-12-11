@@ -77,6 +77,7 @@ pub struct ConnectionsPanel {
     expanded_connections: std::collections::HashSet<i64>, // Track which connections are expanded
     tree_item_metadata: std::collections::HashMap<String, TreeItemMetadata>, // Map hierarchical key -> metadata
     next_item_id: u32, // Serial ID for tree items within each connection
+    connection_status: std::collections::HashMap<String, bool>, // Track connection status for each connection and database
 }
 
 /// Type of tree item in the metadata context
@@ -125,6 +126,7 @@ impl ConnectionsPanel {
             expanded_connections: std::collections::HashSet::new(),
             tree_item_metadata: std::collections::HashMap::new(),
             next_item_id: 1, // Start with 1 to avoid potential issues with 0
+            connection_status: std::collections::HashMap::new(),
         };
 
         cx.spawn(async |this_handle, cx| {
@@ -1016,20 +1018,49 @@ impl ConnectionsPanel {
             .map(|conn| conn.display_name())
             .unwrap_or_else(|| format!("Connection {}", connection_id));
 
-        // Determine connection icon based on whether metadata is loaded
-        let connection_icon = if self.database_metadata.contains_key(&connection_id) {
-            TreeItemIcon {
-                icon: IconName::DatabaseConnected,
-                color: cx.theme().primary.into(),
-            }
-        } else {
-            TreeItemIcon {
-                icon: IconName::Database,
-                color: cx.theme().foreground.into(),
-            }
+        // Check if the connection is actually established using the database service
+        // Initially assume not connected, we'll update this asynchronously
+        let connection_icon = TreeItemIcon {
+            icon: IconName::Database,
+            color: cx.theme().foreground.into(),
         };
 
+        // Clone the database service before entering async context
+        let db_service = DatabaseService::global(cx).clone();
+
+        // Spawn a task to check connection status
+        cx.spawn(async move |this_handle, cx| {
+            let is_connected = db_service.is_connected(connection_id, None).await;
+
+            // Store the connection status
+            let _ = this_handle.update(cx, |this, cx| {
+                this.connection_status.insert(
+                    format!("connection:{}", connection_id),
+                    is_connected,
+                );
+                cx.notify();
+            });
+        }).detach();
+
         // Add connection metadata (using hierarchical key)
+        // Check if we already know the connection status
+        let initial_icon = self.connection_status
+            .get(&format!("connection:{}", connection_id))
+            .map(|&is_connected| {
+                if is_connected {
+                    TreeItemIcon {
+                        icon: IconName::DatabaseConnected,
+                        color: cx.theme().primary.into(),
+                    }
+                } else {
+                    TreeItemIcon {
+                        icon: IconName::Database,
+                        color: cx.theme().foreground.into(),
+                    }
+                }
+            })
+            .unwrap_or(connection_icon);
+
         self.tree_item_metadata.insert(
             format!("connection:{}", connection_id),
             TreeItemMetadata {
@@ -1039,7 +1070,7 @@ impl ConnectionsPanel {
                 database_name: None, // Connection level doesn't have a specific database
                 schema_name: None,
                 table_name: None,
-                icon: connection_icon,
+                icon: initial_icon,
             },
         );
 
@@ -1049,8 +1080,30 @@ impl ConnectionsPanel {
                 // PostgreSQL: connection -> databases -> schemas -> tables
                 for database in &metadata.databases {
                     let database_key = format!("database:{}:{}", connection_id, database.name);
+
+                    // Check if we already know the database connection status
+                    let database_icon = self.connection_status
+                        .get(&format!("database:{}:{}", connection_id, database.name))
+                        .map(|&is_connected| {
+                            if is_connected {
+                                TreeItemIcon {
+                                    icon: IconName::DatabaseConnected,
+                                    color: cx.theme().primary.into(),
+                                }
+                            } else {
+                                TreeItemIcon {
+                                    icon: IconName::Database,
+                                    color: cx.theme().foreground.into(),
+                                }
+                            }
+                        })
+                        .unwrap_or_else(|| TreeItemIcon {
+                            icon: IconName::Database,
+                            color: cx.theme().foreground.into(),
+                        });
+
                     self.tree_item_metadata.insert(
-                        database_key,
+                        database_key.clone(),
                         TreeItemMetadata {
                             connection_id,
                             connection_name: connection_name.clone(),
@@ -1058,12 +1111,27 @@ impl ConnectionsPanel {
                             database_name: Some(database.name.clone()),
                             schema_name: None,
                             table_name: None,
-                            icon: TreeItemIcon {
-                                icon: IconName::Database,
-                                color: cx.theme().primary.into(),
-                            },
+                            icon: database_icon,
                         },
                     );
+
+                    // Clone the database service before entering async context
+                    let db_service = DatabaseService::global(cx).clone();
+                    let db_name = database.name.clone();
+
+                    // Spawn a task to check database connection status
+                    cx.spawn(async move |this_handle, cx| {
+                        let is_connected = db_service.is_connected(connection_id, Some(&db_name)).await;
+
+                        // Store the database connection status
+                        let _ = this_handle.update(cx, |this, cx| {
+                            this.connection_status.insert(
+                                format!("database:{}:{}", connection_id, db_name),
+                                is_connected,
+                            );
+                            cx.notify();
+                        });
+                    }).detach();
 
                     // Add schemas for this database
                     for schema in &database.schemas {
@@ -1252,6 +1320,44 @@ impl ConnectionsPanel {
                 icon: IconName::File,
                 color: cx.theme().foreground.into(),
             });
+
+        // Update icon based on connection status if we have it stored
+        if let Some(metadata) = self.get_tree_item_metadata(&item.id) {
+            let status_key = match metadata.kind {
+                TreeItemKind::Connection => format!("connection:{}", metadata.connection_id),
+                TreeItemKind::Database => {
+                    if let Some(ref db_name) = metadata.database_name {
+                        format!("database:{}:{}", metadata.connection_id, db_name)
+                    } else {
+                        format!("connection:{}", metadata.connection_id)
+                    }
+                }
+                _ => String::new(),
+            };
+
+            if !status_key.is_empty() {
+                if let Some(&is_connected) = self.connection_status.get(&status_key) {
+                    tree_item_icon = if is_connected {
+                        TreeItemIcon {
+                            icon: IconName::DatabaseConnected,
+                            color: cx.theme().primary.into(),
+                        }
+                    } else {
+                        match metadata.kind {
+                            TreeItemKind::Connection => TreeItemIcon {
+                                icon: IconName::Database,
+                                color: cx.theme().foreground.into(),
+                            },
+                            TreeItemKind::Database => TreeItemIcon {
+                                icon: IconName::Database,
+                                color: cx.theme().foreground.into(),
+                            },
+                            _ => tree_item_icon,
+                        }
+                    };
+                }
+            }
+        }
 
         // Update schema icons based on expansion state (check if it's a schema by looking at metadata)
         if let Some(metadata) = self.get_tree_item_metadata(&item.id) {
