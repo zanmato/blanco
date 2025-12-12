@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use blanco_core::HoverProvider;
-use database::{DatabaseService, DatabaseServiceTrait};
+use database::DatabaseService;
 use gpui::{AppContext, Context, Task, Window};
 use gpui_component::input::{CompletionProvider, InputState, Rope, RopeExt};
 use lsp_types::{

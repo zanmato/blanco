@@ -822,6 +822,7 @@ impl Render for EditorPanel {
             .child(
                 // Tab bar
                 TabBar::new("editor-tabs")
+                    .menu(true)
                     .w_full()
                     .selected_index(self.active_tab_ix)
                     .on_click(cx.listener(|this, ix: &usize, window, cx| {

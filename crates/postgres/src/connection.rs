@@ -1220,7 +1220,7 @@ impl PostgresConnection {
                     "NULL".to_string()
                 }
             }
-            "text" | "varchar" | "char" | "BPCHAR" | "CHAR" | "TEXT" | "NAME" => {
+            "text" | "varchar" | "char" | "VARCHAR" | "BPCHAR" | "CHAR" | "TEXT" | "NAME" => {
                 self.handle_string_type(row, column_index, column_type)
             }
             "smallint" | "int2" | "INT2" => self.handle_i16_type(row, column_index, column_type),
@@ -1783,6 +1783,11 @@ impl Connection for PostgresConnection {
             .execute_prepared_query(query, &[table_name.to_string(), schema_name.to_string()])
             .await?;
 
+        let primary_key = self
+            .get_primary_key_for_table(table_name)
+            .await?
+            .unwrap_or("".to_string());
+
         let mut columns = Vec::new();
         for row in result.rows {
             if row.len() >= 7 {
@@ -1793,19 +1798,11 @@ impl Connection for PostgresConnection {
                 let max_length = &row[4]; // character_maximum_length
                                           // row[5] = numeric_precision, row[6] = numeric_scale (not used for now)
 
-                // Check if it's a primary key
-                let is_primary_key =
-                    if let Ok(Some(pk)) = self.get_primary_key_for_table(table_name).await {
-                        pk == *column_name
-                    } else {
-                        false
-                    };
-
                 let column_info = ColumnInfo {
                     name: column_name.clone(),
                     data_type: data_type.clone(),
                     is_nullable: is_nullable == "YES",
-                    is_primary_key,
+                    is_primary_key: primary_key == *column_name,
                     default_value: if default_value.is_empty() {
                         None
                     } else {
