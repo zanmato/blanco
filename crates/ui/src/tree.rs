@@ -73,7 +73,7 @@ pub struct TreeItem<M> {
 /// A flat representation of a tree item with its depth.
 #[derive(Clone)]
 pub struct TreeEntry<M> {
-    item: TreeItem<M>,
+    pub item: TreeItem<M>,
     depth: usize,
 }
 
@@ -209,6 +209,39 @@ impl<D: TreeDelegate> TreeState<D> {
 
     pub fn entries(&self) -> &Vec<TreeEntry<D::Metadata>> {
         &self.entries
+    }
+
+    /// Get mutable reference to all entries
+    pub fn entries_mut(&mut self) -> &mut Vec<TreeEntry<D::Metadata>> {
+        &mut self.entries
+    }
+
+    /// Get mutable reference to entry at specific index
+    pub fn get_mut(&mut self, ix: usize) -> Option<&mut TreeEntry<D::Metadata>> {
+        self.entries.get_mut(ix)
+    }
+
+    /// Update an entry at specific index and notify the UI
+    pub fn update_entry(&mut self, ix: usize, cx: &mut Context<Self>) -> Option<&mut TreeEntry<D::Metadata>> {
+        let entry = self.entries.get_mut(ix);
+        if entry.is_some() {
+            cx.notify();
+        }
+        entry
+    }
+
+    /// Find entry index by ID
+    pub fn find_index(&self, id: &str) -> Option<usize> {
+        self.entries.iter().position(|entry| entry.item.id == id)
+    }
+
+    /// Find entry by ID and get mutable reference
+    pub fn find_mut(&mut self, id: &str, cx: &mut Context<Self>) -> Option<&mut TreeEntry<D::Metadata>> {
+        if let Some(ix) = self.find_index(id) {
+            self.update_entry(ix, cx)
+        } else {
+            None
+        }
     }
 
     /// Set the tree items.

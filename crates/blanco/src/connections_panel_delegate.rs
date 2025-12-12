@@ -1,12 +1,13 @@
 use gpui::{
-    App, Entity, InteractiveElement, ParentElement, Styled, Window, div, prelude::FluentBuilder,
-    px, rems,
+    App, Entity, InteractiveElement, IntoElement, ParentElement, Styled, Window, div,
+    prelude::FluentBuilder, px, rems,
 };
 use gpui_component::{
-    ActiveTheme as _, Icon, h_flex,
+    ActiveTheme as _, Icon, Sizable, Size, h_flex,
     label::Label,
     list::ListItem,
     menu::{PopupMenu, PopupMenuItem},
+    spinner::Spinner,
 };
 
 use crate::connections_panel::{
@@ -49,47 +50,12 @@ impl TreeDelegate for ConnectionsTreeDelegate {
         let metadata = &item.metadata;
         let mut tree_item_icon = metadata.icon.clone();
 
-        // Get panel data for connection status and environment labels
-        let panel = self.parent.read(cx);
-
-        // Update icon based on connection status
-        let status_key = match metadata.kind {
-            TreeItemKind::Connection => format!("connection:{}", metadata.connection_id),
-            TreeItemKind::Database => {
-                if let Some(ref db_name) = metadata.database_name {
-                    format!("database:{}:{}", metadata.connection_id, db_name)
-                } else {
-                    format!("connection:{}", metadata.connection_id)
-                }
-            }
-            _ => String::new(),
-        };
-
-        if !status_key.is_empty() {
-            if let Some(&is_connected) = panel.connection_status.get(&status_key) {
-                tree_item_icon = if is_connected {
-                    TreeItemIcon {
-                        icon: IconName::DatabaseConnected,
-                        color: cx.theme().primary.into(),
-                    }
-                } else {
-                    match metadata.kind {
-                        TreeItemKind::Connection => TreeItemIcon {
-                            icon: IconName::Database,
-                            color: cx.theme().foreground.into(),
-                        },
-                        TreeItemKind::Database => TreeItemIcon {
-                            icon: IconName::Database,
-                            color: cx.theme().foreground.into(),
-                        },
-                        _ => tree_item_icon,
-                    }
-                };
-            }
-        }
+        // The icon is now updated directly in the tree metadata, so we just use it as-is
 
         // Add environment label for connections
         let environment_label = if metadata.kind == TreeItemKind::Connection {
+            // Get panel data for environment labels
+            let panel = self.parent.read(cx);
             if let Some(connection) = panel
                 .connections
                 .iter()
@@ -142,7 +108,8 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                     .child(div().flex_1())
                     .when_some(environment_label, |this, label| this.child(label))
                     .when(
-                        entry.is_folder() || metadata.kind == TreeItemKind::Connection,
+                        (entry.is_folder() || metadata.kind == TreeItemKind::Connection)
+                            && !metadata.loading,
                         |this| {
                             this.child(if entry.is_expanded() {
                                 IconName::ChevronDown.view(cx)
@@ -150,13 +117,29 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                                 IconName::ChevronRight.view(cx)
                             })
                         },
+                    )
+                    .when(
+                        (entry.is_folder()
+                            || metadata.kind == TreeItemKind::Connection
+                            || metadata.kind == TreeItemKind::Database)
+                            && metadata.loading,
+                        |this| {
+                            this.child(
+                                Spinner::new()
+                                    .icon(IconName::LoaderCircle)
+                                    .color(cx.theme().muted_foreground),
+                            )
+                        },
                     ),
             )
-            .on_click(
-                window.listener_for(&self.parent, move |this, _event, window, cx| {
-                    this.handle_tree_item_click(&item_id, window, cx);
-                }),
-            )
+            .when(!metadata.loading, |this| {
+                // Only allow clicks when not loading
+                this.on_click(
+                    window.listener_for(&self.parent, move |this, _event, window, cx| {
+                        this.handle_tree_item_click(&item_id, window, cx);
+                    }),
+                )
+            })
     }
 
     fn context_menu(

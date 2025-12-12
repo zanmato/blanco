@@ -74,7 +74,6 @@ pub struct ConnectionsPanel {
     pub loaded_connections: std::collections::HashSet<i64>,
     expanded_connections: std::collections::HashSet<i64>, // Track which connections are expanded
     next_item_id: u32, // Serial ID for tree items within each connection
-    pub connection_status: std::collections::HashMap<String, bool>, // Track connection status for each connection and database
 }
 
 /// Type of tree item in the metadata context
@@ -97,6 +96,7 @@ pub struct TreeItemMetadata {
     pub table_name: Option<String>,
     pub icon: TreeItemIcon,
     pub environment_type: Option<EnvironmentType>,
+    pub loading: bool, // Whether this item is currently loading
 }
 
 /// Trait to convert metadata into CreateNewQueryTab events
@@ -138,7 +138,6 @@ impl ConnectionsPanel {
         });
 
         let database_metadata = std::collections::HashMap::new();
-        let connection_status = std::collections::HashMap::new();
         let loaded_connections = std::collections::HashSet::new();
         let expanded_connections = std::collections::HashSet::new();
 
@@ -156,7 +155,6 @@ impl ConnectionsPanel {
             loaded_connections,
             expanded_connections,
             next_item_id: 1, // Start with 1 to avoid potential issues with 0
-            connection_status,
         };
 
         cx.spawn(async |this_handle, cx| {
@@ -170,43 +168,84 @@ impl ConnectionsPanel {
         panel
     }
 
-    /// Update tree items from connections data
+    /// Update tree items from connections data and update connection status directly
     fn update_tree_items(&mut self, cx: &mut Context<Self>) {
-        let tree_items: Vec<TreeItem<TreeItemMetadata>> = self
-            .connections
-            .iter()
-            .map(|conn| self.build_connection_tree_item(conn, cx))
-            .collect();
-
-        self.tree_state.update(cx, |state, cx| {
-            state.set_items(tree_items, cx);
-        });
-
-        // Check connection status asynchronously
         let db_service = DatabaseService::global(cx).clone();
 
+        // Get active connections and current tree state to update metadata
         cx.spawn(async move |this_handle, cx| {
-            // Get active connections from DatabaseService much more efficiently
+            // Get active connections from DatabaseService
             let active_connections = db_service.get_active_connections().await;
 
-            // Update connection status based on active connections
+            // Update connection status directly in tree metadata
             let _ = this_handle.update(cx, |this, cx| {
-                this.connection_status.clear();
-                for (connection_id, database_name) in active_connections.keys() {
-                    if database_name == "default" {
-                        // Connection level
-                        let key = format!("connection:{}", connection_id);
-                        this.connection_status.insert(key, true);
-                    } else {
-                        // Database level
-                        let key = format!("database:{}:{}", connection_id, database_name);
-                        this.connection_status.insert(key, true);
-                    }
-                }
+                // Rebuild tree items with updated metadata
+                let tree_items: Vec<TreeItem<TreeItemMetadata>> = this
+                    .connections
+                    .iter()
+                    .map(|conn| {
+                        this.build_connection_tree_item_with_expand(
+                            conn,
+                            this.expanded_connections.contains(&conn.id.unwrap_or(0)),
+                            cx
+                        )
+                    })
+                    .collect();
+
+                this.tree_state.update(cx, |state, cx| {
+                    state.set_items(tree_items, cx);
+                });
+
+                // Update connection status directly in tree entries
+                this.update_connection_status_in_tree(&active_connections, cx);
+
                 cx.notify();
             });
-        })
-        .detach();
+        }).detach();
+    }
+
+    /// Update connection status directly in tree entries without using HashMap
+    fn update_connection_status_in_tree(&mut self, active_connections: &std::collections::HashMap<(i64, String), std::sync::Arc<dyn blanco_core::Connection>>, cx: &mut Context<Self>) {
+        self.tree_state.update(cx, |tree_state, cx| {
+            // Check each entry and update its status
+            for entry in tree_state.entries_mut() {
+                let metadata = &entry.item.metadata;
+                match metadata.kind {
+                    TreeItemKind::Connection => {
+                        // Connections are stored with "default" as the database name
+                        let is_connected = active_connections.contains_key(&(metadata.connection_id, "default".to_string()));
+                        if is_connected {
+                            entry.item.metadata.icon = TreeItemIcon {
+                                icon: IconName::DatabaseConnected,
+                                color: cx.theme().primary.into(),
+                            };
+                        } else {
+                            entry.item.metadata.icon = TreeItemIcon {
+                                icon: IconName::Database,
+                                color: cx.theme().foreground.into(),
+                            };
+                        }
+                    }
+                    TreeItemKind::Database => {
+                        if let Some(ref db_name) = metadata.database_name {
+                            let is_connected = active_connections.contains_key(&(metadata.connection_id, db_name.clone()));
+                            if is_connected {
+                                entry.item.metadata.icon = TreeItemIcon {
+                                    icon: IconName::DatabaseConnected,
+                                    color: cx.theme().primary.into(),
+                                };
+                            } else {
+                                entry.item.metadata.icon = TreeItemIcon {
+                                    icon: IconName::Database,
+                                    color: cx.theme().foreground.into(),
+                                };
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
     }
 
     /// Build a TreeItem for a connection including its children if loaded
@@ -239,6 +278,7 @@ impl ConnectionsPanel {
             table_name: None,
             icon: self.get_connection_icon(connection_id, cx),
             environment_type: Some(connection.environment_type),
+            loading: false,
         };
 
         // Use hierarchical key: "connection:123" for connections
@@ -272,6 +312,7 @@ impl ConnectionsPanel {
                                 color: cx.theme().foreground.into(),
                             },
                             environment_type: Some(connection.environment_type),
+                            loading: false,
                         };
 
                         let schema_items: Vec<TreeItem<TreeItemMetadata>> = database
@@ -296,6 +337,7 @@ impl ConnectionsPanel {
                                         color: cx.theme().yellow.into(),
                                     },
                                     environment_type: Some(connection.environment_type),
+                                    loading: false,
                                 };
 
                                 let table_items: Vec<TreeItem<TreeItemMetadata>> = if schema
@@ -326,6 +368,7 @@ impl ConnectionsPanel {
                                                     color: cx.theme().green.into(),
                                                 },
                                                 environment_type: Some(connection.environment_type),
+                                                loading: false,
                                             };
 
                                             TreeItem::new(
@@ -380,6 +423,7 @@ impl ConnectionsPanel {
                                         color: cx.theme().green.into(),
                                     },
                                     environment_type: Some(connection.environment_type),
+                                    loading: false,
                                 };
 
                                 TreeItem::new(table_key, table.name.clone(), table_metadata)
@@ -533,6 +577,10 @@ impl ConnectionsPanel {
 
                     // Update the panel with loaded metadata
                     let _ = this_handle.update(cx, |this, cx| {
+                        // Clear loading state for this connection
+                        let item_id = format!("connection:{}", connection_id);
+                        this.set_item_loading(&item_id, false, cx);
+
                         this.database_metadata.insert(connection_id, metadata);
                         this.loaded_connections.insert(connection_id);
                         if expand {
@@ -547,6 +595,12 @@ impl ConnectionsPanel {
                 }
                 Err(e) => {
                     tracing::error!("Failed to get connection {}: {}", connection_id, e);
+                    // Clear loading state on error
+                    let _ = this_handle.update(cx, |this, cx| {
+                        let item_id = format!("connection:{}", connection_id);
+                        this.set_item_loading(&item_id, false, cx);
+                        cx.notify();
+                    });
                 }
             }
         })
@@ -623,6 +677,10 @@ impl ConnectionsPanel {
 
                     // Update the panel with loaded schemas
                     let _ = this_handle.update(cx, |this, cx| {
+                        // Clear loading state for this database
+                        let item_id = format!("database:{}:{}", connection_id, database_name);
+                        this.set_item_loading(&item_id, false, cx);
+
                         if let Some(metadata) = this.database_metadata.get_mut(&connection_id) {
                             // Find the database and update its schemas
                             if let Some(database) = metadata
@@ -660,6 +718,12 @@ impl ConnectionsPanel {
                         connection_id,
                         e
                     );
+                    // Clear loading state on error
+                    let _ = this_handle.update(cx, |this, cx| {
+                        let item_id = format!("database:{}:{}", connection_id, database_name);
+                        this.set_item_loading(&item_id, false, cx);
+                        cx.notify();
+                    });
                 }
             }
         })
@@ -752,6 +816,8 @@ impl ConnectionsPanel {
                     // Check if already loaded, if not load first
                     if !self.loaded_connections.contains(&connection_id) {
                         tracing::debug!("Loading connection {} for first time", connection_id);
+                        // Set loading state before starting async operation
+                        self.set_item_loading(item_id, true, cx);
                         self.load_connection_children(connection_id, true, cx);
                     } else {
                         // Already loaded, toggle expand/collapse the tree
@@ -779,6 +845,8 @@ impl ConnectionsPanel {
                                         "Loading schemas for database: {}",
                                         database_name
                                     );
+                                    // Set loading state before starting async operation
+                                    self.set_item_loading(item_id, true, cx);
                                     self.load_database_children(
                                         connection_id,
                                         database_name.clone(),
@@ -948,238 +1016,6 @@ impl ConnectionsPanel {
         }
     }
 
-    /// Build context menu for a tree item based on its type (deprecated - using delegate instead)
-    //  #[allow(dead_code)]
-    //  fn build_context_menu(
-    //      &self,
-    //      _item: &TreeItem<()>, // Type doesn't matter anymore
-    //      weak_panel: gpui::WeakEntity<Self>,
-    //  ) -> impl Fn(
-    //      gpui_component::menu::PopupMenu,
-    //      &mut Window,
-    //      &mut gpui::Context<gpui_component::menu::PopupMenu>,
-    //  ) -> gpui_component::menu::PopupMenu
-    //  + 'static {
-    //      let item = item.clone();
-    //      let metadata = self.get_tree_item_metadata(&item.id).cloned();
-    //
-    //      move |this, _window, _cx| {
-    //          // Build context menu based on item type using metadata
-    //          if metadata.as_ref().map(|m| &m.kind) == Some(&TreeItemKind::Connection) {
-    //              // Connection level
-    //              // Connection context menu - clone for each closure
-    //              let refresh_label_refresh = item.label.clone();
-    //              let disconnect_label = item.label.clone();
-    //              let edit_label = item.label.clone();
-    //              let weak_panel_clone = weak_panel.clone();
-    //              let weak_panel_disconnect = weak_panel.clone();
-    //              let connection_id = metadata
-    //                  .as_ref()
-    //                  .map(|m| m.connection_id)
-    //                  .unwrap_or_default();
-    //
-    //              this.item(
-    //                  PopupMenuItem::new("Refresh").on_click(move |_, _window, cx| {
-    //                      tracing::info!("Refresh connection: {}", refresh_label_refresh);
-    //                      if let Some(panel) = weak_panel_clone.upgrade() {
-    //                          panel.update(cx, |_this, _cx| {
-    //                              // cx.emit(AppEvent::CreateNewQueryTab {})
-    //                          });
-    //                      }
-    //                  }),
-    //              )
-    //              .separator()
-    //              .item(
-    //                  PopupMenuItem::new("Disconnect").on_click(move |_, _window, cx| {
-    //                      tracing::info!("Disconnect connection: {}", disconnect_label);
-    //                      if let Some(panel) = weak_panel_disconnect.upgrade() {
-    //                          panel.update(cx, |this, cx| {
-    //                              this.disconnect_connection(connection_id, cx);
-    //                          });
-    //                      }
-    //                  }),
-    //              )
-    //              .item(
-    //                  PopupMenuItem::new("Edit Connection").on_click(move |_, _window, _cx| {
-    //                      tracing::info!("Edit connection: {}", edit_label);
-    //                      // TODO: Implement edit connection functionality
-    //                  }),
-    //              )
-    //          } else if metadata.as_ref().map(|m| &m.kind) == Some(&TreeItemKind::Database) {
-    //              // Database level (PostgreSQL)
-    //              // Database context menu - clone for each closure
-    //              let new_query_label = item.label.clone();
-    //              let refresh_label = item.label.clone();
-    //              let weak_panel_clone = weak_panel.clone();
-    //              let connection_id = metadata
-    //                  .as_ref()
-    //                  .map(|m| m.connection_id)
-    //                  .unwrap_or_default();
-    //              let database_name = metadata.as_ref().and_then(|m| m.database_name.clone());
-    //              let connection_name = metadata
-    //                  .as_ref()
-    //                  .map(|m| m.connection_name.clone())
-    //                  .unwrap_or_default();
-    //
-    //              // Get environment type from metadata
-    //              let environment_type = metadata.as_ref().and_then(|m| m.environment_type);
-    //
-    //              this.item(PopupMenuItem::new("New Query").on_click({
-    //                  let environment_type = environment_type;
-    //                  move |_, _window, cx| {
-    //                      tracing::info!("New Query for database: {}", new_query_label);
-    //                      if let Some(panel) = weak_panel_clone.upgrade() {
-    //                          panel.update(cx, |_this, cx| {
-    //                              cx.emit(AppEvent::CreateNewQueryTab {
-    //                                  connection_id,
-    //                                  connection_name: connection_name.clone(),
-    //                                  database_name: database_name.clone().unwrap_or_default(),
-    //                                  schema_name: None,
-    //                                  table_name: None,
-    //                                  environment_type,
-    //                              });
-    //                          });
-    //                      }
-    //                  }
-    //              }))
-    //              .item(
-    //                  PopupMenuItem::new("Refresh Database").on_click(move |_, _window, _cx| {
-    //                      tracing::info!("Refresh database: {}", refresh_label);
-    //                      // TODO: Implement database refresh functionality
-    //                  }),
-    //              )
-    //          } else if metadata.as_ref().map(|m| &m.kind) == Some(&TreeItemKind::Schema) {
-    //              // Schema level
-    //              // Schema context menu - clone for each closure
-    //              let new_query_label = item.label.clone();
-    //              let refresh_label = item.label.clone();
-    //              let weak_panel_clone = weak_panel.clone();
-    //              let schema_name = metadata.as_ref().and_then(|m| m.schema_name.clone());
-    //              let connection_id = metadata
-    //                  .as_ref()
-    //                  .map(|m| m.connection_id)
-    //                  .unwrap_or_default();
-    //              let database_name = metadata
-    //                  .as_ref()
-    //                  .and_then(|m| m.database_name.clone())
-    //                  .unwrap_or_default();
-    //              let connection_name = metadata
-    //                  .as_ref()
-    //                  .map(|m| m.connection_name.clone())
-    //                  .unwrap_or_default();
-    //
-    //              // Get environment type from metadata
-    //              let environment_type = metadata.as_ref().and_then(|m| m.environment_type);
-    //
-    //              this.item(PopupMenuItem::new("New Query").on_click({
-    //                  let environment_type = environment_type;
-    //                  move |_, _window, cx| {
-    //                      tracing::info!("New Query for schema: {}", new_query_label);
-    //                      if let Some(panel) = weak_panel_clone.upgrade() {
-    //                          panel.update(cx, |_, cx| {
-    //                              cx.emit(AppEvent::CreateNewQueryTab {
-    //                                  connection_id,
-    //                                  connection_name: connection_name.clone(),
-    //                                  database_name: database_name.clone(),
-    //                                  schema_name: schema_name.clone(),
-    //                                  table_name: None,
-    //                                  environment_type,
-    //                              });
-    //                          });
-    //                      }
-    //                  }
-    //              }))
-    //              .item(
-    //                  PopupMenuItem::new("Refresh Schema").on_click(move |_, _window, _cx| {
-    //                      tracing::info!("Refresh schema: {}", refresh_label);
-    //                      // TODO: Implement refresh schema functionality
-    //                  }),
-    //              )
-    //          } else if metadata.as_ref().map(|m| &m.kind) == Some(&TreeItemKind::Table) {
-    //              // Table level
-    //              // Table context menu - clone for each closure
-    //              let select_label_new_query = item.label.clone();
-    //              let weak_panel_new_query = weak_panel.clone();
-    //              let table_schema_name_new_query =
-    //                  metadata.as_ref().and_then(|m| m.schema_name.clone());
-    //              let table_name_new_query = metadata.as_ref().and_then(|m| m.table_name.clone());
-    //              let connection_id_new_query = metadata
-    //                  .as_ref()
-    //                  .map(|m| m.connection_id)
-    //                  .unwrap_or_default();
-    //              let database_name_new_query = metadata
-    //                  .as_ref()
-    //                  .and_then(|m| m.database_name.clone())
-    //                  .unwrap_or_default();
-    //              let connection_name_new_query = metadata
-    //                  .as_ref()
-    //                  .map(|m| m.connection_name.clone())
-    //                  .unwrap_or_default();
-    //
-    //              // Get environment type from metadata
-    //              let environment_type = metadata.as_ref().and_then(|m| m.environment_type);
-    //
-    //              let select_label_export = item.label.clone();
-    //              let weak_panel_export = weak_panel.clone();
-    //              let table_schema_name_export =
-    //                  metadata.as_ref().and_then(|m| m.schema_name.clone());
-    //              let table_name_export = metadata.as_ref().and_then(|m| m.table_name.clone());
-    //              let connection_id_export = metadata
-    //                  .as_ref()
-    //                  .map(|m| m.connection_id)
-    //                  .unwrap_or_default();
-    //              let database_name_export = metadata
-    //                  .as_ref()
-    //                  .and_then(|m| m.database_name.clone())
-    //                  .unwrap_or_default();
-    //              let connection_name_export = metadata
-    //                  .as_ref()
-    //                  .map(|m| m.connection_name.clone())
-    //                  .unwrap_or_default();
-    //
-    //              this.item(PopupMenuItem::new("New Query").on_click({
-    //                  let environment_type = environment_type;
-    //                  move |_, _window, cx| {
-    //                      tracing::info!("New Query for table: {}", select_label_new_query);
-    //                      if let Some(panel) = weak_panel_new_query.upgrade() {
-    //                          panel.update(cx, |_, cx| {
-    //                              cx.emit(AppEvent::CreateNewQueryTab {
-    //                                  connection_id: connection_id_new_query,
-    //                                  connection_name: connection_name_new_query.clone(),
-    //                                  database_name: database_name_new_query.clone(),
-    //                                  schema_name: table_schema_name_new_query.clone(),
-    //                                  table_name: table_name_new_query.clone(),
-    //                                  environment_type,
-    //                              });
-    //                          });
-    //                      }
-    //                  }
-    //              }))
-    //              .item(
-    //                  PopupMenuItem::new("Export Data").on_click(move |_, window, cx| {
-    //                      tracing::info!("Export data for table: {}", select_label_export);
-    //                      if let Some(panel) = weak_panel_export.upgrade() {
-    //                          panel.update(cx, |panel, cx| {
-    //                              panel.export_table_data(
-    //                                  connection_id_export,
-    //                                  connection_name_export.clone(),
-    //                                  database_name_export.clone(),
-    //                                  table_schema_name_export.clone(),
-    //                                  table_name_export.clone(),
-    //                                  window,
-    //                                  cx,
-    //                              );
-    //                          });
-    //                      }
-    //                  }),
-    //              )
-    //          } else {
-    //              // Default context menu
-    //              this.label(item.label.clone())
-    //          }
-    //      }
-    //  }
-
     /// Handle connection established event
     pub fn handle_connection_established(&mut self, _connection_id: i64, cx: &mut Context<Self>) {
         // Refresh the tree to show all connections as connected
@@ -1313,6 +1149,17 @@ impl ConnectionsPanel {
         } else {
             tracing::error!("Cannot export: No table name provided");
         }
+    }
+
+    /// Set loading state for a tree item by updating the tree entry directly
+    pub fn set_item_loading(&mut self, item_id: &str, loading: bool, cx: &mut Context<Self>) {
+        tracing::info!("Setting item loading {} = {}", item_id, loading);
+
+        self.tree_state.update(cx, |tree_state, cx| {
+            if let Some(entry) = tree_state.find_mut(item_id, cx) {
+                entry.item.metadata.loading = loading;
+            }
+        });
     }
 }
 
