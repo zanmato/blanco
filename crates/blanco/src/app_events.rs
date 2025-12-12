@@ -91,6 +91,7 @@ pub enum AppEvent {
         database_name: String,
         schema_name: Option<String>,
         table_name: Option<String>,
+        environment_type: Option<crate::app_database::EnvironmentType>,
     },
 
     /// Database, Schema and Table events

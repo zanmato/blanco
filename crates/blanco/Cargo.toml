@@ -40,7 +40,7 @@ async-trait = "0.1"
 lsp-types = { workspace = true }
 pulldown-cmark = { workspace = true }
 regex = { workspace = true }
-rust_decimal = "1.32"
+rust_decimal = { workspace = true }
 ropey = { workspace = true }
 
 # Tree-sitter for SQL parsing
@@ -57,8 +57,3 @@ futures = { workspace = true }
 
 # SSH tunnel support
 ssh-key = { version = "0.6" }
-
-
-[dev-dependencies]
-# Dependencies for integration tests
-env_logger = "0.10"

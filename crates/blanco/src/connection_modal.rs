@@ -10,7 +10,7 @@ use gpui_component::{
     v_flex,
 };
 
-use crate::app_database::ConnectionData;
+use crate::app_database::{ConnectionData, EnvironmentType};
 use blanco_core::connection_trait::DriverType;
 
 /// Represents a database connector type
@@ -83,14 +83,21 @@ impl SqliteForm {
             .into_any_element()
     }
 
-    fn get_connection_data(&self, name: String, cx: &App) -> Option<ConnectionData> {
+    fn get_connection_data(
+        &self,
+        name: String,
+        environment_type: EnvironmentType,
+        cx: &App,
+    ) -> Option<ConnectionData> {
         let file_path = self.file_path_input.read(cx).value().to_string();
 
         if file_path.is_empty() {
             return None;
         }
 
-        Some(ConnectionData::new_sqlite(name, file_path))
+        let mut connection = ConnectionData::new_sqlite(name, file_path);
+        connection.environment_type = environment_type;
+        Some(connection)
     }
 
     fn test_connection(&self, cx: &App) -> TestResult {
@@ -221,27 +228,18 @@ impl PostgresForm {
                     .child(Input::new(&self.password_input)),
             )
             // SSH Tunnel Configuration Section
-            .child(
-                div().mt_4().child(
-                    h_flex()
-                        .gap_2()
-                        .items_center()
-                        .child(
+            .when(self.ssh_enabled, |this| {
+                this.child(
+                    div().mt_4().child(
+                        h_flex().gap_2().items_center().child(
                             div()
                                 .text_sm()
                                 .font_semibold()
                                 .child("SSH Tunnel Configuration"),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child("(Optional - Connect through SSH bastion host)"),
                         ),
-                ),
-            )
-            .when(self.ssh_enabled, |this| {
-                this.child(
+                    ),
+                )
+                .child(
                     v_flex()
                         .gap_3()
                         .mt_2()
@@ -327,7 +325,12 @@ impl PostgresForm {
         None
     }
 
-    fn get_connection_data(&self, name: String, cx: &App) -> Option<ConnectionData> {
+    fn get_connection_data(
+        &self,
+        name: String,
+        environment_type: EnvironmentType,
+        cx: &App,
+    ) -> Option<ConnectionData> {
         let host = self.host_input.read(cx).value().to_string();
         let port_str = self.port_input.read(cx).value();
         let database = self.database_input.read(cx).value().to_string();
@@ -379,25 +382,32 @@ impl PostgresForm {
                 Some(ssh_private_key_password.to_string())
             };
 
-            Some(ConnectionData::new_postgres_with_ssh(
-                name,
-                host,
-                port,
-                database,
-                username,
-                password,
-                ssh_host.to_string(),
-                ssh_port,
-                ssh_user.to_string(),
-                ssh_password,
-                ssh_private_key_path,
-                ssh_private_key_password,
-            ))
+            {
+                let mut connection = ConnectionData::new_postgres_with_ssh(
+                    name,
+                    host,
+                    port,
+                    database,
+                    username,
+                    password,
+                    ssh_host.to_string(),
+                    ssh_port,
+                    ssh_user.to_string(),
+                    ssh_password,
+                    ssh_private_key_path,
+                    ssh_private_key_password,
+                );
+                connection.environment_type = environment_type;
+                Some(connection)
+            }
         } else {
             // SSH is disabled, create regular PostgreSQL connection
-            Some(ConnectionData::new_postgres(
-                name, host, port, database, username, password,
-            ))
+            {
+                let mut connection =
+                    ConnectionData::new_postgres(name, host, port, database, username, password);
+                connection.environment_type = environment_type;
+                Some(connection)
+            }
         }
     }
 
@@ -529,62 +539,64 @@ impl MysqlForm {
                     .child(div().text_sm().child("Password"))
                     .child(Input::new(&self.password_input)),
             )
-            // SSH Tunnel Configuration Section
-            .child(
-                div().mt_4().child(
-                    h_flex()
+            .when(self.ssh_enabled, |this| {
+                // SSH Tunnel Configuration Section
+                this.child(
+                    div().mt_4().child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_semibold()
+                                    .child("SSH Tunnel Configuration"),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("(Optional)"),
+                            ),
+                    ),
+                )
+                .child(
+                    v_flex()
                         .gap_2()
-                        .items_center()
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_semibold()
-                                .child("SSH Tunnel Configuration"),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child("(Optional)"),
-                        ),
-                ),
-            )
-            .child(
-                v_flex()
-                    .gap_2()
-                    .child(div().text_sm().child("SSH Host"))
-                    .child(Input::new(&self.ssh_host_input)),
-            )
-            .child(
-                v_flex()
-                    .gap_2()
-                    .child(div().text_sm().child("SSH Port"))
-                    .child(Input::new(&self.ssh_port_input)),
-            )
-            .child(
-                v_flex()
-                    .gap_2()
-                    .child(div().text_sm().child("SSH User"))
-                    .child(Input::new(&self.ssh_user_input)),
-            )
-            .child(
-                v_flex()
-                    .gap_2()
-                    .child(div().text_sm().child("SSH Password"))
-                    .child(Input::new(&self.ssh_password_input)),
-            )
-            .child(
-                v_flex()
-                    .gap_2()
-                    .child(div().text_sm().child("SSH Private Key"))
-                    .child(Input::new(&self.ssh_private_key_input)),
-            )
-            .child(
-                v_flex()
-                    .gap_2()
-                    .child(div().text_sm().child("Private Key Password"))
-                    .child(Input::new(&self.ssh_private_key_password_input)),
-            )
+                        .child(div().text_sm().child("SSH Host"))
+                        .child(Input::new(&self.ssh_host_input)),
+                )
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .child(div().text_sm().child("SSH Port"))
+                        .child(Input::new(&self.ssh_port_input)),
+                )
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .child(div().text_sm().child("SSH User"))
+                        .child(Input::new(&self.ssh_user_input)),
+                )
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .child(div().text_sm().child("SSH Password"))
+                        .child(Input::new(&self.ssh_password_input)),
+                )
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .child(div().text_sm().child("SSH Private Key"))
+                        .child(Input::new(&self.ssh_private_key_input)),
+                )
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .child(div().text_sm().child("Private Key Password"))
+                        .child(Input::new(&self.ssh_private_key_password_input)),
+                )
+            })
             .into_any_element()
     }
 
@@ -683,6 +695,7 @@ pub struct NewConnectionModal {
     focus_handle: FocusHandle,
     name_input: Entity<InputState>,
     db_type_select: Entity<SelectState<Vec<String>>>,
+    environment_type_select: Entity<SelectState<Vec<String>>>,
     sqlite_form: SqliteForm,
     postgres_form: PostgresForm,
     mysql_form: MysqlForm,
@@ -699,6 +712,11 @@ impl NewConnectionModal {
         let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Connection Name"));
         let db_type_select =
             cx.new(|cx| SelectState::new(db_types.clone(), Some(IndexPath::new(0)), window, cx));
+
+        // Environment type selector
+        let environment_types = vec!["DEV".to_string(), "TEST".to_string(), "PROD".to_string()];
+        let environment_type_select =
+            cx.new(|cx| SelectState::new(environment_types, Some(IndexPath::new(0)), window, cx));
 
         // Create entities for SQLite form
         let sqlite_file_path =
@@ -773,6 +791,7 @@ impl NewConnectionModal {
             focus_handle: cx.focus_handle(),
             name_input,
             db_type_select,
+            environment_type_select,
             sqlite_form,
             postgres_form,
             mysql_form,
@@ -788,6 +807,20 @@ impl NewConnectionModal {
             .unwrap_or(&"SQLite".to_string())
             .clone();
         ConnectorType::from_str(&selected)
+    }
+
+    fn get_selected_environment_type(&self, cx: &App) -> EnvironmentType {
+        let selected = self
+            .environment_type_select
+            .read(cx)
+            .selected_value()
+            .unwrap_or(&"DEV".to_string())
+            .clone();
+        match selected.as_str() {
+            "TEST" => EnvironmentType::Test,
+            "PROD" => EnvironmentType::Prod,
+            _ => EnvironmentType::Dev,
+        }
     }
 
     fn toggle_ssh_enabled(&mut self, cx: &mut Context<Self>) {
@@ -820,11 +853,22 @@ impl NewConnectionModal {
         }
 
         let connector_type = self.get_selected_connector_type(cx);
+        let environment_type = self.get_selected_environment_type(cx);
 
         match connector_type {
-            ConnectorType::SQLite => self.sqlite_form.get_connection_data(name, cx),
-            ConnectorType::PostgreSQL => self.postgres_form.get_connection_data(name, cx),
-            ConnectorType::MySQL => self.mysql_form.build_connection_data(&name, cx),
+            ConnectorType::SQLite => {
+                self.sqlite_form
+                    .get_connection_data(name, environment_type, cx)
+            }
+            ConnectorType::PostgreSQL => {
+                self.postgres_form
+                    .get_connection_data(name, environment_type, cx)
+            }
+            ConnectorType::MySQL => {
+                let mut connection = self.mysql_form.build_connection_data(&name, cx)?;
+                connection.environment_type = environment_type;
+                Some(connection)
+            }
         }
     }
 }
@@ -854,6 +898,12 @@ impl Render for NewConnectionModal {
                         .child(div().text_sm().child("Database Type"))
                         .child(Select::new(&self.db_type_select)),
                 )
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .child(div().text_sm().child("Environment"))
+                        .child(Select::new(&self.environment_type_select)),
+                )
                 // Render the appropriate form based on selected type
                 .child(match connector_type {
                     ConnectorType::SQLite => self.sqlite_form.render(cx),
@@ -864,25 +914,16 @@ impl Render for NewConnectionModal {
                             // SSH Switch Section - above the form
                             .child(
                                 div().child(
-                                    h_flex()
-                                        .gap_2()
-                                        .items_center()
-                                        .child(
-                                            Switch::new("ssh-enabled-switch")
-                                                .checked(self.postgres_form.ssh_enabled)
-                                                .label("Enable SSH Tunnel")
-                                                .on_click(cx.listener(
-                                                    |modal: &mut Self, _checked, _window, cx| {
-                                                        modal.toggle_ssh_enabled(cx);
-                                                    },
-                                                )),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child("(Connect through SSH bastion host)"),
-                                        ),
+                                    h_flex().gap_2().items_center().child(
+                                        Switch::new("ssh-enabled-switch")
+                                            .checked(self.postgres_form.ssh_enabled)
+                                            .label("Enable SSH Tunnel")
+                                            .on_click(cx.listener(
+                                                |modal: &mut Self, _checked, _window, cx| {
+                                                    modal.toggle_ssh_enabled(cx);
+                                                },
+                                            )),
+                                    ),
                                 ),
                             )
                             .child(form_elements) // Form renders SSH fields when enabled
@@ -895,25 +936,16 @@ impl Render for NewConnectionModal {
                             // SSH Switch Section - above the form
                             .child(
                                 div().child(
-                                    h_flex()
-                                        .gap_2()
-                                        .items_center()
-                                        .child(
-                                            Switch::new("mysql-ssh-enabled-switch")
-                                                .checked(self.mysql_form.ssh_enabled)
-                                                .label("Enable SSH Tunnel")
-                                                .on_click(cx.listener(
-                                                    |modal: &mut Self, _checked, _window, cx| {
-                                                        modal.toggle_mysql_ssh_enabled(cx);
-                                                    },
-                                                )),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child("(Connect through SSH bastion host)"),
-                                        ),
+                                    h_flex().gap_2().items_center().child(
+                                        Switch::new("mysql-ssh-enabled-switch")
+                                            .checked(self.mysql_form.ssh_enabled)
+                                            .label("Enable SSH Tunnel")
+                                            .on_click(cx.listener(
+                                                |modal: &mut Self, _checked, _window, cx| {
+                                                    modal.toggle_mysql_ssh_enabled(cx);
+                                                },
+                                            )),
+                                    ),
                                 ),
                             )
                             .child(form_elements) // Form renders SSH fields when enabled

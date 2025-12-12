@@ -33,7 +33,7 @@ impl Render for ChatMessageState {
             MessageRole::Assistant => {
                 // Assistant: No padding, no background, just markdown content
                 div().child(
-                    TextView::markdown(self.id.clone(), self.message.clone(), window, cx)
+                    TextView::markdown(self.id.clone(), self.message.clone())
                         .text_sm()
                         .scrollable(false)
                         .selectable(true)
@@ -73,7 +73,7 @@ impl Render for ChatMessageState {
                         .unwrap_or(cx.theme().background))
                     .text_color(cx.theme().foreground)
                     .child(
-                        TextView::markdown(self.id.clone(), self.message.clone(), window, cx)
+                        TextView::markdown(self.id.clone(), self.message.clone())
                             .text_sm()
                             .scrollable(false)
                             .selectable(true),
@@ -98,15 +98,10 @@ impl Render for ChatMessageState {
                             .bg(cx.theme().muted)
                             .text_color(cx.theme().foreground)
                             .child(
-                                TextView::markdown(
-                                    self.id.clone(),
-                                    self.message.clone(),
-                                    window,
-                                    cx,
-                                )
-                                .text_sm()
-                                .scrollable(false)
-                                .selectable(false),
+                                TextView::markdown(self.id.clone(), self.message.clone())
+                                    .text_sm()
+                                    .scrollable(false)
+                                    .selectable(false),
                             ),
                     )
             }

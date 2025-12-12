@@ -52,6 +52,7 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 # Database dependencies
 sqlx = { version = "0.8", features = [
     "runtime-async-std",
+    "tls-native-tls",
     "sqlite",
     "postgres",
     "mysql",
@@ -61,6 +62,7 @@ sqlx = { version = "0.8", features = [
     "bigdecimal",
 ] }
 async-std = { version = "1.13", features = ["attributes"] }
+rust_decimal = "1.32"
 
 # SQL parsing
 sql-parse = "0.2"

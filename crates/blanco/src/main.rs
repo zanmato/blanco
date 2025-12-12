@@ -37,10 +37,7 @@ fn main() {
     app.run(move |cx| {
         tracing_subscriber::registry()
             .with(tracing_subscriber::fmt::layer())
-            .with(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("gpui_component=trace".parse().unwrap()),
-            )
+            .with(tracing_subscriber::EnvFilter::from_default_env())
             .init();
 
         gpui_component::init(cx);
@@ -63,7 +60,6 @@ fn main() {
         if let Err(e) = db {
             tracing::error!("Critical: Failed to initialize database: {}", e);
         } else {
-            tracing::info!("Global DB bro!");
             cx.set_global(db.unwrap());
         }
 
@@ -163,7 +159,7 @@ fn main() {
                 }),
             }),
             window_decorations: Some(gpui::WindowDecorations::Client),
-            window_min_size: Some(size(px(800.), px(600.))),
+            window_min_size: Some(size(px(1024.), px(768.))),
             focus: true,
             show: true,
             kind: gpui::WindowKind::Normal,

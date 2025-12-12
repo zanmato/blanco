@@ -16,7 +16,13 @@ gpui = { workspace = true }
 gpui-component = { workspace = true }
 
 # Database dependencies
-sqlx = { workspace = true, features = ["mysql", "chrono", "uuid", "json"] }
+sqlx = { workspace = true, features = [
+  "mysql",
+  "chrono",
+  "uuid",
+  "json",
+  "tls-native-tls",
+] }
 
 # SQL parsing
 sql-parse = { workspace = true }
@@ -39,10 +45,9 @@ url = { workspace = true }
 lsp-types = { workspace = true }
 
 # Additional dependencies
-mysql_common = "0.32"
-rust_decimal = "1.32"
+rust_decimal = { workspace = true }
 
 [dev-dependencies]
 # Dependencies for integration tests
 async-std = { workspace = true }
-env_logger = "0.10"
+env_logger = { workspace = true }

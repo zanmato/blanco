@@ -22,6 +22,7 @@ sqlx = { workspace = true, features = [
   "uuid",
   "json",
   "rust_decimal",
+  "tls-native-tls",
 ] }
 
 # Async runtime
@@ -48,9 +49,9 @@ url = { workspace = true }
 lsp-types = { workspace = true }
 
 # Additional dependencies
-rust_decimal = "1.32"
+rust_decimal = { workspace = true }
 
 [dev-dependencies]
 # Dependencies for integration tests
 async-std = { workspace = true }
-env_logger = "0.10"
+env_logger = { workspace = true }

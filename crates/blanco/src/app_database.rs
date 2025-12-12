@@ -1,8 +1,55 @@
 use gpui::{App, Global};
+use gpui_component::ActiveTheme;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use sqlx::{ConnectOptions, Row};
 use std::path::PathBuf;
 use std::str::FromStr;
+
+/// Environment type for database connections
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EnvironmentType {
+    #[default]
+    Dev = 1,
+    Test = 2,
+    Prod = 3,
+}
+
+impl EnvironmentType {
+    pub fn from_i32(value: i32) -> Self {
+        match value {
+            1 => EnvironmentType::Dev,
+            2 => EnvironmentType::Test,
+            3 => EnvironmentType::Prod,
+            _ => EnvironmentType::Dev, // Default to Dev for invalid values
+        }
+    }
+
+    pub fn to_i32(self) -> i32 {
+        self as i32
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            EnvironmentType::Dev => "DEV",
+            EnvironmentType::Test => "TEST",
+            EnvironmentType::Prod => "PROD",
+        }
+    }
+
+    pub fn get_color(self, cx: &gpui::App) -> gpui::Rgba {
+        match self {
+            EnvironmentType::Dev => cx.theme().blue.into(),
+            EnvironmentType::Test => cx.theme().green.into(),
+            EnvironmentType::Prod => cx.theme().red.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for EnvironmentType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.display_name())
+    }
+}
 
 /// Application database for persisting query tabs, history, and connections
 #[derive(Clone)]
@@ -319,6 +366,16 @@ impl AppDatabase {
         .await
         .ok(); // Ignore error if column already exists
 
+        // Add environment_type column for connection environment labeling
+        sqlx::query(
+            r#"
+            ALTER TABLE connections ADD COLUMN environment_type INTEGER NOT NULL DEFAULT 1
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .ok(); // Ignore error if column already exists
+
         // Note: database_path NOT NULL constraint has been manually fixed
         // The database schema now allows NULL database_path for PostgreSQL connections
 
@@ -392,7 +449,7 @@ impl AppDatabase {
     pub async fn load_query_tabs(&self) -> Result<Vec<QueryTabData>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
-            SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type, c.name, qt.database_name, qt.schema_name
+            SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type, c.name, qt.database_name, qt.schema_name, c.environment_type
             FROM query_tabs qt
             INNER JOIN connections c ON c.id = qt.connection_id
             ORDER BY qt.position ASC
@@ -424,6 +481,7 @@ impl AppDatabase {
                     connection_name: Some(row.get(6)),
                     database_name: Some(row.get(7)),
                     schema_name: row.get(8),
+                    environment_type: Some(EnvironmentType::from_i32(row.get::<i64, _>(9) as i32)),
                 }
             })
             .collect();
@@ -465,6 +523,7 @@ impl AppDatabase {
                 connection_name: Some(row.get(6)),
                 database_name: Some(row.get(7)),
                 schema_name: row.get(8),
+                environment_type: None, // We don't join with connections in this method
             }))
         } else {
             Ok(None)
@@ -490,7 +549,7 @@ impl AppDatabase {
                 UPDATE connections
                 SET name = ?, db_type = ?, host = ?, port = ?, database_name = ?,
                     username = ?, password = ?, database_path = ?, last_used_at = ?,
-                    connection_string = ?, is_active = ?, connection_params = ?,
+                    connection_string = ?, is_active = ?, connection_params = ?, environment_type = ?,
                     ssh_host = ?, ssh_port = ?, ssh_user = ?, ssh_password = ?,
                     ssh_private_key_path = ?, ssh_private_key_password = ?, local_tunnel_port = ?
                 WHERE id = ?
@@ -508,6 +567,7 @@ impl AppDatabase {
             .bind(&conn.connection_string)
             .bind(conn.is_active.map(|b| if b { 1 } else { 0 }))
             .bind(conn.connection_params.as_ref().map(|v| v.to_string()))
+            .bind(conn.environment_type.to_i32())
             .bind(&conn.ssh_host)
             .bind(conn.ssh_port)
             .bind(&conn.ssh_user)
@@ -523,8 +583,8 @@ impl AppDatabase {
             // Insert new connection
             let result = sqlx::query(
                 r#"
-                INSERT INTO connections (name, db_type, host, port, database_name, username, password, database_path, last_used_at, created_at, connection_string, is_active, connection_params, ssh_host, ssh_port, ssh_user, ssh_password, ssh_private_key_path, ssh_private_key_password, local_tunnel_port)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO connections (name, db_type, host, port, database_name, username, password, database_path, last_used_at, created_at, connection_string, is_active, connection_params, environment_type, ssh_host, ssh_port, ssh_user, ssh_password, ssh_private_key_path, ssh_private_key_password, local_tunnel_port)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(&conn.name)
@@ -540,6 +600,7 @@ impl AppDatabase {
             .bind(&conn.connection_string)
             .bind(conn.is_active.map(|b| if b { 1 } else { 0 }))
             .bind(conn.connection_params.as_ref().map(|v| v.to_string()))
+            .bind(conn.environment_type.to_i32())
             .bind(&conn.ssh_host)
             .bind(conn.ssh_port)
             .bind(&conn.ssh_user)
@@ -558,7 +619,7 @@ impl AppDatabase {
     pub async fn load_connections(&self) -> Result<Vec<ConnectionData>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
-            SELECT id, name, db_type, host, port, database_name, username, password, database_path, last_used_at, connection_string, is_active, connection_params, ssh_host, ssh_port, ssh_user, ssh_password, ssh_private_key_path, ssh_private_key_password, local_tunnel_port
+            SELECT id, name, db_type, host, port, database_name, username, password, database_path, last_used_at, connection_string, is_active, connection_params, environment_type, ssh_host, ssh_port, ssh_user, ssh_password, ssh_private_key_path, ssh_private_key_password, local_tunnel_port
             FROM connections
             ORDER BY name
             "#,
@@ -588,6 +649,9 @@ impl AppDatabase {
                     connection_string: row.get("connection_string"),
                     is_active: row.get::<Option<i32>, _>("is_active").map(|i| i == 1),
                     connection_params,
+                    environment_type: EnvironmentType::from_i32(
+                        row.get::<i64, _>("environment_type") as i32,
+                    ),
                     ssh_host: row.get("ssh_host"),
                     ssh_port: row.get("ssh_port"),
                     ssh_user: row.get("ssh_user"),
@@ -619,6 +683,7 @@ pub struct QueryTabData {
     pub connection_name: Option<String>,
     pub database_name: Option<String>,
     pub schema_name: Option<String>,
+    pub environment_type: Option<EnvironmentType>,
 }
 
 #[derive(Debug, Clone)]
@@ -652,6 +717,7 @@ pub struct ConnectionData {
     pub connection_string: Option<String>,
     pub is_active: Option<bool>,
     pub connection_params: Option<serde_json::Value>, // For extensible parameters
+    pub environment_type: EnvironmentType,            // Environment type (Dev/Test/Prod)
     // SSH tunnel configuration
     pub ssh_host: Option<String>,
     pub ssh_port: Option<i32>,
@@ -680,6 +746,7 @@ impl ConnectionData {
             connection_params: Some(serde_json::json!({
                 "database_path": database_path
             })),
+            environment_type: EnvironmentType::default(),
             last_used_at: None,
             ssh_host: None,
             ssh_port: None,
@@ -726,6 +793,7 @@ impl ConnectionData {
                 "database": database,
                 "username": username
             })),
+            environment_type: EnvironmentType::default(),
             last_used_at: None,
             ssh_host: None,
             ssh_port: None,
@@ -784,6 +852,7 @@ impl ConnectionData {
                     "ssh_user": ssh_user
                 }
             })),
+            environment_type: EnvironmentType::default(),
             last_used_at: None,
             ssh_host: Some(ssh_host),
             ssh_port: Some(ssh_port),
@@ -862,6 +931,7 @@ impl ConnectionData {
                 "database": database,
                 "username": username
             })),
+            environment_type: EnvironmentType::default(),
             last_used_at: None,
             ssh_host: None,
             ssh_port: None,
@@ -916,6 +986,7 @@ impl ConnectionData {
                 "username": username,
                 "ssh_enabled": true
             })),
+            environment_type: EnvironmentType::default(),
             last_used_at: None,
             ssh_host: Some(ssh_host),
             ssh_port: Some(ssh_port),
@@ -938,8 +1009,8 @@ impl AppDatabase {
         let row = sqlx::query(
             r#"
             SELECT id, name, db_type, host, port, database_name, username, password, database_path,
-                   last_used_at, connection_string, is_active, connection_params, ssh_host, ssh_port,
-                   ssh_user, ssh_password, ssh_private_key_path, ssh_private_key_password, local_tunnel_port
+                   last_used_at, connection_string, is_active, connection_params, environment_type,
+                   ssh_host, ssh_port, ssh_user, ssh_password, ssh_private_key_path, ssh_private_key_password, local_tunnel_port
             FROM connections
             WHERE id = ?
             "#,
@@ -963,13 +1034,14 @@ impl AppDatabase {
                 connection_string: row.get(10),
                 is_active: Some(row.get::<i64, _>(11) != 0),
                 connection_params: row.get(12),
-                ssh_host: row.get(13),
-                ssh_port: row.get(14),
-                ssh_user: row.get(15),
-                ssh_password: row.get(16),
-                ssh_private_key_path: row.get(17),
-                ssh_private_key_password: row.get(18),
-                local_tunnel_port: row.get(19),
+                environment_type: EnvironmentType::from_i32(row.get::<i64, _>(13) as i32),
+                ssh_host: row.get(14),
+                ssh_port: row.get(15),
+                ssh_user: row.get(16),
+                ssh_password: row.get(17),
+                ssh_private_key_path: row.get(18),
+                ssh_private_key_password: row.get(19),
+                local_tunnel_port: row.get(20),
             };
             Ok(Some(connection_data))
         } else {

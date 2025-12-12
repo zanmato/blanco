@@ -1,9 +1,10 @@
-use crate::app_database::{AppDatabase, ConnectionData};
+use crate::app_database::{AppDatabase, ConnectionData, EnvironmentType};
 use crate::app_events::{AppEvent, TreeItemType};
 use blanco_ui::IconName;
 use database::{DatabaseService, DatabaseServiceTrait};
+use gpui::rems;
 use gpui::{
-    AppContext, ClickEvent, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
+    App, AppContext, ClickEvent, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
     ParentElement, Render, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::menu::ContextMenuExt;
@@ -99,6 +100,7 @@ pub struct TreeItemMetadata {
     pub schema_name: Option<String>,
     pub table_name: Option<String>,
     pub icon: TreeItemIcon,
+    pub environment_type: Option<EnvironmentType>,
 }
 
 impl ConnectionsPanel {
@@ -859,8 +861,12 @@ impl ConnectionsPanel {
                     .map(|m| m.connection_name.clone())
                     .unwrap_or_default();
 
-                this.item(
-                    PopupMenuItem::new("New Query").on_click(move |_, _window, cx| {
+                // Get environment type from metadata
+                let environment_type = metadata.as_ref().and_then(|m| m.environment_type);
+
+                this.item(PopupMenuItem::new("New Query").on_click({
+                    let environment_type = environment_type;
+                    move |_, _window, cx| {
                         tracing::info!("New Query for database: {}", new_query_label);
                         if let Some(panel) = weak_panel_clone.upgrade() {
                             panel.update(cx, |_this, cx| {
@@ -870,11 +876,12 @@ impl ConnectionsPanel {
                                     database_name: database_name.clone().unwrap_or_default(),
                                     schema_name: None,
                                     table_name: None,
+                                    environment_type,
                                 });
                             });
                         }
-                    }),
-                )
+                    }
+                }))
                 .item(
                     PopupMenuItem::new("Refresh Database").on_click(move |_, _window, _cx| {
                         tracing::info!("Refresh database: {}", refresh_label);
@@ -901,8 +908,12 @@ impl ConnectionsPanel {
                     .map(|m| m.connection_name.clone())
                     .unwrap_or_default();
 
-                this.item(
-                    PopupMenuItem::new("New Query").on_click(move |_, _window, cx| {
+                // Get environment type from metadata
+                let environment_type = metadata.as_ref().and_then(|m| m.environment_type);
+
+                this.item(PopupMenuItem::new("New Query").on_click({
+                    let environment_type = environment_type;
+                    move |_, _window, cx| {
                         tracing::info!("New Query for schema: {}", new_query_label);
                         if let Some(panel) = weak_panel_clone.upgrade() {
                             panel.update(cx, |_, cx| {
@@ -912,11 +923,12 @@ impl ConnectionsPanel {
                                     database_name: database_name.clone(),
                                     schema_name: schema_name.clone(),
                                     table_name: None,
+                                    environment_type,
                                 });
                             });
                         }
-                    }),
-                )
+                    }
+                }))
                 .item(
                     PopupMenuItem::new("Refresh Schema").on_click(move |_, _window, _cx| {
                         tracing::info!("Refresh schema: {}", refresh_label);
@@ -944,6 +956,9 @@ impl ConnectionsPanel {
                     .map(|m| m.connection_name.clone())
                     .unwrap_or_default();
 
+                // Get environment type from metadata
+                let environment_type = metadata.as_ref().and_then(|m| m.environment_type);
+
                 let select_label_export = item.label.clone();
                 let weak_panel_export = weak_panel.clone();
                 let table_schema_name_export =
@@ -962,8 +977,9 @@ impl ConnectionsPanel {
                     .map(|m| m.connection_name.clone())
                     .unwrap_or_default();
 
-                this.item(
-                    PopupMenuItem::new("New Query").on_click(move |_, _window, cx| {
+                this.item(PopupMenuItem::new("New Query").on_click({
+                    let environment_type = environment_type;
+                    move |_, _window, cx| {
                         tracing::info!("New Query for table: {}", select_label_new_query);
                         if let Some(panel) = weak_panel_new_query.upgrade() {
                             panel.update(cx, |_, cx| {
@@ -973,11 +989,12 @@ impl ConnectionsPanel {
                                     database_name: database_name_new_query.clone(),
                                     schema_name: table_schema_name_new_query.clone(),
                                     table_name: table_name_new_query.clone(),
+                                    environment_type,
                                 });
                             });
                         }
-                    }),
-                )
+                    }
+                }))
                 .item(
                     PopupMenuItem::new("Export Data").on_click(move |_, window, cx| {
                         tracing::info!("Export data for table: {}", select_label_export);
@@ -1010,13 +1027,18 @@ impl ConnectionsPanel {
 
     /// Populate tree item metadata when building tree items
     fn populate_tree_item_metadata(&mut self, connection_id: i64, cx: &Context<Self>) {
-        // Get the connection name
-        let connection_name = self
+        // Get the connection data
+        let connection_data = self
             .connections
             .iter()
-            .find(|conn| conn.id == Some(connection_id))
+            .find(|conn| conn.id == Some(connection_id));
+
+        // Get the connection name and environment type
+        let connection_name = connection_data
             .map(|conn| conn.display_name())
             .unwrap_or_else(|| format!("Connection {}", connection_id));
+
+        let connection_environment_type = connection_data.map(|conn| conn.environment_type);
 
         // Check if the connection is actually established using the database service
         // Initially assume not connected, we'll update this asynchronously
@@ -1034,17 +1056,17 @@ impl ConnectionsPanel {
 
             // Store the connection status
             let _ = this_handle.update(cx, |this, cx| {
-                this.connection_status.insert(
-                    format!("connection:{}", connection_id),
-                    is_connected,
-                );
+                this.connection_status
+                    .insert(format!("connection:{}", connection_id), is_connected);
                 cx.notify();
             });
-        }).detach();
+        })
+        .detach();
 
         // Add connection metadata (using hierarchical key)
         // Check if we already know the connection status
-        let initial_icon = self.connection_status
+        let initial_icon = self
+            .connection_status
             .get(&format!("connection:{}", connection_id))
             .map(|&is_connected| {
                 if is_connected {
@@ -1071,6 +1093,7 @@ impl ConnectionsPanel {
                 schema_name: None,
                 table_name: None,
                 icon: initial_icon,
+                environment_type: connection_environment_type,
             },
         );
 
@@ -1082,7 +1105,8 @@ impl ConnectionsPanel {
                     let database_key = format!("database:{}:{}", connection_id, database.name);
 
                     // Check if we already know the database connection status
-                    let database_icon = self.connection_status
+                    let database_icon = self
+                        .connection_status
                         .get(&format!("database:{}:{}", connection_id, database.name))
                         .map(|&is_connected| {
                             if is_connected {
@@ -1112,6 +1136,7 @@ impl ConnectionsPanel {
                             schema_name: None,
                             table_name: None,
                             icon: database_icon,
+                            environment_type: connection_environment_type,
                         },
                     );
 
@@ -1121,7 +1146,8 @@ impl ConnectionsPanel {
 
                     // Spawn a task to check database connection status
                     cx.spawn(async move |this_handle, cx| {
-                        let is_connected = db_service.is_connected(connection_id, Some(&db_name)).await;
+                        let is_connected =
+                            db_service.is_connected(connection_id, Some(&db_name)).await;
 
                         // Store the database connection status
                         let _ = this_handle.update(cx, |this, cx| {
@@ -1131,7 +1157,8 @@ impl ConnectionsPanel {
                             );
                             cx.notify();
                         });
-                    }).detach();
+                    })
+                    .detach();
 
                     // Add schemas for this database
                     for schema in &database.schemas {
@@ -1150,6 +1177,7 @@ impl ConnectionsPanel {
                                     icon: IconName::Folder,
                                     color: cx.theme().foreground.into(),
                                 },
+                                environment_type: connection_environment_type,
                             },
                         );
 
@@ -1172,6 +1200,7 @@ impl ConnectionsPanel {
                                         icon: IconName::Sheet,
                                         color: cx.theme().foreground.into(),
                                     },
+                                    environment_type: connection_environment_type,
                                 },
                             );
                         }
@@ -1197,6 +1226,7 @@ impl ConnectionsPanel {
                                     icon: IconName::Sheet,
                                     color: cx.theme().foreground.into(),
                                 },
+                                environment_type: connection_environment_type,
                             },
                         );
                     }
@@ -1322,7 +1352,7 @@ impl ConnectionsPanel {
             });
 
         // Update icon based on connection status if we have it stored
-        if let Some(metadata) = self.get_tree_item_metadata(&item.id) {
+        let environment_label = if let Some(metadata) = self.get_tree_item_metadata(&item.id) {
             let status_key = match metadata.kind {
                 TreeItemKind::Connection => format!("connection:{}", metadata.connection_id),
                 TreeItemKind::Database => {
@@ -1357,7 +1387,36 @@ impl ConnectionsPanel {
                     };
                 }
             }
-        }
+
+            // Add environment label for connections
+            if metadata.kind == TreeItemKind::Connection {
+                if let Some(connection) = self
+                    .connections
+                    .iter()
+                    .find(|c| c.id == Some(metadata.connection_id))
+                {
+                    let env_type = connection.environment_type;
+                    Some(
+                        div()
+                            .text_size(rems(0.55))
+                            .font_family(cx.theme().mono_font_family.clone())
+                            .px_2()
+                            .py_0p5()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(env_type.get_color(cx))
+                            .text_color(env_type.get_color(cx))
+                            .child(env_type.display_name()),
+                    )
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         // Update schema icons based on expansion state (check if it's a schema by looking at metadata)
         if let Some(metadata) = self.get_tree_item_metadata(&item.id) {
@@ -1382,6 +1441,7 @@ impl ConnectionsPanel {
                     .items_center()
                     .child(Icon::new(tree_item_icon.icon).text_color(tree_item_icon.color))
                     .child(Label::new(item.label.clone()).text_sm())
+                    .when_some(environment_label, |this, label| this.child(label))
                     .context_menu(self.build_context_menu(&item, weak_panel))
                     .when(entry.is_folder(), |this| {
                         this.child(if entry.is_expanded() {

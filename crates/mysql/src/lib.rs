@@ -23,18 +23,17 @@ mod tests {
     async fn test_mysql_data_type_serialization() -> Result<(), Box<dyn std::error::Error>> {
         // Use the provided MySQL test database
         let connection_string = env::var("MYSQL_CONNECTION_STRING")
-            .unwrap_or_else(|_| "mysql://blanco:blanco@localhost:3306/testdb".to_string());
+            .unwrap_or_else(|_| "mysql://root:blanco@172.19.0.2:3306/mysql".to_string());
 
         // Test basic MySQL connection first
-        let mut mysql_connection =
-            crate::MysqlConnection::from_connection_string(&connection_string)?;
+        let mysql_connection = crate::MysqlConnection::from_connection_string(&connection_string)?;
 
         // Test connection string parsing
         let connection_key = crate::MysqlConnectionKey::from_connection_string(&connection_string)?;
-        assert_eq!(connection_key.host, "localhost");
+        assert_eq!(connection_key.host, "172.19.0.2");
         assert_eq!(connection_key.port, 3306);
-        assert_eq!(connection_key.username, "blanco");
-        assert_eq!(connection_key.database, "testdb");
+        assert_eq!(connection_key.username, "root");
+        assert_eq!(connection_key.database, "mysql");
         assert_eq!(connection_key.password, Some("blanco".to_string()));
 
         // Test basic query that should work without creating tables

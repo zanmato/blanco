@@ -70,11 +70,57 @@ impl MysqlServerKey {
     pub fn to_server_connection_string(&self) -> String {
         if let Some(password) = &self.password {
             format!(
-                "mysql://{}:{}@{}:{}/",
+                "mysql://{}:{}@{}:{}",
                 self.username, password, self.host, self.port
             )
         } else {
-            format!("mysql://{}@{}:{}/", self.username, self.host, self.port)
+            format!("mysql://{}@{}:{}", self.username, self.host, self.port)
+        }
+    }
+
+    /// Generate connection string for a specific database
+    pub fn to_database_connection_string(&self, database: &str) -> String {
+        if let Some(password) = &self.password {
+            format!(
+                "mysql://{}:{}@{}:{}/{}",
+                self.username, password, self.host, self.port, database
+            )
+        } else {
+            format!(
+                "mysql://{}@{}:{}/{}",
+                self.username, self.host, self.port, database
+            )
+        }
+    }
+
+    /// Generate a server-level connection string with SSH tunnel support
+    pub fn to_server_connection_string_with_tunnel(&self, local_tunnel_port: u16) -> String {
+        if let Some(password) = &self.password {
+            format!(
+                "mysql://{}:{}@localhost:{}",
+                self.username, password, local_tunnel_port
+            )
+        } else {
+            format!("mysql://{}@localhost:{}", self.username, local_tunnel_port)
+        }
+    }
+
+    /// Generate connection string for a specific database using SSH tunnel
+    pub fn to_database_connection_string_with_tunnel(
+        &self,
+        database: &str,
+        local_tunnel_port: u16,
+    ) -> String {
+        if let Some(password) = &self.password {
+            format!(
+                "mysql://{}:{}@localhost:{}/{}",
+                self.username, password, local_tunnel_port, database
+            )
+        } else {
+            format!(
+                "mysql://{}@localhost:{}/{}",
+                self.username, local_tunnel_port, database
+            )
         }
     }
 }
@@ -287,7 +333,12 @@ impl MysqlConnection {
             return Ok(pool.clone());
         }
 
-        let connection_string = format!("{}{}", self.server_connection_string, database_name);
+        let connection_string = if let Some(local_port) = self.local_tunnel_port {
+            self.server_key
+                .to_database_connection_string_with_tunnel(database_name, local_port)
+        } else {
+            self.server_key.to_database_connection_string(database_name)
+        };
         tracing::debug!(
             "📡 Connection string for {}: {}",
             database_name,
@@ -400,12 +451,7 @@ impl Connection for MysqlConnection {
     }
 
     async fn connect(&mut self, connection_string: &str) -> Result<(), anyhow::Error> {
-        tracing::info!(
-            "🔌 Connecting to MySQL server: {}@{}:{}",
-            self.server_key.username,
-            self.server_key.host,
-            self.server_key.port
-        );
+        tracing::info!("🔌 Connecting to MySQL server: {}", connection_string);
 
         // Parse and validate the connection string to extract server details
         let key = MysqlConnectionKey::from_connection_string(connection_string)?;

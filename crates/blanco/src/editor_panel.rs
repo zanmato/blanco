@@ -1,10 +1,10 @@
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
     IntoElement, KeybindingKeystroke, Keystroke, MouseButton, ParentElement, Render, Styled,
-    Window, div, prelude::FluentBuilder, px,
+    Window, div, prelude::FluentBuilder, px, rems,
 };
 use gpui_component::{
-    ActiveTheme, Sizable, WindowExt as _,
+    ActiveTheme, Sizable, StyledExt, WindowExt as _,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputState, TabSize},
@@ -20,7 +20,7 @@ use tracing::{debug, error, info};
 // Use reqwest
 use reqwest;
 
-use crate::app_database::QueryTabData;
+use crate::app_database::{EnvironmentType, QueryTabData};
 use crate::app_events::AppEvent;
 use crate::chat_provider_resolver::ChatProviderResolver;
 use crate::rename_form::RenameTabForm;
@@ -55,6 +55,7 @@ pub struct QueryTab {
     pub connection_name: Option<String>, // Connection name from database
     pub database_name: String,           // Database name this tab is connected to
     pub schema_name: Option<String>,     // Optional schema name for context
+    pub environment_type: Option<EnvironmentType>, // Environment type from connection
     pub editor: Entity<InputState>,
     pub db_id: Option<i64>, // Database ID for persistence
     pub results_panel: Entity<crate::results_panel::ResultsPanel>, // Each tab has its own results
@@ -122,6 +123,7 @@ pub struct TabCreationParams {
     pub connection_name: Option<String>,
     pub database_name: String,
     pub schema_name: Option<String>,
+    pub environment_type: Option<EnvironmentType>,
 }
 
 impl EditorPanel {
@@ -265,6 +267,7 @@ impl EditorPanel {
                         connection_name: query_tab.connection_name.clone(),
                         database_name: Some(query_tab.database_name.clone()),
                         schema_name: query_tab.schema_name.clone(),
+                        environment_type: query_tab.environment_type,
                     };
 
                     // Trigger the save operation in background
@@ -609,6 +612,7 @@ impl EditorPanel {
                         .clone()
                         .unwrap_or_else(|| "default".to_string()),
                     schema_name: None, // TODO: Load from database when schema is added
+                    environment_type: tab_data.environment_type,
                 };
                 self.create_and_add_tab_with_connection(window, params, cx);
                 restored_count += 1;
@@ -676,6 +680,7 @@ impl EditorPanel {
             connection_name: params.connection_name.clone(),
             database_name: params.database_name.clone(),
             schema_name: params.schema_name.clone(),
+            environment_type: params.environment_type,
             editor: editor.clone(),
             db_id: params.db_id,
             results_panel: cx.new(|cx| ResultsPanel::new(window, cx)),
@@ -903,18 +908,31 @@ impl Render for EditorPanel {
                                     )
                                     .suffix(
                                         h_flex()
-                                            .gap_2()
-                                            .items_center()
+                                            .gap_1()
                                             .child(
                                                 div()
                                                     .text_xs()
                                                     .text_color(cx.theme().muted_foreground)
-                                                    .pr_2()
+                                                    .pr_1()
                                                     .child(
                                                         query_tab.connection_name.clone()
                                                             .unwrap_or_else(|| "No Connection".to_string())
                                                     )
                                             )
+                                            .when_some(query_tab.environment_type, |this, env_type| {
+                                                this.child(
+                                                    div()
+                                                        .text_size(rems(0.55))
+                                                        .font_family(cx.theme().mono_font_family.clone())
+                                                        .px_2()
+                                                        .pt_0p5()
+                                                        .rounded_md()
+                                                        .border_1()
+                                                        .border_color(env_type.get_color(cx))
+                                                        .text_color(env_type.get_color(cx))
+                                                        .child(env_type.display_name())
+                                                )
+                                            })
                                             .when(show_close_button, |this| {
                                                 this.child(
                                                     Button::new(("close-tab", ix))
@@ -1167,7 +1185,7 @@ impl Render for EditorPanel {
                                     query_tab.chat_enabled && query_tab.chat_panel.is_some(),
                                     |this| {
                                         this.child(
-                                            resizable_panel().size(400.).child(
+                                            resizable_panel().size_range(px(300.)..gpui::Pixels::MAX).child(
                                                 div()
                                                     .border_l_1()
                                                     .border_color(cx.theme().border)

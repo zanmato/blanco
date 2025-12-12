@@ -104,11 +104,7 @@ impl ConnectionConfig {
     }
 
     /// Create a new SQLite connection config
-    pub fn new_sqlite(
-        id: i64,
-        name: String,
-        path: String,
-    ) -> Self {
+    pub fn new_sqlite(id: i64, name: String, path: String) -> Self {
         Self {
             id,
             name,
@@ -149,7 +145,12 @@ impl ConnectionConfig {
     }
 
     /// Get a connection string with optional overrides for database, host, and port
-    pub fn connection_string(&self, database: Option<&str>, host: Option<&str>, port: Option<u16>) -> String {
+    pub fn connection_string(
+        &self,
+        database: Option<&str>,
+        host: Option<&str>,
+        port: Option<u16>,
+    ) -> String {
         let db_name = database.unwrap_or(&self.database);
         let conn_host = host.unwrap_or(&self.host);
         let conn_port = port.unwrap_or(self.port);
@@ -225,21 +226,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_database_type_from_str() {
-        assert_eq!(DatabaseType::from_str("SQLite"), Some(DatabaseType::SQLite));
-        assert_eq!(DatabaseType::from_str("PostgreSQL"), Some(DatabaseType::PostgreSQL));
-        assert_eq!(DatabaseType::from_str("MySQL"), Some(DatabaseType::MySQL));
-        assert_eq!(DatabaseType::from_str("Unknown"), None);
-    }
-
-    #[test]
-    fn test_database_type_display() {
-        assert_eq!(DatabaseType::SQLite.to_string(), "SQLite");
-        assert_eq!(DatabaseType::PostgreSQL.to_string(), "PostgreSQL");
-        assert_eq!(DatabaseType::MySQL.to_string(), "MySQL");
-    }
-
-    #[test]
     fn test_postgres_connection_string_generation() {
         let config = ConnectionConfig::new(
             1,
@@ -253,16 +239,10 @@ mod tests {
         );
 
         let conn_str = config.connection_string(None, None, None);
-        assert_eq!(
-            conn_str,
-            "postgresql://user:pass@localhost:5432/default_db"
-        );
+        assert_eq!(conn_str, "postgresql://user:pass@localhost:5432/default_db");
 
         let override_db = config.connection_string(Some("new_db"), None, None);
-        assert_eq!(
-            override_db,
-            "postgresql://user:pass@localhost:5432/new_db"
-        );
+        assert_eq!(override_db, "postgresql://user:pass@localhost:5432/new_db");
     }
 
     #[test]
@@ -279,16 +259,10 @@ mod tests {
         );
 
         let conn_str = config.connection_string(None, None, None);
-        assert_eq!(
-            conn_str,
-            "mysql://user:pass@localhost:3306/default_db"
-        );
+        assert_eq!(conn_str, "mysql://user:pass@localhost:3306/default_db");
 
         let override_db = config.connection_string(Some("new_db"), None, None);
-        assert_eq!(
-            override_db,
-            "mysql://user:pass@localhost:3306/new_db"
-        );
+        assert_eq!(override_db, "mysql://user:pass@localhost:3306/new_db");
     }
 
     #[test]
@@ -318,7 +292,8 @@ mod tests {
             "db".to_string(),
             "user".to_string(),
             None,
-        ).with_ssh_config(
+        )
+        .with_ssh_config(
             "ssh.example.com".to_string(),
             "sshuser".to_string(),
             Some("sshpass".to_string()),

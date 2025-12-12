@@ -7,7 +7,8 @@ use gpui::{
     Task, Window, actions, div, prelude::FluentBuilder, px, svg,
 };
 use gpui_component::{
-    ActiveTheme, Root, TITLE_BAR_HEIGHT, TitleBar, WindowExt as _, button::Button, menu::AppMenuBar,
+    ActiveTheme, Root, TITLE_BAR_HEIGHT, TitleBar, WindowExt as _, button::Button,
+    menu::AppMenuBar, notification::NotificationType,
 };
 use serde::Deserialize;
 use tracing::{debug, error, info};
@@ -167,6 +168,7 @@ impl BlancoApp {
                         database_name,
                         schema_name,
                         table_name,
+                        environment_type,
                     } => {
                         tracing::info!(
                             "CreateNewQueryTab called: {} (database: {:?}, schema: {:?}, table: {:?})",
@@ -205,6 +207,7 @@ impl BlancoApp {
                                     connection_name: Some(connection_name.clone()),
                                     database_name: database_name.clone(),
                                     schema_name: schema_name.clone(),
+                                    environment_type: *environment_type,
                                 },
                                 cx,
                             );
@@ -427,10 +430,19 @@ impl BlancoApp {
                                 });
                             }
 
-                            window.push_notification("Connection saved successfully", cx);
+                            window.push_notification(
+                                (NotificationType::Success, "Connection saved successfully"),
+                                cx,
+                            );
                             true
                         } else {
-                            window.push_notification("Please fill in all required fields", cx);
+                            window.push_notification(
+                                (
+                                    NotificationType::Error,
+                                    "Please fill in all required fields",
+                                ),
+                                cx,
+                            );
                             false
                         }
                     }
