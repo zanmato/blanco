@@ -8,6 +8,7 @@ mod chat_provider_resolver;
 mod connection;
 mod connection_modal;
 mod connections_panel;
+mod connections_panel_delegate;
 mod editor_panel;
 mod export_modal;
 mod export_service;
@@ -26,7 +27,6 @@ use database::{ConnectionConfig, DatabaseService, DatabaseType};
 use gpui::{AppContext, Application, SharedString, WindowBounds, WindowOptions, px, size};
 use gpui_component::{Theme, ThemeRegistry};
 use std::path::PathBuf;
-use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
 use crate::{app_database::AppDatabase, app_settings::AppSettings, settings::Settings};

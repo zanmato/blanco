@@ -232,21 +232,9 @@ impl DatabaseService {
         Ok(())
     }
 
-    /// Check if a connection exists
-    pub async fn is_connected(&self, config_id: DatabaseConfigId, database: Option<&str>) -> bool {
-        // If database is None, check if config_id has any active connections
-        // If database is Some, check if (config_id, database) exists in active_connections
-        let connections = self.active_connections.read().await;
-        match database {
-            None => {
-                // Check if config_id has any active connections
-                connections.keys().any(|(id, _)| *id == config_id)
-            }
-            Some(db) => {
-                // Check if (config_id, database) exists in active_connections
-                connections.contains_key(&(config_id, db.to_string()))
-            }
-        }
+    /// Get active connections reference
+    pub async fn get_active_connections(&self) -> std::collections::HashMap<ConnectionId, Arc<dyn Connection>> {
+        self.active_connections.read().await.clone()
     }
 
     // Private helper methods

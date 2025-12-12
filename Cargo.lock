@@ -982,6 +982,7 @@ dependencies = [
  "gpui-component",
  "log",
  "ropey",
+ "serde",
 ]
 
 [[package]]
