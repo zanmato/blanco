@@ -1264,7 +1264,6 @@ impl ResultsPanel {
             .contains(&row);
 
         // Create input state for editing with the current cell value
-        tracing::debug!("Is this being recreated?");
         let input = cx.new(|cx| InputState::new(window, cx).default_value(&current_value));
 
         // Start editing in the delegate with the input
@@ -1715,7 +1714,7 @@ impl ResultsPanel {
                     for operation in &change_operations_for_pipeline {
                         tracing::debug!("Got operation {:?}", operation);
                         let sql_query = operation.to_sql_query();
-                        match connection.execute_query(&sql_query, None).await {
+                        match connection.execute_query(&sql_query, None, None).await {
                             Ok(query_result) => {
                                 total_rows_affected += query_result.rows_affected;
                                 operations_executed += 1;

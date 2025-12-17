@@ -91,17 +91,7 @@ impl DatabaseService {
         {
             let connections = self.active_connections.read().await;
             if let Some(existing_conn) = connections.get(&connection_id) {
-                // Check if the connection is still healthy
-                if existing_conn.test_connection().await.unwrap_or(false) {
-                    tracing::debug!("Using existing healthy connection: {:?}", connection_id);
-                    return Ok(Arc::clone(existing_conn));
-                } else {
-                    tracing::info!(
-                        "Existing connection is unhealthy, will recreate: {:?}",
-                        connection_id
-                    );
-                    drop(connections);
-                }
+                return Ok(Arc::clone(existing_conn));
             }
         }
 
@@ -189,51 +179,90 @@ impl DatabaseService {
         config_id: DatabaseConfigId,
         database: Option<&str>,
     ) -> Result<()> {
-        let connection_id = (config_id, database.unwrap_or("default").to_string());
+        let disconnected_connections: Vec<(DatabaseConfigId, String)>;
 
         // Remove from active_connections
         {
             let mut connections = self.active_connections.write().await;
-            connections.remove(&connection_id);
+
+            if let Some(database_name) = database {
+                // Disconnect specific database connection
+                let connection_id = (config_id, database_name.to_string());
+                connections.remove(&connection_id);
+                disconnected_connections = vec![connection_id];
+            } else {
+                // Disconnect all connections for this config_id
+                disconnected_connections = connections
+                    .keys()
+                    .filter(|(id, _)| *id == config_id)
+                    .cloned()
+                    .collect();
+
+                for connection_id in &disconnected_connections {
+                    connections.remove(connection_id);
+                }
+            }
         }
 
-        // Check if we need to clean up SSH tunnel
-        {
+        // First, remove from tunnel_connections tracking to get accurate tunnel usage
+        let tunnels_to_check: std::collections::HashSet<DatabaseConfigId> = {
             let tunnel_connections = self.tunnel_connections.read().await;
-            if let Some(tunnel_config_id) = tunnel_connections.get(&connection_id) {
-                let tunnel_config_id = *tunnel_config_id;
+
+            disconnected_connections
+                .iter()
+                .filter_map(|connection_id| tunnel_connections.get(connection_id))
+                .copied()
+                .collect()
+        };
+
+        // Remove the disconnected connections from tunnel_connections tracking
+        {
+            let mut tunnel_connections = self.tunnel_connections.write().await;
+            for connection_id in &disconnected_connections {
+                tunnel_connections.remove(connection_id);
+            }
+        }
+
+        // Now check if we need to clean up SSH tunnels (after removal)
+        for tunnel_config_id in tunnels_to_check {
+            let should_remove_tunnel;
+
+            {
+                let tunnel_connections = self.tunnel_connections.read().await;
 
                 // Check if any other connections are using this tunnel
                 let tunnels_in_use = tunnel_connections
                     .values()
                     .any(|&id| id == tunnel_config_id);
 
-                if !tunnels_in_use {
-                    // No other connections using this tunnel, remove it
-                    let mut tunnels = self.ssh_tunnels.write().await;
-                    if let Some(_tunnel_mutex) = tunnels.remove(&tunnel_config_id) {
-                        // The tunnel will be disconnected when Arc is dropped
-                        tracing::info!(
-                            "Removed SSH tunnel for connection config {}",
-                            tunnel_config_id
-                        );
-                    }
+                should_remove_tunnel = !tunnels_in_use;
+            }
+
+            if should_remove_tunnel {
+                // No other connections using this tunnel, remove it
+                let mut tunnels = self.ssh_tunnels.write().await;
+                if let Some(_tunnel_mutex) = tunnels.remove(&tunnel_config_id) {
+                    // The tunnel will be disconnected when Arc is dropped
+                    tracing::info!(
+                        "Removed SSH tunnel for connection config {}",
+                        tunnel_config_id
+                    );
                 }
             }
         }
 
-        // Remove from tunnel_connections tracking
-        {
-            let mut tunnel_connections = self.tunnel_connections.write().await;
-            tunnel_connections.remove(&connection_id);
-        }
-
-        tracing::info!("Disconnected connection: {:?}", connection_id);
+        tracing::info!(
+            "Disconnected {} connections for config {:?}",
+            disconnected_connections.len(),
+            config_id
+        );
         Ok(())
     }
 
     /// Get active connections reference
-    pub async fn get_active_connections(&self) -> std::collections::HashMap<ConnectionId, Arc<dyn Connection>> {
+    pub async fn get_active_connections(
+        &self,
+    ) -> std::collections::HashMap<ConnectionId, Arc<dyn Connection>> {
         self.active_connections.read().await.clone()
     }
 

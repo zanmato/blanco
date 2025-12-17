@@ -592,7 +592,7 @@ fn init_menus(cx: &mut App) {
             name: "File".into(),
             items: vec![
                 MenuItem::action("New Connection", OpenNewConnectionModal),
-                MenuItem::action("Preferences...", OpenSettings),
+                MenuItem::action("Settings", OpenSettings),
                 MenuItem::Separator,
                 MenuItem::action("Quit", Quit),
             ],

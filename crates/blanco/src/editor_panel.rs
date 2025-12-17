@@ -34,7 +34,7 @@ use crate::{
 use crate::{app::RenameTab, app_settings::AppSettings};
 use blanco_core::chat_provider::{ChatProvider, ProviderError};
 use blanco_ui::{IconName, SqlLog};
-use database::DatabaseService;
+use database::{DatabaseService, DatabaseServiceTrait};
 use gpui_component::Icon;
 
 #[derive(Clone)]
@@ -370,7 +370,7 @@ impl EditorPanel {
                                     connection.get_connection_type()
                                 );
                                 match connection
-                                    .execute_query(&query_clone, Some(&database_name))
+                                    .execute_query(&query_clone, Some(&database_name), None)
                                     .await
                                 {
                                     Ok(mut result) => {
@@ -652,7 +652,8 @@ impl EditorPanel {
                 .placeholder("Enter your SQL query here...");
 
             // Set up completion provider using connection_id, database_name, and DbService
-            let db_service = DatabaseService::global(cx).clone();
+            let db_service: Arc<dyn DatabaseServiceTrait> =
+                Arc::new(DatabaseService::global(cx).clone());
             let completion_provider = SqlCompletionProvider::new_with_database(
                 params.connection_id,
                 params.database_name.clone(),
@@ -909,11 +910,12 @@ impl Render for EditorPanel {
                                     .suffix(
                                         h_flex()
                                             .gap_1()
+                                            .pr_1()
                                             .child(
                                                 div()
+                                                    .pr_1()
                                                     .text_xs()
                                                     .text_color(cx.theme().muted_foreground)
-                                                    .pr_1()
                                                     .child(
                                                         query_tab.connection_name.clone()
                                                             .unwrap_or_else(|| "No Connection".to_string())
@@ -924,7 +926,7 @@ impl Render for EditorPanel {
                                                     div()
                                                         .text_size(rems(0.55))
                                                         .font_family(cx.theme().mono_font_family.clone())
-                                                        .px_2()
+                                                        .px(px(6.))
                                                         .pt_0p5()
                                                         .rounded_md()
                                                         .border_1()
@@ -958,9 +960,9 @@ impl Render for EditorPanel {
                                         h_flex()
                                             .gap_2()
                                             .items_center()
+                                            .pr_1()
                                             .child(
                                                 div()
-                                                    .pr_2()
                                                     .text_xs()
                                                     .text_color(cx.theme().muted_foreground)
                                                     .child(settings_tab.title.clone())
@@ -981,20 +983,6 @@ impl Render for EditorPanel {
                             }
                         }
                     }))
-                    .suffix(
-                        h_flex()
-                            .gap_1()
-                            .px_2()
-                            .child(
-                                Button::new("settings-tab")
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(IconName::Settings)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.add_settings_tab(window, cx);
-                                    })),
-                            ),
-                    ),
             )
             // Render the active tab's complete view
             .child(

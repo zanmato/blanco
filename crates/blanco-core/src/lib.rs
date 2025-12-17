@@ -14,7 +14,10 @@ pub mod database_service;
 pub use connection_trait::{
     Connection, ConnectionFactory, ConnectionInfo, ConnectionRegistry, ConnectionUIMetadata,
     ColumnInfo, IconName, QueryResult, TableMetadata, TableChangeOperation,
+    DatabaseSchemaResult, PaginationInfo, TableSchemaInfo,
 };
+
+pub use database_service::DatabaseService;
 
 pub use table_operations::{
     OperationType, RowIdentifier, ColumnChange,
@@ -30,5 +33,3 @@ pub use chat_provider::{
     CompletionChoice, FinishReason, FunctionCall, FunctionDefinition, Message, StreamChunk,
     StreamChoice, StreamDelta, ToolCall, ToolChoice, ToolDefinition, ToolResult, UsageInfo,
 };
-
-pub use database_service::DatabaseService;

@@ -20,7 +20,6 @@ use blanco_core::chat_provider::{
     ChatCompletionRequest, ChatCompletionResponse, ChatProvider, Message, ProviderError,
     StreamChunk, ToolCall, ToolDefinition, ToolResult,
 };
-use blanco_core::DatabaseService;
 
 /// OpenAI client that implements the ChatProvider trait
 pub struct OpenAIClient {
@@ -56,26 +55,24 @@ impl OpenAIClient {
         })
     }
 
-    /// Create a new OpenAI client with a tool executor and database service
-    pub fn with_tool_executor_and_db(
+    /// Create a new OpenAI client with a tool executor with context provider
+    pub fn with_context_provider<F>(
         http_client: Arc<reqwest::Client>,
         config: OpenAIConfig,
-        _tool_executor: ToolExecutor,
-        database_service: Arc<dyn DatabaseService>,
-    ) -> OpenAIResult<Self> {
+        provider: F,
+    ) -> OpenAIResult<Self>
+    where
+        F: Fn() -> crate::tools::ConnectionContext + Send + Sync + 'static,
+    {
         config.validate()?;
 
-        // Create a new tool executor with the database service
-        let tool_executor_with_db = ToolExecutor::with_database_service(database_service);
-
-        // Copy all handlers from the original tool executor
-        // This is a bit of a workaround since we can't directly access the handlers HashMap
-        // In practice, we'll modify the ChatProviderResolver to create the tool executor directly
+        // Create a new tool executor with the context provider
+        let tool_executor = ToolExecutor::with_context_provider(provider);
 
         Ok(Self {
             config,
             http_client,
-            tool_executor: Some(tool_executor_with_db),
+            tool_executor: Some(tool_executor),
         })
     }
 

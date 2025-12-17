@@ -6,6 +6,7 @@
 
 pub mod connection;
 pub mod factory;
+pub mod schema;
 pub mod sql_parser;
 
 // Re-export main types for convenience

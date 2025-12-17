@@ -1,7 +1,7 @@
 use async_trait::async_trait;
+use futures::Stream;
 use std::collections::HashMap;
 use std::fmt;
-use futures::Stream;
 
 /// Database driver types supported by the application
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -92,7 +92,7 @@ pub struct QueryResult {
 }
 
 /// Information about a database column
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ColumnInfo {
     pub name: String,
     pub data_type: String,
@@ -100,6 +100,33 @@ pub struct ColumnInfo {
     pub is_primary_key: bool,
     pub default_value: Option<String>,
     pub character_maximum_length: Option<i32>,
+}
+
+/// Information about a table in the database schema
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct TableSchemaInfo {
+    pub name: String,
+    pub schema: String,
+    pub object_type: String,
+    pub columns: Vec<ColumnInfo>,
+    pub column_count: usize,
+}
+
+/// Result of paginated database schema query
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct DatabaseSchemaResult {
+    pub connection_type: String,
+    pub display_name: String,
+    pub tables: Vec<TableSchemaInfo>,
+    pub pagination: PaginationInfo,
+}
+
+/// Pagination information for schema queries
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct PaginationInfo {
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+    pub has_more: bool,
 }
 
 /// Metadata about a database table
@@ -168,10 +195,6 @@ pub trait Connection: Send + Sync + fmt::Debug {
     /// Get a human-readable display name for this connection
     fn get_display_name(&self) -> String;
 
-    /// Get the underlying manager for advanced operations
-    #[allow(dead_code)]
-    fn get_manager_any(&self) -> &dyn std::any::Any;
-
     // === Connection Lifecycle ===
 
     /// Connect to the database using the provided connection string
@@ -184,25 +207,15 @@ pub trait Connection: Send + Sync + fmt::Debug {
     /// Check if the connection is currently active and healthy
     fn is_connected(&self) -> bool;
 
-    /// Ensure the connection is established, reconnecting if necessary
-    #[allow(dead_code)]
-    async fn ensure_connected(&mut self, connection_string: &str) -> Result<(), anyhow::Error>;
-
     // === Query Execution ===
 
     /// Execute a SQL query and return the results
-    /// If database_name is provided, the query will be executed in the context of that database
+    /// If parameters is provided, the query will be executed as a prepared statement
     async fn execute_query(
         &self,
         query: &str,
         database_name: Option<&str>,
-    ) -> Result<QueryResult, anyhow::Error>;
-
-    /// Execute a parameterized query with prepared statements
-    async fn execute_prepared_query(
-        &self,
-        sql_template: &str,
-        parameters: &[String],
+        parameters: Option<&[String]>,
     ) -> Result<QueryResult, anyhow::Error>;
 
     /// Execute a query and return a stream of rows for large datasets
@@ -212,9 +225,16 @@ pub trait Connection: Send + Sync + fmt::Debug {
         &self,
         query: &str,
         database_name: Option<&str>,
-    ) -> Result<(Vec<String>, Vec<String>, Box<dyn std::marker::Send + std::marker::Sync>), anyhow::Error> {
+    ) -> Result<
+        (
+            Vec<String>,
+            Vec<String>,
+            Box<dyn std::marker::Send + std::marker::Sync>,
+        ),
+        anyhow::Error,
+    > {
         // Default implementation uses regular query
-        let result = self.execute_query(query, database_name).await?;
+        let result = self.execute_query(query, database_name, None).await?;
         Ok((result.columns, result.column_types, Box::new(result.rows)))
     }
 
@@ -224,11 +244,22 @@ pub trait Connection: Send + Sync + fmt::Debug {
         &self,
         query: &str,
         database_name: Option<&str>,
-    ) -> Result<(Vec<String>, Vec<String>, Box<dyn Stream<Item = Result<Vec<String>, anyhow::Error>> + Send + Unpin>), anyhow::Error> {
+    ) -> Result<
+        (
+            Vec<String>,
+            Vec<String>,
+            Box<dyn Stream<Item = Result<Vec<String>, anyhow::Error>> + Send + Unpin>,
+        ),
+        anyhow::Error,
+    > {
         // Default implementation converts regular query to stream
-        let result = self.execute_query(query, database_name).await?;
+        let result = self.execute_query(query, database_name, None).await?;
         let rows = result.rows.into_iter().map(Ok);
-        Ok((result.columns, result.column_types, Box::new(futures::stream::iter(rows))))
+        Ok((
+            result.columns,
+            result.column_types,
+            Box::new(futures::stream::iter(rows)),
+        ))
     }
 
     // === Schema Exploration ===
@@ -295,43 +326,24 @@ pub trait Connection: Send + Sync + fmt::Debug {
         changes: &[TableChangeOperation],
     ) -> Result<QueryResult, anyhow::Error>;
 
-    // === Connection Management ===
-
-    /// Test if the connection is alive with a simple ping query
-    async fn test_connection(&self) -> Result<bool, anyhow::Error> {
-        if !self.is_connected() {
-            return Ok(false);
-        }
-
-        // Try a simple query that should work on most databases
-        match self.execute_query("SELECT 1", None).await {
-            Ok(_) => Ok(true),
-            Err(_) => Ok(false),
-        }
-    }
-
     /// Get connection statistics and metadata
     async fn get_connection_info(&self) -> Result<ConnectionInfo, anyhow::Error> {
         Ok(ConnectionInfo {
             connection_type: self.get_connection_type().to_string(),
             display_name: self.get_display_name(),
             is_connected: self.is_connected(),
-            database_name: self.get_database_name().await?,
             schema_count: self.get_schemas().await.map(|s| s.len()).unwrap_or(0),
         })
     }
 
-    /// Get the current database name
-    async fn get_database_name(&self) -> Result<Option<String>, anyhow::Error> {
-        // Default implementation - can be overridden by specific implementations
-        match self
-            .execute_query("SELECT CURRENT_DATABASE() as db_name", None)
-            .await
-        {
-            Ok(result) if !result.rows.is_empty() => Ok(Some(result.rows[0][0].clone())),
-            _ => Ok(None),
-        }
-    }
+    /// Get database schema with pagination support
+    /// Returns structured schema information including tables and columns
+    async fn get_database_schema_paginated(
+        &self,
+        table_names: Option<&str>,
+        limit: Option<i64>,
+        offset: Option<i64>,
+    ) -> Result<DatabaseSchemaResult, anyhow::Error>;
 
     // === UI Integration Methods ===
 
@@ -372,8 +384,6 @@ pub struct ConnectionInfo {
     #[allow(dead_code)]
     pub display_name: String,
     pub is_connected: bool,
-    #[allow(dead_code)]
-    pub database_name: Option<String>,
     pub schema_count: usize,
 }
 

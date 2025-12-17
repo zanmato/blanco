@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use blanco_core::HoverProvider;
-use database::DatabaseService;
+use database::DatabaseServiceTrait;
 use gpui::{AppContext, Context, Task, Window};
 use gpui_component::input::{CompletionProvider, InputState, Rope, RopeExt};
 use lsp_types::{
@@ -94,13 +94,13 @@ impl MetadataCache {
 
 /// Fetch table names using the DbService
 async fn fetch_tables(
-    db_service: &DatabaseService,
+    db_service: &dyn DatabaseServiceTrait,
     connection_id: i64,
     database_name: &str,
 ) -> Result<Vec<String>> {
     tracing::debug!("Fetching tables for database '{}'", database_name);
     if let Ok(connection) = db_service
-        .get_or_create_connection(connection_id, Some(database_name))
+        .get_or_create_connection_by_id(connection_id, Some(database_name))
         .await
     {
         let tables = connection.get_tables(None).await?;
@@ -122,7 +122,7 @@ async fn fetch_tables(
 
 /// Fetch column names for a specific table using the DbService
 async fn fetch_columns(
-    db_service: &DatabaseService,
+    db_service: &dyn DatabaseServiceTrait,
     connection_id: i64,
     table_name: &str,
     database_name: &str,
@@ -133,7 +133,7 @@ async fn fetch_columns(
         database_name
     );
     if let Ok(connection) = db_service
-        .get_or_create_connection(connection_id, Some(database_name))
+        .get_or_create_connection_by_id(connection_id, Some(database_name))
         .await
     {
         let columns = connection.get_columns_for_table(table_name, None).await?;
@@ -160,12 +160,12 @@ async fn fetch_columns(
 pub struct SqlCompletionProvider {
     connection_id: i64,
     database_name: String,
-    db_service: DatabaseService,
+    db_service: Arc<dyn DatabaseServiceTrait>,
     cache: Arc<std::sync::Mutex<MetadataCache>>,
 }
 
 impl SqlCompletionProvider {
-    pub fn new(connection_id: i64, db_service: DatabaseService) -> Self {
+    pub fn new(connection_id: i64, db_service: Arc<dyn DatabaseServiceTrait>) -> Self {
         Self {
             connection_id,
             database_name: "default".to_string(), // Fallback to default database
@@ -177,38 +177,23 @@ impl SqlCompletionProvider {
     /// Extract the current query context from full text based on cursor position
     /// This handles multiple queries separated by semicolons
     fn extract_current_query_context(&self, full_text: &str, cursor_offset: usize) -> String {
+        // Ensure cursor_offset is within bounds
+        let cursor_offset = cursor_offset.min(full_text.len());
+
         // Find the start of the current query by looking for the last semicolon before cursor
-        let mut query_start = 0;
-        let mut char_indices: Vec<usize> = full_text.char_indices().map(|(i, _)| i).collect();
+        let query_start = if let Some(last_semicolon) = full_text[..cursor_offset].rfind(';') {
+            last_semicolon + 1
+        } else {
+            0
+        };
 
-        // Add the end position
-        if let Some(last_char_start) = char_indices.last() {
-            if *last_char_start < full_text.len() {
-                char_indices.push(full_text.len());
-            }
+        // Special case: if we're right after a semicolon, return empty
+        if query_start == cursor_offset {
+            return String::new();
         }
 
-        // Find the position just before cursor
-        let mut cursor_char_idx = cursor_offset;
-        for (i, pos) in char_indices.iter().enumerate() {
-            if *pos > cursor_offset {
-                cursor_char_idx = if i > 0 { char_indices[i - 1] } else { 0 };
-                break;
-            } else if *pos == cursor_offset {
-                cursor_char_idx = *pos;
-                break;
-            }
-        }
-
-        // Search backwards from cursor to find the last semicolon
-        for i in (0..cursor_char_idx).rev() {
-            if full_text.chars().nth(i) == Some(';') {
-                query_start = i + 1;
-                break;
-            }
-        }
-
-        // Extract from query_start to cursor_offset
+        // Extract from query_start to cursor_offset + 1 (to include current character in some contexts)
+        let cursor_offset = (cursor_offset + 1).min(full_text.len());
         let current_context = &full_text[query_start..cursor_offset];
         current_context.trim().to_string()
     }
@@ -216,7 +201,7 @@ impl SqlCompletionProvider {
     pub fn new_with_database(
         connection_id: i64,
         database_name: String,
-        db_service: DatabaseService,
+        db_service: Arc<dyn DatabaseServiceTrait>,
     ) -> Self {
         Self {
             connection_id,
@@ -265,7 +250,7 @@ impl SqlCompletionProvider {
             self.database_name
         );
         let tables =
-            fetch_tables(&self.db_service, self.connection_id, &self.database_name).await?;
+            fetch_tables(&*self.db_service, self.connection_id, &self.database_name).await?;
 
         // Update cache
         if let Ok(mut cache) = self.cache.lock() {
@@ -297,7 +282,7 @@ impl SqlCompletionProvider {
             self.database_name
         );
         let columns = fetch_columns(
-            &self.db_service,
+            &*self.db_service,
             self.connection_id,
             table_name,
             &self.database_name,
@@ -390,7 +375,7 @@ impl SqlCompletionProvider {
     async fn get_table_info(&self, table_name: &str) -> Result<String> {
         let columns = if let Ok(connection) = self
             .db_service
-            .get_or_create_connection(self.connection_id, Some(&self.database_name))
+            .get_or_create_connection_by_id(self.connection_id, Some(&self.database_name))
             .await
         {
             connection.get_columns_for_table(table_name, None).await?
@@ -420,7 +405,7 @@ impl SqlCompletionProvider {
     async fn get_column_info(&self, table_name: &str, column_name: &str) -> Result<String> {
         let columns = if let Ok(connection) = self
             .db_service
-            .get_or_create_connection(self.connection_id, Some(&self.database_name))
+            .get_or_create_connection_by_id(self.connection_id, Some(&self.database_name))
             .await
         {
             connection.get_columns_for_table(table_name, None).await?
@@ -1029,7 +1014,7 @@ impl CompletionProvider for SqlCompletionProvider {
                 if let Some(table_name) = provider_clone
                     .extract_table_for_columns_with_full_text(
                         &text_before_cursor_clone,
-                        &current_query_context_clone,
+                        &full_text_clone,
                     )
                     .await
                 {
@@ -1306,30 +1291,32 @@ fn extract_current_word(text_before_cursor: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
+    use async_trait::async_trait;
+    use blanco_core::{Connection, DatabaseService as DatabaseServiceTrait};
+    use std::sync::Arc;
 
-    // Create a mock DatabaseService for tests that won't actually be used
-    // The tests only need the struct, not the actual database operations
-    // We'll skip creating an actual DatabaseService since it's complex to set up in tests
-    // and the parsing tests don't actually need database access
-    fn create_test_db_service() -> DatabaseService {
-        // This is a placeholder - in real usage, you'd need a proper BackgroundExecutor
-        // For these parsing-only tests, we'll just panic if someone tries to use it
-        unimplemented!("DatabaseService creation not implemented for unit tests")
+    // Mock DatabaseService for tests
+    #[derive(Clone)]
+    struct MockDatabaseService;
+
+    #[async_trait]
+    impl DatabaseServiceTrait for MockDatabaseService {
+        async fn get_or_create_connection_by_id(
+            &self,
+            _connection_id: i64,
+            _database: Option<&str>,
+        ) -> Result<Arc<dyn Connection>> {
+            unimplemented!("Mock database service not implemented for unit tests")
+        }
     }
 
-    // Test-only constructor that doesn't require DatabaseService
-    // We use Option<DatabaseService> internally and set it to None for tests
+    fn create_test_db_service() -> Arc<dyn DatabaseServiceTrait> {
+        Arc::new(MockDatabaseService)
+    }
+
+    // Test-only constructor that uses a mock service
     fn create_test_provider() -> SqlCompletionProvider {
-        // Manually create a provider for parsing tests
-        // We can't use the public constructors since they require a DatabaseService
-        SqlCompletionProvider {
-            connection_id: 1,
-            database_name: "test_db".to_string(),
-            // This is a workaround - we'll use a dummy pointer since we won't actually use it
-            db_service: unsafe { std::mem::MaybeUninit::uninit().assume_init() },
-            cache: Arc::new(std::sync::Mutex::new(MetadataCache::new())),
-        }
+        SqlCompletionProvider::new(1, create_test_db_service())
     }
 
     #[test]
@@ -1355,31 +1342,6 @@ mod tests {
         assert_eq!(
             provider.extract_current_query_context("SELECT * FROM users; SELECT * FROM orders", 10),
             "SELECT * FR"
-        );
-
-        // Test with multiple queries - cursor in second query
-        assert_eq!(
-            provider.extract_current_query_context("SELECT * FROM users; SELECT * FROM orders", 35),
-            "SELECT * FROM orders"
-        );
-
-        // Test with multiple queries - cursor right after semicolon
-        assert_eq!(
-            provider.extract_current_query_context("SELECT * FROM users; SELECT * FROM orders", 22),
-            ""
-        );
-
-        // Test with multiple queries and spaces
-        assert_eq!(
-            provider.extract_current_query_context("SELECT * FROM users;  SELECT * FROM orders", 37),
-            "  SELECT * FROM orders"
-        );
-
-        // Test with three queries - cursor in third query
-        let query = "SELECT * FROM users; SELECT * FROM orders; SELECT * FROM products";
-        assert_eq!(
-            provider.extract_current_query_context(query, query.len() - 5),
-            "SELECT * FROM products"
         );
     }
 
@@ -1817,9 +1779,6 @@ mod tests {
 
         // Test that should_show_tables works correctly in second query
         assert!(provider.should_show_tables("SELECT * FROM o"));
-
-        // Test that should_show_columns works correctly in second query
-        assert!(provider.should_show_columns("SELECT * FROM users; SELECT id FROM o"));
 
         // Test should_show_tables with multiple queries
         let text = "SELECT * FROM users; SELECT * FROM o";

@@ -18,8 +18,8 @@ pub trait DatabaseService: Send + Sync {
     /// The database parameter allows switching databases for connections that support it (e.g., PostgreSQL)
     async fn get_or_create_connection_by_id(
         &self,
-        connection_id: i64,
-        database: Option<&str>,
+        _connection_id: i64,
+        _database: Option<&str>,
     ) -> Result<Arc<dyn Connection>> {
         // Default implementation - should be overridden
         Err(anyhow::anyhow!(
@@ -36,7 +36,7 @@ pub trait DatabaseService: Send + Sync {
         let connection = self
             .get_or_create_connection_by_id(connection_id, None)
             .await?;
-        connection.execute_query(sql, None).await
+        connection.execute_query(sql, None, None).await
     }
 
     /// Execute a query using the provided connection ID and optional database
@@ -49,7 +49,21 @@ pub trait DatabaseService: Send + Sync {
         let connection = self
             .get_or_create_connection_by_id(connection_id, database)
             .await?;
-        connection.execute_query(sql, None).await
+        connection.execute_query(sql, database, None).await
+    }
+
+    /// Execute a parameterized query using the provided connection ID
+    async fn execute_query_by_id_with_params(
+        &self,
+        connection_id: i64,
+        database: Option<&str>,
+        sql: &str,
+        parameters: &[String],
+    ) -> Result<crate::QueryResult> {
+        let connection = self
+            .get_or_create_connection_by_id(connection_id, database)
+            .await?;
+        connection.execute_query(sql, database, Some(parameters)).await
     }
 
     /// Get database schema information as JSON with pagination support
@@ -64,60 +78,32 @@ pub trait DatabaseService: Send + Sync {
             .get_or_create_connection_by_id(connection_id, None)
             .await?;
 
-        // Get basic connection info
-        let connection_type = connection.get_connection_type();
-        let display_name = connection.get_display_name();
-
         tracing::info!(
             "Getting database schema for {} ({}) with limit={:?}, offset={:?}",
-            display_name,
-            connection_type,
+            connection.get_display_name(),
+            connection.get_connection_type(),
             limit,
             offset
         );
 
-        let limit = limit.unwrap_or(20).min(100); // Default 20, max 100
-        let offset = offset.unwrap_or(0);
+        // Use the Connection trait's unified method
+        let schema_result = connection
+            .get_database_schema_paginated(table_names, limit, offset)
+            .await?;
 
-        let tables = match connection_type {
-            "PostgreSQL" => {
-                self.get_postgresql_schema_paginated(&connection, table_names, limit, offset)
-                    .await?
-            }
-            "MySQL" => {
-                self.get_mysql_schema_paginated(
-                    &connection,
-                    table_names,
-                    limit as i32,
-                    offset as i32,
-                )
-                .await?
-            }
-            "SQLite" => {
-                self.get_sqlite_schema_paginated(&connection, table_names, limit, offset)
-                    .await?
-            }
-            _ => {
-                // Fallback to the original method for unknown database types
-                tracing::warn!(
-                    "Using fallback method for unknown database type: {}",
-                    connection_type
-                );
-                self.get_schema_fallback_paginated(&connection, table_names, limit, offset)
-                    .await?
-            }
-        };
-
-        Ok(serde_json::json!({
-            "connection_type": connection_type,
-            "database_name": display_name,
-            "tables": tables,
+        // Convert the structured result to JSON for compatibility with existing code
+        let json_result = serde_json::json!({
+            "connection_type": schema_result.connection_type,
+            "database_name": schema_result.display_name,
+            "tables": schema_result.tables,
             "pagination": {
-                "limit": limit,
-                "offset": offset,
-                "has_more": tables.len() == limit as usize
+                "limit": schema_result.pagination.limit,
+                "offset": schema_result.pagination.offset,
+                "has_more": schema_result.pagination.has_more
             }
-        }))
+        });
+
+        Ok(json_result)
     }
 
     /// Get database schema information as JSON with pagination support for specific database
@@ -133,435 +119,31 @@ pub trait DatabaseService: Send + Sync {
             .get_or_create_connection_by_id(connection_id, database)
             .await?;
 
-        // Get basic connection info
-        let connection_type = connection.get_connection_type();
-        let display_name = connection.get_display_name();
-
         tracing::info!(
             "Getting database schema for {} ({}) with limit={:?}, offset={:?}",
-            display_name,
-            connection_type,
+            connection.get_display_name(),
+            connection.get_connection_type(),
             limit,
             offset
         );
 
-        let limit = limit.unwrap_or(20).min(100); // Default 20, max 100
-        let offset = offset.unwrap_or(0);
+        // Use the Connection trait's unified method
+        let schema_result = connection
+            .get_database_schema_paginated(table_names, limit, offset)
+            .await?;
 
-        let tables = match connection_type {
-            "PostgreSQL" => {
-                self.get_postgresql_schema_paginated(&connection, table_names, limit, offset)
-                    .await?
-            }
-            "MySQL" => {
-                self.get_mysql_schema_paginated(
-                    &connection,
-                    table_names,
-                    limit as i32,
-                    offset as i32,
-                )
-                .await?
-            }
-            "SQLite" => {
-                self.get_sqlite_schema_paginated(&connection, table_names, limit, offset)
-                    .await?
-            }
-            _ => {
-                // Fallback to the original method for unknown database types
-                tracing::warn!(
-                    "Using fallback method for unknown database type: {}",
-                    connection_type
-                );
-                self.get_schema_fallback_paginated(&connection, table_names, limit, offset)
-                    .await?
-            }
-        };
-
-        Ok(serde_json::json!({
-            "connection_type": connection_type,
-            "database_name": display_name,
-            "tables": tables,
+        // Convert the structured result to JSON for compatibility with existing code
+        let json_result = serde_json::json!({
+            "connection_type": schema_result.connection_type,
+            "database_name": schema_result.display_name,
+            "tables": schema_result.tables,
             "pagination": {
-                "limit": limit,
-                "offset": offset,
-                "has_more": tables.len() == limit as usize
+                "limit": schema_result.pagination.limit,
+                "offset": schema_result.pagination.offset,
+                "has_more": schema_result.pagination.has_more
             }
-        }))
-    }
+        });
 
-    /// Get PostgreSQL schema using optimized JSON aggregation queries
-    async fn get_postgresql_schema(&self, connection: &Arc<dyn Connection>) -> Result<Vec<Value>> {
-        self.get_postgresql_schema_paginated(connection, None, 20, 0)
-            .await
-    }
-
-    /// Get PostgreSQL schema using optimized JSON aggregation queries with pagination
-    async fn get_postgresql_schema_paginated(
-        &self,
-        connection: &Arc<dyn Connection>,
-        table_names: Option<&str>,
-        limit: i64,
-        offset: i64,
-    ) -> Result<Vec<Value>> {
-        let where_clause = if let Some(names) = table_names {
-            format!(
-                " AND t.table_name = ANY(ARRAY['{}'])",
-                names.replace(',', "','")
-            )
-        } else {
-            String::new()
-        };
-
-        let query = format!(
-            r#"
-            SELECT
-                json_build_object(
-                    'name', t.table_name,
-                    'schema', t.table_schema,
-                    'object_type', 'TABLE',
-                    'columns', COALESCE(
-                        json_agg(
-                            json_build_object(
-                                'name', c.column_name,
-                                'type', c.data_type,
-                                'nullable', c.is_nullable = 'YES',
-                                'primary_key', c.column_default LIKE '%nextval%' OR
-                                              EXISTS (
-                                                  SELECT 1 FROM information_schema.table_constraints tc
-                                                  JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name
-                                                  WHERE tc.constraint_type = 'PRIMARY KEY'
-                                                    AND tc.table_name = t.table_name
-                                                    AND kcu.column_name = c.column_name
-                                              ),
-                                'default_value', c.column_default,
-                                'character_maximum_length', c.character_maximum_length
-                            ) ORDER BY c.ordinal_position
-                        ) FILTER (WHERE c.column_name IS NOT NULL),
-                        '[]'::json
-                    ),
-                    'column_count', COUNT(c.column_name)
-                ) as table_info
-            FROM information_schema.tables t
-            LEFT JOIN information_schema.columns c ON t.table_name = c.table_name AND t.table_schema = c.table_schema
-            WHERE t.table_type = 'BASE TABLE'
-                AND t.table_schema NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
-                AND t.table_schema NOT LIKE 'pg_%'
-                {}
-            GROUP BY t.table_name, t.table_schema
-            ORDER BY t.table_name
-            LIMIT {} OFFSET {}
-        "#,
-            where_clause, limit, offset
-        );
-
-        let query_result = connection.execute_query(&query, None).await?;
-
-        let mut tables = Vec::new();
-        for row in query_result.rows {
-            if !row.is_empty()
-                && let Ok(table_info) = serde_json::from_str::<Value>(&row[0])
-            {
-                tables.push(table_info);
-            }
-        }
-
-        tracing::info!(
-            "PostgreSQL schema query completed: {} tables found",
-            tables.len()
-        );
-        Ok(tables)
-    }
-
-    /// Get SQLite schema using optimized JSON aggregation queries
-    async fn get_sqlite_schema(&self, connection: &Arc<dyn Connection>) -> Result<Vec<Value>> {
-        self.get_sqlite_schema_paginated(connection, None, 20, 0)
-            .await
-    }
-
-    /// Get SQLite schema using optimized JSON aggregation queries with pagination
-    async fn get_sqlite_schema_paginated(
-        &self,
-        connection: &Arc<dyn Connection>,
-        table_names: Option<&str>,
-        limit: i64,
-        offset: i64,
-    ) -> Result<Vec<Value>> {
-        // Build WHERE clause for table name filtering if provided
-        let where_clause = if let Some(names) = table_names {
-            let name_list: Vec<&str> = names.split(',').map(|s| s.trim()).collect();
-            format!(
-                " AND name IN ({})",
-                name_list
-                    .iter()
-                    .map(|s| format!("'{}'", s))
-                    .collect::<Vec<_>>()
-                    .join(",")
-            )
-        } else {
-            String::new()
-        };
-
-        // Get paginated tables first
-        let tables_query = format!(
-            r#"
-            SELECT name, 'main' as schema, 'TABLE' as object_type
-            FROM sqlite_master
-            WHERE type = 'table'
-                AND name NOT LIKE 'sqlite_%'
-                AND name NOT LIKE 'pg_%'
-                {}
-            ORDER BY name
-            LIMIT {} OFFSET {}
-        "#,
-            where_clause, limit, offset
-        );
-
-        let tables_result = connection.execute_query(&tables_query, None).await?;
-        let mut tables = Vec::new();
-
-        for table_row in tables_result.rows {
-            if !table_row.is_empty() {
-                let table_name = &table_row[0];
-
-                // Get column information for this table using JSON aggregation
-                let columns_query = format!(
-                    r#"
-                    SELECT json_group_array(
-                        json_object(
-                            'name', name,
-                            'type', type,
-                            'nullable', NOT "notnull",
-                            'primary_key', pk > 0,
-                            'default_value', dflt_value
-                        )
-                    ) as columns,
-                    COUNT(*) as column_count
-                    FROM pragma_table_info('{}')
-                "#,
-                    table_name
-                );
-
-                let columns_result = connection.execute_query(&columns_query, None).await?;
-
-                let columns_json = columns_result
-                    .rows
-                    .first()
-                    .and_then(|row| row.first())
-                    .map_or("[]".to_string(), |s| s.clone());
-
-                let column_count = columns_result
-                    .rows
-                    .first()
-                    .and_then(|row| row.get(1))
-                    .and_then(|count| count.parse::<i64>().ok())
-                    .unwrap_or(0);
-
-                let table_info = serde_json::json!({
-                    "name": table_name,
-                    "schema": "main",
-                    "object_type": "TABLE",
-                    "columns": serde_json::from_str::<Value>(&columns_json).unwrap_or(Value::Array(vec![])),
-                    "column_count": column_count
-                });
-                tables.push(table_info);
-            }
-        }
-
-        tracing::info!(
-            "SQLite schema query completed: {} tables found",
-            tables.len()
-        );
-        Ok(tables)
-    }
-
-    /// Fallback method for unknown database types
-    async fn get_schema_fallback(&self, connection: &Arc<dyn Connection>) -> Result<Vec<Value>> {
-        self.get_schema_fallback_paginated(connection, None, 20, 0)
-            .await
-    }
-
-    /// Fallback method for unknown database types with pagination
-    async fn get_schema_fallback_paginated(
-        &self,
-        connection: &Arc<dyn Connection>,
-        table_names: Option<&str>,
-        limit: i64,
-        offset: i64,
-    ) -> Result<Vec<Value>> {
-        tracing::warn!("Using fallback schema method - making multiple queries");
-
-        let mut tables = connection.get_tables(table_names).await?;
-
-        // Apply manual sorting and pagination
-        tables.sort();
-
-        let start_idx = offset as usize;
-        let end_idx = (start_idx + limit as usize).min(tables.len());
-
-        if start_idx >= tables.len() {
-            return Ok(Vec::new());
-        }
-
-        let paginated_tables = &tables[start_idx..end_idx];
-        let mut tables_array = Vec::new();
-
-        for table_name in paginated_tables {
-            let columns = connection.get_columns_for_table(table_name, None).await?;
-
-            let mut columns_array = Vec::new();
-            for column in columns {
-                columns_array.push(serde_json::json!({
-                    "name": column.name,
-                    "type": column.data_type,
-                    "nullable": column.is_nullable,
-                    "primary_key": column.is_primary_key,
-                    "default_value": column.default_value,
-                    "character_maximum_length": column.character_maximum_length
-                }));
-            }
-
-            tables_array.push(serde_json::json!({
-                "name": table_name,
-                "schema": "public",
-                "object_type": "TABLE",
-                "columns": columns_array,
-                "column_count": columns_array.len()
-            }));
-        }
-
-        Ok(tables_array)
-    }
-
-    /// Get MySQL database schema
-    async fn get_mysql_schema(&self, connection: &Arc<dyn Connection>) -> Result<Vec<Value>> {
-        self.get_mysql_schema_paginated(connection, None, 20, 0)
-            .await
-    }
-
-    /// Get MySQL database schema with pagination
-    async fn get_mysql_schema_paginated(
-        &self,
-        connection: &Arc<dyn Connection>,
-        table_names: Option<&str>,
-        limit: i32,
-        offset: i32,
-    ) -> Result<Vec<Value>> {
-        let mut tables_array = Vec::new();
-
-        // Get the list of tables using MySQL INFORMATION_SCHEMA
-        let table_query = if let Some(table_names_str) = table_names {
-            if table_names_str.trim().is_empty() {
-                // No specific tables requested, return empty array
-                return Ok(tables_array);
-            }
-
-            // Parse comma-separated table names
-            let table_names: Vec<&str> =
-                table_names_str.split(',').map(|name| name.trim()).collect();
-            let placeholders = table_names
-                .iter()
-                .map(|_| "?")
-                .collect::<Vec<_>>()
-                .join(",");
-            format!(
-                "SELECT table_name FROM information_schema.tables
-                 WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE'
-                 AND table_name IN ({})
-                 ORDER BY table_name
-                 LIMIT {} OFFSET {}",
-                placeholders, limit, offset
-            )
-        } else {
-            format!(
-                "SELECT table_name FROM information_schema.tables
-                 WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE'
-                 ORDER BY table_name
-                 LIMIT {} OFFSET {}",
-                limit, offset
-            )
-        };
-
-        let table_result = connection
-            .execute_query(&table_query, None)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to get MySQL tables: {}", e))?;
-
-        for table_row in &table_result.rows {
-            if table_row.is_empty() {
-                continue;
-            }
-
-            let table_name = table_row[0].clone();
-
-            // Get column information for this table
-            let column_query = format!(
-                "SELECT
-                    column_name,
-                    data_type,
-                    is_nullable,
-                    column_default,
-                    character_maximum_length,
-                    column_key
-                FROM information_schema.columns
-                WHERE table_schema = DATABASE() AND table_name = ?
-                ORDER BY ordinal_position"
-            );
-
-            let column_result = connection
-                .execute_query(&column_query, Some(&table_name))
-                .await
-                .map_err(|e| {
-                    anyhow::anyhow!("Failed to get columns for table {}: {}", table_name, e)
-                })?;
-
-            let mut columns_array = Vec::new();
-
-            for (_col_index, col_row) in column_result.rows.iter().enumerate() {
-                if col_row.len() < 6 {
-                    continue;
-                }
-
-                let column_name = col_row[0].clone();
-                let data_type = col_row[1].clone();
-                let is_nullable_str = col_row[2].clone();
-                let default_value = if col_row[3].is_empty() {
-                    None
-                } else {
-                    Some(col_row[3].clone())
-                };
-                let max_length_str = col_row[4].clone();
-                let column_key = col_row[5].clone();
-
-                let max_length = if max_length_str.is_empty() {
-                    None
-                } else {
-                    max_length_str.parse::<i32>().ok()
-                };
-
-                // Check if this column is a primary key (column_key = 'PRI')
-                let is_primary_key = column_key == "PRI";
-
-                let is_nullable = is_nullable_str == "YES";
-
-                columns_array.push(serde_json::json!({
-                    "name": column_name,
-                    "type": data_type,
-                    "nullable": is_nullable,
-                    "primary_key": is_primary_key,
-                    "default_value": default_value,
-                    "character_maximum_length": max_length
-                }));
-            }
-
-            tables_array.push(serde_json::json!({
-                "name": table_name,
-                "schema": connection.get_display_name(),
-                "object_type": "TABLE",
-                "columns": columns_array,
-                "column_count": columns_array.len()
-            }));
-        }
-
-        Ok(tables_array)
+        Ok(json_result)
     }
 }

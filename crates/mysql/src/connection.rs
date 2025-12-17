@@ -446,10 +446,6 @@ impl Connection for MysqlConnection {
         self.display_name.clone()
     }
 
-    fn get_manager_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     async fn connect(&mut self, connection_string: &str) -> Result<(), anyhow::Error> {
         tracing::info!("🔌 Connecting to MySQL server: {}", connection_string);
 
@@ -489,17 +485,11 @@ impl Connection for MysqlConnection {
         true // Simplified for now
     }
 
-    async fn ensure_connected(&mut self, connection_string: &str) -> Result<(), anyhow::Error> {
-        if !self.is_connected() {
-            self.connect(connection_string).await?;
-        }
-        Ok(())
-    }
-
     async fn execute_query(
         &self,
         query: &str,
         database_name: Option<&str>,
+        parameters: Option<&[String]>,
     ) -> Result<QueryResult, anyhow::Error> {
         let database = database_name
             .or(self.initial_database.as_ref().map(|s| s.as_str()))
@@ -510,12 +500,24 @@ impl Connection for MysqlConnection {
         let start_time = std::time::Instant::now();
 
         tracing::debug!(
-            "🎯 Executing MySQL query on database '{}': {}",
+            "🎯 Executing MySQL query on database '{}': {} (parameters: {})",
             database,
-            query
+            query,
+            parameters.map(|p| p.len()).unwrap_or(0)
         );
 
-        let rows = sqlx::query(query).fetch_all(&pool).await?;
+        // Build query with parameters if provided
+        let sql_query = if let Some(params) = parameters {
+            let mut q = sqlx::query(query);
+            for param in params {
+                q = q.bind(param);
+            }
+            q
+        } else {
+            sqlx::query(query)
+        };
+
+        let rows = sql_query.fetch_all(&pool).await?;
 
         let execution_time = start_time.elapsed().as_millis() as i64;
 
@@ -579,25 +581,6 @@ impl Connection for MysqlConnection {
             primary_key_column: None,
             connection_id: None,
         })
-    }
-
-    async fn execute_prepared_query(
-        &self,
-        sql_template: &str,
-        parameters: &[String],
-    ) -> Result<QueryResult, anyhow::Error> {
-        tracing::debug!("🎯 Executing MySQL prepared query: {}", sql_template);
-        tracing::debug!("📋 Parameters: {:?}", parameters);
-
-        // For now, implement simple parameter substitution
-        // In a production environment, you'd want to use actual prepared statements
-        let mut query = sql_template.to_string();
-        for param in parameters {
-            query = query.replacen('?', &format!("'{}'", param), 1);
-        }
-
-        self.execute_query(&query, self.initial_database.as_deref())
-            .await
     }
 
     async fn get_databases(&self) -> Result<Vec<String>, anyhow::Error> {
@@ -850,5 +833,29 @@ impl Connection for MysqlConnection {
             supports_schemas: false,
             icon_name: IconName::MySQL,
         }
+    }
+
+    async fn get_database_schema_paginated(
+        &self,
+        table_names: Option<&str>,
+        limit: Option<i64>,
+        offset: Option<i64>,
+    ) -> Result<blanco_core::connection_trait::DatabaseSchemaResult> {
+        let limit = limit.unwrap_or(20).min(100) as i32; // Default 20, max 100
+        let offset = offset.unwrap_or(0) as i32;
+
+        let tables = self.get_schema_paginated(table_names, limit, offset).await?;
+        let table_count = tables.len();
+
+        Ok(blanco_core::connection_trait::DatabaseSchemaResult {
+            connection_type: self.get_connection_type().to_string(),
+            display_name: self.get_display_name(),
+            tables,
+            pagination: blanco_core::connection_trait::PaginationInfo {
+                limit: Some(limit as i64),
+                offset: Some(offset as i64),
+                has_more: table_count == limit as usize,
+            },
+        })
     }
 }

@@ -1260,145 +1260,6 @@ impl PostgresConnection {
             }
         }
     }
-    /// Execute a query using a specific connection pool
-    async fn execute_query_with_pool(
-        &self,
-        pool: &sqlx::PgPool,
-        query: &str,
-    ) -> Result<QueryResult> {
-        // Try to execute as a query that returns rows
-        match sqlx::query(query).fetch_all(pool).await {
-            Ok(rows) => {
-                if rows.is_empty() {
-                    return Ok(QueryResult {
-                        columns: vec![],
-                        column_types: vec![],
-                        rows: vec![],
-                        rows_affected: 0,
-                        query_text: None,
-                        execution_time_ms: None,
-                        is_error: false,
-                        table_name: None,
-                        primary_key_column: None,
-                        connection_id: None,
-                    });
-                }
-
-                // Extract column names and types from the first row
-                let first_row = &rows[0];
-                let columns: Vec<String> = first_row
-                    .columns()
-                    .iter()
-                    .map(|col| col.name().to_string())
-                    .collect();
-
-                let column_types: Vec<String> = first_row
-                    .columns()
-                    .iter()
-                    .map(|col| col.type_info().name().to_string())
-                    .collect();
-
-                // First pass: Process rows and collect OIDs from regclass columns
-                let mut data_rows: Vec<Vec<String>> = rows
-                    .iter()
-                    .map(|row| {
-                        (0..columns.len())
-                            .map(|i| self.convert_row_value_to_string(row, i, &column_types))
-                            .collect()
-                    })
-                    .collect();
-
-                // Check if we have any regclass columns that need OID resolution
-                let regclass_columns: Vec<usize> = column_types
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, col_type)| {
-                        if col_type == "regclass" {
-                            Some(i)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-
-                if !regclass_columns.is_empty() {
-                    // Collect OIDs from regclass columns using raw bytes
-                    let mut oids_to_resolve = Vec::new();
-                    for (row_idx, row) in rows.iter().enumerate() {
-                        for &col_idx in &regclass_columns {
-                            if let Ok(raw_value) = row.try_get_raw(col_idx) {
-                                if !raw_value.is_null() {
-                                    // Use the same approach as handle_unknown_type with as_bytes()
-                                    match raw_value.as_bytes() {
-                                        Ok(bytes) => {
-                                            // PostgreSQL OIDs are 4-byte integers in network byte order (big-endian)
-                                            if bytes.len() >= 4 {
-                                                let oid = i32::from_be_bytes([
-                                                    bytes[0], bytes[1], bytes[2], bytes[3],
-                                                ]);
-                                                oids_to_resolve.push((row_idx, col_idx, oid));
-                                            }
-                                        }
-                                        Err(_) => {
-                                            // If we can't get bytes, we can't resolve this OID
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Resolve OIDs to table names in batch
-                    if !oids_to_resolve.is_empty() {
-                        let unique_oids: Vec<i32> = oids_to_resolve
-                            .iter()
-                            .map(|(_, _, oid)| *oid)
-                            .collect::<std::collections::HashSet<_>>()
-                            .into_iter()
-                            .collect();
-
-                        let oid_to_name = self.resolve_oids_to_names(pool, &unique_oids).await?;
-
-                        // Update data rows with resolved names
-                        for (row_idx, col_idx, oid) in oids_to_resolve {
-                            if let Some(name) = oid_to_name.get(&oid) {
-                                data_rows[row_idx][col_idx] = name.clone();
-                            }
-                        }
-                    }
-                }
-
-                Ok(QueryResult {
-                    columns,
-                    column_types,
-                    rows: data_rows,
-                    rows_affected: rows.len().try_into().unwrap_or(0),
-                    query_text: None,
-                    execution_time_ms: None,
-                    is_error: false,
-                    table_name: None,
-                    primary_key_column: None,
-                    connection_id: None,
-                })
-            }
-            Err(_e) => {
-                // If it's not a SELECT query, try executing it as a statement
-                let result = sqlx::query(query).execute(pool).await?;
-                Ok(QueryResult {
-                    columns: vec![],
-                    column_types: vec![],
-                    rows: vec![],
-                    rows_affected: result.rows_affected(),
-                    query_text: None,
-                    execution_time_ms: None,
-                    is_error: false,
-                    table_name: None,
-                    primary_key_column: None,
-                    connection_id: None,
-                })
-            }
-        }
-    }
 
     /// Fetch PostgreSQL tables using async background task
     async fn fetch_postgres_tables(&self, schema: Option<&str>) -> Result<Vec<String>> {
@@ -1412,7 +1273,7 @@ impl PostgresConnection {
         ";
 
         let result = self
-            .execute_prepared_query(query, &[schema_filter.to_string()])
+            .execute_query(query, Some("postgres"), Some(&[schema_filter.to_string()]))
             .await?;
         let tables: Vec<String> = result
             .rows
@@ -1462,6 +1323,155 @@ impl PostgresConnection {
     }
 }
 
+impl PostgresConnection {
+    /// Helper method to execute a query with parameters
+    async fn execute_query_with_params(
+        &self,
+        pool: &sqlx::PgPool,
+        sql_template: &str,
+        parameters: &[String],
+    ) -> Result<QueryResult> {
+        use sqlx::Either;
+
+        tracing::debug!(
+            "Executing PostgreSQL query with {} parameters",
+            parameters.len()
+        );
+
+        // Build the query with parameter placeholders
+        let mut query = sqlx::query(sql_template);
+
+        // Add parameters to the query
+        for param in parameters {
+            query = query.bind(param);
+        }
+
+        // Use fetch_many to handle both row-returning and row-affecting queries
+        let mut results = query.fetch_many(pool);
+
+        let mut columns: Vec<String> = Vec::new();
+        let mut column_types: Vec<String> = Vec::new();
+        let mut rows: Vec<Vec<String>> = Vec::new();
+        let mut rows_affected: u64 = 0;
+        let mut collected_rows: Vec<sqlx::postgres::PgRow> = Vec::new();
+
+        while let Some(result) = results.next().await {
+            match result? {
+                Either::Left(execution_result) => {
+                    rows_affected += execution_result.rows_affected();
+                }
+                Either::Right(row) => {
+                    // Extract column info from the first row
+                    if columns.is_empty() {
+                        columns = row
+                            .columns()
+                            .iter()
+                            .map(|col| col.name().to_string())
+                            .collect();
+
+                        column_types = row
+                            .columns()
+                            .iter()
+                            .map(|col| col.type_info().name().to_string())
+                            .collect();
+                    }
+
+                    // Collect rows for OID processing later
+                    collected_rows.push(row);
+                }
+            }
+        }
+
+        // Process rows with OID resolution if needed
+        if !collected_rows.is_empty() {
+            // First pass: Process rows and collect OIDs from regclass columns
+            let mut data_rows: Vec<Vec<String>> = collected_rows
+                .iter()
+                .map(|row| {
+                    (0..columns.len())
+                        .map(|i| self.convert_row_value_to_string(row, i, &column_types))
+                        .collect()
+                })
+                .collect();
+
+            // Check if we have any regclass columns that need OID resolution
+            let regclass_columns: Vec<usize> = column_types
+                .iter()
+                .enumerate()
+                .filter_map(|(i, col_type)| {
+                    if col_type == "regclass" {
+                        Some(i)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            if !regclass_columns.is_empty() {
+                // Collect OIDs from regclass columns using raw bytes
+                let mut oids_to_resolve = Vec::new();
+                for (row_idx, row) in collected_rows.iter().enumerate() {
+                    for &col_idx in &regclass_columns {
+                        if let Ok(raw_value) = row.try_get_raw(col_idx) {
+                            if !raw_value.is_null() {
+                                // Use the same approach as handle_unknown_type with as_bytes()
+                                match raw_value.as_bytes() {
+                                    Ok(bytes) => {
+                                        // PostgreSQL OIDs are 4-byte integers in network byte order (big-endian)
+                                        if bytes.len() >= 4 {
+                                            let oid = i32::from_be_bytes([
+                                                bytes[0], bytes[1], bytes[2], bytes[3],
+                                            ]);
+                                            oids_to_resolve.push((row_idx, col_idx, oid));
+                                        }
+                                    }
+                                    Err(_) => {
+                                        // If we can't get bytes, we can't resolve this OID
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Resolve OIDs to table names in batch
+                if !oids_to_resolve.is_empty() {
+                    let unique_oids: Vec<i32> = oids_to_resolve
+                        .iter()
+                        .map(|(_, _, oid)| *oid)
+                        .collect::<std::collections::HashSet<_>>()
+                        .into_iter()
+                        .collect();
+
+                    let oid_to_name = self.resolve_oids_to_names(pool, &unique_oids).await?;
+
+                    // Update data rows with resolved names
+                    for (row_idx, col_idx, oid) in oids_to_resolve {
+                        if let Some(name) = oid_to_name.get(&oid) {
+                            data_rows[row_idx][col_idx] = name.clone();
+                        }
+                    }
+                }
+            }
+
+            rows = data_rows;
+        }
+
+        Ok(QueryResult {
+            columns,
+            column_types,
+            rows,
+            rows_affected,
+            query_text: Some(sql_template.to_string()),
+            execution_time_ms: None,
+            is_error: false,
+            table_name: None,
+            primary_key_column: None,
+            connection_id: None,
+        })
+    }
+}
+
 #[async_trait]
 impl Connection for PostgresConnection {
     fn get_connection_key_str(&self) -> String {
@@ -1484,10 +1494,6 @@ impl Connection for PostgresConnection {
 
     fn get_display_name(&self) -> String {
         self.display_name.clone()
-    }
-
-    fn get_manager_any(&self) -> &dyn std::any::Any {
-        self
     }
 
     async fn connect(&mut self, connection_string: &str) -> Result<()> {
@@ -1538,164 +1544,50 @@ impl Connection for PostgresConnection {
         !self.display_name.is_empty()
     }
 
-    async fn ensure_connected(&mut self, connection_string: &str) -> Result<()> {
-        if !self.is_connected() || !self.is_connection_healthy().await {
-            tracing::info!("Reconnecting to PostgreSQL database");
-            self.connect(connection_string).await?;
-        }
-        Ok(())
-    }
-
-    async fn execute_query(&self, query: &str, database_name: Option<&str>) -> Result<QueryResult> {
+    async fn execute_query(
+        &self,
+        query: &str,
+        database_name: Option<&str>,
+        parameters: Option<&[String]>,
+    ) -> Result<QueryResult> {
         tracing::debug!(
-            "Executing PostgreSQL query: {} (database: {:?})",
+            "Executing PostgreSQL query: {} (database: {:?}) (parameters: {})",
             query,
-            database_name
+            database_name,
+            parameters.map(|p| p.len()).unwrap_or(0)
         );
 
-        // If no database specified, we need to connect to a default database first
-        // to get the list of available databases. We'll try common default databases.
-        let target_database = if let Some(db) = database_name {
-            db.to_string()
-        } else {
-            // Try to find an available database by testing common defaults
-            self.get_available_database().await?
-        };
+        let database_name = database_name.ok_or(anyhow::anyhow!("missing database"))?;
 
         // Get or create connection pool for the specific database
-        let pool = self
-            .get_or_create_pool(&target_database)
-            .await
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "Failed to get connection pool for database '{}': {}",
-                    target_database,
-                    e
-                )
-            })?;
+        let pool = self.get_or_create_pool(&database_name).await.map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to get connection pool for database '{}': {}",
+                database_name,
+                e
+            )
+        })?;
 
-        // Execute the query using the database-specific pool
+        // Execute the query, passing an empty slice if no parameters are provided
+        let params = parameters.unwrap_or(&[]);
         let result = self
-            .execute_query_with_pool(&pool, query)
+            .execute_query_with_params(&pool, query, params)
             .await
             .map_err(|e| anyhow::anyhow!("PostgreSQL query execution failed: {}", e))?;
 
         tracing::debug!(
-            "Query executed successfully on database '{}', {} rows returned",
-            target_database,
+            "Query executed successfully, {} rows returned",
             result.row_count()
         );
 
         Ok(result)
     }
 
-    async fn execute_prepared_query(
-        &self,
-        sql_template: &str,
-        parameters: &[String],
-    ) -> Result<QueryResult> {
-        tracing::debug!(
-            "Executing prepared PostgreSQL query with {} parameters",
-            parameters.len()
-        );
-
-        // For prepared queries, use the initial database or 'postgres' as fallback
-        let database_name = self.initial_database.as_deref().unwrap_or("postgres");
-        let pool = self.get_or_create_pool(database_name).await.map_err(|e| {
-            anyhow::anyhow!("Failed to get connection pool for prepared query: {}", e)
-        })?;
-
-        // Build the query with parameter placeholders
-        let mut query = sqlx::query(sql_template);
-
-        // Add parameters to the query
-        for param in parameters {
-            query = query.bind(param);
-        }
-
-        // Try to execute as a query that returns rows
-        match query.fetch_all(&pool).await {
-            Ok(rows) => {
-                if rows.is_empty() {
-                    return Ok(QueryResult {
-                        columns: vec![],
-                        column_types: vec![],
-                        rows: vec![],
-                        rows_affected: 0,
-                        query_text: Some(sql_template.to_string()),
-                        execution_time_ms: None,
-                        is_error: false,
-                        table_name: None,
-                        primary_key_column: None,
-                        connection_id: None,
-                    });
-                }
-
-                // Extract column names and types from the first row
-                let first_row: &sqlx::postgres::PgRow = &rows[0];
-                let columns: Vec<String> = first_row
-                    .columns()
-                    .iter()
-                    .map(|col| col.name().to_string())
-                    .collect();
-
-                let column_types: Vec<String> = first_row
-                    .columns()
-                    .iter()
-                    .map(|col| col.type_info().name().to_string())
-                    .collect();
-
-                // Extract row data using the reusable type conversion method
-                let data_rows: Vec<Vec<String>> = rows
-                    .iter()
-                    .map(|row| {
-                        (0..columns.len())
-                            .map(|i| self.convert_row_value_to_string(row, i, &column_types))
-                            .collect()
-                    })
-                    .collect();
-
-                Ok(QueryResult {
-                    columns,
-                    column_types,
-                    rows: data_rows,
-                    rows_affected: 0,
-                    query_text: Some(sql_template.to_string()),
-                    execution_time_ms: None,
-                    is_error: false,
-                    table_name: None,
-                    primary_key_column: None,
-                    connection_id: None,
-                })
-            }
-            Err(_e) => {
-                // If it's not a SELECT query, try executing it as a statement
-                // Need to recreate the query since it was consumed by fetch_all
-                let mut statement_query = sqlx::query(sql_template);
-                for param in parameters {
-                    statement_query = statement_query.bind(param);
-                }
-                let result = statement_query.execute(&pool).await?;
-                Ok(QueryResult {
-                    columns: vec![],
-                    column_types: vec![],
-                    rows: vec![],
-                    rows_affected: result.rows_affected(),
-                    query_text: Some(sql_template.to_string()),
-                    execution_time_ms: None,
-                    is_error: false,
-                    table_name: None,
-                    primary_key_column: None,
-                    connection_id: None,
-                })
-            }
-        }
-    }
-
     async fn get_databases(&self) -> Result<Vec<String>> {
         let result = self
             .execute_query(
                 "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname",
+                self.initial_database.as_deref(),
                 None,
             )
             .await?;
@@ -1711,6 +1603,7 @@ impl Connection for PostgresConnection {
         let result = self
             .execute_query(
                 "SELECT schema_name FROM information_schema.schemata WHERE schema_owner = 'pg_database_owner' ORDER BY schema_name",
+                self.initial_database.as_deref(),
                 None,
             )
             .await?;
@@ -1743,7 +1636,7 @@ impl Connection for PostgresConnection {
         ";
 
         let result = self
-            .execute_prepared_query(query, &[table_name.to_string()])
+            .execute_query(query, Some("postgres"), Some(&[table_name.to_string()]))
             .await?;
 
         if !result.rows.is_empty() {
@@ -1780,7 +1673,11 @@ impl Connection for PostgresConnection {
         ";
 
         let result = self
-            .execute_prepared_query(query, &[table_name.to_string(), schema_name.to_string()])
+            .execute_query(
+                query,
+                Some("postgres"),
+                Some(&[table_name.to_string(), schema_name.to_string()]),
+            )
             .await?;
 
         let primary_key = self
@@ -1842,12 +1739,13 @@ impl Connection for PostgresConnection {
 
         // Get row count
         let row_count = match self
-            .execute_prepared_query(
+            .execute_query(
                 &format!(
                     "SELECT COUNT(*) FROM \"{}\".\"{}\"",
                     schema_name, table_name
                 ),
-                &[],
+                Some("postgres"),
+                Some(&[]),
             )
             .await
         {
@@ -1891,12 +1789,6 @@ impl Connection for PostgresConnection {
         ))
     }
 
-    async fn get_database_name(&self) -> Result<Option<String>> {
-        // For server-level connections, we don't have a specific database
-        // Return None to indicate server-level connection
-        Ok(None)
-    }
-
     fn get_file_safe_name(&self) -> String {
         // Create a file-safe name from PostgreSQL server details
         let name = format!(
@@ -1922,30 +1814,21 @@ impl Connection for PostgresConnection {
         ),
         anyhow::Error,
     > {
+        let database_name = database_name.ok_or(anyhow::anyhow!("missing database"))?;
         tracing::debug!(
             "Executing PostgreSQL streaming query: {} (database: {:?})",
             query,
             database_name
         );
 
-        // Get the target database
-        let target_database = if let Some(db) = database_name {
-            db.to_string()
-        } else {
-            self.get_available_database().await?
-        };
-
         // Get connection pool
-        let pool = self
-            .get_or_create_pool(&target_database)
-            .await
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "Failed to get connection pool for database '{}': {}",
-                    target_database,
-                    e
-                )
-            })?;
+        let pool = self.get_or_create_pool(&database_name).await.map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to get connection pool for database '{}': {}",
+                database_name,
+                e
+            )
+        })?;
 
         // Use sqlx::query().fetch() for true streaming
         let rows_stream = sqlx::query(query).fetch(&pool);
@@ -2053,6 +1936,32 @@ impl Connection for PostgresConnection {
                 Ok(None)
             }
         }
+    }
+
+    async fn get_database_schema_paginated(
+        &self,
+        table_names: Option<&str>,
+        limit: Option<i64>,
+        offset: Option<i64>,
+    ) -> Result<blanco_core::connection_trait::DatabaseSchemaResult> {
+        let limit = limit.unwrap_or(20).min(100); // Default 20, max 100
+        let offset = offset.unwrap_or(0);
+
+        let tables = self
+            .get_schema_paginated(table_names, limit, offset)
+            .await?;
+        let table_count = tables.len();
+
+        Ok(blanco_core::connection_trait::DatabaseSchemaResult {
+            connection_type: self.get_connection_type().to_string(),
+            display_name: self.get_display_name(),
+            tables,
+            pagination: blanco_core::connection_trait::PaginationInfo {
+                limit: Some(limit),
+                offset: Some(offset),
+                has_more: table_count == limit as usize,
+            },
+        })
     }
 }
 

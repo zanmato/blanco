@@ -1,0 +1,147 @@
+//! SQLite schema query utilities
+
+use crate::connection::SqliteConnection;
+use anyhow::Result;
+use blanco_core::connection_trait::{TableSchemaInfo, ColumnInfo};
+use blanco_core::Connection;
+
+impl SqliteConnection {
+    /// Get SQLite schema using optimized JSON aggregation queries with pagination
+    pub async fn get_schema_paginated(
+        &self,
+        table_names: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<TableSchemaInfo>> {
+        // Build WHERE clause for table name filtering if provided
+        let where_clause = if let Some(names) = table_names {
+            let name_list: Vec<&str> = names.split(',').map(|s| s.trim()).collect();
+            format!(
+                " AND name IN ({})",
+                name_list
+                    .iter()
+                    .map(|s| format!("'{}'", s))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        } else {
+            String::new()
+        };
+
+        // Get paginated tables first
+        let tables_query = format!(
+            r#"
+            SELECT name, 'main' as schema, 'TABLE' as object_type
+            FROM sqlite_master
+            WHERE type = 'table'
+                AND name NOT LIKE 'sqlite_%'
+                AND name NOT LIKE 'pg_%'
+                {}
+            ORDER BY name
+            LIMIT {} OFFSET {}
+        "#,
+            where_clause, limit, offset
+        );
+
+        let tables_result = self.execute_query(&tables_query, None, None).await?;
+        let mut tables = Vec::new();
+
+        for table_row in &tables_result.rows {
+            if !table_row.is_empty() {
+                let table_name = &table_row[0];
+
+                // Get column information for this table using JSON aggregation
+                let columns_query = format!(
+                    r#"
+                    SELECT json_group_array(
+                        json_object(
+                            'name', name,
+                            'type', type,
+                            'nullable', NOT "notnull",
+                            'primary_key', pk > 0,
+                            'default_value', dflt_value
+                        )
+                    ) as columns,
+                    COUNT(*) as column_count
+                    FROM pragma_table_info('{}')
+                "#,
+                    table_name
+                );
+
+                let columns_result = self.execute_query(&columns_query, None, None).await?;
+
+                let columns_json = columns_result
+                    .rows
+                    .first()
+                    .and_then(|row| row.first())
+                    .map_or("[]".to_string(), |s| s.clone());
+
+                let column_count = columns_result
+                    .rows
+                    .first()
+                    .and_then(|row| row.get(1))
+                    .and_then(|count: &String| count.parse::<i64>().ok())
+                    .unwrap_or(0);
+
+                // Parse the columns JSON into ColumnInfo structs
+                let columns: Vec<ColumnInfo> = if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&columns_json) {
+                    if let Some(array) = json_value.as_array() {
+                        array.iter().filter_map(|col| {
+                            if let Some(name) = col.get("name").and_then(|v| v.as_str()) {
+                                let data_type = col.get("type")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("unknown")
+                                    .to_string();
+                                let nullable = col.get("nullable")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(true);
+                                let primary_key = col.get("primary_key")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false);
+                                let default_value = col.get("default_value")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| {
+                                        if s == "NULL" || s.is_empty() {
+                                            None
+                                        } else {
+                                            Some(s.to_string())
+                                        }
+                                    })
+                                    .flatten();
+
+                                Some(ColumnInfo {
+                                    name: name.to_string(),
+                                    data_type,
+                                    is_nullable: nullable,
+                                    is_primary_key: primary_key,
+                                    default_value,
+                                    character_maximum_length: None, // SQLite doesn't specify this in pragma_table_info
+                                })
+                            } else {
+                                None
+                            }
+                        }).collect()
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    Vec::new()
+                };
+
+                tables.push(TableSchemaInfo {
+                    name: table_name.clone(),
+                    schema: "main".to_string(),
+                    object_type: "TABLE".to_string(),
+                    columns,
+                    column_count: column_count as usize,
+                });
+            }
+        }
+
+        tracing::info!(
+            "SQLite schema query completed: {} tables found",
+            tables.len()
+        );
+        Ok(tables)
+    }
+}

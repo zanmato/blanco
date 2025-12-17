@@ -130,14 +130,29 @@ impl SqliteConnection {
     }
 
     /// Execute a query asynchronously using SQLX directly
-    async fn execute_query_async(&self, query: &str) -> Result<QueryResult> {
+    async fn execute_query_async(
+        &self,
+        query: &str,
+        parameters: Option<&[String]>,
+    ) -> Result<QueryResult> {
         let pool = self
             .pool
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
 
+        // Build query with parameters if provided
+        let sql_query = if let Some(params) = parameters {
+            let mut q = sqlx::query(query);
+            for param in params {
+                q = q.bind(param);
+            }
+            q
+        } else {
+            sqlx::query(query)
+        };
+
         // Try to execute as a query that returns rows
-        match sqlx::query(query).fetch_all(pool).await {
+        match sql_query.fetch_all(pool).await {
             Ok(rows) => {
                 if rows.is_empty() {
                     return Ok(QueryResult {
@@ -304,10 +319,6 @@ impl Connection for SqliteConnection {
         self.display_name.clone()
     }
 
-    fn get_manager_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     async fn connect(&mut self, connection_string: &str) -> Result<()> {
         tracing::info!(
             "Connecting to SQLite database: {}",
@@ -345,143 +356,6 @@ impl Connection for SqliteConnection {
         self.pool.is_some()
     }
 
-    async fn ensure_connected(&mut self, connection_string: &str) -> Result<()> {
-        if !self.is_connected() || !self.is_connection_healthy().await {
-            tracing::info!("Reconnecting to SQLite database");
-            self.connect(connection_string).await?;
-        }
-        Ok(())
-    }
-
-    async fn execute_prepared_query(
-        &self,
-        sql_template: &str,
-        parameters: &[String],
-    ) -> Result<QueryResult> {
-        tracing::debug!(
-            "Executing prepared SQLite query with {} parameters",
-            parameters.len()
-        );
-
-        let pool = self
-            .pool
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
-
-        // Build the query with parameter placeholders
-        let mut query = sqlx::query(sql_template);
-
-        // Add parameters to the query (SQLite uses 1-based indexing)
-        for param in parameters {
-            query = query.bind(param);
-        }
-
-        // Try to execute as a query that returns rows
-        match query.fetch_all(pool).await {
-            Ok(rows) => {
-                if rows.is_empty() {
-                    return Ok(QueryResult {
-                        columns: vec![],
-                        column_types: vec![],
-                        rows: vec![],
-                        rows_affected: 0,
-                        query_text: Some(sql_template.to_string()),
-                        execution_time_ms: None,
-                        is_error: false,
-                        table_name: None,
-                        primary_key_column: None,
-                        connection_id: None,
-                    });
-                }
-
-                // Extract column names and types from the first row
-                let first_row = &rows[0];
-                let columns: Vec<String> = first_row
-                    .columns()
-                    .iter()
-                    .map(|col| col.name().to_string())
-                    .collect();
-
-                let column_types: Vec<String> = first_row
-                    .columns()
-                    .iter()
-                    .map(|col| col.type_info().name().to_string())
-                    .collect();
-
-                // Extract row data
-                let data_rows: Vec<Vec<String>> = rows
-                    .iter()
-                    .map(|row| {
-                        columns
-                            .iter()
-                            .enumerate()
-                            .map(|(i, _)| {
-                                // Check if the value is NULL first
-                                if let Ok(val) = row.try_get::<Option<String>, _>(i) {
-                                    val.unwrap_or_else(|| "NULL".to_string())
-                                } else if let Ok(val) = row.try_get::<Option<i64>, _>(i) {
-                                    val.map(|v| v.to_string())
-                                        .unwrap_or_else(|| "NULL".to_string())
-                                } else if let Ok(val) = row.try_get::<Option<f64>, _>(i) {
-                                    val.map(|v| v.to_string())
-                                        .unwrap_or_else(|| "NULL".to_string())
-                                } else if let Ok(val) = row.try_get::<Option<bool>, _>(i) {
-                                    val.map(|v| v.to_string())
-                                        .unwrap_or_else(|| "NULL".to_string())
-                                } else if let Ok(val) = row.try_get::<Option<Vec<u8>>, _>(i) {
-                                    // BLOB support - convert to hex string
-                                    val.map(|bytes| {
-                                        bytes
-                                            .iter()
-                                            .map(|b| format!("{:02x}", b))
-                                            .collect::<String>()
-                                    })
-                                    .unwrap_or_else(|| "NULL".to_string())
-                                } else {
-                                    "NULL".to_string()
-                                }
-                            })
-                            .collect()
-                    })
-                    .collect();
-
-                Ok(QueryResult {
-                    columns,
-                    column_types,
-                    rows: data_rows,
-                    rows_affected: 0,
-                    query_text: Some(sql_template.to_string()),
-                    execution_time_ms: None,
-                    is_error: false,
-                    table_name: None,
-                    primary_key_column: None,
-                    connection_id: None,
-                })
-            }
-            Err(_e) => {
-                // If it's not a SELECT query, try executing it as a statement
-                // Need to recreate the query since it was consumed by fetch_all
-                let mut statement_query = sqlx::query(sql_template);
-                for param in parameters {
-                    statement_query = statement_query.bind(param);
-                }
-                let result = statement_query.execute(pool).await?;
-                Ok(QueryResult {
-                    columns: vec![],
-                    column_types: vec![],
-                    rows: vec![],
-                    rows_affected: result.rows_affected(),
-                    query_text: Some(sql_template.to_string()),
-                    execution_time_ms: None,
-                    is_error: false,
-                    table_name: None,
-                    primary_key_column: None,
-                    connection_id: None,
-                })
-            }
-        }
-    }
-
     async fn get_databases(&self) -> Result<Vec<String>> {
         // SQLite has a single database, so we return the current database name
         let db_name = std::path::Path::new(&self.database_path)
@@ -497,9 +371,10 @@ impl Connection for SqliteConnection {
         &self,
         query: &str,
         _database_name: Option<&str>,
+        parameters: Option<&[String]>,
     ) -> Result<QueryResult> {
         // SQLite only has one database, so we ignore the database parameter and execute normally
-        self.execute_query_async(query).await
+        self.execute_query_async(query, parameters).await
     }
 
     async fn get_schemas(&self) -> Result<Vec<String>> {
@@ -507,7 +382,7 @@ impl Connection for SqliteConnection {
         let mut schemas = vec!["main".to_string()];
 
         // Try to get attached databases
-        match self.execute_query("PRAGMA database_list", None).await {
+        match self.execute_query("PRAGMA database_list", None, None).await {
             Ok(result) => {
                 for row in &result.rows {
                     if let Some(schema_name) = row.get(1) {
@@ -532,7 +407,7 @@ impl Connection for SqliteConnection {
             schema_filter
         );
 
-        let result = self.execute_query(&query, None).await?;
+        let result = self.execute_query(&query, None, None).await?;
         let tables: Vec<String> = result
             .rows
             .into_iter()
@@ -555,7 +430,7 @@ impl Connection for SqliteConnection {
         // Query SQLite's table_info to get primary key information
         let query = format!("PRAGMA table_info({})", table_name);
 
-        match self.execute_query(&query, None).await {
+        match self.execute_query(&query, None, None).await {
             Ok(result) => {
                 // Find the column with pk > 0 (primary key)
                 for row in &result.rows {
@@ -598,7 +473,7 @@ impl Connection for SqliteConnection {
         // Use PRAGMA table_info to get column information
         let query = format!("PRAGMA table_info({})", table_name);
 
-        let result = self.execute_query(&query, None).await?;
+        let result = self.execute_query(&query, None, None).await?;
 
         let mut columns = Vec::new();
         for row in result.rows {
@@ -645,7 +520,11 @@ impl Connection for SqliteConnection {
 
         // Get row count
         let row_count = match self
-            .execute_prepared_query(&format!("SELECT COUNT(*) FROM \"{}\"", table_name), &[])
+            .execute_query(
+                &format!("SELECT COUNT(*) FROM \"{}\"", table_name),
+                None,
+                Some(&[]),
+            )
             .await
         {
             Ok(count_result) if !count_result.rows.is_empty() => {
@@ -684,16 +563,6 @@ impl Connection for SqliteConnection {
         Err(anyhow::anyhow!(
             "Table changes not yet implemented for SQLite"
         ))
-    }
-
-    async fn get_database_name(&self) -> Result<Option<String>> {
-        // For SQLite, get the database file name without extension
-        let path = std::path::Path::new(&self.database_path);
-        let name = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_string());
-        Ok(name)
     }
 
     fn get_file_safe_name(&self) -> String {
@@ -835,6 +704,30 @@ impl Connection for SqliteConnection {
         let all_rows_stream = futures::stream::iter(rows.into_iter().map(Ok));
 
         Ok((columns, column_types, Box::new(all_rows_stream)))
+    }
+
+    async fn get_database_schema_paginated(
+        &self,
+        table_names: Option<&str>,
+        limit: Option<i64>,
+        offset: Option<i64>,
+    ) -> Result<blanco_core::connection_trait::DatabaseSchemaResult> {
+        let limit = limit.unwrap_or(20).min(100); // Default 20, max 100
+        let offset = offset.unwrap_or(0);
+
+        let tables = self.get_schema_paginated(table_names, limit, offset).await?;
+        let table_count = tables.len();
+
+        Ok(blanco_core::connection_trait::DatabaseSchemaResult {
+            connection_type: self.get_connection_type().to_string(),
+            display_name: self.get_display_name(),
+            tables,
+            pagination: blanco_core::connection_trait::PaginationInfo {
+                limit: Some(limit),
+                offset: Some(offset),
+                has_more: table_count == limit as usize,
+            },
+        })
     }
 }
 

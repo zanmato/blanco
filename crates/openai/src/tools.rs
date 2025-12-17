@@ -1,8 +1,91 @@
 use blanco_core::chat_provider::{FunctionDefinition, ToolCall, ToolDefinition, ToolResult};
-use blanco_core::DatabaseService;
+use blanco_core::{Connection, DatabaseService};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// Connection context for tool execution
+#[derive(Clone)]
+pub struct ConnectionContext {
+    /// Database service for connection resolution
+    pub database_service: Option<Arc<dyn DatabaseService>>,
+    /// The database connection ID
+    pub connection_id: Option<i64>,
+    /// The current database name (for connections that support multiple databases)
+    pub database_name: Option<String>,
+}
+
+impl ConnectionContext {
+    /// Create a new empty connection context
+    pub fn new() -> Self {
+        Self {
+            database_service: None,
+            connection_id: None,
+            database_name: None,
+        }
+    }
+
+    /// Create a connection context with database service and connection ID
+    pub fn with_database_service(
+        database_service: Arc<dyn DatabaseService>,
+        connection_id: i64,
+    ) -> Self {
+        Self {
+            database_service: Some(database_service),
+            connection_id: Some(connection_id),
+            database_name: None,
+        }
+    }
+
+    /// Create a connection context with database service, connection ID, and database name
+    pub fn with_database_service_and_database(
+        database_service: Arc<dyn DatabaseService>,
+        connection_id: i64,
+        database_name: String,
+    ) -> Self {
+        Self {
+            database_service: Some(database_service),
+            connection_id: Some(connection_id),
+            database_name: Some(database_name),
+        }
+    }
+
+    /// Check if the context has a database service
+    pub fn has_database_service(&self) -> bool {
+        self.database_service.is_some()
+    }
+
+    /// Get a reference to the database service
+    pub fn database_service(&self) -> Option<&Arc<dyn DatabaseService>> {
+        self.database_service.as_ref()
+    }
+
+    /// Get the connection ID
+    pub fn connection_id(&self) -> Option<i64> {
+        self.connection_id
+    }
+
+    /// Get the database name
+    pub fn database_name(&self) -> Option<&str> {
+        self.database_name.as_deref()
+    }
+
+    /// Get a connection asynchronously
+    pub async fn get_connection(&self) -> Result<Option<Arc<dyn Connection>>, anyhow::Error> {
+        if let (Some(db_service), Some(conn_id)) = (&self.database_service, self.connection_id) {
+            let database_name_ref = self.database_name.as_deref();
+            Ok(Some(db_service.get_or_create_connection_by_id(conn_id, database_name_ref).await?))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+impl Default for ConnectionContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// A registry of available tools/functions
 #[derive(Clone, Debug)]
@@ -81,11 +164,11 @@ impl Default for ToolRegistry {
 /// A trait for tool handlers
 #[async_trait::async_trait]
 pub trait ToolHandler: Send + Sync {
-    /// Execute the tool with given arguments and optional database service
-    async fn execute_with_db(
+    /// Execute the tool with given arguments and connection context
+    async fn execute_with_context(
         &self,
         arguments: Value,
-        database_service: Option<Arc<dyn DatabaseService>>,
+        context: ConnectionContext,
     ) -> ToolResult;
 
     /// Get the tool definition
@@ -98,7 +181,7 @@ pub trait ToolHandler: Send + Sync {
 /// A tool executor that can run tools
 pub struct ToolExecutor {
     handlers: HashMap<String, Box<dyn ToolHandler>>,
-    database_service: Option<Arc<dyn DatabaseService>>,
+    context_provider: Option<Box<dyn Fn() -> ConnectionContext + Send + Sync>>,
 }
 
 impl ToolExecutor {
@@ -106,15 +189,18 @@ impl ToolExecutor {
     pub fn new() -> Self {
         Self {
             handlers: HashMap::new(),
-            database_service: None,
+            context_provider: None,
         }
     }
 
-    /// Create a new tool executor with a database service
-    pub fn with_database_service(database_service: Arc<dyn DatabaseService>) -> Self {
+    /// Create a new tool executor with a context provider
+    pub fn with_context_provider<F>(provider: F) -> Self
+    where
+        F: Fn() -> ConnectionContext + Send + Sync + 'static,
+    {
         Self {
             handlers: HashMap::new(),
-            database_service: Some(database_service),
+            context_provider: Some(Box::new(provider)),
         }
     }
 
@@ -146,9 +232,16 @@ impl ToolExecutor {
                     }
                 };
 
-                // Execute the tool with database service if available
+                // Get the context if provider is available
+                let context = if let Some(provider) = &self.context_provider {
+                    provider()
+                } else {
+                    ConnectionContext::new()
+                };
+
+                // Execute the tool with context
                 let mut result = handler
-                    .execute_with_db(arguments.clone(), self.database_service.clone())
+                    .execute_with_context(arguments.clone(), context)
                     .await;
 
                 // Add human-readable summary to the result
@@ -207,7 +300,9 @@ impl Default for ToolExecutor {
 
 /// List-tables tool for database schema exploration
 pub struct ListTablesTool {
-    connection_id_resolver: Option<Box<dyn Fn() -> Option<i64> + Send + Sync>>,
+    // This tool now relies on the ToolExecutor's connection resolver
+    // We can remove the connection_id_resolver since the connection is provided
+    // through the execute_with_connection method
 }
 
 impl Default for ListTablesTool {
@@ -219,49 +314,25 @@ impl Default for ListTablesTool {
 impl ListTablesTool {
     /// Create a new list-tables tool
     pub fn new() -> Self {
-        Self {
-            connection_id_resolver: None,
-        }
-    }
-
-    /// Create a new list-tables tool with a connection od
-    pub fn with_connection_id(connection_id: i64) -> Self {
-        Self {
-            connection_id_resolver: Some(Box::new(move || Some(connection_id))),
-        }
-    }
-
-    /// Create a new list-tables tool with connection id resolver
-    pub fn with_connection_resolver<F>(resolver: F) -> Self
-    where
-        F: Fn() -> Option<i64> + Send + Sync + 'static,
-    {
-        Self {
-            connection_id_resolver: Some(Box::new(resolver)),
-        }
+        Self {}
     }
 }
 
 #[async_trait::async_trait]
 impl ToolHandler for ListTablesTool {
-    async fn execute_with_db(
+    async fn execute_with_context(
         &self,
         arguments: Value,
-        database_service: Option<Arc<dyn DatabaseService>>,
+        context: ConnectionContext,
     ) -> ToolResult {
         tracing::debug!(
-            "ListTablesTool execute_with_db called with arguments: {}",
+            "ListTablesTool execute_with_context called with arguments: {}",
             arguments
         );
 
         // Extract parameters
         let table_names = arguments
             .get("table_names")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
-        let output_format = arguments
-            .get("output_format")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
@@ -276,46 +347,52 @@ impl ToolHandler for ListTablesTool {
             .unwrap_or(0); // Default offset of 0
 
         tracing::debug!(
-            "Extracted parameters - table_names: {:?}, output_format: {:?}, limit: {}, offset: {}",
+            "Extracted parameters - table_names: {:?}, limit: {}, offset: {}",
             table_names,
-            output_format,
             limit,
             offset
         );
 
-        // Try to get connection string from various sources
-        let connection_id = if let Some(resolver) = &self.connection_id_resolver {
-            resolver()
-        } else {
-            None
-        };
-
-        if let Some(conn_id) = connection_id {
-            if let Some(db_service) = &database_service {
+        // Try to get connection from context
+        match context.get_connection().await {
+            Ok(Some(conn)) => {
                 tracing::debug!(
-                    "Using database service for ListTablesTool with connection: {}",
-                    conn_id
+                    "Using connection for ListTablesTool: {} ({})",
+                    conn.get_display_name(),
+                    conn.get_connection_type()
                 );
 
-                // Use the database service to query actual database schema with pagination
+                // Use the connection to query actual database schema with pagination
                 let table_names_ref = table_names.as_deref();
-                match db_service
+                let database_name = context.database_name();
+
+                match conn
                     .get_database_schema_paginated(
-                        conn_id,
                         table_names_ref,
                         Some(limit),
                         Some(offset),
                     )
                     .await
                 {
-                    Ok(result) => ToolResult::success(
-                        "list-tables",
-                        serde_json::to_string_pretty(&result)
-                            .unwrap_or_else(|_| "Invalid JSON result".to_string()),
-                    ),
+                    Ok(result) => {
+                        // Convert the DatabaseSchemaResult to JSON with database context
+                        let json_result = serde_json::json!({
+                            "connection_type": result.connection_type,
+                            "display_name": result.display_name,
+                            "database_name": database_name,
+                            "tables": result.tables,
+                            "pagination": result.pagination
+                        });
+
+                        ToolResult::success(
+                            "list-tables",
+                            serde_json::to_string_pretty(&json_result)
+                                .unwrap_or_else(|_| "Invalid JSON result".to_string()),
+                        )
+                    },
                     Err(e) => {
                         tracing::error!(
-                            "Failed to query database schema via database service: {}",
+                            "Failed to query database schema: {}",
                             e
                         );
                         ToolResult::error(
@@ -324,18 +401,24 @@ impl ToolHandler for ListTablesTool {
                         )
                     }
                 }
-            } else {
+            },
+            Ok(None) => {
+                tracing::warn!("No connection available for ListTablesTool");
                 ToolResult::error(
                     "list-tables",
                     "No database connection available. Please connect to a database first.",
                 )
+            },
+            Err(e) => {
+                tracing::error!(
+                    "Failed to get database connection: {}",
+                    e
+                );
+                ToolResult::error(
+                    "list-tables",
+                    format!("Failed to get database connection: {}", e),
+                )
             }
-        } else {
-            tracing::warn!("No connection string available for ListTablesTool");
-            ToolResult::error(
-                "list-tables",
-                "No database connection available. Please connect to a database first.",
-            )
         }
     }
 
@@ -429,12 +512,12 @@ impl ReadTabTool {
 
 #[async_trait::async_trait]
 impl ToolHandler for ReadTabTool {
-    async fn execute_with_db(
+    async fn execute_with_context(
         &self,
         _arguments: Value,
-        _database_service: Option<Arc<dyn DatabaseService>>,
+        _context: ConnectionContext,
     ) -> ToolResult {
-        tracing::debug!("ReadTabTool execute_with_db called");
+        tracing::debug!("ReadTabTool execute_with_context called");
 
         // Get tab content using the resolver or return a default message
         let tab_content = if let Some(resolver) = &self.tab_content_resolver {
