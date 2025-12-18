@@ -2,8 +2,7 @@ use crate::sql_parser::SqliteTableExtractor;
 use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
-    ColumnInfo, Connection, ConnectionUIMetadata, IconName, QueryResult, TableChangeOperation,
-    TableMetadata,
+    ColumnInfo, Connection, ConnectionUIMetadata, IconName, QueryResult, TableMetadata,
 };
 use futures::{Stream, StreamExt};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
@@ -555,16 +554,7 @@ impl Connection for SqliteConnection {
         Ok(metadata)
     }
 
-    async fn execute_table_changes(
-        &self,
-        _changes: &[TableChangeOperation],
-    ) -> Result<QueryResult> {
-        // This is a placeholder - would need implementation of table operations
-        Err(anyhow::anyhow!(
-            "Table changes not yet implemented for SQLite"
-        ))
-    }
-
+    
     fn get_file_safe_name(&self) -> String {
         // Create a file-safe name from SQLite database path
         let path = std::path::Path::new(&self.database_path);

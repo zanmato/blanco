@@ -2,8 +2,7 @@ use anyhow::Result;
 use async_std::sync::RwLock;
 use async_trait::async_trait;
 use blanco_core::{
-    ColumnInfo, Connection, ConnectionUIMetadata, IconName, QueryResult, TableChangeOperation,
-    TableMetadata,
+    ColumnInfo, Connection, ConnectionUIMetadata, IconName, QueryResult, TableMetadata,
 };
 use sqlx::mysql::MySqlPoolOptions;
 use sqlx::{Column, Row};
@@ -878,16 +877,7 @@ impl Connection for MysqlConnection {
         Ok(None)
     }
 
-    async fn execute_table_changes(
-        &self,
-        _changes: &[TableChangeOperation],
-    ) -> Result<QueryResult, anyhow::Error> {
-        // For now, return an error indicating this isn't implemented
-        Err(anyhow::anyhow!(
-            "Table changes are not yet implemented for MySQL"
-        ))
-    }
-
+    
     fn get_file_safe_name(&self) -> String {
         format!("mysql_{}_{}", self.server_key.host, self.server_key.port)
             .replace(':', "_")

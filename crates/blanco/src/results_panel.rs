@@ -32,7 +32,8 @@ pub struct TableOperationResponse {
     pub operations_executed: usize,
 }
 use blanco_core::QueryResult;
-use blanco_core::table_operations::{
+mod table_operations;
+use table_operations::{
     ColumnChange, OperationType, RowIdentifier, TableChangeOperation,
 };
 use blanco_ui::IconName;
@@ -424,13 +425,13 @@ impl ResultsTableDelegate {
     /// This method consolidates multiple changes to the same row into single operations.
     pub fn create_change_operations(
         &self,
-    ) -> Vec<blanco_core::table_operations::TableChangeOperation> {
+    ) -> Vec<table_operations::TableChangeOperation> {
         use std::collections::HashMap;
 
         // Map to consolidate changes by (table_name, pk_column, pk_value)
         let mut update_operations: HashMap<(String, String, String), Vec<ColumnChange>> =
             HashMap::new();
-        let mut insert_operations: Vec<blanco_core::table_operations::TableChangeOperation> =
+        let mut insert_operations: Vec<table_operations::TableChangeOperation> =
             Vec::new();
 
         for change in &self.edit_state.changes {
@@ -1678,7 +1679,7 @@ impl ResultsPanel {
         // Log the operations to SQL log if available
         if let Some(sql_log) = sql_log {
             for operation in &change_operations_for_logging {
-                let sql_query = operation.to_sql_query();
+                let sql_query = (operation as &table_operations::TableChangeOperation).to_sql_query();
                 sql_log.update(cx, |log, cx| {
                     log.append_text(&blanco_ui::SqlLogMessage::SqlStatement(sql_query), cx);
                     log.append_text(
@@ -1713,7 +1714,7 @@ impl ResultsPanel {
 
                     for operation in &change_operations_for_pipeline {
                         tracing::debug!("Got operation {:?}", operation);
-                        let sql_query = operation.to_sql_query();
+                        let sql_query = (operation as &table_operations::TableChangeOperation).to_sql_query();
                         match connection.execute_query(&sql_query, None, None).await {
                             Ok(query_result) => {
                                 total_rows_affected += query_result.rows_affected;

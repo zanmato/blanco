@@ -2,11 +2,9 @@
 //!
 //! This crate provides shared traits and types for the Blanco SQL editor.
 //! It defines the core interfaces for database connections, completion providers,
-//! and hover providers that are implemented by database-specific crates.
+//! and chat providers that are implemented by database-specific crates.
 
 pub mod connection_trait;
-pub mod lsp_traits;
-pub mod table_operations;
 pub mod chat_provider;
 pub mod database_service;
 
@@ -19,14 +17,8 @@ pub use connection_trait::{
 
 pub use database_service::DatabaseService;
 
-pub use table_operations::{
-    OperationType, RowIdentifier, ColumnChange,
-};
-
-pub use lsp_traits::{
-    CompletionProvider, HoverProvider, LanguageProvider, LanguageProviderRegistry,
-    Position, Range, CompletionContext, CompletionResponse, Hover,
-};
+// Re-export lsp-types Position for convenience
+pub use lsp_types::Position;
 
 pub use chat_provider::{
     ChatProvider, ProviderError, ChatCompletionRequest, ChatCompletionResponse,

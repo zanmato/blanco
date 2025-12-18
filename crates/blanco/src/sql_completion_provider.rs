@@ -5,10 +5,9 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
-use blanco_core::HoverProvider;
 use database::DatabaseServiceTrait;
 use gpui::{AppContext, Context, Task, Window};
-use gpui_component::input::{CompletionProvider, InputState, Rope, RopeExt};
+use gpui_component::input::{CompletionProvider, HoverProvider, InputState, Rope, RopeExt};
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
     Hover, HoverContents, MarkupContent, MarkupKind, Range, TextEdit,
@@ -1195,7 +1194,7 @@ impl HoverProvider for SqlCompletionProvider {
         rope: &Rope,
         offset: usize,
         _window: &mut Window,
-        cx: &mut gpui::Context<InputState>,
+        cx: &mut gpui::App,
     ) -> Task<Result<Option<Hover>>> {
         // Get the current text before cursor to determine context
         let full_text = rope.to_string();

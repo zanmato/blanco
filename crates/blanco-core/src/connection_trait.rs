@@ -319,13 +319,7 @@ pub trait Connection: Send + Sync + fmt::Debug {
         alias: &str,
     ) -> Result<Option<String>, anyhow::Error>;
 
-    /// Execute table change operations in a database-agnostic way
-    /// Takes a list of change operations and executes them with proper SQL generation
-    async fn execute_table_changes(
-        &self,
-        changes: &[TableChangeOperation],
-    ) -> Result<QueryResult, anyhow::Error>;
-
+    
     /// Get connection statistics and metadata
     async fn get_connection_info(&self) -> Result<ConnectionInfo, anyhow::Error> {
         Ok(ConnectionInfo {
