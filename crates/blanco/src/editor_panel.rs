@@ -3,6 +3,7 @@ use gpui::{
     IntoElement, KeybindingKeystroke, Keystroke, MouseButton, ParentElement, Render, Styled,
     Window, div, prelude::FluentBuilder, px, rems,
 };
+use gpui_tokio::Tokio;
 use gpui_component::{
     ActiveTheme, Sizable, StyledExt, WindowExt as _,
     button::{Button, ButtonVariants},
@@ -14,7 +15,7 @@ use gpui_component::{
     tab::{Tab, TabBar},
     v_flex,
 };
-use std::{rc::Rc, sync::Arc};
+use std::{rc::Rc, sync::Arc, time::Duration};
 use tracing::{debug, error, info};
 
 // Use reqwest
@@ -105,6 +106,7 @@ pub struct EditorPanel {
     active_tab_ix: usize,
     next_tab_id: usize,
     sidebar_collapsed: bool,
+    tabbar_scroll_handle: gpui::ScrollHandle,
     _subscriptions: Vec<gpui::Subscription>,
     run_query_keystroke: KeybindingKeystroke,
     editor_chat_resize_state: Entity<ResizableState>,
@@ -203,7 +205,7 @@ impl EditorPanel {
         }
     }
 
-    pub fn add_settings_tab(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub fn add_settings_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Check if settings tab already exists
         if self
             .tabs
@@ -235,6 +237,8 @@ impl EditorPanel {
 
         self.tabs.push(TabType::Settings(settings_tab));
         self.active_tab_ix = self.tabs.len() - 1;
+        self.scroll_tabbar_to_the_end(window, cx);
+
         cx.notify();
     }
 
@@ -545,6 +549,7 @@ impl EditorPanel {
             active_tab_ix: 0,
             next_tab_id: 0,
             sidebar_collapsed,
+            tabbar_scroll_handle: gpui::ScrollHandle::default(),
             _subscriptions: Vec::new(),
             run_query_keystroke: KeybindingKeystroke::from_keystroke(
                 Keystroke::parse("shift-enter").unwrap(),
@@ -645,11 +650,10 @@ impl EditorPanel {
                 .code_editor("sql".to_string())
                 .line_number(true)
                 .tab_size(TabSize {
-                    tab_size: 4,
+                    tab_size: 2,
                     hard_tabs: false,
                 })
-                .soft_wrap(false)
-                .placeholder("Enter your SQL query here...");
+                .soft_wrap(true);
 
             // Set up completion provider using connection_id, database_name, and DbService
             let db_service: Arc<dyn DatabaseServiceTrait> =
@@ -692,7 +696,20 @@ impl EditorPanel {
         };
 
         self.tabs.push(TabType::Query(query_tab));
+        self.active_tab_ix = tab_id;
+        self.scroll_tabbar_to_the_end(window, cx);
+
         cx.notify();
+    }
+
+    fn scroll_tabbar_to_the_end(&self, window: &mut Window, _: &mut Context<Self>) {
+        let scroll_handle = self.tabbar_scroll_handle.clone();
+        window.on_next_frame(move |window, _| {
+            window.on_next_frame(move |_, _| {
+                let max_offset = scroll_handle.max_offset();
+                scroll_handle.set_offset(gpui::point(-max_offset.width, gpui::px(0.0)));
+            })
+        });
     }
 
     /// Commit current changes in the active tab's results panel
@@ -983,6 +1000,7 @@ impl Render for EditorPanel {
                             }
                         }
                     }))
+                    .track_scroll(&self.tabbar_scroll_handle)
             )
             // Render the active tab's complete view
             .child(
@@ -1225,8 +1243,10 @@ fn create_chat_provider_info(connection_id: i64, cx: &mut App) -> anyhow::Result
     let http_client = Arc::new(reqwest::Client::new());
     // Get db_service
     let db_service = DatabaseService::global(cx).clone();
+    // Get the tokio runtime handle
+    let runtime_handle = Tokio::handle(cx);
     // Create chat provider
-    let mut resolver = ChatProviderResolver::new(http_client.clone(), db_service);
+    let mut resolver = ChatProviderResolver::new(http_client.clone(), db_service, runtime_handle);
     resolver.set_connection_id(connection_id);
     let provider_info = resolver.get_provider(&app_settings.settings)?;
     Ok(ChatProviderInfo {
