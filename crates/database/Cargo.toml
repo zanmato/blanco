@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 # Core dependencies
 blanco-core = { path = "../blanco-core" }
+gpui_tokio = { path = "../gpui_tokio" }
 gpui = { workspace = true }
 sqlx = { workspace = true }
 russh = "0.45"
@@ -19,7 +20,6 @@ sqlite = { path = "../sqlite" }
 # Async and utilities
 tokio = { version = "1.0", features = ["full", "net", "io-util"] }
 async-std = { workspace = true }
-async-compat = { workspace = true }
 anyhow = { workspace = true }
 
 # Logging

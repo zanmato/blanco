@@ -1273,7 +1273,11 @@ impl PostgresConnection {
         ";
 
         let result = self
-            .execute_query(query, Some("postgres"), Some(&[schema_filter.to_string()]))
+            .execute_query(
+                query,
+                self.initial_database.as_deref(),
+                Some(&[schema_filter.to_string()]),
+            )
             .await?;
         let tables: Vec<String> = result
             .rows
@@ -1636,7 +1640,11 @@ impl Connection for PostgresConnection {
         ";
 
         let result = self
-            .execute_query(query, Some("postgres"), Some(&[table_name.to_string()]))
+            .execute_query(
+                query,
+                self.initial_database.as_deref(),
+                Some(&[table_name.to_string()]),
+            )
             .await?;
 
         if !result.rows.is_empty() {
@@ -1675,7 +1683,7 @@ impl Connection for PostgresConnection {
         let result = self
             .execute_query(
                 query,
-                Some("postgres"),
+                self.initial_database.as_deref(),
                 Some(&[table_name.to_string(), schema_name.to_string()]),
             )
             .await?;
@@ -1738,22 +1746,7 @@ impl Connection for PostgresConnection {
             .await?;
 
         // Get row count
-        let row_count = match self
-            .execute_query(
-                &format!(
-                    "SELECT COUNT(*) FROM \"{}\".\"{}\"",
-                    schema_name, table_name
-                ),
-                Some("postgres"),
-                Some(&[]),
-            )
-            .await
-        {
-            Ok(count_result) if !count_result.rows.is_empty() => {
-                count_result.rows[0][0].parse().ok()
-            }
-            _ => None,
-        };
+        let row_count = Some(0);
 
         // Extract primary key information
         let primary_keys: Vec<String> = columns

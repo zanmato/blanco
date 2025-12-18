@@ -13,7 +13,7 @@ reqwest = { workspace = true }
 http = { workspace = true }
 async-std = { workspace = true }
 async-trait = { workspace = true }
-async-compat = { workspace = true }
+tokio = { workspace = true }
 futures = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }

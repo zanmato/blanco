@@ -9,10 +9,12 @@ members = [
     "crates/mysql",
     "crates/openai",
     "crates/database",
+    "crates/gpui_tokio",
 ]
 
 [workspace.package]
 edition = "2024"
+publish = false
 
 [workspace.dependencies]
 # Core GPUI dependencies

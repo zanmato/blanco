@@ -382,48 +382,116 @@ impl MysqlConnection {
     }
 
     /// Convert MySQL row value to string
-    fn convert_row_value_to_string(
+    pub fn convert_row_value_to_string(
         &self,
         row: &sqlx::mysql::MySqlRow,
         column_index: usize,
-        _column_type: &str,
+        column_type: &str,
     ) -> String {
-        // Try different types in order of likelihood
-        if let Ok(val) = row.try_get::<Option<String>, _>(column_index) {
-            return val.unwrap_or_else(|| "NULL".to_string());
+        // Use column type to determine the best conversion approach
+        match column_type.to_uppercase().as_str() {
+            // Integer types
+            "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INT" | "INTEGER" | "BIGINT" => {
+                if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(column_index) {
+                    // Special handling for TINYINT(1) which is often used for booleans
+                    if column_type.to_uppercase().contains("TINYINT") && (v == 0 || v == 1) {
+                        return if v == 1 { "true" } else { "false" }.to_string();
+                    }
+                    return v.to_string();
+                }
+            }
+
+            // Floating point types
+            "FLOAT" | "DOUBLE" | "REAL" => {
+                if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(column_index) {
+                    return v.to_string();
+                }
+            }
+
+            // Decimal types - try rust_decimal conversion, will fall back to string
+            "DECIMAL" | "NUMERIC" => {
+                if let Ok(Some(v)) = row.try_get::<Option<rust_decimal::Decimal>, _>(column_index) {
+                    return v.to_string();
+                }
+            }
+
+            // Boolean type
+            "BOOLEAN" | "BOOL" | "TINYINT(1)" => {
+                if let Ok(Some(v)) = row.try_get::<Option<bool>, _>(column_index) {
+                    return if v { "true" } else { "false" }.to_string();
+                }
+            }
+
+            // Date and time types
+            "DATE" => {
+                if let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveDate>, _>(column_index) {
+                    return v.to_string();
+                }
+            }
+
+            "DATETIME" | "TIMESTAMP" => {
+                // Try string conversion first for better compatibility
+                if let Ok(Some(v)) = row.try_get::<Option<String>, _>(column_index) {
+                    return v;
+                }
+                // Try NaiveDateTime
+                if let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveDateTime>, _>(column_index) {
+                    return v.to_string();
+                }
+                // Try DateTime<Utc> for TIMESTAMP
+                if let Ok(Some(v)) = row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>(column_index) {
+                    return v.to_string();
+                }
+            }
+
+            "TIME" => {
+                if let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveTime>, _>(column_index) {
+                    return v.to_string();
+                }
+            }
+
+            // String and binary types
+            "CHAR" | "VARCHAR" | "TEXT" | "TINYTEXT" | "MEDIUMTEXT" | "LONGTEXT" |
+            "ENUM" | "SET" | "JSON" => {
+                if let Ok(v) = row.try_get::<Option<String>, _>(column_index) {
+                    return v.unwrap_or_else(|| "NULL".to_string());
+                }
+            }
+
+            // Binary types (these might be represented as strings in hex format)
+            "BINARY" | "VARBINARY" | "BLOB" | "TINYBLOB" | "MEDIUMBLOB" | "LONGBLOB" => {
+                if let Ok(Some(v)) = row.try_get::<Option<Vec<u8>>, _>(column_index) {
+                    return format!("0x{}", hex::encode(v));
+                }
+            }
+
+            // Unknown type - try common numeric types first
+            _ => {
+                // Try boolean first (for SELECT TRUE/FALSE literals)
+                if let Ok(Some(v)) = row.try_get::<Option<bool>, _>(column_index) {
+                    return if v { "true" } else { "false" }.to_string();
+                }
+                // Try integer next
+                if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(column_index) {
+                    // Check if this could be a boolean (0/1)
+                    if v == 0 || v == 1 {
+                        return if v == 1 { "true" } else { "false" }.to_string();
+                    }
+                    return v.to_string();
+                }
+                // Try float
+                if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(column_index) {
+                    return v.to_string();
+                }
+            }
         }
 
-        if let Ok(val) = row.try_get::<Option<i64>, _>(column_index) {
-            return val
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "NULL".to_string());
+        // Universal fallback: try string conversion
+        if let Ok(v) = row.try_get::<Option<String>, _>(column_index) {
+            return v.unwrap_or_else(|| "NULL".to_string());
         }
 
-        if let Ok(val) = row.try_get::<Option<f64>, _>(column_index) {
-            return val
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "NULL".to_string());
-        }
-
-        if let Ok(val) = row.try_get::<Option<bool>, _>(column_index) {
-            return val
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "NULL".to_string());
-        }
-
-        if let Ok(val) = row.try_get::<Option<chrono::NaiveDate>, _>(column_index) {
-            return val
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "NULL".to_string());
-        }
-
-        if let Ok(val) = row.try_get::<Option<chrono::NaiveDateTime>, _>(column_index) {
-            return val
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "NULL".to_string());
-        }
-
-        // Fallback: try to get as raw string
+        // Ultimate fallback if nothing works
         "NULL".to_string()
     }
 }

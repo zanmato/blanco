@@ -20,6 +20,7 @@ sql-parse = { workspace = true }
 async-std = { workspace = true }
 
 # Local dependencies
+gpui_tokio = { path = "../gpui_tokio" }
 blanco_ui = { path = "../ui", package = "blanco-ui" }
 blanco-core = { path = "../blanco-core" }
 postgres = { path = "../postgres" }
@@ -31,7 +32,6 @@ database = { path = "../database" }
 # Additional dependencies
 env_logger = { workspace = true }
 smol = { workspace = true }
-async-compat = { workspace = true }
 dirs = { workspace = true }
 rust-embed = { workspace = true }
 url = { workspace = true }

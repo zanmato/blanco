@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use blanco_core::HoverProvider;
@@ -1009,6 +1009,8 @@ impl CompletionProvider for SqlCompletionProvider {
 
             // Spawn background task to extract table name and fetch columns
             let task = cx.background_spawn(async move {
+                smol::Timer::after(Duration::from_millis(100)).await;
+
                 // Extract table name and fetch columns using cache with current query context
                 // This ensures we only parse the current query, not previous ones
                 if let Some(table_name) = provider_clone

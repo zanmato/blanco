@@ -4,7 +4,7 @@ use anyhow::Result;
 use async_std::sync::RwLock;
 use async_trait::async_trait;
 use blanco_core::{Connection, ConnectionFactory, DatabaseService as DatabaseServiceTrait};
-use gpui::{BackgroundExecutor, Global};
+use gpui::Global;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -32,11 +32,11 @@ pub struct DatabaseService {
     tunnel_connections: Arc<RwLock<HashMap<ConnectionId, DatabaseConfigId>>>,
 
     // Dependencies
-    background_executor: BackgroundExecutor,
+    runtime_handle: tokio::runtime::Handle,
 }
 
 impl DatabaseService {
-    pub fn new(background_executor: BackgroundExecutor) -> Self {
+    pub fn new(runtime_handle: tokio::runtime::Handle) -> Self {
         // Initialize connection factories
         let mut factories: HashMap<String, Arc<dyn ConnectionFactory>> = HashMap::new();
         factories.insert(
@@ -58,7 +58,7 @@ impl DatabaseService {
             connection_factories: Arc::new(factories),
             ssh_tunnels: Arc::new(RwLock::new(HashMap::new())),
             tunnel_connections: Arc::new(RwLock::new(HashMap::new())),
-            background_executor,
+            runtime_handle,
         }
     }
 
@@ -303,14 +303,17 @@ impl DatabaseService {
             local_port,
         };
 
-        // Create tunnel - wrap with async-compat to bridge tokio to async-std
-        let mut tunnel = async_compat::Compat::new(async {
-            SshTunnel::create(ssh_config, self.background_executor.clone()).await
-        })
-        .await?;
-
-        // Connect before putting in mutex - wrap with async-compat to bridge tokio to async-std
-        async_compat::Compat::new(async { tunnel.connect().await }).await?;
+        // Create tunnel using the tokio runtime handle
+        let runtime_handle = self.runtime_handle.clone();
+        let runtime_handle_inner = runtime_handle.clone();
+        let tunnel = runtime_handle
+            .spawn(async move {
+                let mut tunnel = SshTunnel::create(ssh_config, runtime_handle_inner.clone()).await?;
+                tunnel.connect().await?;
+                Result::<SshTunnel, anyhow::Error>::Ok(tunnel)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to spawn SSH tunnel creation: {}", e))??;
 
         // Get tunnel info
         let tunnel_info = tunnel.get_info();
@@ -356,7 +359,7 @@ impl Clone for DatabaseService {
             connection_factories: Arc::clone(&self.connection_factories),
             ssh_tunnels: Arc::clone(&self.ssh_tunnels),
             tunnel_connections: Arc::clone(&self.tunnel_connections),
-            background_executor: self.background_executor.clone(),
+            runtime_handle: self.runtime_handle.clone(),
         }
     }
 }

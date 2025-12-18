@@ -2,9 +2,7 @@
 //! This module provides SSH tunneling functionality that is internal to the database crate
 
 use anyhow::Result;
-use async_compat;
 use async_trait::async_trait;
-use gpui::BackgroundExecutor;
 use russh::client as russh_client;
 use russh::client::{Config as SshConfig, Handle as SshHandle};
 use russh::keys::load_secret_key;
@@ -85,14 +83,14 @@ pub struct SshTunnel {
     status: Arc<StdMutex<TunnelStatus>>,
     is_running: Arc<StdMutex<bool>>,
     active_connections: Arc<StdMutex<std::collections::HashSet<ConnectionId>>>,
-    background_executor: BackgroundExecutor,
-    tunnel_task: Option<gpui::Task<()>>,
+    runtime_handle: tokio::runtime::Handle,
+    tunnel_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl SshTunnel {
     pub async fn create(
         config: SshTunnelConfig,
-        background_executor: BackgroundExecutor,
+        runtime_handle: tokio::runtime::Handle,
     ) -> Result<Self> {
         tracing::info!(
             "Creating SSH tunnel to {}:{} -> {}:{}",
@@ -108,7 +106,7 @@ impl SshTunnel {
             status: Arc::new(StdMutex::new(TunnelStatus::Disconnected)),
             is_running: Arc::new(StdMutex::new(false)),
             active_connections: Arc::new(StdMutex::new(std::collections::HashSet::new())),
-            background_executor,
+            runtime_handle,
             tunnel_task: None,
         };
 
@@ -126,7 +124,7 @@ impl SshTunnel {
     }
 
     /// Set the tunnel task to keep it alive
-    pub fn set_tunnel_task(&mut self, task: gpui::Task<()>) {
+    pub fn set_tunnel_task(&mut self, task: tokio::task::JoinHandle<()>) {
         self.tunnel_task = Some(task);
     }
 
@@ -195,7 +193,7 @@ impl SshTunnel {
     }
 
     /// Set up TCP forwarding to handle actual tunneling
-    async fn setup_tcp_forwarding(&mut self) -> Result<gpui::Task<()>> {
+    async fn setup_tcp_forwarding(&mut self) -> Result<tokio::task::JoinHandle<()>> {
         let remote_host = self.config.remote_host.clone();
         let remote_port = self.config.remote_port;
         let local_port = self.config.local_port;
@@ -223,88 +221,86 @@ impl SshTunnel {
         let session = Arc::new(tokio::sync::Mutex::new(self.session.take().unwrap()));
         let active_connections = Arc::clone(&self.active_connections);
 
-        tracing::debug!("Using background executor for SSH tunnel spawn");
-        let background_executor = self.background_executor.clone();
-        let task = background_executor.clone().spawn(async move {
-            async_compat::Compat::new(async move {
-                // Handle incoming connections
-                while *is_running.lock().unwrap() {
-                    match listener.accept().await {
-                        Ok((mut local_socket, _)) => {
-                            let remote_host = remote_host.clone();
-                            let remote_port = remote_port;
-                            let local_port = local_port;
-                            let session = Arc::clone(&session);
-                            let active_connections = Arc::clone(&active_connections);
+        tracing::debug!("Using tokio runtime handle for SSH tunnel spawn");
+        let runtime_handle = self.runtime_handle.clone();
+        let runtime_handle_inner = runtime_handle.clone();
+        let task = runtime_handle.spawn(async move {
+            // Handle incoming connections
+            while *is_running.lock().unwrap() {
+                match listener.accept().await {
+                    Ok((mut local_socket, _)) => {
+                        let remote_host = remote_host.clone();
+                        let remote_port = remote_port;
+                        let local_port = local_port;
+                        let session = Arc::clone(&session);
+                        let active_connections = Arc::clone(&active_connections);
+                        let runtime_handle = runtime_handle_inner.clone();
 
-                            // Generate a unique connection ID
-                            let connection_id = ConnectionId(format!(
-                                "{}:{}->{}:{}-{}",
-                                "127.0.0.1",
-                                local_port,
-                                remote_host,
-                                remote_port,
-                                uuid::Uuid::new_v4().to_string()
-                            ));
+                        // Generate a unique connection ID
+                        let connection_id = ConnectionId(format!(
+                            "{}:{}->{}:{}-{}",
+                            "127.0.0.1",
+                            local_port,
+                            remote_host,
+                            remote_port,
+                            uuid::Uuid::new_v4().to_string()
+                        ));
 
-                            // Add connection to tracking
-                            {
-                                let mut connections = active_connections.lock().unwrap();
-                                connections.insert(connection_id.clone());
-                            }
+                        // Add connection to tracking
+                        {
+                            let mut connections = active_connections.lock().unwrap();
+                            connections.insert(connection_id.clone());
+                        }
 
-                            // Handle connection in background task
-                            background_executor.spawn(async move {
-                                async_compat::Compat::new(async move {
-                                    tracing::debug!("Processing connection {}", connection_id.0);
+                        // Handle connection in background task
+                        runtime_handle.spawn(async move {
+                            tracing::debug!("Processing connection {}", connection_id.0);
 
-                                    // Open SSH channel to remote host:port
-                                    let ssh_channel = {
-                                        let session = session.lock().await;
-                                        session.channel_open_direct_tcpip(
-                                            &remote_host,
-                                            remote_port as u32,
-                                            "127.0.0.1",
-                                            local_port as u32
-                                        ).await
-                                    };
+                            // Open SSH channel to remote host:port
+                            let ssh_channel = {
+                                let session = session.lock().await;
+                                session.channel_open_direct_tcpip(
+                                    &remote_host,
+                                    remote_port as u32,
+                                    "127.0.0.1",
+                                    local_port as u32
+                                ).await
+                            };
 
-                                    match ssh_channel {
-                                        Ok(ssh_channel) => {
-                                            let mut ssh_stream = ssh_channel.into_stream();
+                            match ssh_channel {
+                                Ok(ssh_channel) => {
+                                    let mut ssh_stream = ssh_channel.into_stream();
 
-                                            // Copy data bidirectionally between local socket and SSH stream
-                                            match copy_bidirectional(&mut local_socket, &mut ssh_stream).await {
-                                                Ok((bytes_to_local, bytes_to_remote)) => {
-                                                    tracing::debug!("Connection {} completed. {} bytes to local, {} bytes to remote",
-                                                        connection_id.0, bytes_to_local, bytes_to_remote);
-                                                }
-                                                Err(e) => {
-                                                    tracing::error!("Error copying data for connection {}: {}", connection_id.0, e);
-                                                }
-                                            }
+                                    // Copy data bidirectionally between local socket and SSH stream
+                                    match copy_bidirectional(&mut local_socket, &mut ssh_stream).await {
+                                        Ok((bytes_to_local, bytes_to_remote)) => {
+                                            tracing::debug!("Connection {} completed. {} bytes to local, {} bytes to remote",
+                                                connection_id.0, bytes_to_local, bytes_to_remote);
                                         }
                                         Err(e) => {
-                                            tracing::error!("Failed to open SSH forwarding channel for connection {}: {}", connection_id.0, e);
+                                            tracing::error!("Error copying data for connection {}: {}", connection_id.0, e);
                                         }
                                     }
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to open SSH forwarding channel for connection {}: {}", connection_id.0, e);
+                                }
+                            }
 
-                                    // Remove connection from tracking
-                                    {
-                                        let mut connections = active_connections.lock().unwrap();
-                                        connections.remove(&connection_id);
-                                    }
-                                }).await
-                            }).detach();
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to accept SSH tunnel connection: {}", e);
-                        }
+                            // Remove connection from tracking
+                            {
+                                let mut connections = active_connections.lock().unwrap();
+                                connections.remove(&connection_id);
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to accept SSH tunnel connection: {}", e);
                     }
                 }
+            }
 
-                tracing::info!("SSH tunnel listener stopped");
-            }).await
+            tracing::info!("SSH tunnel listener stopped");
         });
 
         Ok(task)
@@ -316,8 +312,10 @@ impl SshTunnel {
         *self.is_running.lock().unwrap() = false;
         *self.status.lock().unwrap() = TunnelStatus::Disconnected;
         self.session = None;
-        // Drop the task to stop the TCP forwarding
-        self.tunnel_task = None;
+        // Abort the task to stop the TCP forwarding
+        if let Some(task) = self.tunnel_task.take() {
+            task.abort();
+        }
         Ok(())
     }
 }
@@ -326,7 +324,9 @@ impl Drop for SshTunnel {
     fn drop(&mut self) {
         tracing::debug!("Dropping SSH tunnel");
         *self.is_running.lock().unwrap() = false;
-        // Drop the task to stop the TCP forwarding
-        self.tunnel_task = None;
+        // Abort the task to stop the TCP forwarding
+        if let Some(task) = self.tunnel_task.take() {
+            task.abort();
+        }
     }
 }

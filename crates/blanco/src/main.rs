@@ -41,6 +41,10 @@ fn main() {
             .init();
 
         gpui_component::init(cx);
+        gpui_tokio::init(cx);
+
+        // Get the tokio runtime handle for automatic SSH tunnel establishment
+        let runtime_handle = gpui_tokio::Tokio::handle(cx);
 
         // Use default theme for now
         // Settings will be loaded asynchronously
@@ -63,8 +67,8 @@ fn main() {
             cx.set_global(db.unwrap());
         }
 
-        // Initialize database service with background executor for automatic SSH tunnel establishment
-        let db_service = DatabaseService::new(cx.background_executor().clone());
+        // Initialize database service with tokio runtime handle for automatic SSH tunnel establishment
+        let db_service = DatabaseService::new(runtime_handle.clone());
         cx.set_global(db_service);
 
         // Load connections from app database and add them to the database service

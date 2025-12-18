@@ -18,6 +18,7 @@ gpui-component = { workspace = true }
 # Database dependencies
 sqlx = { workspace = true, features = [
   "mysql",
+  "rust_decimal",
   "chrono",
   "uuid",
   "json",
@@ -46,6 +47,7 @@ lsp-types = { workspace = true }
 
 # Additional dependencies
 rust_decimal = { workspace = true }
+hex = "0.4"
 
 [dev-dependencies]
 # Dependencies for integration tests

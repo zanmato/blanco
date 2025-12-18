@@ -324,19 +324,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-compat"
-version = "0.2.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1ba85bc55464dcbf728b56d97e119d673f4cf9062be330a9a26f3acf504a590"
-dependencies = [
- "futures-core",
- "futures-io",
- "once_cell",
- "pin-project-lite",
- "tokio",
-]
-
-[[package]]
 name = "async-compression"
 version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -889,7 +876,6 @@ name = "blanco"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-compat",
  "async-std",
  "async-stream",
  "async-trait",
@@ -904,6 +890,7 @@ dependencies = [
  "futures",
  "gpui",
  "gpui-component",
+ "gpui_tokio",
  "http",
  "log",
  "lsp-types",
@@ -956,7 +943,6 @@ name = "blanco-openai"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-compat",
  "async-std",
  "async-stream",
  "async-trait",
@@ -969,6 +955,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "tokio",
  "tracing",
  "uuid",
 ]
@@ -1796,11 +1783,11 @@ name = "database"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-compat",
  "async-std",
  "async-trait",
  "blanco-core",
  "gpui",
+ "gpui_tokio",
  "mysql",
  "postgres",
  "russh",
@@ -3108,6 +3095,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpui_tokio"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "tokio",
+]
+
+[[package]]
 name = "grid"
 version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4357,6 +4353,7 @@ dependencies = [
  "futures",
  "gpui",
  "gpui-component",
+ "hex",
  "lsp-types",
  "ropey",
  "rust_decimal",

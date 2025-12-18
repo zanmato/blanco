@@ -26,17 +26,23 @@ pub struct OpenAIClient {
     config: OpenAIConfig,
     http_client: Arc<reqwest::Client>,
     tool_executor: Option<ToolExecutor>,
+    runtime_handle: tokio::runtime::Handle,
 }
 
 impl OpenAIClient {
     /// Create a new OpenAI client
-    pub fn new(http_client: Arc<reqwest::Client>, config: OpenAIConfig) -> OpenAIResult<Self> {
+    pub fn new(
+        http_client: Arc<reqwest::Client>,
+        config: OpenAIConfig,
+        runtime_handle: tokio::runtime::Handle,
+    ) -> OpenAIResult<Self> {
         config.validate()?;
 
         Ok(Self {
             config,
             http_client,
             tool_executor: None,
+            runtime_handle,
         })
     }
 
@@ -45,6 +51,7 @@ impl OpenAIClient {
         http_client: Arc<reqwest::Client>,
         config: OpenAIConfig,
         tool_executor: ToolExecutor,
+        runtime_handle: tokio::runtime::Handle,
     ) -> OpenAIResult<Self> {
         config.validate()?;
 
@@ -52,6 +59,7 @@ impl OpenAIClient {
             config,
             http_client,
             tool_executor: Some(tool_executor),
+            runtime_handle,
         })
     }
 
@@ -60,6 +68,7 @@ impl OpenAIClient {
         http_client: Arc<reqwest::Client>,
         config: OpenAIConfig,
         provider: F,
+        runtime_handle: tokio::runtime::Handle,
     ) -> OpenAIResult<Self>
     where
         F: Fn() -> crate::tools::ConnectionContext + Send + Sync + 'static,
@@ -73,6 +82,7 @@ impl OpenAIClient {
             config,
             http_client,
             tool_executor: Some(tool_executor),
+            runtime_handle,
         })
     }
 
@@ -122,14 +132,16 @@ impl OpenAIClient {
         // Add body
         let req_builder = req_builder.body(body);
 
-        // Use async_std's timeout function with async-compat wrapper for the entire async block
-        let response = async_std::future::timeout(
-            timeout,
-            async_compat::Compat::new(async move { req_builder.send().await }),
-        )
-        .await
-        .map_err(|_| OpenAIError::Timeout)?
-        .map_err(|err| OpenAIError::HttpError(err.to_string()))?;
+        // Use tokio's timeout function
+        let response = self
+            .runtime_handle
+            .spawn(async move {
+                tokio::time::timeout(timeout, req_builder.send()).await
+            })
+            .await
+            .map_err(|_| OpenAIError::Timeout)?
+            .map_err(|e| OpenAIError::HttpError(e.to_string()))?
+            .map_err(|err| OpenAIError::HttpError(err.to_string()))?;
 
         // Check the status code
         let status = response.status();
@@ -166,8 +178,11 @@ impl OpenAIClient {
 
         if !status.is_success() {
             // Try to parse the error response
-            let body = async_compat::Compat::new(async { response.text().await })
+            let body = self
+                .runtime_handle
+                .spawn(async move { response.text().await })
                 .await
+                .map_err(|e| OpenAIError::HttpError(e.to_string()))?
                 .map_err(|err| {
                     OpenAIError::HttpError(format!("Failed to read error response: {}", err))
                 })?;
@@ -188,8 +203,10 @@ impl OpenAIClient {
         }
 
         // Read the response body
-        async_compat::Compat::new(async { response.text().await })
+        self.runtime_handle
+            .spawn(async move { response.text().await })
             .await
+            .map_err(|e| OpenAIError::HttpError(e.to_string()))?
             .map_err(|err| OpenAIError::HttpError(format!("Failed to read response: {}", err)))
     }
 
@@ -393,15 +410,19 @@ impl ChatProvider for OpenAIClient {
         let req_builder = req_builder.body(request_body.into_bytes());
 
         // Send the request with timeout
-        let response = async_std::future::timeout(
-            timeout,
-            async_compat::Compat::new(async move { req_builder.send().await }),
-        )
-        .await
-        .map_err(|_| -> ProviderError { anyhow::anyhow!("Request timeout").into() })?
-        .map_err(|err| -> ProviderError {
-            anyhow::anyhow!("HTTP request failed: {}", err).into()
-        })?;
+        let response = self
+            .runtime_handle
+            .spawn(async move {
+                tokio::time::timeout(timeout, req_builder.send()).await
+            })
+            .await
+            .map_err(|_| -> ProviderError { anyhow::anyhow!("Request timeout").into() })?
+            .map_err(|e| -> ProviderError {
+                anyhow::anyhow!("HTTP request failed: {}", e).into()
+            })?
+            .map_err(|err| -> ProviderError {
+                anyhow::anyhow!("HTTP request failed: {}", err).into()
+            })?;
 
         // Check the status code
         if response.status() == StatusCode::UNAUTHORIZED {
@@ -421,8 +442,13 @@ impl ChatProvider for OpenAIClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = async_compat::Compat::new(async { response.text().await })
+            let body = self
+                .runtime_handle
+                .spawn(async move { response.text().await })
                 .await
+                .map_err(|e| -> ProviderError {
+                    anyhow::anyhow!("Failed to read error response: {}", e).into()
+                })?
                 .map_err(|e| -> ProviderError {
                     anyhow::anyhow!("Failed to read error response: {}", e).into()
                 })?;

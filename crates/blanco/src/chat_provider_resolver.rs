@@ -35,16 +35,22 @@ pub struct ChatProviderResolver {
     db_service: DatabaseService,
     current_connection_id: Option<i64>,
     cached_provider: Option<CachedProvider>,
+    runtime_handle: tokio::runtime::Handle,
 }
 
 impl ChatProviderResolver {
     /// Create a new chat provider resolver
-    pub fn new(http_client: Arc<reqwest::Client>, db_service: DatabaseService) -> Self {
+    pub fn new(
+        http_client: Arc<reqwest::Client>,
+        db_service: DatabaseService,
+        runtime_handle: tokio::runtime::Handle,
+    ) -> Self {
         Self {
             http_client,
             db_service,
             current_connection_id: None,
             cached_provider: None,
+            runtime_handle,
         }
     }
 
@@ -149,6 +155,7 @@ impl ChatProviderResolver {
             self.http_client.clone(),
             config,
             tool_executor,
+            self.runtime_handle.clone(),
         )
         .map_err(|e| anyhow::anyhow!("Failed to create OpenAI client: {}", e))?;
 
