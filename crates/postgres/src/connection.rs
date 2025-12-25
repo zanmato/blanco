@@ -2,9 +2,7 @@ use crate::sql_parser::PostgresTableExtractor;
 use anyhow::Result;
 use async_std::sync::RwLock;
 use async_trait::async_trait;
-use blanco_core::{
-    ColumnInfo, Connection, ConnectionUIMetadata, IconName, QueryResult, TableMetadata,
-};
+use blanco_core::{ColumnInfo, Connection, ConnectionUIMetadata, QueryResult, TableMetadata};
 use futures::{Stream, StreamExt};
 use sqlx::postgres::types::PgMoney;
 use sqlx::postgres::PgPoolOptions;
@@ -1489,12 +1487,6 @@ impl Connection for PostgresConnection {
         "PostgreSQL"
     }
 
-    fn get_icon_name(&self) -> IconName {
-        // Return DatabaseConnected when we have any active pools, otherwise Database
-        // Since we can't do async in a sync trait method, use a simple heuristic
-        IconName::DatabaseConnected
-    }
-
     fn get_display_name(&self) -> String {
         self.display_name.clone()
     }
@@ -1771,7 +1763,6 @@ impl Connection for PostgresConnection {
         Ok(metadata)
     }
 
-    
     fn get_file_safe_name(&self) -> String {
         // Create a file-safe name from PostgreSQL server details
         let name = format!(
@@ -1871,7 +1862,6 @@ impl Connection for PostgresConnection {
             display_name: self.display_name.clone(),
             file_safe_name: self.get_file_safe_name(),
             supports_schemas: self.supports_schemas(),
-            icon_name: self.get_icon_name(),
         }
     }
 

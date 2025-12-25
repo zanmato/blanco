@@ -1,9 +1,7 @@
 use crate::sql_parser::SqliteTableExtractor;
 use anyhow::Result;
 use async_trait::async_trait;
-use blanco_core::{
-    ColumnInfo, Connection, ConnectionUIMetadata, IconName, QueryResult, TableMetadata,
-};
+use blanco_core::{ColumnInfo, Connection, ConnectionUIMetadata, QueryResult, TableMetadata};
 use futures::{Stream, StreamExt};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use sqlx::{Column, ConnectOptions, Row, TypeInfo, ValueRef};
@@ -118,16 +116,6 @@ impl SqliteConnection {
         Ok(pool)
     }
 
-    /// Check if the database connection is healthy with a ping query
-    async fn is_connection_healthy(&self) -> bool {
-        if let Some(pool) = &self.pool {
-            // Execute a simple ping query to check connection health
-            (sqlx::query("SELECT 1").fetch_one(pool).await).is_ok()
-        } else {
-            false
-        }
-    }
-
     /// Execute a query asynchronously using SQLX directly
     async fn execute_query_async(
         &self,
@@ -150,105 +138,94 @@ impl SqliteConnection {
             sqlx::query(query)
         };
 
-        // Try to execute as a query that returns rows
-        match sql_query.fetch_all(pool).await {
-            Ok(rows) => {
-                if rows.is_empty() {
-                    return Ok(QueryResult {
-                        columns: vec![],
-                        column_types: vec![],
-                        rows: vec![],
-                        rows_affected: 0,
-                        query_text: None,
-                        execution_time_ms: None,
-                        is_error: false,
-                        table_name: None,
-                        primary_key_column: None,
-                        connection_id: None,
-                    });
+        // Use fetch_many to handle both row-returning and row-affecting queries
+        use sqlx::Either;
+        let mut results = sql_query.fetch_many(pool);
+
+        let mut columns: Vec<String> = Vec::new();
+        let mut column_types: Vec<String> = Vec::new();
+        let mut rows: Vec<Vec<String>> = Vec::new();
+        let mut rows_affected: u64 = 0;
+        let mut collected_rows: Vec<sqlx::sqlite::SqliteRow> = Vec::new();
+
+        while let Some(result) = results.next().await {
+            match result? {
+                Either::Left(execution_result) => {
+                    rows_affected += execution_result.rows_affected();
                 }
-
-                // Extract column names and types from the first row
-                let first_row = &rows[0];
-                let columns: Vec<String> = first_row
-                    .columns()
-                    .iter()
-                    .map(|col| col.name().to_string())
-                    .collect();
-
-                let column_types: Vec<String> = first_row
-                    .columns()
-                    .iter()
-                    .map(|col| col.type_info().name().to_string())
-                    .collect();
-
-                // Extract row data
-                let data_rows: Vec<Vec<String>> = rows
-                    .iter()
-                    .map(|row| {
-                        columns
+                Either::Right(row) => {
+                    // Extract column info from the first row
+                    if columns.is_empty() {
+                        columns = row
+                            .columns()
                             .iter()
-                            .enumerate()
-                            .map(|(i, _)| {
-                                // Check if the value is NULL first
-                                if let Ok(val) = row.try_get::<Option<String>, _>(i) {
-                                    val.unwrap_or_else(|| "NULL".to_string())
-                                } else if let Ok(val) = row.try_get::<Option<i64>, _>(i) {
-                                    val.map(|v| v.to_string())
-                                        .unwrap_or_else(|| "NULL".to_string())
-                                } else if let Ok(val) = row.try_get::<Option<f64>, _>(i) {
-                                    val.map(|v| v.to_string())
-                                        .unwrap_or_else(|| "NULL".to_string())
-                                } else if let Ok(val) = row.try_get::<Option<bool>, _>(i) {
-                                    val.map(|v| v.to_string())
-                                        .unwrap_or_else(|| "NULL".to_string())
-                                } else if let Ok(val) = row.try_get::<Option<Vec<u8>>, _>(i) {
-                                    // BLOB support - convert to hex string
-                                    val.map(|bytes| {
-                                        bytes
-                                            .iter()
-                                            .map(|b| format!("{:02x}", b))
-                                            .collect::<String>()
-                                    })
-                                    .unwrap_or_else(|| "NULL".to_string())
-                                } else {
-                                    "NULL".to_string()
-                                }
-                            })
-                            .collect()
-                    })
-                    .collect();
+                            .map(|col| col.name().to_string())
+                            .collect();
 
-                Ok(QueryResult {
-                    columns,
-                    column_types,
-                    rows: data_rows,
-                    rows_affected: rows.len() as u64,
-                    query_text: None,
-                    execution_time_ms: None,
-                    is_error: false,
-                    table_name: None,
-                    primary_key_column: None,
-                    connection_id: None,
-                })
-            }
-            Err(_e) => {
-                // If it's not a SELECT query, try executing it as a statement
-                let result = sqlx::query(query).execute(pool).await?;
-                Ok(QueryResult {
-                    columns: vec![],
-                    column_types: vec![],
-                    rows: vec![],
-                    rows_affected: result.rows_affected(),
-                    query_text: None,
-                    execution_time_ms: None,
-                    is_error: false,
-                    table_name: None,
-                    primary_key_column: None,
-                    connection_id: None,
-                })
+                        column_types = row
+                            .columns()
+                            .iter()
+                            .map(|col| col.type_info().name().to_string())
+                            .collect();
+                    }
+
+                    // Collect rows for processing later
+                    collected_rows.push(row);
+                }
             }
         }
+
+        // Process collected rows into string format
+        if !collected_rows.is_empty() {
+            rows = collected_rows
+                .iter()
+                .map(|row| {
+                    columns
+                        .iter()
+                        .enumerate()
+                        .map(|(i, _)| {
+                            // Check if the value is NULL first
+                            if let Ok(val) = row.try_get::<Option<String>, _>(i) {
+                                val.unwrap_or_else(|| "NULL".to_string())
+                            } else if let Ok(val) = row.try_get::<Option<i64>, _>(i) {
+                                val.map(|v| v.to_string())
+                                    .unwrap_or_else(|| "NULL".to_string())
+                            } else if let Ok(val) = row.try_get::<Option<f64>, _>(i) {
+                                val.map(|v| v.to_string())
+                                    .unwrap_or_else(|| "NULL".to_string())
+                            } else if let Ok(val) = row.try_get::<Option<bool>, _>(i) {
+                                val.map(|v| v.to_string())
+                                    .unwrap_or_else(|| "NULL".to_string())
+                            } else if let Ok(val) = row.try_get::<Option<Vec<u8>>, _>(i) {
+                                // BLOB support - convert to hex string
+                                val.map(|bytes| {
+                                    bytes
+                                        .iter()
+                                        .map(|b| format!("{:02x}", b))
+                                        .collect::<String>()
+                                })
+                                .unwrap_or_else(|| "NULL".to_string())
+                            } else {
+                                "NULL".to_string()
+                            }
+                        })
+                        .collect()
+                })
+                .collect();
+        }
+
+        Ok(QueryResult {
+            columns,
+            column_types,
+            rows,
+            rows_affected,
+            query_text: None,
+            execution_time_ms: None,
+            is_error: false,
+            table_name: None,
+            primary_key_column: None,
+            connection_id: None,
+        })
     }
 
     /// Generate a human-readable display name for the connection
@@ -304,14 +281,6 @@ impl Connection for SqliteConnection {
 
     fn get_connection_type(&self) -> &'static str {
         "SQLite"
-    }
-
-    fn get_icon_name(&self) -> IconName {
-        // Return DatabaseConnected when pool is Some (active connection), otherwise Database
-        match self.pool {
-            Some(_) => IconName::DatabaseConnected,
-            None => IconName::Database,
-        }
     }
 
     fn get_display_name(&self) -> String {
@@ -554,7 +523,6 @@ impl Connection for SqliteConnection {
         Ok(metadata)
     }
 
-    
     fn get_file_safe_name(&self) -> String {
         // Create a file-safe name from SQLite database path
         let path = std::path::Path::new(&self.database_path);
@@ -574,7 +542,6 @@ impl Connection for SqliteConnection {
             display_name: self.display_name.clone(),
             file_safe_name: self.get_file_safe_name(),
             supports_schemas: self.supports_schemas(),
-            icon_name: self.get_icon_name(),
         }
     }
 
@@ -705,7 +672,9 @@ impl Connection for SqliteConnection {
         let limit = limit.unwrap_or(20).min(100); // Default 20, max 100
         let offset = offset.unwrap_or(0);
 
-        let tables = self.get_schema_paginated(table_names, limit, offset).await?;
+        let tables = self
+            .get_schema_paginated(table_names, limit, offset)
+            .await?;
         let table_count = tables.len();
 
         Ok(blanco_core::connection_trait::DatabaseSchemaResult {

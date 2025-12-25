@@ -30,49 +30,7 @@ impl DriverType {
             Self::MySQL => "MySQL",
         }
     }
-
-    /// Get the icon name for this driver type
-    pub fn get_icon_name(&self) -> IconName {
-        match self {
-            Self::SQLite => IconName::Sqlite,
-            Self::PostgreSQL => IconName::Postgres,
-            Self::MySQL => IconName::MySQL,
-        }
-    }
 }
-
-/// Icon types for database connections
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum IconName {
-    Database,
-    DatabaseConnected,
-    Sqlite,
-    Postgres,
-    MySQL,
-    Table,
-    Column,
-    Key,
-    Folder,
-    FolderOpen,
-    File,
-    Settings,
-    Refresh,
-    Play,
-    Stop,
-    Plus,
-    Minus,
-    Search,
-    Filter,
-    Eye,
-    EyeOff,
-    Lock,
-    Unlock,
-    Check,
-    X,
-    Alert,
-    Info,
-}
-
 /// Result of a database query
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct QueryResult {
@@ -188,9 +146,6 @@ pub trait Connection: Send + Sync + fmt::Debug {
 
     /// Get the connection type identifier (e.g., "SQLite", "PostgreSQL")
     fn get_connection_type(&self) -> &'static str;
-
-    /// Get the icon to display for this connection type in the UI
-    fn get_icon_name(&self) -> IconName;
 
     /// Get a human-readable display name for this connection
     fn get_display_name(&self) -> String;
@@ -319,7 +274,6 @@ pub trait Connection: Send + Sync + fmt::Debug {
         alias: &str,
     ) -> Result<Option<String>, anyhow::Error>;
 
-    
     /// Get connection statistics and metadata
     async fn get_connection_info(&self) -> Result<ConnectionInfo, anyhow::Error> {
         Ok(ConnectionInfo {
@@ -388,7 +342,6 @@ pub struct ConnectionUIMetadata {
     pub display_name: String,
     pub file_safe_name: String,
     pub supports_schemas: bool,
-    pub icon_name: IconName,
 }
 
 impl std::fmt::Debug for ConnectionUIMetadata {

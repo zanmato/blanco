@@ -27,7 +27,10 @@ impl std::fmt::Display for OperationType {
 
 #[derive(Clone, Debug)]
 pub enum RowIdentifier {
-    PrimaryKey { column: String, value: String },
+    PrimaryKey {
+        column: String,
+        value: String,
+    },
     #[allow(dead_code)]
     RowIndex(usize), // For cases without clear PK
 }
@@ -67,15 +70,19 @@ impl TableChangeOperation {
         Self {
             operation_type: OperationType::Update,
             table_name,
-            row_identifier: RowIdentifier::PrimaryKey { column: pk_column, value: pk_value },
-            changes: vec![ColumnChange { column_name, old_value, new_value }],
+            row_identifier: RowIdentifier::PrimaryKey {
+                column: pk_column,
+                value: pk_value,
+            },
+            changes: vec![ColumnChange {
+                column_name,
+                old_value,
+                new_value,
+            }],
         }
     }
 
-    pub fn insert_row(
-        table_name: String,
-        column_changes: Vec<ColumnChange>,
-    ) -> Self {
+    pub fn insert_row(table_name: String, column_changes: Vec<ColumnChange>) -> Self {
         Self {
             operation_type: OperationType::Insert,
             table_name,
@@ -84,55 +91,65 @@ impl TableChangeOperation {
         }
     }
 
-    pub fn delete_row(
-        table_name: String,
-        pk_column: String,
-        pk_value: String,
-    ) -> Self {
+    pub fn delete_row(table_name: String, pk_column: String, pk_value: String) -> Self {
         Self {
             operation_type: OperationType::Delete,
             table_name,
-            row_identifier: RowIdentifier::PrimaryKey { column: pk_column, value: pk_value },
+            row_identifier: RowIdentifier::PrimaryKey {
+                column: pk_column,
+                value: pk_value,
+            },
             changes: vec![],
         }
     }
 
     /// Generate the actual SQL query for logging purposes
     pub fn to_sql_query(&self) -> String {
+        // Helper function to escape single quotes in SQL values
+        let escape_sql_value = |value: &str| value.replace('\'', "''");
+
         match self.operation_type {
             OperationType::Update => {
-                if let RowIdentifier::PrimaryKey { column: pk_column, value: pk_value } = &self.row_identifier {
+                if let RowIdentifier::PrimaryKey {
+                    column: pk_column,
+                    value: pk_value,
+                } = &self.row_identifier
+                {
                     if self.changes.is_empty() {
                         format!("UPDATE {}", self.table_name)
                     } else if self.changes.len() == 1 {
                         // Single column change
                         let change = &self.changes[0];
+                        let escaped_new_value =
+                            escape_sql_value(change.new_value.as_ref().unwrap_or(&String::new()));
+                        let escaped_pk_value = escape_sql_value(pk_value);
                         format!(
                             "UPDATE {} SET {} = '{}' WHERE {} = '{}'",
                             self.table_name,
                             change.column_name,
-                            change.new_value.as_ref().unwrap_or(&String::new()),
+                            escaped_new_value,
                             pk_column,
-                            pk_value
+                            escaped_pk_value
                         )
                     } else {
                         // Multiple column changes
-                        let set_clauses: Vec<String> = self.changes
+                        let set_clauses: Vec<String> = self
+                            .changes
                             .iter()
                             .map(|change| {
-                                format!(
-                                    "{} = '{}'",
-                                    change.column_name,
-                                    change.new_value.as_ref().unwrap_or(&String::new())
-                                )
+                                let escaped_value = escape_sql_value(
+                                    change.new_value.as_ref().unwrap_or(&String::new()),
+                                );
+                                format!("{} = '{}'", change.column_name, escaped_value)
                             })
                             .collect();
+                        let escaped_pk_value = escape_sql_value(pk_value);
                         format!(
                             "UPDATE {} SET {} WHERE {} = '{}'",
                             self.table_name,
                             set_clauses.join(", "),
                             pk_column,
-                            pk_value
+                            escaped_pk_value
                         )
                     }
                 } else {
@@ -140,9 +157,16 @@ impl TableChangeOperation {
                 }
             }
             OperationType::Insert => {
-                let columns: Vec<String> = self.changes.iter().map(|c| c.column_name.clone()).collect();
-                let values: Vec<String> = self.changes.iter()
-                    .map(|c| format!("'{}'", c.new_value.as_ref().unwrap_or(&String::new())))
+                let columns: Vec<String> =
+                    self.changes.iter().map(|c| c.column_name.clone()).collect();
+                let values: Vec<String> = self
+                    .changes
+                    .iter()
+                    .map(|c| {
+                        let escaped_value =
+                            escape_sql_value(c.new_value.as_ref().unwrap_or(&String::new()));
+                        format!("'{}'", escaped_value)
+                    })
                     .collect();
                 format!(
                     "INSERT INTO {} ({}) VALUES ({})",
@@ -152,12 +176,15 @@ impl TableChangeOperation {
                 )
             }
             OperationType::Delete => {
-                if let RowIdentifier::PrimaryKey { column: pk_column, value: pk_value } = &self.row_identifier {
+                if let RowIdentifier::PrimaryKey {
+                    column: pk_column,
+                    value: pk_value,
+                } = &self.row_identifier
+                {
+                    let escaped_pk_value = escape_sql_value(pk_value);
                     format!(
                         "DELETE FROM {} WHERE {} = '{}'",
-                        self.table_name,
-                        pk_column,
-                        pk_value
+                        self.table_name, pk_column, escaped_pk_value
                     )
                 } else {
                     format!("DELETE FROM {}", self.table_name)

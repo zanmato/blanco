@@ -45,28 +45,28 @@ pub enum AppEvent {
 
     /// Schema events
     SchemaChanged {
-        connection_id: Option<i64>,
+        connection_id: i64,
         schema_name: String,
     },
     TablesRefreshed {
-        connection_id: Option<i64>,
+        connection_id: i64,
         table_count: usize,
     },
 
     /// Table operations events
     TableChangesCommitted {
         table_name: String,
-        connection_id: Option<i64>,
+        connection_id: i64,
         changes_count: usize,
     },
     TableChangesRollback {
         table_name: String,
-        connection_id: Option<i64>,
+        connection_id: i64,
         changes_count: usize,
     },
     TableOperationCompleted {
         table_name: String,
-        connection_id: Option<i64>,
+        connection_id: i64,
         success: bool,
         rows_affected: Option<u64>,
         error_message: Option<String>,

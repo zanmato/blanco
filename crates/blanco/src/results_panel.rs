@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
+use serde_json::Value;
+
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
@@ -8,7 +10,7 @@ use gpui::{
     Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon,
+    ActiveTheme, Icon, StyledExt, h_flex,
     input::{Input, InputEvent, InputState},
     menu::PopupMenu,
     table::{Column, ColumnSort, Table, TableDelegate, TableState},
@@ -19,7 +21,6 @@ use crate::app::{AddRow, DuplicateRow};
 use crate::app_events::AppEvent;
 use crate::transformers::CopyHandler;
 use database::{DatabaseService, DatabaseServiceTrait};
-use std::sync::Arc;
 
 // Response structure for table operations
 #[derive(Debug, Clone)]
@@ -33,10 +34,8 @@ pub struct TableOperationResponse {
 }
 use blanco_core::QueryResult;
 mod table_operations;
-use table_operations::{
-    ColumnChange, OperationType, RowIdentifier, TableChangeOperation,
-};
 use blanco_ui::IconName;
+use table_operations::{ColumnChange, OperationType, RowIdentifier, TableChangeOperation};
 
 // Data structures for copy functionality
 #[derive(Clone, Debug)]
@@ -80,6 +79,8 @@ pub struct TableChange {
     // New fields for prepared statements
     pub sql_template: Option<String>,
     pub parameters: Vec<String>,
+    // For INSERT operations, store multiple column values
+    pub insert_values: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -88,9 +89,22 @@ pub enum ChangeType {
     InsertRow,
 }
 
+/// Format a value for display in table cells, replacing whitespace with visual indicators
+/// to maintain table layout while showing multi-line content.
+/// - \n (newline) becomes ⏎
+/// - \r (carriage return) becomes ␍
+/// - \t (tab) becomes ⇥
+fn format_value_for_display(value: &str) -> String {
+    value
+        .replace('\r', "␍")
+        .replace('\n', "⏎")
+        .replace('\t', "⇥")
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct CellEditState {
-    pub editing_cell: Option<(usize, usize)>, // (row, col)
+    pub editing_cell: Option<(usize, usize)>,  // (row, col)
+    pub expanded_cell: Option<(usize, usize)>, // (row, col) - cell in expanded multi-line mode
     pub original_values: HashMap<(usize, usize), String>,
     pub edited_values: HashMap<(usize, usize), String>,
     pub pending_new_rows: Vec<usize>, // Track rows that are newly added
@@ -107,6 +121,20 @@ impl CellEditState {
 
     pub fn is_edited(&self, row: usize, col: usize) -> bool {
         self.edited_values.contains_key(&(row, col))
+    }
+
+    pub fn is_expanded(&self, row: usize, col: usize) -> bool {
+        self.expanded_cell == Some((row, col))
+    }
+
+    pub fn toggle_expanded(&mut self, row: usize, col: usize) {
+        if self.expanded_cell == Some((row, col)) {
+            tracing::info!("Collapsing cell at ({}, {})", row, col);
+            self.expanded_cell = None;
+        } else {
+            tracing::info!("Expanding cell at ({}, {})", row, col);
+            self.expanded_cell = Some((row, col));
+        }
     }
 
     pub fn get_edited_value(&self, row: usize, col: usize) -> Option<&String> {
@@ -126,6 +154,7 @@ impl CellEditState {
     pub fn stop_editing(&mut self) {
         self.editing_cell = None;
         self.editing_input = None;
+        self.expanded_cell = None;
     }
 
     pub fn get_editing_input(&self) -> Option<Entity<InputState>> {
@@ -144,6 +173,7 @@ impl CellEditState {
         self.pending_new_rows.clear();
         self.editing_cell = None;
         self.editing_input = None;
+        self.expanded_cell = None;
     }
 
     pub fn clear_all(&mut self) {
@@ -152,12 +182,25 @@ impl CellEditState {
         self.edited_values.clear();
         self.pending_new_rows.clear();
         self.editing_input = None;
+        self.expanded_cell = None;
         self.changes.clear();
         self.selected_rows.clear();
         self.current_column = 1; // Start with first data column
     }
 
     pub fn add_change(&mut self, change: TableChange) {
+        // For UpdateCell changes, replace any existing change for the same cell
+        // This prevents duplicate SET clauses for the same column
+        if change.change_type == ChangeType::UpdateCell {
+            if let Some(col_idx) = change.column_index {
+                // Remove any existing UpdateCell change for this same (row, column) combination
+                self.changes.retain(|existing_change| {
+                    existing_change.change_type != ChangeType::UpdateCell
+                        || existing_change.row_index != change.row_index
+                        || existing_change.column_index != Some(col_idx)
+                });
+            }
+        }
         self.changes.push(change);
     }
 
@@ -187,6 +230,7 @@ pub struct TableChangeBuilder {
     new_value: Option<String>,
     primary_key_value: Option<String>,
     primary_key_column: Option<String>,
+    insert_values: Option<Vec<String>>,
 }
 
 impl TableChangeBuilder {
@@ -200,6 +244,7 @@ impl TableChangeBuilder {
             new_value: None,
             primary_key_value: None,
             primary_key_column: None,
+            insert_values: None,
         }
     }
 
@@ -228,6 +273,11 @@ impl TableChangeBuilder {
         self
     }
 
+    pub fn insert_values(mut self, values: Option<Vec<String>>) -> Self {
+        self.insert_values = values;
+        self
+    }
+
     pub fn build(self) -> TableChange {
         let mut change = TableChange {
             change_type: self.change_type,
@@ -240,6 +290,7 @@ impl TableChangeBuilder {
             primary_key_column: self.primary_key_column,
             sql_template: None,
             parameters: Vec::new(),
+            insert_values: self.insert_values,
         };
 
         // Generate prepared statement immediately
@@ -259,6 +310,7 @@ impl TableChange {
         new_value: Option<String>,
         primary_key_value: Option<String>,
         primary_key_column: Option<String>,
+        insert_values: Option<Vec<String>>,
     ) -> Self {
         TableChangeBuilder::new(change_type, table_name, row_index)
             .column_index(column_index)
@@ -266,6 +318,7 @@ impl TableChange {
             .new_value(new_value)
             .primary_key_value(primary_key_value)
             .primary_key_column(primary_key_column)
+            .insert_values(insert_values)
             .build()
     }
 
@@ -302,13 +355,31 @@ impl TableChange {
                 }
             }
             ChangeType::InsertRow => {
-                // For INSERT, we need column names from the table structure
-                // This is a placeholder - actual implementation will need column info
-                self.sql_template = Some(format!("INSERT INTO {} VALUES ($1)", self.table_name));
+                // For INSERT, use the insert_values if available, otherwise fall back to new_value
+                if let Some(values) = &self.insert_values {
+                    // Create parameter placeholders ($1, $2, $3, ...)
+                    let placeholders: Vec<String> =
+                        (1..=values.len()).map(|i| format!("${}", i)).collect();
 
-                if let Some(new_val) = &self.new_value {
+                    self.sql_template = Some(format!(
+                        "INSERT INTO {} VALUES ({})",
+                        self.table_name,
+                        placeholders.join(", ")
+                    ));
+
+                    // Use the individual values as parameters
+                    self.parameters.clear();
+                    self.parameters.extend(values.clone());
+                } else if let Some(new_val) = &self.new_value {
+                    // Fallback for backward compatibility
+                    self.sql_template =
+                        Some(format!("INSERT INTO {} VALUES ($1)", self.table_name));
+                    self.parameters.clear();
                     self.parameters.push(new_val.clone());
                 } else {
+                    self.sql_template =
+                        Some(format!("INSERT INTO {} VALUES ($1)", self.table_name));
+                    self.parameters.clear();
                     self.parameters.push("NULL".to_string());
                 }
             }
@@ -326,7 +397,8 @@ pub struct ResultsTableDelegate {
     table_name: Option<String>,
     primary_key_column: Option<String>,
     pending_edit_cell: Option<(usize, usize)>,
-    connection_id: Option<i64>,
+    connection_id: i64,
+    database_name: String,
     original_query: Option<String>,
 }
 
@@ -396,6 +468,15 @@ impl ResultsTableDelegate {
                     {
                         return None; // Skip primary key column
                     }
+
+                    // Check if there's an edited value for this cell
+                    let display_col = data_index + 1; // +1 for row number column
+                    if let Some(edited_value) =
+                        self.edit_state.edited_values.get(&(row_index, display_col))
+                    {
+                        return Some(edited_value.clone());
+                    }
+
                     Some(val.clone())
                 })
                 .collect()
@@ -412,8 +493,9 @@ impl ResultsTableDelegate {
     }
 
     /// Set the connection ID for database operations
-    pub fn set_connection_id(&mut self, connection_id: i64) {
-        self.connection_id = Some(connection_id);
+    pub fn set_connection_id(&mut self, connection_id: i64, database_name: &str) {
+        self.connection_id = connection_id;
+        self.database_name = database_name.to_owned();
     }
 
     /// Set the original SQL query for alias resolution
@@ -423,16 +505,13 @@ impl ResultsTableDelegate {
 
     /// Convert table changes to database-agnostic TableChangeOperations
     /// This method consolidates multiple changes to the same row into single operations.
-    pub fn create_change_operations(
-        &self,
-    ) -> Vec<table_operations::TableChangeOperation> {
+    pub fn create_change_operations(&self) -> Vec<table_operations::TableChangeOperation> {
         use std::collections::HashMap;
 
         // Map to consolidate changes by (table_name, pk_column, pk_value)
         let mut update_operations: HashMap<(String, String, String), Vec<ColumnChange>> =
             HashMap::new();
-        let mut insert_operations: Vec<table_operations::TableChangeOperation> =
-            Vec::new();
+        let mut insert_operations: Vec<table_operations::TableChangeOperation> = Vec::new();
 
         for change in &self.edit_state.changes {
             match change.change_type {
@@ -481,17 +560,40 @@ impl ResultsTableDelegate {
                 ChangeType::InsertRow => {
                     // For INSERT operations, get the current values from the actual row data
                     // This ensures we use the most up-to-date values instead of stored ones
-                    let column_names = self.get_insert_column_names(true); // exclude_primary_key = true
-                    let row_values = self.get_insert_values(change.row_index, true); // exclude_primary_key = true
+
+                    // Check if primary key should be excluded (only if it's NULL/auto-generated)
+                    let pk_col_index = self.get_primary_key_column_index();
+                    let exclude_primary_key = pk_col_index.is_some_and(|idx| {
+                        // Get the current value of the primary key column
+                        let display_col = idx + 1; // +1 for row number column
+
+                        // Check edited values first, then fall back to row data
+                        let pk_value = self
+                            .edit_state
+                            .edited_values
+                            .get(&(change.row_index, display_col))
+                            .or_else(|| {
+                                self.rows
+                                    .get(change.row_index)
+                                    .and_then(|row| row.get(display_col))
+                            });
+
+                        // Only exclude if PK is NULL or empty
+                        pk_value.is_none_or(|v| v.is_empty() || v == "NULL")
+                    });
+
+                    let column_names = self.get_insert_column_names(exclude_primary_key);
+                    let row_values = self.get_insert_values(change.row_index, exclude_primary_key);
 
                     let column_changes: Vec<ColumnChange> = column_names
                         .into_iter()
                         .zip(row_values.iter())
                         .map(|(column_name, value)| {
+                            // Pass raw values - to_sql_query() will handle SQL formatting
                             let formatted_value = if value.is_empty() || value == "NULL" {
                                 "NULL".to_string()
                             } else {
-                                format!("'{}'", value.replace("'", "''"))
+                                value.to_string() // Pass raw value without SQL formatting
                             };
                             ColumnChange {
                                 column_name,
@@ -743,6 +845,7 @@ impl ResultsTableDelegate {
                         Some(new_value.clone()),
                         primary_key_value,
                         self.primary_key_column.clone(),
+                        None, // No insert_values for UpdateCell operations
                     );
 
                     self.edit_state.add_change(change);
@@ -769,22 +872,6 @@ impl ResultsTableDelegate {
 
     pub fn get_table_name(&self) -> Option<&str> {
         self.table_name.as_deref()
-    }
-
-    pub fn get_primary_key_value(&self, row: usize) -> Option<String> {
-        // Get the primary key value using the detected primary key column
-        if let Some(pk_column_name) = &self.primary_key_column {
-            // Find the index of the primary key column
-            if let Some(pk_index) = self
-                .columns
-                .iter()
-                .position(|col| col.name.as_str() == pk_column_name)
-            {
-                return self.rows.get(row).and_then(|r| r.get(pk_index).cloned());
-            }
-        }
-        // Fallback to first column if no primary key column is detected
-        self.rows.get(row).and_then(|r| r.first().cloned())
     }
 
     pub fn is_numeric_column(&self, col_index: usize) -> bool {
@@ -934,47 +1021,194 @@ impl TableDelegate for ResultsTableDelegate {
         let display_text = if is_null {
             "NULL".to_string()
         } else {
-            current_value.clone()
+            // Format multi-line values for display (replace newlines with visual indicators)
+            format_value_for_display(&current_value)
         };
 
         if is_editing {
             // Embed Input directly in the cell (not for row number column)
             if let Some(input) = self.edit_state.get_editing_input() {
-                div()
-                    .font_family("Fira Code")
-                    .text_xs()
-                    .size_full()
-                    .flex() // Enable flexbox layout
-                    .items_center() // Center vertically
-                    .p_0() // No padding since the cell already has padding
-                    .when(self.is_numeric_column(col_ix - 1), |this| {
-                        // Adjust for row number column
-                        this.justify_end() // Right-align numeric columns
-                    })
-                    .when(self.is_uuid_column(col_ix - 1), |this| {
-                        // Adjust for row number column
-                        this.text_color(cx.theme().blue) // Blue color for UUIDs
-                    })
-                    .when(self.is_timestamp_column(col_ix - 1), |this| {
-                        // Adjust for row number column
-                        this.text_color(cx.theme().green) // Green color for timestamps
-                    })
-                    .when(self.is_json_column(col_ix - 1), |this| {
-                        // Adjust for row number column
-                        this.text_color(cx.theme().yellow) // Yellow color for JSON
-                    })
-                    .when(self.is_array_column(col_ix - 1), |this| {
-                        // Adjust for row number column
-                        this.text_color(cx.theme().blue) // Blue color for arrays
-                    })
-                    .child(
-                        Input::new(&input)
-                            .size_full()
-                            .text_size(px(12.))
-                            .border_0() // No border on the input
-                            .p_2()
-                            .bg(cx.theme().yellow.opacity(0.3)),
-                    )
+                let is_expanded = self.edit_state.is_expanded(row_ix, col_ix);
+                let is_json = self.is_json_column(col_ix - 1);
+                let input = input.clone();
+
+                if is_expanded {
+                    // Expanded mode: absolute positioned input with larger size
+                    div()
+                        .bg(cx.theme().background)
+                        .border_2()
+                        .border_color(cx.theme().yellow)
+                        .p_0()
+                        .font_family("Fira Code")
+                        .child(
+                            gpui::deferred(
+                                div()
+                                    .absolute()
+                                    .right(px(0.))
+                                    .top(px(0.))
+                                    .w(px(600.))
+                                    .h(px(200.))
+                                    .bg(cx.theme().background)
+                                    .shadow_lg()
+                                    .child(
+                                        Input::new(&input).size_full().font_family("Fira Code").text_size(px(12.)).suffix(
+                                            div()
+                                                .cursor_pointer()
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(
+                                                        move |table, _event, window, cx| {
+                                                            // Get current text before recreating input
+                                                            let current_text = table
+                                                                .delegate_mut()
+                                                                .edit_state
+                                                                .editing_input
+                                                                .as_ref()
+                                                                .and_then(|input| {
+                                                                    Some(
+                                                                        input
+                                                                            .read(cx)
+                                                                            .text()
+                                                                            .to_string(),
+                                                                    )
+                                                                })
+                                                                .unwrap_or_default();
+
+                                                            // Recreate InputState with single-line mode and subscribe to events
+                                                            let new_input = cx.new(|cx| {
+                                                                InputState::new(window, cx)
+                                                                    .default_value(current_text)
+                                                            });
+                                                            table
+                                                                .delegate_mut()
+                                                                .edit_state
+                                                                .editing_input =
+                                                                Some(new_input.clone());
+
+                                                            // Re-subscribe to input events (blur/change)
+                                                            ResultsPanel::subscribe_to_input_events(
+                                                                table, &new_input, row_ix, col_ix,
+                                                                cx,
+                                                            );
+
+                                                            // Re-focus the input after recreation
+                                                            new_input
+                                                                .focus_handle(cx)
+                                                                .focus(window);
+
+                                                            // Toggle expanded state
+                                                            table
+                                                                .delegate_mut()
+                                                                .edit_state
+                                                                .toggle_expanded(row_ix, col_ix);
+
+                                                            table.refresh(cx);
+                                                            cx.notify();
+                                                        },
+                                                    ),
+                                                )
+                                                .child(Icon::new(IconName::Minimize).text_xs()),
+                                        ),
+                                    ),
+                            )
+                            .with_priority(99),
+                        )
+                } else {
+                    // Normal inline edit with expand icon as suffix
+                    div()
+                        .font_family("Fira Code")
+                        .text_xs()
+                        .size_full()
+                        .flex()
+                        .items_center()
+                        .p_0()
+                        .when(self.is_numeric_column(col_ix - 1), |this| {
+                            this.justify_end()
+                        })
+                        .when(self.is_uuid_column(col_ix - 1), |this| {
+                            this.text_color(cx.theme().blue)
+                        })
+                        .when(self.is_timestamp_column(col_ix - 1), |this| {
+                            this.text_color(cx.theme().green)
+                        })
+                        .when(self.is_json_column(col_ix - 1), |this| {
+                            this.text_color(cx.theme().yellow)
+                        })
+                        .when(self.is_array_column(col_ix - 1), |this| {
+                            this.text_color(cx.theme().blue)
+                        })
+                        .child(
+                            Input::new(&input)
+                                .flex_1()
+                                .text_size(px(12.))
+                                .border_0()
+                                .p_2()
+                                .suffix(
+                                    div()
+                                        .cursor_pointer()
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(move |table, _event, window, cx| {
+                                                // Get current text before recreating input
+                                                let current_text = table
+                                                    .delegate_mut()
+                                                    .edit_state
+                                                    .editing_input
+                                                    .as_ref()
+                                                    .and_then(|input| {
+                                                        Some(input.read(cx).text().to_string())
+                                                    })
+                                                    .unwrap_or_default();
+
+                                                // Toggle expanded state
+                                                table
+                                                    .delegate_mut()
+                                                    .edit_state
+                                                    .toggle_expanded(row_ix, col_ix);
+
+                                                // Recreate InputState with multi-line mode
+                                                let new_input = cx.new(|cx| {
+                                                    let editor = InputState::new(window, cx)
+                                                        .multi_line(true)
+                                                        .soft_wrap(true);
+
+                                                    if is_json {
+                                                        // Prettify JSON if valid
+                                                        let prettified_text = if let Ok(value) =
+                                                            serde_json::from_str::<Value>(
+                                                                &current_text,
+                                                            ) {
+                                                            serde_json::to_string_pretty(&value)
+                                                                .unwrap_or(current_text)
+                                                        } else {
+                                                            current_text
+                                                        };
+                                                        editor
+                                                            .code_editor("json")
+                                                            .default_value(prettified_text)
+                                                    } else {
+                                                        editor.default_value(current_text)
+                                                    }
+                                                });
+                                                table.delegate_mut().edit_state.editing_input =
+                                                    Some(new_input.clone());
+
+                                                // Re-subscribe to input events (blur/change)
+                                                ResultsPanel::subscribe_to_input_events(
+                                                    table, &new_input, row_ix, col_ix, cx,
+                                                );
+
+                                                // Re-focus the input after recreation
+                                                new_input.focus_handle(cx).focus(window);
+
+                                                table.refresh(cx);
+                                                cx.notify();
+                                            }),
+                                        )
+                                        .child(Icon::new(IconName::Maximize).text_xs()),
+                                ),
+                        )
+                }
             } else {
                 div().child("")
             }
@@ -1031,9 +1265,18 @@ impl TableDelegate for ResultsTableDelegate {
                 .when(!is_row_number_col && !is_null && is_editable, |this| {
                     this.cursor_pointer()
                 })
-                .when(!is_editable && !is_row_number_col, |this| {
-                    this.text_color(cx.theme().muted_foreground.opacity(0.6))
-                })
+                // Apply muted grey color only to non-editable tables for cells WITHOUT type-based highlighting
+                // Type-based highlighting (UUID=blue, timestamp=green, JSON=yellow, array=blue) should work regardless
+                .when(
+                    !is_editable
+                        && !is_row_number_col
+                        && !is_null
+                        && !self.is_uuid_column(col_ix - 1)
+                        && !self.is_timestamp_column(col_ix - 1)
+                        && !self.is_json_column(col_ix - 1)
+                        && !self.is_array_column(col_ix - 1),
+                    |this| this.text_color(cx.theme().muted_foreground.opacity(0.6)),
+                )
                 // All data cells (non-row-number) should be selectable for copying
                 .when(!is_row_number_col, |this| {
                     this.on_mouse_down(
@@ -1121,7 +1364,7 @@ impl TableDelegate for ResultsTableDelegate {
         _window: &mut Window,
         _cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
-        // Basic copy operations - always show "Copy as" format
+        // Basic copy operations
         let menu = menu
             .menu_with_icon(
                 "Copy as CSV",
@@ -1142,16 +1385,16 @@ impl TableDelegate for ResultsTableDelegate {
                 "Copy as Markdown",
                 Icon::new(IconName::Markdown),
                 Box::new(crate::app::CopyAsMarkdown),
-            );
-
-        // Row operations
-        menu.separator()
+            )
+            .separator()
             .menu_with_icon("Add Row", Icon::new(IconName::Plus), Box::new(AddRow))
             .menu_with_icon(
                 "Duplicate Row",
                 Icon::new(IconName::Copy),
                 Box::new(DuplicateRow { row: row_ix }),
-            )
+            );
+
+        menu
     }
 }
 
@@ -1166,21 +1409,16 @@ pub struct ResultsPanel {
 }
 
 impl ResultsPanel {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::with_connection_id(None, window, cx)
-    }
-
-    pub fn with_connection_id(
-        connection_id: Option<i64>,
+    pub fn new(
+        connection_id: i64,
+        database_name: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut delegate = ResultsTableDelegate::default();
 
         // Set connection ID on delegate if provided
-        if let Some(conn_id) = connection_id {
-            delegate.set_connection_id(conn_id);
-        }
+        delegate.set_connection_id(connection_id, database_name);
 
         let table_state = cx.new(|cx| TableState::new(delegate, window, cx).col_selectable(false));
 
@@ -1204,13 +1442,6 @@ impl ResultsPanel {
         connection_id: Option<i64>,
         cx: &mut Context<Self>,
     ) {
-        // Set connection ID on the delegate for table extraction
-        if let Some(conn_id) = connection_id {
-            self.table_state.update(cx, |state, _cx| {
-                state.delegate_mut().set_connection_id(conn_id);
-            });
-        }
-
         self.table_state.update(cx, |state, cx| {
             // Set the original query for alias resolution
             if let Some(ref query) = result.query_text {
@@ -1282,48 +1513,7 @@ impl ResultsPanel {
             }
 
             // Subscribe to input changes to update edited_values
-            let row_clone = row;
-            let col_clone = col;
-            cx.subscribe(&input, move |table, input, event, cx| {
-                if let InputEvent::Change = event {
-                    let new_text = input.read(cx).text().to_string();
-                    tracing::info!(
-                        "Input change: '{}' at ({}, {})",
-                        new_text,
-                        row_clone,
-                        col_clone
-                    );
-                    table
-                        .delegate_mut()
-                        .edit_state
-                        .edited_values
-                        .insert((row_clone, col_clone), new_text.clone());
-
-                    // Debug: Input change handled in edited_values for commit_cell_edit
-                    // Note: Can't refresh here due to borrowing issues
-                } else if let InputEvent::Blur = event {
-                    // Handle blur - save current edit to edited_values when input loses focus
-                    // Get the current editing cell and value
-                    let editing_cell = table.delegate_mut().edit_state.editing_cell;
-                    tracing::info!("Blur event triggered for editing_cell: {:?}", editing_cell);
-
-                    if let Some((row, col)) = editing_cell {
-                        let new_value = input.read(cx).text().to_string();
-                        tracing::info!("Blur: saving value '{}' at ({}, {})", new_value, row, col);
-
-                        // Commit the cell edit to create a TableChange entry
-                        tracing::info!("Blur: committing cell edit at ({}, {})", row, col);
-                        table.delegate_mut().commit_cell_edit(row, col);
-                        table.refresh(cx);
-                        tracing::info!("Blur: cell edit committed and table refreshed");
-                    } else {
-                        tracing::info!("Blur: no editing cell found");
-                    }
-                }
-            })
-            .detach();
-
-            state.refresh(cx);
+            Self::subscribe_to_input_events(state, &input, row, col, cx);
         });
 
         // Focus the input automatically when editing starts
@@ -1332,6 +1522,66 @@ impl ResultsPanel {
         // Store the editing state in the panel for commit/cancel operations
         self.editing_input = Some(input.clone());
         self.editing_cell = Some((row, col));
+    }
+
+    /// Subscribe to input events (blur/change) for a given cell
+    fn subscribe_to_input_events(
+        state: &mut TableState<ResultsTableDelegate>,
+        input: &Entity<InputState>,
+        row: usize,
+        col: usize,
+        cx: &mut Context<TableState<ResultsTableDelegate>>,
+    ) {
+        let row_clone = row;
+        let col_clone = col;
+        cx.subscribe(input, move |table, input, event, cx| {
+            if let InputEvent::Change = event {
+                let new_text = input.read(cx).text().to_string();
+                tracing::info!(
+                    "Input change: '{}' at ({}, {})",
+                    new_text,
+                    row_clone,
+                    col_clone
+                );
+                table
+                    .delegate_mut()
+                    .edit_state
+                    .edited_values
+                    .insert((row_clone, col_clone), new_text.clone());
+
+                // Debug: Input change handled in edited_values for commit_cell_edit
+                // Note: Can't refresh here due to borrowing issues
+            } else if let InputEvent::Blur = event {
+                // Handle blur - save current edit to edited_values when input loses focus
+                // Get the current editing cell and value
+                let editing_cell = table.delegate_mut().edit_state.editing_cell;
+                tracing::info!("Blur event triggered for editing_cell: {:?}", editing_cell);
+
+                if let Some((row, col)) = editing_cell {
+                    // Ignore blur if the cell is in expanded mode
+                    if table.delegate_mut().edit_state.is_expanded(row, col) {
+                        tracing::info!(
+                            "Blur: ignoring blur for expanded cell at ({}, {})",
+                            row,
+                            col
+                        );
+                        return;
+                    }
+
+                    let new_value = input.read(cx).text().to_string();
+                    tracing::info!("Blur: saving value '{}' at ({}, {})", new_value, row, col);
+
+                    // Commit the cell edit to create a TableChange entry
+                    tracing::info!("Blur: committing cell edit at ({}, {})", row, col);
+                    table.delegate_mut().commit_cell_edit(row, col);
+                    table.refresh(cx);
+                    tracing::info!("Blur: cell edit committed and table refreshed");
+                } else {
+                    tracing::info!("Blur: no editing cell found");
+                }
+            }
+        })
+        .detach();
     }
 
     pub fn commit_cell_edit(
@@ -1429,6 +1679,7 @@ impl ResultsPanel {
                         Some(new_value.clone()),
                         primary_key_value,
                         primary_key_column,
+                        None, // No insert_values for UpdateCell operations
                     );
                     delegate.edit_state.add_change(change);
 
@@ -1500,6 +1751,7 @@ impl ResultsPanel {
                     Some(new_value.clone()),
                     None, // primary_key_value
                     None, // primary_key_column
+                    None, // No insert_values for UpdateCell operations
                 ));
             }
         }
@@ -1635,20 +1887,10 @@ impl ResultsPanel {
             change_operations.len()
         );
 
-        // Get connection id from delegate (use fallback if not available)
-        let connection_id = self
-            .table_state
-            .read(cx)
-            .delegate()
-            .connection_id
-            .unwrap_or(0);
-        // TODO: error here instead of fallback to connection_id 0
+        let delegate = self.table_state.read(cx).delegate();
 
         // Get table name for logging
-        let table_name = self
-            .table_state
-            .read(cx)
-            .delegate()
+        let table_name = delegate
             .table_name
             .clone()
             .unwrap_or_else(|| "unknown".to_string());
@@ -1658,8 +1900,9 @@ impl ResultsPanel {
         let change_operations_for_logging = change_operations.clone();
         let table_name_for_logging = table_name.clone();
         let _table_name_for_event = table_name.clone();
-        let connection_id_for_pipeline = connection_id;
-        let connection_id_for_event = connection_id;
+        let connection_id_for_pipeline = delegate.connection_id;
+        let connection_id_for_event = delegate.connection_id;
+        let database_name = delegate.database_name.clone();
 
         // Create response channel for table operations
         let (response_tx, response_rx) = async_std::channel::bounded(1);
@@ -1679,7 +1922,8 @@ impl ResultsPanel {
         // Log the operations to SQL log if available
         if let Some(sql_log) = sql_log {
             for operation in &change_operations_for_logging {
-                let sql_query = (operation as &table_operations::TableChangeOperation).to_sql_query();
+                let sql_query =
+                    (operation as &table_operations::TableChangeOperation).to_sql_query();
                 sql_log.update(cx, |log, cx| {
                     log.append_text(&blanco_ui::SqlLogMessage::SqlStatement(sql_query), cx);
                     log.append_text(
@@ -1700,7 +1944,7 @@ impl ResultsPanel {
 
             // Execute table operations using DatabaseService
             let result = match db_service
-                .get_or_create_connection(connection_id_for_pipeline, None)
+                .get_or_create_connection(connection_id_for_pipeline, Some(&database_name))
                 .await
             {
                 Ok(connection) => {
@@ -1714,8 +1958,12 @@ impl ResultsPanel {
 
                     for operation in &change_operations_for_pipeline {
                         tracing::debug!("Got operation {:?}", operation);
-                        let sql_query = (operation as &table_operations::TableChangeOperation).to_sql_query();
-                        match connection.execute_query(&sql_query, None, None).await {
+                        let sql_query =
+                            (operation as &table_operations::TableChangeOperation).to_sql_query();
+                        match connection
+                            .execute_query(&sql_query, Some(&database_name), None)
+                            .await
+                        {
                             Ok(query_result) => {
                                 total_rows_affected += query_result.rows_affected;
                                 operations_executed += 1;
@@ -1805,7 +2053,7 @@ impl ResultsPanel {
                         let _ = entity.update(cx, |_, cx| {
                             cx.emit(AppEvent::TableOperationCompleted {
                                 table_name: response.table_name,
-                                connection_id: Some(response.connection_id),
+                                connection_id: response.connection_id,
                                 success: true,
                                 rows_affected: response.rows_affected,
                                 error_message: None,
@@ -1829,7 +2077,7 @@ impl ResultsPanel {
                         let _ = entity.update(cx, |_, cx| {
                             cx.emit(AppEvent::TableOperationCompleted {
                                 table_name: response.table_name,
-                                connection_id: Some(response.connection_id),
+                                connection_id: response.connection_id,
                                 success: false,
                                 rows_affected: None,
                                 error_message: response.error_message,
@@ -1939,11 +2187,10 @@ impl ResultsPanel {
             if let Some(table_name) = &delegate.table_name {
                 // For new rows, exclude primary key to avoid UPDATE/INSERT confusion
                 let column_names = delegate.get_insert_column_names(true); // exclude_primary_key = true
-                let values_str = column_names
+                let values_vec = column_names
                     .iter()
                     .map(|_| "NULL".to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                    .collect::<Vec<_>>();
 
                 let change = TableChange::new(
                     ChangeType::InsertRow,
@@ -1951,9 +2198,10 @@ impl ResultsPanel {
                     new_row_index,
                     None,
                     None,
-                    Some(values_str.clone()),
+                    None, // No single new_value for insert operations
                     None, // No primary key value for new rows
                     delegate.primary_key_column.clone(),
+                    Some(values_vec), // Use insert_values parameter instead
                 );
                 delegate.edit_state.add_change(change);
             }
@@ -1983,17 +2231,16 @@ impl ResultsPanel {
                         // For new rows (duplicated rows), exclude primary key to avoid UPDATE/INSERT confusion
                         let _column_names = delegate.get_insert_column_names(true); // exclude_primary_key = true
                         let values = delegate.get_insert_values(new_row_index, true); // exclude_primary_key = true
-                        let values_str = values
+                        let values_vec = values
                             .iter()
                             .map(|val| {
                                 if val.is_empty() || val == "NULL" {
                                     "NULL".to_string()
                                 } else {
-                                    format!("'{}'", val.replace("'", "''"))
+                                    val.to_string() // Keep raw value without SQL formatting
                                 }
                             })
-                            .collect::<Vec<_>>()
-                            .join(", ");
+                            .collect::<Vec<_>>();
 
                         let change = TableChange::new(
                             ChangeType::InsertRow,
@@ -2001,9 +2248,10 @@ impl ResultsPanel {
                             new_row_index,
                             None,
                             None,
-                            Some(values_str.clone()),
+                            None, // No single new_value for insert operations
                             None, // No primary key value for new rows
                             delegate.primary_key_column.clone(),
+                            Some(values_vec.clone()), // Use insert_values parameter instead
                         );
                         delegate.edit_state.add_change(change);
                     }
@@ -2213,7 +2461,7 @@ impl Focusable for ResultsPanel {
 
 impl Render for ResultsPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Check for pending edits
+        // Check for pending inline edits
         if let Some((row, col)) = self.table_state.read(cx).delegate().pending_edit_cell {
             // Clear the pending edit and start editing
             self.table_state.update(cx, |state, _cx| {

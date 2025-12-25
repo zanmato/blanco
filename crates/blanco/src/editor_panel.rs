@@ -3,7 +3,6 @@ use gpui::{
     IntoElement, KeybindingKeystroke, Keystroke, MouseButton, ParentElement, Render, Styled,
     Window, div, prelude::FluentBuilder, px, rems,
 };
-use gpui_tokio::Tokio;
 use gpui_component::{
     ActiveTheme, Sizable, StyledExt, WindowExt as _,
     button::{Button, ButtonVariants},
@@ -15,6 +14,7 @@ use gpui_component::{
     tab::{Tab, TabBar},
     v_flex,
 };
+use gpui_tokio::Tokio;
 use std::{rc::Rc, sync::Arc, time::Duration};
 use tracing::{debug, error, info};
 
@@ -111,6 +111,7 @@ pub struct EditorPanel {
     run_query_keystroke: KeybindingKeystroke,
     editor_chat_resize_state: Entity<ResizableState>,
     editor_results_resize_state: Entity<ResizableState>,
+    loading: bool,
 }
 
 /// Parameters for creating a new tab with connection
@@ -340,6 +341,10 @@ impl EditorPanel {
 
                     tracing::info!("Executing query via async pipeline: {}", query);
 
+                    // Set loading state to true
+                    self.loading = true;
+                    cx.notify();
+
                     // Log the query to the SQL log
                     query_tab.sql_log.update(cx, |sql_log, cx| {
                         sql_log.append_text(
@@ -418,7 +423,10 @@ impl EditorPanel {
                                         }
 
                                         // Store rows_affected before moving result
-                                        let rows_affected = result.rows_affected;
+                                        let rows_affected = std::cmp::max(
+                                            result.rows_affected,
+                                            result.row_count() as u64,
+                                        );
 
                                         // Update results panel
                                         let _ = results_panel_clone.update(cx, |panel, cx| {
@@ -439,9 +447,10 @@ impl EditorPanel {
                                             );
                                         });
 
-                                        // Emit success event
+                                        // Set loading to false and emit success event
                                         editor_panel_entity
-                                            .update(cx, |_, cx| {
+                                            .update(cx, |editor_panel, cx| {
+                                                editor_panel.loading = false;
                                                 cx.emit(AppEvent::QueryExecutionCompleted {
                                                     connection_id: Some(connection_id),
                                                     database_name: Some(database_name.clone()),
@@ -450,6 +459,7 @@ impl EditorPanel {
                                                     rows_affected: Some(rows_affected),
                                                     error_message: None,
                                                 });
+                                                cx.notify();
                                             })
                                             .ok();
                                     }
@@ -468,9 +478,11 @@ impl EditorPanel {
                                             );
                                         });
 
-                                        // Emit error event
+                                        // Set loading to false and emit error event
                                         editor_panel_entity
-                                            .update(cx, |_, cx| {
+                                            .update(cx, |editor_panel, cx| {
+                                                editor_panel.loading = false;
+                                                cx.notify();
                                                 cx.emit(AppEvent::QueryExecutionCompleted {
                                                     connection_id: Some(connection_id),
                                                     database_name: Some(database_name.clone()),
@@ -501,7 +513,9 @@ impl EditorPanel {
                             Err(e) => {
                                 tracing::error!("Failed to get connection: {}", e);
                                 editor_panel_entity
-                                    .update(cx, |_, cx| {
+                                    .update(cx, |editor_panel, cx| {
+                                        editor_panel.loading = false;
+                                        cx.notify();
                                         cx.emit(AppEvent::ErrorOccurred {
                                             context: format!(
                                                 "Connection setup for connection_id: {}",
@@ -556,6 +570,7 @@ impl EditorPanel {
             ),
             editor_chat_resize_state,
             editor_results_resize_state,
+            loading: false,
         };
 
         panel.restore_saved_tabs_with_connections_sync(saved_tabs, window, cx);
@@ -688,7 +703,9 @@ impl EditorPanel {
             environment_type: params.environment_type,
             editor: editor.clone(),
             db_id: params.db_id,
-            results_panel: cx.new(|cx| ResultsPanel::new(window, cx)),
+            results_panel: cx.new(|cx| {
+                ResultsPanel::new(params.connection_id, &params.database_name, window, cx)
+            }),
             sql_log: cx.new(|cx| SqlLog::new(1000, cx.theme().highlight_theme.clone())),
             // Chat functionality
             chat_enabled: false,
@@ -1072,6 +1089,8 @@ impl Render for EditorPanel {
                                                                             .outline()
                                                                             .small()
                                                                             .label("Run Current")
+                                                                            .loading(self.loading)
+                                                                            .loading_icon(IconName::LoaderCircle)
                                                                             .children(vec![Kbd::new(self.run_query_keystroke.inner().clone()).into_any_element()])
                                                                             .on_click(cx.listener(|panel, _, window, cx| panel.run_query(window, cx))),
                                                                     )

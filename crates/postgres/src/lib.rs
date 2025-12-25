@@ -23,7 +23,7 @@ pub use factory::PostgresConnectionFactory;
 #[cfg(test)]
 mod tests {
     use blanco_core::Connection;
-    use sqlx::{postgres::PgPoolOptions, Row, ValueRef};
+    use sqlx::{postgres::PgPoolOptions, Column, Row, TypeInfo};
     use std::env;
 
     #[async_std::test]
@@ -161,8 +161,10 @@ mod tests {
         // Establish the actual database connection
         postgres_connection.connect(&test_connection_string).await?;
 
+        let database_name = "manager_test".to_string();
+
         // Test a simple query to make sure Blanco can handle the data
-        let query_result = postgres_connection.execute_query("SELECT * FROM comprehensive_test WHERE id = (SELECT MAX(id) FROM comprehensive_test)", None).await?;
+        let query_result = postgres_connection.execute_query("SELECT * FROM comprehensive_test WHERE id = (SELECT MAX(id) FROM comprehensive_test)", Some(&database_name), None).await?;
 
         assert!(
             !query_result.rows.is_empty(),
@@ -263,8 +265,126 @@ mod tests {
         println!("✅ All type conversion tests passed!");
         println!("✅ Basic types, strings, booleans, dates, timestamps, UUID, JSON all working correctly!");
         println!("✅ Array types (INT4[], TEXT[], UUID[]) all working correctly!");
-        println!("✅ System catalog types (regclass) working correctly with user-friendly display!");
+        println!(
+            "✅ System catalog types (regclass) working correctly with user-friendly display!"
+        );
 
+        Ok(())
+    }
+
+    #[async_std::test]
+    async fn test_computed_column_type_detection() -> Result<(), Box<dyn std::error::Error>> {
+        // Use environment variable for connection string or fallback to default
+        let connection_string = env::var("POSTGRES_CONNECTION_STRING").unwrap_or_else(|_| {
+            "postgres://manager:manager@localhost:5444/postgres?sslmode=disable".to_string()
+        });
+
+        // Connect to PostgreSQL
+        let _pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect(&connection_string)
+            .await?;
+
+        // Create test database if it doesn't exist
+        let _ = sqlx::query("CREATE DATABASE manager_test")
+            .execute(&_pool)
+            .await;
+
+        // Use the manager_test database
+        let test_connection_string = connection_string.replace("/postgres", "/manager_test");
+        let test_pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect(&test_connection_string)
+            .await?;
+
+        // Create test table if it doesn't exist
+        sqlx::query("DROP TABLE IF EXISTS computed_test")
+            .execute(&test_pool)
+            .await
+            .ok();
+
+        sqlx::query(
+            "CREATE TABLE computed_test (
+                id SERIAL PRIMARY KEY,
+                smallint_col SMALLINT,
+                text_col TEXT
+            )",
+        )
+        .execute(&test_pool)
+        .await?;
+
+        // Insert test data
+        sqlx::query("INSERT INTO computed_test (smallint_col, text_col) VALUES (42, 'hello')")
+            .execute(&test_pool)
+            .await?;
+
+        // Test query with computed column (cast)
+        let query = "SELECT smallint_col, smallint_col::text FROM computed_test";
+        let rows = sqlx::query(query).fetch_all(&test_pool).await?;
+
+        println!("\n=== Computed Column Type Test ===");
+        println!("Query: {}", query);
+
+        for (i, row) in rows.iter().enumerate() {
+            println!("\nRow {}:", i);
+
+            for (col_idx, col) in row.columns().iter().enumerate() {
+                let col_name = col.name();
+                let type_name = col.type_info().name();
+                println!(
+                    "  Column {}: name='{}', type='{}'",
+                    col_idx, col_name, type_name
+                );
+            }
+        }
+
+        // Verify we got 2 columns with proper type information
+        assert_eq!(rows.len(), 1, "Should have 1 row");
+        let first_row = &rows[0];
+        let columns = first_row.columns();
+        assert_eq!(columns.len(), 2, "Should have 2 columns");
+
+        // Check column names - PostgreSQL keeps the same name for both columns!
+        assert_eq!(columns[0].name(), "smallint_col");
+        assert_eq!(columns[1].name(), "smallint_col"); // Same name, different type!
+
+        // Check column types - this is the key test
+        let type0 = columns[0].type_info().name();
+        let type1 = columns[1].type_info().name();
+
+        println!("\nColumn types:");
+        println!("  Column 0 (smallint_col): {}", type0);
+        println!("  Column 1 (smallint_col::text): {}", type1);
+
+        // Both types should be available
+        assert!(!type0.is_empty(), "First column type should not be empty");
+        assert!(!type1.is_empty(), "Second column type should not be empty");
+
+        // Now test with Blanco's connection to see if the issue is in our code
+        let mut postgres_connection =
+            crate::PostgresConnection::from_connection_string(&test_connection_string)?;
+        postgres_connection.connect(&test_connection_string).await?;
+
+        let database_name = "manager_test".to_string();
+
+        // Test the problematic query
+        let query_result = postgres_connection
+            .execute_query(query, Some(&database_name), None)
+            .await?;
+
+        println!("\n=== Blanco QueryResult ===");
+        println!("Columns: {:?}", query_result.columns);
+        println!("Column types: {:?}", query_result.column_types);
+        println!("Rows: {:?}", query_result.rows);
+
+        // Verify column count matches column types count
+        assert_eq!(
+            query_result.columns.len(),
+            query_result.column_types.len(),
+            "Column count should match column types count"
+        );
+
+        println!("\n✅ Computed column type detection test passed!");
         Ok(())
     }
 }

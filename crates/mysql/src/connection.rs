@@ -1,9 +1,8 @@
 use anyhow::Result;
 use async_std::sync::RwLock;
 use async_trait::async_trait;
-use blanco_core::{
-    ColumnInfo, Connection, ConnectionUIMetadata, IconName, QueryResult, TableMetadata,
-};
+use blanco_core::{ColumnInfo, Connection, ConnectionUIMetadata, QueryResult, TableMetadata};
+use futures::StreamExt;
 use sqlx::mysql::MySqlPoolOptions;
 use sqlx::{Column, Row};
 use std::collections::HashMap;
@@ -390,12 +389,20 @@ impl MysqlConnection {
         // Use column type to determine the best conversion approach
         match column_type.to_uppercase().as_str() {
             // Integer types
-            "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INT" | "INTEGER" | "BIGINT" => {
+            "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INT" | "INTEGER" | "BIGINT"
+            | "TINYINT SIGNED" | "SMALLINT SIGNED" | "MEDIUMINT SIGNED" | "INT SIGNED"
+            | "BIGINT SIGNED" => {
                 if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(column_index) {
                     // Special handling for TINYINT(1) which is often used for booleans
                     if column_type.to_uppercase().contains("TINYINT") && (v == 0 || v == 1) {
                         return if v == 1 { "true" } else { "false" }.to_string();
                     }
+                    return v.to_string();
+                }
+            }
+
+            "INT UNSIGNED" => {
+                if let Ok(Some(v)) = row.try_get::<Option<u64>, _>(column_index) {
                     return v.to_string();
                 }
             }
@@ -438,7 +445,9 @@ impl MysqlConnection {
                     return v.to_string();
                 }
                 // Try DateTime<Utc> for TIMESTAMP
-                if let Ok(Some(v)) = row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>(column_index) {
+                if let Ok(Some(v)) =
+                    row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>(column_index)
+                {
                     return v.to_string();
                 }
             }
@@ -450,8 +459,8 @@ impl MysqlConnection {
             }
 
             // String and binary types
-            "CHAR" | "VARCHAR" | "TEXT" | "TINYTEXT" | "MEDIUMTEXT" | "LONGTEXT" |
-            "ENUM" | "SET" | "JSON" => {
+            "CHAR" | "VARCHAR" | "TEXT" | "TINYTEXT" | "MEDIUMTEXT" | "LONGTEXT" | "ENUM"
+            | "SET" | "JSON" => {
                 if let Ok(v) = row.try_get::<Option<String>, _>(column_index) {
                     return v.unwrap_or_else(|| "NULL".to_string());
                 }
@@ -465,7 +474,9 @@ impl MysqlConnection {
             }
 
             // Unknown type - try common numeric types first
-            _ => {
+            unknown => {
+                tracing::debug!("unknown type: {}", unknown);
+
                 // Try boolean first (for SELECT TRUE/FALSE literals)
                 if let Ok(Some(v)) = row.try_get::<Option<bool>, _>(column_index) {
                     return if v { "true" } else { "false" }.to_string();
@@ -503,10 +514,6 @@ impl Connection for MysqlConnection {
 
     fn get_connection_type(&self) -> &'static str {
         "MySQL"
-    }
-
-    fn get_icon_name(&self) -> IconName {
-        IconName::MySQL
     }
 
     fn get_display_name(&self) -> String {
@@ -584,63 +591,72 @@ impl Connection for MysqlConnection {
             sqlx::query(query)
         };
 
-        let rows = sql_query.fetch_all(&pool).await?;
+        // Use fetch_many to handle both row-returning and row-affecting queries
+        use sqlx::Either;
+        let mut results = sql_query.fetch_many(&pool);
+
+        let mut columns: Vec<String> = Vec::new();
+        let mut column_types: Vec<String> = Vec::new();
+        let mut rows: Vec<Vec<String>> = Vec::new();
+        let mut rows_affected: u64 = 0;
+        let mut collected_rows: Vec<sqlx::mysql::MySqlRow> = Vec::new();
+
+        while let Some(result) = results.next().await {
+            match result? {
+                Either::Left(execution_result) => {
+                    rows_affected += execution_result.rows_affected();
+                }
+                Either::Right(row) => {
+                    // Extract column info from the first row
+                    if columns.is_empty() {
+                        columns = row
+                            .columns()
+                            .iter()
+                            .map(|col| col.name().to_string())
+                            .collect();
+
+                        column_types = row
+                            .columns()
+                            .iter()
+                            .map(|col| col.type_info().to_string())
+                            .collect();
+
+                        tracing::info!("columns {:?}, {:?}", columns, column_types);
+                    }
+
+                    // Collect rows for processing later
+                    collected_rows.push(row);
+                }
+            }
+        }
+
+        // Process collected rows into string format
+        if !collected_rows.is_empty() {
+            rows = collected_rows
+                .iter()
+                .map(|row| {
+                    columns
+                        .iter()
+                        .enumerate()
+                        .map(|(i, _)| self.convert_row_value_to_string(row, i, &column_types[i]))
+                        .collect()
+                })
+                .collect();
+        }
 
         let execution_time = start_time.elapsed().as_millis() as i64;
 
-        if rows.is_empty() {
-            tracing::debug!("✅ Query returned no rows");
-            return Ok(QueryResult {
-                columns: vec![],
-                column_types: vec![],
-                rows: vec![],
-                rows_affected: 0,
-                query_text: Some(query.to_string()),
-                execution_time_ms: Some(execution_time),
-                is_error: false,
-                table_name: None,
-                primary_key_column: None,
-                connection_id: None,
-            });
-        }
-
-        // Extract column information from first row
-        let first_row = &rows[0];
-        let columns: Vec<String> = first_row
-            .columns()
-            .iter()
-            .map(|col| col.name().to_string())
-            .collect();
-
-        let column_types: Vec<String> = first_row
-            .columns()
-            .iter()
-            .map(|col| col.type_info().to_string())
-            .collect();
-
-        // Convert rows to string format
-        let result_rows: Vec<Vec<String>> = rows
-            .iter()
-            .map(|row| {
-                columns
-                    .iter()
-                    .enumerate()
-                    .map(|(i, _)| self.convert_row_value_to_string(row, i, &column_types[i]))
-                    .collect()
-            })
-            .collect();
-
-        let rows_count = result_rows.len();
         tracing::debug!(
-            "✅ Query executed successfully: {} rows returned",
-            rows_count
+            "✅ Query executed successfully: {} rows returned, {} rows affected",
+            rows.len(),
+            rows_affected
         );
 
         Ok(QueryResult {
             columns,
             column_types,
-            rows: result_rows,
-            rows_affected: rows_count as u64,
+            rows,
+            rows_affected,
             query_text: Some(query.to_string()),
             execution_time_ms: Some(execution_time),
             is_error: false,
@@ -877,7 +893,6 @@ impl Connection for MysqlConnection {
         Ok(None)
     }
 
-    
     fn get_file_safe_name(&self) -> String {
         format!("mysql_{}_{}", self.server_key.host, self.server_key.port)
             .replace(':', "_")
@@ -889,7 +904,6 @@ impl Connection for MysqlConnection {
             display_name: self.display_name.clone(),
             file_safe_name: self.get_file_safe_name(),
             supports_schemas: false,
-            icon_name: IconName::MySQL,
         }
     }
 
@@ -902,7 +916,9 @@ impl Connection for MysqlConnection {
         let limit = limit.unwrap_or(20).min(100) as i32; // Default 20, max 100
         let offset = offset.unwrap_or(0) as i32;
 
-        let tables = self.get_schema_paginated(table_names, limit, offset).await?;
+        let tables = self
+            .get_schema_paginated(table_names, limit, offset)
+            .await?;
         let table_count = tables.len();
 
         Ok(blanco_core::connection_trait::DatabaseSchemaResult {

@@ -95,6 +95,13 @@ pub struct DuplicateRow {
 
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
+pub struct EditCellInPopover {
+    pub row: usize,
+    pub col: usize,
+}
+
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
 pub struct RenameTab {
     pub tab_index: usize,
     pub new_name: String,
