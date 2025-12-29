@@ -16,10 +16,6 @@ pub use sql_parser::{CompletionKind, ParsedQuery, SqliteTableExtractor, TableAli
 
 pub use factory::SqliteConnectionFactory;
 
-// Import completion and hover implementations to make them available
-// use completion::*;
-// use hover::*;
-
 #[cfg(test)]
 mod tests {
     use blanco_core::Connection;
@@ -125,16 +121,21 @@ mod tests {
 
         // Create the test table using Blanco connection
         sqlite_connection
-            .execute_query(create_table_sql, None)
+            .execute_query(create_table_sql, None, None)
             .await?;
 
         // Insert test data using Blanco connection
-        sqlite_connection.execute_query(insert_sql, None).await?;
+        sqlite_connection
+            .execute_query(insert_sql, None, None)
+            .await?;
 
         // Test a simple query to make sure Blanco can handle the data
-        let query_result = sqlite_connection.execute_query("SELECT * FROM comprehensive_test WHERE id = (SELECT MAX(id) FROM comprehensive_test)", None).await?;
+        let query_result = sqlite_connection.execute_query("SELECT * FROM comprehensive_test WHERE id = (SELECT MAX(id) FROM comprehensive_test)", None, None).await?;
 
-        assert!(!query_result.rows.is_empty(), "Query should return at least one row");
+        assert!(
+            !query_result.rows.is_empty(),
+            "Query should return at least one row"
+        );
         let first_row = query_result.rows.first().unwrap();
 
         // Create a map for easy lookup of values by column name
@@ -146,9 +147,18 @@ mod tests {
             .collect();
 
         // Test integer affinity types
-        assert!(value_map.get("id").unwrap().parse::<i64>().unwrap() > 0, "id should be positive");
-        assert_eq!(value_map.get("integer_col"), Some(&"2147483647".to_string()));
-        assert_eq!(value_map.get("bigint_col"), Some(&"9223372036854775807".to_string()));
+        assert!(
+            value_map.get("id").unwrap().parse::<i64>().unwrap() > 0,
+            "id should be positive"
+        );
+        assert_eq!(
+            value_map.get("integer_col"),
+            Some(&"2147483647".to_string())
+        );
+        assert_eq!(
+            value_map.get("bigint_col"),
+            Some(&"9223372036854775807".to_string())
+        );
         assert_eq!(value_map.get("int_col"), Some(&"123456".to_string()));
         assert_eq!(value_map.get("smallint_col"), Some(&"32767".to_string()));
         assert_eq!(value_map.get("tinyint_col"), Some(&"255".to_string()));
@@ -156,20 +166,38 @@ mod tests {
         // Test numeric affinity types
         assert!(value_map.get("real_col").unwrap().contains("12345"));
         assert!(value_map.get("numeric_col").unwrap().contains("98765"));
-        assert!(value_map.get("numeric_affinity_col").unwrap().contains("123"));
-        assert!(value_map.get("real_affinity_col").unwrap().contains("3.14159"));
+        assert!(value_map
+            .get("numeric_affinity_col")
+            .unwrap()
+            .contains("123"));
+        assert!(value_map
+            .get("real_affinity_col")
+            .unwrap()
+            .contains("3.14159"));
 
         // Test text affinity types
-        assert_eq!(value_map.get("text_col"), Some(&"This is a test text with unicode: ñiño 你好 🚀".to_string()));
-        assert_eq!(value_map.get("varchar_col"), Some(&"variable_string".to_string()));
-        assert_eq!(value_map.get("text_affinity_col"), Some(&"text affinity".to_string()));
+        assert_eq!(
+            value_map.get("text_col"),
+            Some(&"This is a test text with unicode: ñiño 你好 🚀".to_string())
+        );
+        assert_eq!(
+            value_map.get("varchar_col"),
+            Some(&"variable_string".to_string())
+        );
+        assert_eq!(
+            value_map.get("text_affinity_col"),
+            Some(&"text affinity".to_string())
+        );
 
         // Test CHAR type (may be padded)
         assert!(value_map.get("char_col").unwrap().starts_with("fixed_len"));
 
         // Test boolean (stored as integer in SQLite)
-        assert!(value_map.get("bool_col") == Some(&"1".to_string()) || value_map.get("bool_col") == Some(&"true".to_string()),
-               "Boolean should be stored as 1 or true in SQLite");
+        assert!(
+            value_map.get("bool_col") == Some(&"1".to_string())
+                || value_map.get("bool_col") == Some(&"true".to_string()),
+            "Boolean should be stored as 1 or true in SQLite"
+        );
 
         // Test date/time types
         assert!(value_map.get("date_col").unwrap().contains("2025"));
@@ -184,10 +212,16 @@ mod tests {
 
         // Test blob affinity types (SQLite converts binary data to text when possible)
         assert!(value_map.get("blob_col").unwrap().contains("48656c6c6f")); // "Hello World"
-        assert!(value_map.get("blob_affinity_col").unwrap().contains("48656c6c6f")); // "Hello"
+        assert!(value_map
+            .get("blob_affinity_col")
+            .unwrap()
+            .contains("48656c6c6f")); // "Hello"
 
         // Test custom types (should fall back to string conversion)
-        assert_eq!(value_map.get("custom_type_col"), Some(&"custom value".to_string()));
+        assert_eq!(
+            value_map.get("custom_type_col"),
+            Some(&"custom value".to_string())
+        );
 
         println!("✅ All SQLite type conversion tests passed!");
         println!("✅ Integer affinity types working correctly!");

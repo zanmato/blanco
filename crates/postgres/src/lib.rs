@@ -16,10 +16,6 @@ pub use sql_parser::{CompletionKind, ParsedQuery, PostgresTableExtractor, TableA
 
 pub use factory::PostgresConnectionFactory;
 
-// Import completion and hover implementations to make them available
-// use completion::*;
-// use hover::*;
-
 #[cfg(test)]
 mod tests {
     use blanco_core::Connection;

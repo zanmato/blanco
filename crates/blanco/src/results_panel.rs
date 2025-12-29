@@ -1142,7 +1142,6 @@ impl TableDelegate for ResultsTableDelegate {
                                 .flex_1()
                                 .text_size(px(12.))
                                 .border_0()
-                                .p_2()
                                 .suffix(
                                     div()
                                         .cursor_pointer()

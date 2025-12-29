@@ -18,6 +18,7 @@ mod settings;
 mod settings_view;
 mod sql_completion_provider;
 mod sql_document_color_provider;
+mod sql_selection_range_provider;
 mod sql_statement_parser;
 mod time_format;
 mod transformers;
