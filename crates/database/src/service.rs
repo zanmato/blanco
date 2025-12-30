@@ -15,15 +15,28 @@ use crate::factories::{
 };
 use crate::ssh_tunnel::{SshTunnel, SshTunnelConfig, TunnelInfo};
 
-// Message type for channel-based action dispatch
+// Message types for channel-based action dispatch
 #[derive(Clone, Debug)]
 pub struct DatabaseConnectedMessage {
     pub connection_id: i64,
     pub database_name: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct DatabaseDisconnectedMessage {
+    pub connection_id: i64,
+    pub database_name: String,
+}
+
+/// Enum for all messages that can be sent through the database service channel
+#[derive(Clone, Debug)]
+pub enum DatabaseServiceMessage {
+    Connected(DatabaseConnectedMessage),
+    Disconnected(DatabaseDisconnectedMessage),
+}
+
 // Shared channel sender wrapper - Arc so clones share the same sender
-type SharedActionSender = Arc<StdMutex<Option<channel::Sender<DatabaseConnectedMessage>>>>;
+type SharedActionSender = Arc<StdMutex<Option<channel::Sender<DatabaseServiceMessage>>>>;
 
 // Type aliases for clarity
 pub type DatabaseConfigId = i64; // Connection ID from app_database
@@ -78,7 +91,7 @@ impl DatabaseService {
     }
 
     /// Set the action sender (called via cx.update_global from app initialization)
-    pub fn set_action_sender(&mut self, sender: channel::Sender<DatabaseConnectedMessage>) {
+    pub fn set_action_sender(&mut self, sender: channel::Sender<DatabaseServiceMessage>) {
         tracing::info!(
             "Setting action_sender on DatabaseService, Arc address: {:p}",
             self.action_sender
@@ -201,17 +214,17 @@ impl DatabaseService {
 
         if let Some(sender) = sender_opt {
             tracing::info!(
-                "Dispatching DatabaseConnectedMessage for connection ID: {}",
+                "Dispatching DatabaseServiceMessage::Connected for connection ID: {}",
                 config_id
             );
             sender
-                .send(DatabaseConnectedMessage {
+                .send(DatabaseServiceMessage::Connected(DatabaseConnectedMessage {
                     connection_id: config_id,
                     database_name: database.unwrap_or("default").to_string(),
-                })
+                }))
                 .await?;
         } else {
-            tracing::warn!("action_sender is None, cannot dispatch DatabaseConnectedMessage");
+            tracing::warn!("action_sender is None, cannot dispatch DatabaseServiceMessage");
         }
 
         tracing::info!(

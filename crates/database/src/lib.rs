@@ -9,7 +9,10 @@ mod service;
 mod ssh_tunnel;
 
 pub use connection_config::{ConnectionConfig, DatabaseType};
-pub use service::{DatabaseConnectedMessage, DatabaseService, DatabaseConfigId, ConnectionId};
+pub use service::{
+    DatabaseConnectedMessage, DatabaseDisconnectedMessage, DatabaseService,
+    DatabaseServiceMessage, DatabaseConfigId, ConnectionId,
+};
 pub use ssh_tunnel::{SshTunnel, SshTunnelConfig, TunnelInfo};
 pub use factories::{SqliteConnectionFactory, PostgresConnectionFactory, MysqlConnectionFactory};
 

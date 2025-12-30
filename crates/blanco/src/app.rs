@@ -142,7 +142,7 @@ impl BlancoApp {
 
         // Create channel for background action dispatch
         let (action_sender, action_receiver) =
-            channel::unbounded::<database::DatabaseConnectedMessage>();
+            channel::unbounded::<database::DatabaseServiceMessage>();
 
         // Set sender on DatabaseService using update_global
         cx.update_global::<database::DatabaseService, _>(
@@ -151,20 +151,31 @@ impl BlancoApp {
             },
         );
 
-        // For now, emit an event when a new connection is created
+        // Handle database service messages
         let action_task = cx.spawn(async move |_weak_handle, cx| {
-            info!("DatabaseConnectedMessage listener task started");
+            info!("DatabaseServiceMessage listener task started");
             while let Ok(msg) = action_receiver.recv().await {
-                info!(
-                    "DatabaseConnectedMessage received for connection_id: {}, database_name: {}",
-                    msg.connection_id, msg.database_name
-                );
-                let _ = _weak_handle.update(cx, |_, cx| {
-                    info!("Dispatching DatabaseConnected action to app");
-                    cx.dispatch_action(&DatabaseConnected::from(msg.clone()));
-                });
+                match msg {
+                    database::DatabaseServiceMessage::Connected(conn_msg) => {
+                        info!(
+                            "DatabaseServiceMessage::Connected received for connection_id: {}, database_name: {}",
+                            conn_msg.connection_id, conn_msg.database_name
+                        );
+                        let _ = _weak_handle.update(cx, |_, cx| {
+                            info!("Dispatching DatabaseConnected action to app");
+                            cx.dispatch_action(&DatabaseConnected::from(conn_msg));
+                        });
+                    }
+                    database::DatabaseServiceMessage::Disconnected(disconn_msg) => {
+                        info!(
+                            "DatabaseServiceMessage::Disconnected received for connection_id: {}, database_name: {}",
+                            disconn_msg.connection_id, disconn_msg.database_name
+                        );
+                        // TODO: Handle disconnection - dispatch action or update state
+                    }
+                }
             }
-            info!("DatabaseConnectedMessage listener task ended");
+            info!("DatabaseServiceMessage listener task ended");
         });
 
         let sidebar = cx.new(|cx| ConnectionsPanel::new(window, cx));
