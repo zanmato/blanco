@@ -1,29 +1,23 @@
-use std::sync::Arc;
-use std::time::Duration;
-
-use async_std::channel;
 use gpui::{
     Action, App, AppContext, BorrowAppContext, Context, Entity, EventEmitter, FocusHandle,
     Focusable, InteractiveElement, IntoElement, Menu, MenuItem, ParentElement, Render, Styled,
-    Subscription, Task, WeakEntity, Window, actions, div, prelude::FluentBuilder, px, svg,
+    Subscription, Task, Window, actions, div, prelude::FluentBuilder, px, svg,
 };
 use gpui_component::{
     ActiveTheme, Root, TITLE_BAR_HEIGHT, TitleBar, WindowExt as _, button::Button,
     menu::AppMenuBar, notification::NotificationType,
 };
 use serde::Deserialize;
+use smol::channel;
 use tracing::{debug, error, info};
 
 use crate::{
-    app,
     app_database::AppDatabase,
     app_events::AppEvent,
-    app_settings::AppSettings,
     connection_modal::NewConnectionModal,
     connections_panel::ConnectionsPanel,
     editor_panel::{EditorPanel, TabCreationParams},
 };
-use database::DatabaseService;
 
 actions!(
     blanco_app,

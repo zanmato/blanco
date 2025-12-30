@@ -1,5 +1,6 @@
 use once_cell::sync::Lazy;
 use ropey::Rope;
+use std::cell::RefCell;
 use std::ops::Range;
 use tree_sitter::{Language, Node, Parser};
 
@@ -14,15 +15,31 @@ pub struct StatementInfo {
 }
 
 /// SQL statement parser using tree-sitter for accurate statement extraction
-pub struct SqlStatementParser {
+struct SqlStatementParser {
     parser: Parser,
 }
 
 static SQL_LANGUAGE: Lazy<Language> = Lazy::new(|| tree_sitter_sequel::LANGUAGE.into());
 
+// Thread-local parser instance for reuse.
+// Each thread gets its own parser, avoiding contention and ensuring thread safety.
+thread_local! {
+    static TLS_PARSER: RefCell<SqlStatementParser> = {
+        match SqlStatementParser::new() {
+            Ok(parser) => RefCell::new(parser),
+            Err(e) => {
+                tracing::error!("Failed to create thread-local SQL parser: {}", e);
+                // Panic in the unlikely case the parser cannot be created.
+                // This is acceptable because a parser failure is a fatal error.
+                panic!("Failed to initialize thread-local SQL parser: {}", e);
+            }
+        }
+    };
+}
+
 impl SqlStatementParser {
     /// Create a new SQL statement parser
-    pub fn new() -> Result<Self, String> {
+    fn new() -> Result<Self, String> {
         let mut parser = Parser::new();
         parser
             .set_language(&*SQL_LANGUAGE)
@@ -55,7 +72,8 @@ impl SqlStatementParser {
             // If cursor is inside the statement, return it immediately
             if range.contains(&cursor_byte_pos) {
                 let rope = Rope::from_str(text);
-                let utf16_range = rope.byte_to_utf16_idx(range.start)..rope.byte_to_utf16_idx(range.end);
+                let utf16_range =
+                    rope.byte_to_utf16_idx(range.start)..rope.byte_to_utf16_idx(range.end);
                 let text = text[range.clone()].to_string();
                 let is_complete = self.is_statement_complete(&text);
                 return Some(StatementInfo {
@@ -84,7 +102,8 @@ impl SqlStatementParser {
         if let Some(statement) = best_statement {
             let range = statement.byte_range();
             let rope = Rope::from_str(text);
-            let utf16_range = rope.byte_to_utf16_idx(range.start)..rope.byte_to_utf16_idx(range.end);
+            let utf16_range =
+                rope.byte_to_utf16_idx(range.start)..rope.byte_to_utf16_idx(range.end);
             let text = text[range.clone()].to_string();
             let is_complete = self.is_statement_complete(&text);
             Some(StatementInfo {
@@ -154,6 +173,8 @@ impl SqlStatementParser {
 /// This is a convenience function that maintains compatibility with the existing
 /// extract_current_query function signature while using robust tree-sitter parsing.
 ///
+/// Uses a thread-local parser instance to avoid creating a new parser on every call.
+///
 /// # Arguments
 /// * `text` - Full SQL text
 /// * `cursor_pos` - Cursor position in characters (not bytes)
@@ -162,28 +183,31 @@ impl SqlStatementParser {
 /// # Returns
 /// The extracted SQL statement, or empty string if no statement found
 pub fn extract_current_query(text: &str, cursor_pos: usize, _has_selection: bool) -> String {
-    // Create a new parser instance for each call
-    // This is safe and avoids static mut issues
-    let mut parser = match SqlStatementParser::new() {
-        Ok(parser) => parser,
-        Err(e) => {
-            tracing::error!("Failed to initialize SQL parser: {}", e);
-            return String::new();
-        }
-    };
-
-    // Use Rope for efficient character to byte position conversion
-    let rope = Rope::from_str(text);
-    let cursor_byte_pos = if cursor_pos < rope.len_chars() {
-        rope.char_to_byte_idx(cursor_pos)
-    } else {
-        text.len()
-    };
-
-    parser
-        .extract_statement_at_cursor(text, cursor_byte_pos)
+    extract_statement_info(text, cursor_pos)
         .map(|info| info.text.trim().to_string())
         .unwrap_or_default()
+}
+
+/// Extract statement info at cursor position using thread-local parser.
+///
+/// # Arguments
+/// * `text` - Full SQL text
+/// * `cursor_pos` - Cursor position in characters (not bytes)
+///
+/// # Returns
+/// The statement info, or None if no statement found
+pub fn extract_statement_info(text: &str, cursor_pos: usize) -> Option<StatementInfo> {
+    TLS_PARSER.with_borrow_mut(|parser| {
+        // Use Rope for efficient character to byte position conversion
+        let rope = Rope::from_str(text);
+        let cursor_byte_pos = if cursor_pos < rope.len_chars() {
+            rope.char_to_byte_idx(cursor_pos)
+        } else {
+            text.len()
+        };
+
+        parser.extract_statement_at_cursor(text, cursor_byte_pos)
+    })
 }
 
 #[cfg(test)]
@@ -224,10 +248,7 @@ mod tests {
 
         assert!(result.is_some());
         let info = result.unwrap();
-        assert_eq!(
-            info.text.trim(),
-            "INSERT INTO orders (a) VALUES ('hello;')"
-        );
+        assert_eq!(info.text.trim(), "INSERT INTO orders (a) VALUES ('hello;')");
         assert!(info.is_complete);
     }
 
@@ -361,13 +382,19 @@ mod tests {
         // Position cursor in the middle of the statement
         let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 20));
 
-        assert!(result.is_some(), "Should extract statement with Unicode characters");
+        assert!(
+            result.is_some(),
+            "Should extract statement with Unicode characters"
+        );
         let info = result.unwrap();
 
         // Verify both byte and UTF-16 ranges are provided
         assert!(info.byte_range.start < info.byte_range.end);
         assert!(info.utf16_range.start < info.utf16_range.end);
-        assert_eq!(info.text.trim(), "SELECT * FROM testing WHERE text_col = '🏠'");
+        assert_eq!(
+            info.text.trim(),
+            "SELECT * FROM testing WHERE text_col = '🏠'"
+        );
         assert!(info.is_complete);
 
         // Verify UTF-16 range exists and is reasonable
@@ -391,14 +418,20 @@ DELETE FROM users WHERE id = 1;";
         let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 5));
         assert!(result.is_some());
         let info = result.unwrap();
-        assert_eq!(info.text.trim().replace('\n', " "), "INSERT INTO orders (a) VALUES ('hello;')");
+        assert_eq!(
+            info.text.trim().replace('\n', " "),
+            "INSERT INTO orders (a) VALUES ('hello;')"
+        );
         assert!(info.is_complete);
 
         // Test cursor on second line (VALUES part of INSERT)
         let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 30));
         assert!(result.is_some());
         let info = result.unwrap();
-        assert_eq!(info.text.trim().replace('\n', " "), "INSERT INTO orders (a) VALUES ('hello;')");
+        assert_eq!(
+            info.text.trim().replace('\n', " "),
+            "INSERT INTO orders (a) VALUES ('hello;')"
+        );
         assert!(info.is_complete);
 
         // Test cursor on third line (empty line after INSERT semicolon)
@@ -471,7 +504,10 @@ DELETE FROM users WHERE id = 1;";
         let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 120));
         assert!(result.is_some());
         let info = result.unwrap();
-        assert_eq!(info.text.trim(), "UPDATE test SET name = 'test' WHERE id = 1");
+        assert_eq!(
+            info.text.trim(),
+            "UPDATE test SET name = 'test' WHERE id = 1"
+        );
         assert!(info.is_complete);
 
         // Test cursor in DROP

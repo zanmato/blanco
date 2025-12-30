@@ -2628,9 +2628,9 @@ mod tests {
         let operations = delegate.create_change_operations();
         assert_eq!(operations.len(), 1);
 
-        if let blanco_core::table_operations::OperationType::Update = &operations[0].operation_type
+        if let OperationType::Update = &operations[0].operation_type
         {
-            if let blanco_core::table_operations::RowIdentifier::PrimaryKey { value, .. } =
+            if let RowIdentifier::PrimaryKey { value, .. } =
                 &operations[0].row_identifier
             {
                 assert_eq!(value, "2"); // Should use original ID in WHERE clause
