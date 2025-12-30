@@ -964,7 +964,7 @@ impl CompletionProvider for SqlCompletionProvider {
         rope: &Rope,
         offset: usize,
         _trigger: CompletionContext,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<InputState>,
     ) -> Task<Result<CompletionResponse>> {
         // Get the full text and extract current query context

@@ -1,6 +1,7 @@
 //! Database service implementation with connection and SSH tunnel management
 
 use anyhow::Result;
+use async_std::channel;
 use async_std::sync::RwLock;
 use async_trait::async_trait;
 use blanco_core::{Connection, ConnectionFactory, DatabaseService as DatabaseServiceTrait};
@@ -13,6 +14,16 @@ use crate::factories::{
     MysqlConnectionFactory, PostgresConnectionFactory, SqliteConnectionFactory,
 };
 use crate::ssh_tunnel::{SshTunnel, SshTunnelConfig, TunnelInfo};
+
+// Message type for channel-based action dispatch
+#[derive(Clone, Debug)]
+pub struct DatabaseConnectedMessage {
+    pub connection_id: i64,
+    pub database_name: String,
+}
+
+// Shared channel sender wrapper - Arc so clones share the same sender
+type SharedActionSender = Arc<StdMutex<Option<channel::Sender<DatabaseConnectedMessage>>>>;
 
 // Type aliases for clarity
 pub type DatabaseConfigId = i64; // Connection ID from app_database
@@ -30,6 +41,9 @@ pub struct DatabaseService {
     // Internal SSH management (private)
     ssh_tunnels: Arc<RwLock<HashMap<DatabaseConfigId, Arc<StdMutex<SshTunnel>>>>>,
     tunnel_connections: Arc<RwLock<HashMap<ConnectionId, DatabaseConfigId>>>,
+
+    // Channel sender for dispatching actions from any context (shared via Arc)
+    action_sender: SharedActionSender,
 
     // Dependencies
     runtime_handle: tokio::runtime::Handle,
@@ -58,8 +72,19 @@ impl DatabaseService {
             connection_factories: Arc::new(factories),
             ssh_tunnels: Arc::new(RwLock::new(HashMap::new())),
             tunnel_connections: Arc::new(RwLock::new(HashMap::new())),
+            action_sender: Arc::new(StdMutex::new(None)),
             runtime_handle,
         }
+    }
+
+    /// Set the action sender (called via cx.update_global from app initialization)
+    pub fn set_action_sender(&mut self, sender: channel::Sender<DatabaseConnectedMessage>) {
+        tracing::info!(
+            "Setting action_sender on DatabaseService, Arc address: {:p}",
+            self.action_sender
+        );
+        *self.action_sender.lock().unwrap() = Some(sender);
+        tracing::info!("Action sender set successfully");
     }
 
     /// Add a connection configuration
@@ -164,6 +189,29 @@ impl DatabaseService {
         if config.requires_ssh_tunnel() {
             let mut tunnel_connections = self.tunnel_connections.write().await;
             tunnel_connections.insert(connection_id.clone(), config_id);
+        }
+
+        // Send action message for newly created connections
+        tracing::info!(
+            "About to send, action_sender Arc address: {:p}",
+            self.action_sender
+        );
+        let sender_opt = self.action_sender.lock().unwrap().clone();
+        // Lock is dropped here
+
+        if let Some(sender) = sender_opt {
+            tracing::info!(
+                "Dispatching DatabaseConnectedMessage for connection ID: {}",
+                config_id
+            );
+            sender
+                .send(DatabaseConnectedMessage {
+                    connection_id: config_id,
+                    database_name: database.unwrap_or("default").to_string(),
+                })
+                .await?;
+        } else {
+            tracing::warn!("action_sender is None, cannot dispatch DatabaseConnectedMessage");
         }
 
         tracing::info!(
@@ -308,7 +356,8 @@ impl DatabaseService {
         let runtime_handle_inner = runtime_handle.clone();
         let tunnel = runtime_handle
             .spawn(async move {
-                let mut tunnel = SshTunnel::create(ssh_config, runtime_handle_inner.clone()).await?;
+                let mut tunnel =
+                    SshTunnel::create(ssh_config, runtime_handle_inner.clone()).await?;
                 tunnel.connect().await?;
                 Result::<SshTunnel, anyhow::Error>::Ok(tunnel)
             })
@@ -359,6 +408,7 @@ impl Clone for DatabaseService {
             connection_factories: Arc::clone(&self.connection_factories),
             ssh_tunnels: Arc::clone(&self.ssh_tunnels),
             tunnel_connections: Arc::clone(&self.tunnel_connections),
+            action_sender: Arc::clone(&self.action_sender),
             runtime_handle: self.runtime_handle.clone(),
         }
     }

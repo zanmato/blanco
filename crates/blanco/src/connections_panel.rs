@@ -6,8 +6,8 @@ use blanco_ui::tree::{Tree, TreeEntry, TreeItem, TreeState};
 use database::{DatabaseService, DatabaseServiceTrait};
 use gpui::rems;
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, IntoElement, ParentElement, Render, Styled,
-    Window, div, prelude::FluentBuilder, px,
+    App, AppContext, Context, Entity, EventEmitter, InteractiveElement, IntoElement, ParentElement,
+    Render, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     ActiveTheme as _, Icon, StyledExt, WindowExt,
@@ -1176,7 +1176,9 @@ impl ConnectionsPanel {
 
 impl Render for ConnectionsPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex()
+        div()
+            .flex()
+            .flex_col()
             .size_full()
             .gap_2()
             .bg(cx.theme().sidebar_primary_foreground)

@@ -1,10 +1,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_std::channel;
 use gpui::{
-    Action, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, Menu, MenuItem, ParentElement, Render, Styled, Subscription,
-    Task, Window, actions, div, prelude::FluentBuilder, px, svg,
+    Action, App, AppContext, BorrowAppContext, Context, Entity, EventEmitter, FocusHandle,
+    Focusable, InteractiveElement, IntoElement, Menu, MenuItem, ParentElement, Render, Styled,
+    Subscription, Task, WeakEntity, Window, actions, div, prelude::FluentBuilder, px, svg,
 };
 use gpui_component::{
     ActiveTheme, Root, TITLE_BAR_HEIGHT, TitleBar, WindowExt as _, button::Button,
@@ -107,6 +108,23 @@ pub struct RenameTab {
     pub new_name: String,
 }
 
+// Action for database connection state
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct DatabaseConnected {
+    pub connection_id: i64,
+    pub database_name: String,
+}
+
+impl From<database::DatabaseConnectedMessage> for DatabaseConnected {
+    fn from(msg: database::DatabaseConnectedMessage) -> Self {
+        Self {
+            connection_id: msg.connection_id,
+            database_name: msg.database_name,
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 #[allow(dead_code)]
 pub enum ConnectionType {
@@ -121,11 +139,39 @@ pub struct BlancoApp {
     sidebar_collapsed: bool,
     app_menu_bar: Entity<AppMenuBar>,
     _subscriptions: Vec<Subscription>,
+    _action_task: Task<()>,
 }
 
 impl BlancoApp {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         init_menus(cx);
+
+        // Create channel for background action dispatch
+        let (action_sender, action_receiver) =
+            channel::unbounded::<database::DatabaseConnectedMessage>();
+
+        // Set sender on DatabaseService using update_global
+        cx.update_global::<database::DatabaseService, _>(
+            |db_service: &mut database::DatabaseService, _cx| {
+                db_service.set_action_sender(action_sender);
+            },
+        );
+
+        // For now, emit an event when a new connection is created
+        let action_task = cx.spawn(async move |_weak_handle, cx| {
+            info!("DatabaseConnectedMessage listener task started");
+            while let Ok(msg) = action_receiver.recv().await {
+                info!(
+                    "DatabaseConnectedMessage received for connection_id: {}, database_name: {}",
+                    msg.connection_id, msg.database_name
+                );
+                let _ = _weak_handle.update(cx, |_, cx| {
+                    info!("Dispatching DatabaseConnected action to app");
+                    cx.dispatch_action(&DatabaseConnected::from(msg.clone()));
+                });
+            }
+            info!("DatabaseConnectedMessage listener task ended");
+        });
 
         let sidebar = cx.new(|cx| ConnectionsPanel::new(window, cx));
 
@@ -324,6 +370,7 @@ impl BlancoApp {
             sidebar_collapsed: false,
             app_menu_bar,
             _subscriptions: subscriptions,
+            _action_task: action_task,
         }
     }
 
@@ -356,6 +403,18 @@ impl BlancoApp {
     fn on_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
         self.editor_panel.update(cx, |panel, cx| {
             panel.add_settings_tab(window, cx);
+        });
+    }
+
+    fn on_database_connected(
+        &mut self,
+        action: &DatabaseConnected,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.sidebar.update(cx, |sidebar, cx| {
+            // Mark the connection as connected and refresh the sidebar view
+            sidebar.validate_connection_as_connected(action.connection_id, cx);
         });
     }
 
@@ -526,6 +585,7 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_commit_changes))
             .on_action(cx.listener(Self::on_rollback_changes))
             .on_action(cx.listener(Self::on_rename_tab))
+            .on_action(cx.listener(Self::on_database_connected))
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
