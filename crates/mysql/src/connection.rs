@@ -580,20 +580,21 @@ impl Connection for MysqlConnection {
             parameters.map(|p| p.len()).unwrap_or(0)
         );
 
-        // Build query with parameters if provided
-        let sql_query = if let Some(params) = parameters {
-            let mut q = sqlx::query(query);
-            for param in params {
-                q = q.bind(param);
+        // Build query: use raw_sql for no parameters, otherwise bind parameters
+        let sql_query = match parameters {
+            Some(params) if !params.is_empty() => {
+                let mut q = sqlx::query(query);
+                for param in params {
+                    q = q.bind(param);
+                }
+                q.fetch_many(&pool)
             }
-            q
-        } else {
-            sqlx::query(query)
+            _ => sqlx::raw_sql(query).fetch_many(&pool),
         };
 
         // Use fetch_many to handle both row-returning and row-affecting queries
         use sqlx::Either;
-        let mut results = sql_query.fetch_many(&pool);
+        let mut results = sql_query;
 
         let mut columns: Vec<String> = Vec::new();
         let mut column_types: Vec<String> = Vec::new();

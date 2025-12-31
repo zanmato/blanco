@@ -4,6 +4,21 @@ use std::cell::RefCell;
 use std::ops::Range;
 use tree_sitter::{Language, Node, Parser};
 
+/// Parameter style in SQL query
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ParameterStyle {
+    Positional(usize),  // $1, $2, etc.
+    Named(String),      // :name, @name, etc.
+}
+
+/// A parameter found in a SQL query
+#[derive(Clone, Debug)]
+pub struct QueryParameter {
+    pub style: ParameterStyle,
+    pub raw_text: String,     // Original text from query (e.g., "$1", ":user_id")
+    pub byte_offset: usize,   // Byte offset of the parameter in the original query
+}
+
 /// Information about an extracted SQL statement
 #[derive(Debug, Clone)]
 pub struct StatementInfo {
@@ -12,6 +27,7 @@ pub struct StatementInfo {
     pub byte_range: Range<usize>,
     pub utf16_range: Range<usize>,
     pub is_complete: bool,
+    pub parameters: Vec<QueryParameter>,
 }
 
 /// SQL statement parser using tree-sitter for accurate statement extraction
@@ -74,13 +90,20 @@ impl SqlStatementParser {
                 let rope = Rope::from_str(text);
                 let utf16_range =
                     rope.byte_to_utf16_idx(range.start)..rope.byte_to_utf16_idx(range.end);
-                let text = text[range.clone()].to_string();
-                let is_complete = self.is_statement_complete(&text);
+                let statement_text = text[range.clone()].to_string();
+                let is_complete = self.is_statement_complete(&statement_text);
+                // Extract parameters and adjust their offsets to be relative to the statement text
+                let mut parameters = self.extract_parameters_from_node(statement, text);
+                // Adjust byte offsets to be relative to the statement text (not the full text)
+                for param in &mut parameters {
+                    param.byte_offset = param.byte_offset.saturating_sub(range.start);
+                }
                 return Some(StatementInfo {
-                    text,
+                    text: statement_text,
                     byte_range: range,
                     utf16_range,
                     is_complete,
+                    parameters,
                 });
             }
 
@@ -104,13 +127,20 @@ impl SqlStatementParser {
             let rope = Rope::from_str(text);
             let utf16_range =
                 rope.byte_to_utf16_idx(range.start)..rope.byte_to_utf16_idx(range.end);
-            let text = text[range.clone()].to_string();
-            let is_complete = self.is_statement_complete(&text);
+            let statement_text = text[range.clone()].to_string();
+            let is_complete = self.is_statement_complete(&statement_text);
+            // Extract parameters and adjust their offsets to be relative to the statement text
+            let mut parameters = self.extract_parameters_from_node(statement, text);
+            // Adjust byte offsets to be relative to the statement text (not the full text)
+            for param in &mut parameters {
+                param.byte_offset = param.byte_offset.saturating_sub(range.start);
+            }
             Some(StatementInfo {
-                text,
+                text: statement_text,
                 byte_range: range,
                 utf16_range,
                 is_complete,
+                parameters,
             })
         } else {
             None
@@ -165,6 +195,108 @@ impl SqlStatementParser {
         // Since we're extracting statement nodes from tree-sitter,
         // they represent complete statements regardless of semicolon presence
         true
+    }
+
+    /// Extract parameters from a statement node
+    fn extract_parameters_from_node(&self, node: tree_sitter::Node, text: &str) -> Vec<QueryParameter> {
+        let mut parameters = Vec::new();
+        self.collect_parameters(node, text, &mut parameters);
+
+        // Sort by byte offset ascending for user display (in order of appearance)
+        parameters.sort_by_key(|p| p.byte_offset);
+        parameters
+    }
+
+    /// Recursively collect parameters from the AST
+    fn collect_parameters<'a>(
+        &self,
+        node: tree_sitter::Node<'a>,
+        text: &str,
+        parameters: &mut Vec<QueryParameter>,
+    ) {
+        // Check if this node represents a parameter
+        if let Some(param) = self.try_parse_parameter(node, text) {
+            // Deduplicate by byte offset - each position can only have one parameter
+            let already_seen = parameters.iter().any(|p| p.byte_offset == param.byte_offset);
+
+            if !already_seen {
+                parameters.push(param);
+            }
+        }
+
+        // Recursively check children
+        for i in 0.. {
+            if let Some(child) = node.child(i) {
+                self.collect_parameters(child, text, parameters);
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Try to parse a node as a parameter
+    fn try_parse_parameter(&self, node: tree_sitter::Node, text: &str) -> Option<QueryParameter> {
+        let kind = node.kind();
+        let byte_range = node.byte_range();
+
+        // Clamp the byte range to the text length to avoid panic
+        // This handles edge cases where tree-sitter returns ranges extending beyond text
+        let end = byte_range.end.min(text.len());
+        let start = byte_range.start.min(end);
+        let node_text = &text[start..end];
+
+        // Check for tree-sitter parameter node types
+        if kind == "positional_parameter" || kind == "bind_parameter" {
+            return self.parse_parameter_text(node_text, start);
+        }
+
+        // Fallback: check for dollar-number pattern or named parameter patterns in text
+        if let Some(param) = self.parse_parameter_text(node_text, start) {
+            return Some(param);
+        }
+
+        None
+    }
+
+    /// Parse parameter text into a QueryParameter
+    fn parse_parameter_text(&self, text: &str, byte_offset: usize) -> Option<QueryParameter> {
+        let trimmed = text.trim();
+
+        // Standalone ? parameter (JDBC style)
+        if trimmed == "?" {
+            return Some(QueryParameter {
+                style: ParameterStyle::Positional(0),
+                raw_text: trimmed.to_string(),
+                byte_offset,
+            });
+        }
+
+        // Positional parameter: $1, $2, etc.
+        if let Some(rest) = trimmed.strip_prefix('$') {
+            if rest.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+                if let Ok(index) = rest.parse::<usize>() {
+                    return Some(QueryParameter {
+                        style: ParameterStyle::Positional(index),
+                        raw_text: trimmed.to_string(),
+                        byte_offset,
+                    });
+                }
+            }
+        }
+
+        // Named parameter: :name, @name, etc. (?name is also supported as named)
+        if trimmed.starts_with(':') || trimmed.starts_with('@') || trimmed.starts_with('?') {
+            let name = trimmed[1..].to_string();
+            if !name.is_empty() && name.chars().next().map_or(false, |c| c.is_alphabetic() || c == '_') {
+                return Some(QueryParameter {
+                    style: ParameterStyle::Named(name),
+                    raw_text: trimmed.to_string(),
+                    byte_offset,
+                });
+            }
+        }
+
+        None
     }
 }
 
@@ -544,5 +676,94 @@ DELETE FROM users WHERE id = 1;";
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "DELETE FROM d WHERE e = 2");
         assert!(info.is_complete);
+    }
+
+    #[test]
+    fn test_update_with_uuid_string() {
+        let mut parser = create_test_parser();
+        // This query caused a panic: byte index 177 is out of bounds
+        // The issue was that tree-sitter returned a node with byte range extending beyond text length
+        let text = "UPDATE alternative_images ai SET updated_at = NOW() WHERE id = 'f893fd7a-45a2-4747-a726-5561bb4735ec'";
+
+        // Test cursor at various positions in the statement
+        for cursor_pos in [0, 10, 30, 50, 70, 90, text.len().saturating_sub(1)] {
+            let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, cursor_pos));
+            assert!(
+                result.is_some(),
+                "Should extract statement at cursor position {}",
+                cursor_pos
+            );
+            let info = result.unwrap();
+            assert_eq!(
+                info.text.trim(),
+                "UPDATE alternative_images ai SET updated_at = NOW() WHERE id = 'f893fd7a-45a2-4747-a726-5561bb4735ec'"
+            );
+            assert!(info.is_complete);
+            // Should have no parameters
+            assert!(info.parameters.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_parameter_extraction_with_special_characters() {
+        let mut parser = create_test_parser();
+        // Test that single character named params don't panic
+        // Note: :a is NOT recognized as a parameter by tree-sitter SQL grammar
+        let text = "SELECT * FROM users WHERE name = :a";
+
+        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 20));
+        assert!(result.is_some());
+        let info = result.unwrap();
+        assert_eq!(info.text.trim(), "SELECT * FROM users WHERE name = :a");
+        // tree-sitter doesn't classify :a as a parameter node
+        assert_eq!(info.parameters.len(), 0);
+
+        // Test with positional parameter (PostgreSQL style)
+        // Note: $1 IS recognized as a positional_parameter by tree-sitter
+        let text = "SELECT * FROM users WHERE id = $1";
+        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 20));
+        assert!(result.is_some());
+        let info = result.unwrap();
+        // PostgreSQL $1 IS recognized
+        assert_eq!(info.parameters.len(), 1);
+        assert_eq!(info.parameters[0].raw_text, "$1");
+        matches!(info.parameters[0].style, ParameterStyle::Positional(1));
+
+        // Test with multiple parameters
+        let text = "SELECT * FROM users WHERE id = $1 AND name = $2";
+        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 20));
+        assert!(result.is_some());
+        let info = result.unwrap();
+        assert_eq!(info.parameters.len(), 2);
+        // Parameters are sorted in ascending byte offset order (for user display)
+        assert_eq!(info.parameters[0].raw_text, "$1");
+        assert_eq!(info.parameters[1].raw_text, "$2");
+        // Verify byte offsets are in ascending order
+        assert!(info.parameters[0].byte_offset < info.parameters[1].byte_offset);
+    }
+
+    #[test]
+    fn test_parameter_extraction_bound_parameter() {
+        let mut parser = create_test_parser();
+        // Test with ? style parameter
+        // Note: ? IS recognized as a bind_parameter by tree-sitter SQL grammar
+        let text = "SELECT * FROM users WHERE id = ?";
+
+        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 20));
+        assert!(result.is_some());
+        let info = result.unwrap();
+        // ? IS recognized as a bind_parameter
+        assert_eq!(info.parameters.len(), 1);
+        assert_eq!(info.parameters[0].raw_text, "?");
+        // Note: ? is parsed as a positional parameter with index 0 (no number in it)
+        matches!(info.parameters[0].style, ParameterStyle::Positional(0));
+
+        // Test with multiple ? parameters
+        let text = "SELECT * FROM users WHERE id = ? AND name = ?";
+        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 20));
+        assert!(result.is_some());
+        let info = result.unwrap();
+        // Multiple ? are recognized as separate bind_parameter nodes
+        assert_eq!(info.parameters.len(), 2);
     }
 }

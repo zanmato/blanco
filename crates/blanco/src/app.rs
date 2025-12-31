@@ -102,6 +102,14 @@ pub struct RenameTab {
     pub new_name: String,
 }
 
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct ExecuteSubstitutedQuery {
+    pub query: String,
+    pub connection_id: i64,
+    pub database_name: String,
+}
+
 // Action for database connection state
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]

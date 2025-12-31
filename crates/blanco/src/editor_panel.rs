@@ -1,7 +1,7 @@
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
     IntoElement, KeybindingKeystroke, Keystroke, MouseButton, ParentElement, Render, SharedString,
-    Styled, Task, Window, div, prelude::FluentBuilder, px, rems,
+    Styled, Task, Window, actions, div, prelude::FluentBuilder, px, rems,
 };
 use gpui_component::{
     ActiveTheme, Sizable, StyledExt, WindowExt as _,
@@ -21,14 +21,16 @@ use tracing::{debug, error, info};
 // Use reqwest
 use reqwest;
 
+use crate::app::ExecuteSubstitutedQuery;
 use crate::app_database::{EnvironmentType, QueryTabData};
 use crate::app_events::AppEvent;
 use crate::chat_provider_resolver::ChatProviderResolver;
+use crate::parameter_form::ParameterForm;
 use crate::rename_form::RenameTabForm;
 use crate::results_panel::ResultsPanel;
 use crate::sql_completion_provider::SqlCompletionProvider;
 use crate::sql_selection_range_provider::SqlSelectionRangeProvider;
-use crate::sql_statement_parser::extract_current_query;
+use crate::sql_statement_parser::extract_statement_info;
 use crate::{
     agent::{ChatPanel, SqlContext},
     app_database::AppDatabase,
@@ -253,315 +255,371 @@ impl EditorPanel {
         }
     }
 
-    /// Run query through the async pipeline
-    pub fn run_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(tab) = self.tabs.get(self.active_tab_ix) {
-            match tab {
-                TabType::Query(query_tab) => {
-                    // Save the current tab before executing the query
-                    // Extract the tab data we need before starting async operations
-                    let tab_index = self.active_tab_ix;
-                    let content = query_tab.editor.read(cx).text().to_string();
+    /// Handler for Run Query button/keyboard
+    /// Checks for parameters and shows modal if needed, otherwise executes directly
+    pub fn on_run_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Extract the values we need before any mutable borrows
+        let tab_index = self.active_tab_ix;
 
-                    let connection_type = None;
-                    let tab_data = QueryTabData {
-                        id: query_tab.db_id,
-                        title: query_tab.title.clone(),
-                        content: content.clone(),
-                        position: tab_index as i32,
-                        connection_id: Some(query_tab.connection_id),
-                        connection_type,
-                        connection_name: query_tab.connection_name.clone(),
-                        database_name: Some(query_tab.database_name.clone()),
-                        schema_name: query_tab.schema_name.clone(),
-                        environment_type: query_tab.environment_type,
-                    };
+        if let Some(tab) = self.tabs.get(tab_index) {
+            if let TabType::Query(query_tab) = tab {
+                // Get text, cursor position, and selection from editor
+                let editor = query_tab.editor.read(cx);
+                let full_text = editor.text().to_string();
+                let cursor_pos = editor.cursor();
+                let selected_text = editor.selected_text().to_string();
 
-                    // Trigger the save operation in background
-                    let app_database = AppDatabase::global(cx).clone();
-                    let _title = query_tab.title.clone();
-                    let connection_id = query_tab.connection_id;
+                // Clone the values we need
+                let connection_id = query_tab.connection_id;
+                let database_name = query_tab.database_name.clone();
 
-                    cx.spawn(async move |entity_handle, cx| {
-                        // Create the final tab data with connection_id
-                        let mut final_tab_data = tab_data;
-                        final_tab_data.connection_id = Some(connection_id);
+                // Use extract_statement_info to get parameters
+                // For selected text, parse from the selection; otherwise use cursor position
+                let statement_info = if !selected_text.trim().is_empty() {
+                    extract_statement_info(&selected_text, 0)
+                } else {
+                    extract_statement_info(&full_text, cursor_pos)
+                };
 
-                        // First save to get or create the database ID
-                        let tab_db_id = match app_database.save_query_tab(&final_tab_data).await {
-                            Ok(db_id) => {
-                                debug!("Tab saved successfully with db_id: {}", db_id);
-                                db_id
-                            }
-                            Err(e) => {
-                                error!("Failed to save tab: {}", e);
-                                return;
-                            }
-                        };
+                // Determine the query to execute: use selected text if available, otherwise extract from statement_info
+                let query = if !selected_text.trim().is_empty() {
+                    selected_text
+                } else {
+                    statement_info
+                        .as_ref()
+                        .map(|info| info.text.clone())
+                        .unwrap_or_default()
+                };
 
-                        let _ = entity_handle.update(cx, |editor_panel: &mut EditorPanel, _| {
-                            if let Some(tab) = editor_panel.tabs.get_mut(editor_panel.active_tab_ix)
-                            {
-                                match tab {
-                                    TabType::Query(query_tab) => {
-                                        query_tab.db_id = Some(tab_db_id);
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        });
-                    })
-                    .detach();
-
-                    // Use the connection_id to get the connection from db_service
-                    let connection_id = query_tab.connection_id;
-
-                    // Get text, cursor position, and selection from editor
-                    let editor = query_tab.editor.read(cx);
-                    let full_text = editor.text().to_string();
-                    let cursor_pos = editor.cursor();
-
-                    // Check if there's a selection
-                    let selected_text = editor.selected_text().to_string();
-                    let query = if !selected_text.trim().is_empty() {
-                        // Use the selected text
-                        selected_text
-                    } else {
-                        // Fall back to extracting query at cursor position
-                        extract_current_query(
-                            &full_text, cursor_pos, false, // Selection is handled above
-                        )
-                    };
-
-                    if query.is_empty() {
-                        window.push_notification(
-                            (NotificationType::Error, "No query to execute"),
-                            cx,
-                        );
-                        return;
-                    }
-
-                    tracing::info!("Executing query via async pipeline: {}", query);
-
-                    // Set loading state to true
-                    self.loading = true;
-                    cx.notify();
-
-                    // Log the query to the SQL log
-                    query_tab.sql_log.update(cx, |sql_log, cx| {
-                        sql_log.append_text(
-                            &blanco_ui::SqlLogMessage::SqlStatement(query.clone()),
-                            cx,
-                        );
-                    });
-
-                    // Execute query directly using cx.spawn instead of async pipeline
-                    let query_clone = query.clone();
-                    let results_panel_clone = query_tab.results_panel.clone();
-                    let sql_log_clone = query_tab.sql_log.clone();
-                    let db_service = DatabaseService::global(cx).clone();
-                    let database_name = query_tab.database_name.clone();
-
-                    // Emit query execution started event
-                    cx.emit(AppEvent::QueryExecutionStarted {
-                        connection_id: Some(connection_id),
-                        query: query.clone(),
-                    });
-
-                    self._run_query_task =
-                        cx.spawn_in(window, async move |editor_panel_entity, window| {
-                            let start_time = std::time::Instant::now();
-
-                            // Execute query using db_service with connection_id
-                            tracing::debug!(
-                                "Query execution - using connection_id: '{}', database: '{}'",
-                                connection_id,
-                                database_name
-                            );
-                            match db_service
-                                .get_or_create_connection(connection_id, Some(&database_name))
-                                .await
-                            {
-                                Ok(connection) => {
-                                    tracing::debug!(
-                                        "Connection retrieved successfully, type: {}",
-                                        connection.get_connection_type()
-                                    );
-                                    match connection
-                                        .execute_query(&query_clone, Some(&database_name), None)
-                                        .await
-                                    {
-                                        Ok(mut result) => {
-                                            let duration_ms =
-                                                start_time.elapsed().as_millis() as i64;
-
-                                            tracing::info!(
-                                                "Query executed successfully: {} rows in {}ms",
-                                                result.row_count(),
-                                                duration_ms
-                                            );
-
-                                            // Add execution metadata
-                                            result.query_text = Some(query_clone.clone());
-                                            result.execution_time_ms = Some(duration_ms);
-                                            result.is_error = false;
-                                            result.connection_id = Some(connection_id);
-
-                                            // Extract table metadata from the query
-                                            let table_name = connection
-                                                .extract_table_name_from_query(&query_clone, false)
-                                                .ok()
-                                                .flatten();
-                                            result.table_name = table_name.clone();
-
-                                            // Extract primary key if we have a table name and results
-                                            if let (Some(table_name), false) =
-                                                (&table_name, result.rows.is_empty())
-                                            {
-                                                // Try to get primary key information for the table
-                                                if let Ok(Some(pk_column)) = connection
-                                                    .get_primary_key_for_table(table_name)
-                                                    .await
-                                                {
-                                                    result.primary_key_column = Some(pk_column);
-                                                    tracing::info!(
-                                                        "Detected primary key '{}' for table '{}'",
-                                                        result.primary_key_column.as_ref().unwrap(),
-                                                        table_name
-                                                    );
-                                                }
-                                            }
-
-                                            // Store rows_affected before moving result
-                                            let rows_affected = std::cmp::max(
-                                                result.rows_affected,
-                                                result.row_count() as u64,
-                                            );
-
-                                            let _ = window.update(move |_, cx| {
-                                                // Update results panel
-                                                let _ =
-                                                    results_panel_clone.update(cx, |panel, cx| {
-                                                        panel.set_query_result(
-                                                            result,
-                                                            Some(connection_id),
-                                                            cx,
-                                                        );
-                                                    });
-
-                                                // Log execution result to SQL log
-                                                let _ = sql_log_clone.update(cx, |sql_log, cx| {
-                                                    let log_message = format!(
-                                                        "{}, {} rows in {}",
-                                                        crate::time_format::format_current_timestamp(),
-                                                        rows_affected,
-                                                        crate::time_format::format_duration(duration_ms)
-                                                    );
-                                                    sql_log.append_text(
-                                                        &blanco_ui::SqlLogMessage::Comment(
-                                                            log_message,
-                                                        ),
-                                                        cx,
-                                                    );
-                                                });
-
-                                                // Set loading to false and emit success event
-                                                editor_panel_entity
-                                                    .update(cx, |editor_panel, cx| {
-                                                        editor_panel.loading = false;
-                                                        cx.emit(
-                                                            AppEvent::QueryExecutionCompleted {
-                                                                connection_id: Some(connection_id),
-                                                                database_name: Some(
-                                                                    database_name.clone(),
-                                                                ),
-                                                                success: true,
-                                                                execution_time: start_time
-                                                                    .elapsed(),
-                                                                rows_affected: Some(rows_affected),
-                                                                error_message: None,
-                                                            },
-                                                        );
-                                                        cx.notify();
-                                                    })
-                                                    .ok();
-                                            });
-                                        }
-                                        Err(e) => {
-                                            tracing::error!("Query execution failed: {}", e);
-
-                                            let _ = window.update(|window, cx| {
-                                                // Log execution error to SQL log
-                                                let _error_duration =
-                                                    start_time.elapsed().as_millis() as i64;
-                                                let _ = sql_log_clone.update(cx, |sql_log, cx| {
-                                                    let log_message =
-                                                        format!("query execution failed: {}", e);
-                                                    sql_log.append_text(
-                                                        &blanco_ui::SqlLogMessage::Comment(
-                                                            log_message,
-                                                        ),
-                                                        cx,
-                                                    );
-                                                });
-
-                                                // Set loading to false and emit error event
-                                                editor_panel_entity
-                                                    .update(cx, |editor_panel, cx| {
-                                                        editor_panel.loading = false;
-                                                        cx.notify();
-                                                        cx.emit(
-                                                            AppEvent::QueryExecutionCompleted {
-                                                                connection_id: Some(connection_id),
-                                                                database_name: Some(
-                                                                    database_name.clone(),
-                                                                ),
-                                                                success: false,
-                                                                execution_time: start_time
-                                                                    .elapsed(),
-                                                                rows_affected: None,
-                                                                error_message: Some(e.to_string()),
-                                                            },
-                                                        );
-                                                    })
-                                                    .ok();
-
-                                                editor_panel_entity
-                                                    .update(cx, |_, cx| {
-                                                        cx.emit(AppEvent::ErrorOccurred {
-                                                        context: format!(
-                                                            "Query execution on connection_id: {}",
-                                                            connection_id,
-                                                        ),
-                                                        error: e.to_string(),
-                                                        severity:
-                                                            crate::app_events::ErrorSeverity::Error,
-                                                    });
-                                                    })
-                                                    .ok();
-
-                                                window.push_notification(
-                                                    (
-                                                        NotificationType::Error,
-                                                        SharedString::from(e.to_string()),
-                                                    ),
-                                                    cx,
-                                                );
-                                            });
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::error!("Failed to get connection: {}", e);
-                                }
-                            }
-                        });
+                if query.is_empty() {
+                    window.push_notification((NotificationType::Error, "No query to execute"), cx);
+                    return;
                 }
-                TabType::Settings(_) => {
-                    // Not a query tab, do nothing
+
+                // Check if query has parameters
+                let has_params = statement_info
+                    .as_ref()
+                    .map(|info| !info.parameters.is_empty())
+                    .unwrap_or(false);
+
+                tracing::info!("statement_info {:?}", statement_info);
+
+                if has_params {
+                    // Show parameter modal instead of executing directly
+                    let params = statement_info.unwrap().parameters;
+                    self.show_parameter_modal(
+                        query,
+                        params,
+                        connection_id,
+                        database_name,
+                        window,
+                        cx,
+                    );
+                } else {
+                    // Execute directly
+                    self.execute_query(query, connection_id, &database_name, window, cx);
                 }
             }
         }
+    }
+
+    /// Execute a query with the given parameters
+    fn execute_query(
+        &mut self,
+        query: String,
+        connection_id: i64,
+        database_name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Save the current tab before executing the query
+        // Extract the tab data we need before starting async operations
+        let tab_index = self.active_tab_ix;
+        let tab = self.tabs.get(self.active_tab_ix);
+
+        if let Some(TabType::Query(query_tab)) = tab {
+            let content = query_tab.editor.read(cx).text().to_string();
+
+            let results_panel = query_tab.results_panel.clone();
+            let sql_log = query_tab.sql_log.clone();
+
+            let connection_type = None;
+            let tab_data = QueryTabData {
+                id: query_tab.db_id,
+                title: query_tab.title.clone(),
+                content: content.clone(),
+                position: tab_index as i32,
+                connection_id: Some(query_tab.connection_id),
+                connection_type,
+                connection_name: query_tab.connection_name.clone(),
+                database_name: Some(query_tab.database_name.clone()),
+                schema_name: query_tab.schema_name.clone(),
+                environment_type: query_tab.environment_type,
+            };
+
+            // Trigger the save operation in background
+            let app_database = AppDatabase::global(cx).clone();
+            let _title = query_tab.title.clone();
+            let connection_id = query_tab.connection_id;
+
+            cx.spawn(async move |entity_handle, cx| {
+                // Create the final tab data with connection_id
+                let mut final_tab_data = tab_data;
+                final_tab_data.connection_id = Some(connection_id);
+
+                // First save to get or create the database ID
+                let tab_db_id = match app_database.save_query_tab(&final_tab_data).await {
+                    Ok(db_id) => {
+                        debug!("Tab saved successfully with db_id: {}", db_id);
+                        db_id
+                    }
+                    Err(e) => {
+                        error!("Failed to save tab: {}", e);
+                        return;
+                    }
+                };
+
+                let _ = entity_handle.update(cx, |editor_panel: &mut EditorPanel, _| {
+                    if let Some(tab) = editor_panel.tabs.get_mut(editor_panel.active_tab_ix) {
+                        match tab {
+                            TabType::Query(query_tab) => {
+                                query_tab.db_id = Some(tab_db_id);
+                            }
+                            _ => {}
+                        }
+                    }
+                });
+            })
+            .detach();
+
+            tracing::info!("Executing query via async pipeline: {}", query);
+
+            // Set loading state to true
+            self.loading = true;
+            cx.notify();
+
+            // Log the query to the SQL log
+            query_tab.sql_log.update(cx, |sql_log, cx| {
+                sql_log.append_text(&blanco_ui::SqlLogMessage::SqlStatement(query.clone()), cx);
+            });
+
+            // Execute query directly using cx.spawn instead of async pipeline
+            let query_clone = query.clone();
+            let results_panel_clone = query_tab.results_panel.clone();
+            let sql_log_clone = query_tab.sql_log.clone();
+            let db_service = DatabaseService::global(cx).clone();
+            let database_name = database_name.to_string();
+
+            // Emit query execution started event
+            cx.emit(AppEvent::QueryExecutionStarted {
+                connection_id: Some(connection_id),
+                query: query.clone(),
+            });
+
+            self._run_query_task = cx.spawn_in(window, async move |editor_panel_entity, window| {
+                let start_time = std::time::Instant::now();
+
+                // Execute query using db_service with connection_id
+                tracing::debug!(
+                    "Query execution - using connection_id: '{}', database: '{}'",
+                    connection_id,
+                    database_name
+                );
+                match db_service
+                    .get_or_create_connection(connection_id, Some(&database_name))
+                    .await
+                {
+                    Ok(connection) => {
+                        tracing::debug!(
+                            "Connection retrieved successfully, type: {}",
+                            connection.get_connection_type()
+                        );
+                        match connection
+                            .execute_query(&query_clone, Some(&database_name), None)
+                            .await
+                        {
+                            Ok(mut result) => {
+                                let duration_ms = start_time.elapsed().as_millis() as i64;
+
+                                tracing::info!(
+                                    "Query executed successfully: {} rows in {}ms",
+                                    result.row_count(),
+                                    duration_ms
+                                );
+
+                                // Add execution metadata
+                                result.query_text = Some(query_clone.clone());
+                                result.execution_time_ms = Some(duration_ms);
+                                result.is_error = false;
+                                result.connection_id = Some(connection_id);
+
+                                // Extract table metadata from the query
+                                let table_name = connection
+                                    .extract_table_name_from_query(&query_clone, false)
+                                    .ok()
+                                    .flatten();
+                                result.table_name = table_name.clone();
+
+                                // Extract primary key if we have a table name and results
+                                if let (Some(table_name), false) =
+                                    (&table_name, result.rows.is_empty())
+                                {
+                                    // Try to get primary key information for the table
+                                    if let Ok(Some(pk_column)) =
+                                        connection.get_primary_key_for_table(table_name).await
+                                    {
+                                        result.primary_key_column = Some(pk_column);
+                                        tracing::info!(
+                                            "Detected primary key '{}' for table '{}'",
+                                            result.primary_key_column.as_ref().unwrap(),
+                                            table_name
+                                        );
+                                    }
+                                }
+
+                                // Store rows_affected before moving result
+                                let rows_affected =
+                                    std::cmp::max(result.rows_affected, result.row_count() as u64);
+
+                                let _ = window.update(move |_, cx| {
+                                    // Update results panel
+                                    let _ = results_panel_clone.update(cx, |panel, cx| {
+                                        panel.set_query_result(result, Some(connection_id), cx);
+                                    });
+
+                                    // Log execution result to SQL log
+                                    let _ = sql_log_clone.update(cx, |sql_log, cx| {
+                                        let log_message = format!(
+                                            "{}, {} rows in {}",
+                                            crate::time_format::format_current_timestamp(),
+                                            rows_affected,
+                                            crate::time_format::format_duration(duration_ms)
+                                        );
+                                        sql_log.append_text(
+                                            &blanco_ui::SqlLogMessage::Comment(log_message),
+                                            cx,
+                                        );
+                                    });
+
+                                    // Set loading to false and emit success event
+                                    editor_panel_entity
+                                        .update(cx, |editor_panel, cx| {
+                                            editor_panel.loading = false;
+                                            cx.emit(AppEvent::QueryExecutionCompleted {
+                                                connection_id: Some(connection_id),
+                                                database_name: Some(database_name.clone()),
+                                                success: true,
+                                                execution_time: start_time.elapsed(),
+                                                rows_affected: Some(rows_affected),
+                                                error_message: None,
+                                            });
+                                            cx.notify();
+                                        })
+                                        .ok();
+                                });
+                            }
+                            Err(e) => {
+                                tracing::error!("Query execution failed: {}", e);
+
+                                let _ = window.update(|window, cx| {
+                                    // Log execution error to SQL log
+                                    let _error_duration = start_time.elapsed().as_millis() as i64;
+                                    let _ = sql_log_clone.update(cx, |sql_log, cx| {
+                                        let log_message = format!("query execution failed: {}", e);
+                                        sql_log.append_text(
+                                            &blanco_ui::SqlLogMessage::Comment(log_message),
+                                            cx,
+                                        );
+                                    });
+
+                                    // Set loading to false and emit error event
+                                    editor_panel_entity
+                                        .update(cx, |editor_panel, cx| {
+                                            editor_panel.loading = false;
+                                            cx.notify();
+                                            cx.emit(AppEvent::QueryExecutionCompleted {
+                                                connection_id: Some(connection_id),
+                                                database_name: Some(database_name.clone()),
+                                                success: false,
+                                                execution_time: start_time.elapsed(),
+                                                rows_affected: None,
+                                                error_message: Some(e.to_string()),
+                                            });
+                                        })
+                                        .ok();
+
+                                    editor_panel_entity
+                                        .update(cx, |_, cx| {
+                                            cx.emit(AppEvent::ErrorOccurred {
+                                                context: format!(
+                                                    "Query execution on connection_id: {}",
+                                                    connection_id,
+                                                ),
+                                                error: e.to_string(),
+                                                severity: crate::app_events::ErrorSeverity::Error,
+                                            });
+                                        })
+                                        .ok();
+
+                                    window.push_notification(
+                                        (
+                                            NotificationType::Error,
+                                            SharedString::from(e.to_string()),
+                                        ),
+                                        cx,
+                                    );
+                                });
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to get connection: {}", e);
+                    }
+                }
+            });
+        }
+    }
+
+    /// Show parameter input modal and execute query with substituted values
+    fn show_parameter_modal(
+        &mut self,
+        query: String,
+        params: Vec<crate::sql_statement_parser::QueryParameter>,
+        connection_id: i64,
+        database_name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let param_form = cx.new(|cx| ParameterForm::new(query.clone(), params, window, cx));
+
+        let weak_editor_panel = cx.entity().downgrade();
+        window.open_dialog(cx, move |modal, _, _| {
+            modal
+                .title("Query Parameters")
+                .w(px(500.))
+                .child(param_form.clone())
+                .confirm()
+                .on_ok({
+                    let param_form = param_form.clone();
+                    let database_name = database_name.clone();
+                    let weak_editor_panel = weak_editor_panel.clone();
+                    move |_event, window, cx| {
+                        let substituted_query = param_form.read(cx).get_substituted_query(cx);
+                        weak_editor_panel
+                            .update(cx, |editor_panel, cx| {
+                                editor_panel.execute_query(
+                                    substituted_query,
+                                    connection_id,
+                                    &database_name,
+                                    window,
+                                    cx,
+                                );
+                            })
+                            .ok();
+                        true // Close dialog
+                    }
+                })
+        });
     }
 
     /// Load saved query tabs from the app database
@@ -891,6 +949,16 @@ impl Render for EditorPanel {
             .flex_1()
             .h_full()
             .overflow_hidden()
+            .on_action(cx.listener(|this, action: &ExecuteSubstitutedQuery, window, cx| {
+                tracing::info!("GOT ACTION YOLO");
+                this.execute_query(
+                    action.query.clone(),
+                    action.connection_id,
+                    &action.database_name,
+                    window,
+                    cx,
+                );
+            }))
             .child(
                 // Tab bar
                 TabBar::new("editor-tabs")
@@ -1082,8 +1150,7 @@ impl Render for EditorPanel {
                                                                 .min_h_0()
                                                                 .on_key_down(cx.listener(|this, evt: &gpui::KeyDownEvent, window, cx| {
                                                                     if evt.keystroke.should_match(&this.run_query_keystroke) {
-                                                                        tracing::debug!("Matches keystroke {:?}", evt.keystroke);
-                                                                        this.run_query(window, cx);
+                                                                        this.on_run_query(window, cx);
                                                                     }
                                                                 }))
                                                                 .relative() // Make container relative for absolute popup positioning
@@ -1124,7 +1191,7 @@ impl Render for EditorPanel {
                                                                             .loading(self.loading)
                                                                             .loading_icon(IconName::LoaderCircle)
                                                                             .children(vec![Kbd::new(self.run_query_keystroke.inner().clone()).into_any_element()])
-                                                                            .on_click(cx.listener(|panel, _, window, cx| panel.run_query(window, cx))),
+                                                                            .on_click(cx.listener(|panel, _, window, cx| panel.on_run_query(window, cx))),
                                                                     )
                                                         )
                                                         // Results section: Results on top, SQL Log on bottom

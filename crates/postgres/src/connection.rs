@@ -1339,16 +1339,16 @@ impl PostgresConnection {
             parameters.len()
         );
 
-        // Build the query with parameter placeholders
-        let mut query = sqlx::query(sql_template);
-
-        // Add parameters to the query
-        for param in parameters {
-            query = query.bind(param);
-        }
-
-        // Use fetch_many to handle both row-returning and row-affecting queries
-        let mut results = query.fetch_many(pool);
+        // Use raw_sql for queries without parameters, otherwise use query with bindings
+        let mut results = if parameters.is_empty() {
+            sqlx::raw_sql(sql_template).fetch_many(pool)
+        } else {
+            let mut query = sqlx::query(sql_template);
+            for param in parameters {
+                query = query.bind(param);
+            }
+            query.fetch_many(pool)
+        };
 
         let mut columns: Vec<String> = Vec::new();
         let mut column_types: Vec<String> = Vec::new();
