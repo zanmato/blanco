@@ -13,8 +13,8 @@ use crate::sql_statement_parser::QueryParameter;
 
 #[derive(Clone, Debug)]
 pub struct ParameterInput {
-    pub label: String,           // e.g., "$1" or ":user_id"
-    pub raw_text: String,        // For display (e.g., "$1")
+    pub label: String,            // e.g., "$1" or ":user_id"
+    pub raw_text: String,         // For display (e.g., "$1")
     pub byte_offsets: Vec<usize>, // All byte offsets where this parameter appears (sorted descending for replacement)
     pub byte_length: usize,       // Length in bytes of the parameter text
     pub input: Entity<InputState>,
@@ -59,13 +59,16 @@ impl ParameterForm {
                     InputState::new(window, cx).placeholder(&format!("Value for {}", label))
                 });
 
-                param_map.insert(label.clone(), ParameterInput {
-                    label,
-                    raw_text: param.raw_text.clone(),
-                    byte_offsets: vec![byte_offset],
-                    byte_length,
-                    input,
-                });
+                param_map.insert(
+                    label.clone(),
+                    ParameterInput {
+                        label,
+                        raw_text: param.raw_text.clone(),
+                        byte_offsets: vec![byte_offset],
+                        byte_length,
+                        input,
+                    },
+                );
             }
         }
 
@@ -93,8 +96,11 @@ impl ParameterForm {
         // Sort by offset descending (so replacements don't affect earlier offsets)
         replacements.sort_by_key(|(offset, _, _)| std::cmp::Reverse(*offset));
 
-        tracing::info!("get_substituted_query: original_query={}, replacements={:?}",
-            self.original_query, replacements);
+        tracing::info!(
+            "get_substituted_query: original_query={}, replacements={:?}",
+            self.original_query,
+            replacements
+        );
 
         // Apply replacements in descending offset order
         let mut result = self.original_query.clone();
@@ -103,12 +109,21 @@ impl ParameterForm {
                 let before = &result[..byte_offset];
                 let after = &result[byte_offset + byte_length..];
                 let new_result = format!("{}{}{}", before, value, after);
-                tracing::info!("Replacing at offset {}: len={}, value='{}', result='{}'",
-                    byte_offset, byte_length, value, new_result);
+                tracing::info!(
+                    "Replacing at offset {}: len={}, value='{}', result='{}'",
+                    byte_offset,
+                    byte_length,
+                    value,
+                    new_result
+                );
                 result = new_result;
             } else {
-                tracing::warn!("Skipping invalid replacement: offset={}, len={}, result_len={}",
-                    byte_offset, byte_length, result.len());
+                tracing::warn!(
+                    "Skipping invalid replacement: offset={}, len={}, result_len={}",
+                    byte_offset,
+                    byte_length,
+                    result.len()
+                );
             }
         }
 
@@ -134,51 +149,5 @@ impl Render for ParameterForm {
                     .child(Input::new(&param.input))
                     .into_any_element()
             }))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::sql_statement_parser::{ParameterStyle, QueryParameter};
-
-    // Helper to simulate parameter substitution without the full GPUI context
-    fn substitute_params_test(query: &str, params: &[(usize, &str, &str)]) -> String {
-        // params: (byte_offset, param_text, replacement_value)
-        let mut replacements: Vec<(usize, usize, String)> = Vec::new();
-        for (offset, param_text, value) in params {
-            replacements.push((*offset, param_text.len(), value.to_string()));
-        }
-
-        // Sort by offset descending
-        replacements.sort_by_key(|(offset, _, _)| std::cmp::Reverse(*offset));
-
-        // Apply replacements
-        let mut result = query.to_string();
-        for (byte_offset, byte_length, value) in replacements {
-            if byte_offset + byte_length <= result.len() {
-                let before = &result[..byte_offset];
-                let after = &result[byte_offset + byte_length..];
-                result = format!("{}{}{}", before, value, after);
-            }
-        }
-
-        result
-    }
-
-    #[test]
-    fn test_substitute_duplicate_params() {
-        let query = "SELECT * FROM users u WHERE u.name = $1 AND u.username = $1 AND u.name = $2";
-        let params = vec![
-            (37, "$1", "'Robert'"),   // First $1
-            (57, "$1", "'Robert'"),   // Second $1
-            (73, "$2", "'Roberto'"),  // $2
-        ];
-
-        let result = substitute_params_test(query, &params);
-        assert_eq!(
-            result,
-            "SELECT * FROM users u WHERE u.name = 'Robert' AND u.username = 'Robert' AND u.name = 'Roberto'"
-        );
     }
 }

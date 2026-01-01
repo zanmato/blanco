@@ -280,27 +280,6 @@ impl BlancoApp {
                         });
                         cx.notify();
                     }
-                    AppEvent::ConnectionEstablished { .. } => {
-                        // Refresh sidebar connections when a new connection is established
-                        sidebar.update(cx, |_sidebar, _cx| {
-                            // TOOD: refresh connections panel
-                            // sidebar.load_database_connections(cx);
-                        });
-
-                        // Optionally refresh editor panel connection options
-                        editor_panel_clone.update(cx, |_editor_panel, _cx| {
-                            // TODO: Refresh connection options in editor if needed
-                            tracing::info!("Connection established, refreshing components");
-                        });
-                    }
-                    AppEvent::ConnectionLost { .. } => {
-                        // Handle connection loss
-                        tracing::info!("Connection lost, updating UI components");
-                    }
-                    AppEvent::ConnectionsLoaded { .. } => {
-                        // This is the key event for tab restoration with window access!
-                        tracing::info!("Connections loaded");
-                    }
                     _ => {}
                 }
             });
@@ -315,20 +294,6 @@ impl BlancoApp {
                 AppEvent::QueryExecutionStarted { .. } => {
                     // Could show loading indicator or update status
                     tracing::info!("Query execution started");
-                }
-                AppEvent::QueryExecutionCompleted { connection_id, database_name, success, .. } => {
-                    // Refresh connections panel to mark connection as connected if query was successful
-                    if *success {
-                        if let Some(conn_id) = connection_id {
-                            tracing::info!("Query execution completed successfully for connection {} ({:?}), refreshing connections panel", conn_id, database_name);
-                            sidebar_clone.update(cx, |sidebar, cx| {
-                                // Mark the connection as connected and refresh the sidebar view
-                                sidebar.validate_connection_as_connected(*conn_id, cx);
-                            });
-                        }
-                    } else {
-                        tracing::info!("Query execution completed with errors");
-                    }
                 }
                 AppEvent::TableOperationCompleted { table_name, success, rows_affected, operations_executed, .. } => {
                     if *success {
@@ -395,15 +360,8 @@ impl BlancoApp {
         println!("Blanco SQL Editor v0.1.0");
     }
 
-    fn on_open_connection(&mut self, _: &OpenConnection, _: &mut Window, cx: &mut Context<Self>) {
-        // TODO: Open connection dialog
-        cx.notify();
-    }
-
     fn toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
-        tracing::info!("🔄 ToggleSidebar action triggered!");
         self.sidebar_collapsed = !self.sidebar_collapsed;
-        tracing::info!("🔄 New sidebar_collapsed state: {}", self.sidebar_collapsed);
 
         // Update editor panel's sidebar state
         self.editor_panel.update(cx, |panel, cx| {
@@ -591,7 +549,6 @@ impl Render for BlancoApp {
             .flex_col()
             .on_action(cx.listener(Self::on_quit))
             .on_action(cx.listener(Self::on_about))
-            .on_action(cx.listener(Self::on_open_connection))
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::on_settings))
             .on_action(cx.listener(Self::on_new_connection_modal))
