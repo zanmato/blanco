@@ -28,6 +28,9 @@ use crate::chat_provider_resolver::ChatProviderResolver;
 use crate::parameter_form::ParameterForm;
 use crate::rename_form::RenameTabForm;
 use crate::results_panel::ResultsPanel;
+use crate::snippet_editor::SnippetEditor;
+use crate::snippets_panel::SnippetsPanel;
+use crate::snippets_panel_delegate::SnippetItemMetadata;
 use crate::sql_completion_provider::SqlCompletionProvider;
 use crate::sql_selection_range_provider::SqlSelectionRangeProvider;
 use crate::sql_statement_parser::extract_statement_info;
@@ -49,6 +52,7 @@ pub enum EditorPanelEvent {
 pub enum TabType {
     Query(QueryTab),
     Settings(SettingsTab),
+    Snippet(Entity<SnippetEditor>),
 }
 
 pub struct QueryTab {
@@ -241,6 +245,47 @@ impl EditorPanel {
         };
 
         self.tabs.push(TabType::Settings(settings_tab));
+        self.active_tab_ix = self.tabs.len() - 1;
+        self.scroll_tabbar_to_the_end(window, cx);
+
+        cx.notify();
+    }
+
+    pub fn create_snippet_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tab_id = self.next_tab_id;
+        self.next_tab_id += 1;
+
+        let snippet_editor = cx.new(|cx| SnippetEditor::new(tab_id, window, cx));
+
+        self.tabs.push(TabType::Snippet(snippet_editor));
+        self.active_tab_ix = self.tabs.len() - 1;
+        self.scroll_tabbar_to_the_end(window, cx);
+
+        cx.notify();
+    }
+
+    pub fn open_snippet_tab(
+        &mut self,
+        snippet_id: i64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let tab_id = self.next_tab_id;
+        self.next_tab_id += 1;
+
+        let snippet_editor = cx.new(|cx| SnippetEditor::new(tab_id, window, cx));
+
+        // Load snippet data
+        let app_database = AppDatabase::global(cx);
+        if let Ok(Some(snippet_data)) =
+            async_std::task::block_on(async { app_database.get_snippet_by_id(snippet_id).await })
+        {
+            snippet_editor.update(cx, |editor, cx| {
+                editor.load_snippet(snippet_data, window, cx);
+            });
+        }
+
+        self.tabs.push(TabType::Snippet(snippet_editor));
         self.active_tab_ix = self.tabs.len() - 1;
         self.scroll_tabbar_to_the_end(window, cx);
 
@@ -950,7 +995,6 @@ impl Render for EditorPanel {
             .h_full()
             .overflow_hidden()
             .on_action(cx.listener(|this, action: &ExecuteSubstitutedQuery, window, cx| {
-                tracing::info!("GOT ACTION YOLO");
                 this.execute_query(
                     action.query.clone(),
                     action.connection_id,
@@ -1072,6 +1116,38 @@ impl Render for EditorPanel {
                                             .when(show_close_button, |this| {
                                                 this.child(
                                                     Button::new(("close-tab", ix))
+                                                        .ghost()
+                                                        .xsmall()
+                                                        .icon(IconName::Close)
+                                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                                            this.close_tab(tab_index, cx);
+                                                        }))
+                                                )
+                                            })
+                                            .into_any_element()
+                                    )
+                            }
+                            TabType::Snippet(snippet_editor) => {
+                                let label = snippet_editor.read(cx).get_title();
+                                let show_close_button = self.tabs.len() > 1;
+                                let tab_index = ix;
+
+                                Tab::new()
+                                    .label(label)
+                                    .suffix(
+                                        h_flex()
+                                            .gap_2()
+                                            .items_center()
+                                            .pr_1()
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child(snippet_editor.read(cx).get_title())
+                                            )
+                                            .when(show_close_button, |this| {
+                                                this.child(
+                                                    Button::new(("close-snippet-tab", ix))
                                                         .ghost()
                                                         .xsmall()
                                                         .icon(IconName::Close)
@@ -1332,6 +1408,16 @@ impl Render for EditorPanel {
                                 .h_full()
                                 .overflow_hidden()
                                 .child(settings_tab.settings_view.clone())
+                        )
+                    }
+                    TabType::Snippet(snippet_editor) => {
+                        // Snippet tab: Show the snippet editor
+                        this.child(
+                            div()
+                                .flex_1()
+                                .h_full()
+                                .overflow_hidden()
+                                .child(snippet_editor.clone())
                         )
                     }
                 }

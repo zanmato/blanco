@@ -17,6 +17,7 @@ use crate::{
     connection_modal::NewConnectionModal,
     connections_panel::ConnectionsPanel,
     editor_panel::{EditorPanel, TabCreationParams},
+    snippets_panel::{RefreshSnippets, SnippetsPanel},
 };
 
 actions!(
@@ -27,6 +28,7 @@ actions!(
         OpenConnection,
         OpenSettings,
         OpenNewConnectionModal,
+        NewSnippet,
         CommitChanges,
         RollbackChanges,
         CopyAsCSV,
@@ -97,6 +99,19 @@ pub struct EditCellInPopover {
 
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
+pub struct SnippetSaved {
+    pub id: i64,
+    pub name: String,
+}
+
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct OpenSnippetEditor {
+    pub snippet_id: Option<i64>,
+}
+
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
 pub struct RenameTab {
     pub tab_index: usize,
     pub new_name: String,
@@ -137,6 +152,7 @@ pub enum ConnectionType {
 pub struct BlancoApp {
     focus_handle: FocusHandle,
     sidebar: Entity<ConnectionsPanel>,
+    snippets_panel: Entity<SnippetsPanel>,
     editor_panel: Entity<EditorPanel>,
     sidebar_collapsed: bool,
     app_menu_bar: Entity<AppMenuBar>,
@@ -187,6 +203,7 @@ impl BlancoApp {
         });
 
         let sidebar = cx.new(|cx| ConnectionsPanel::new(window, cx));
+        let snippets_panel = cx.new(|cx| SnippetsPanel::new(window, cx));
 
         // Load saved tabs from database
         info!("Loading saved tabs from database");
@@ -288,6 +305,8 @@ impl BlancoApp {
         // Subscribe to editor panel events to update other components
         let sidebar_clone = sidebar.clone();
         let editor_panel_for_subscription = editor_panel.clone();
+
+        let snippets_panel_for_refresh = snippets_panel.downgrade();
         let subscription = cx.subscribe(&editor_panel, move |app, _editor_panel, event, cx| {
             let editor_panel_for_events = editor_panel_for_subscription.clone();
             match event {
@@ -336,14 +355,53 @@ impl BlancoApp {
                             new_name: new_name.clone(),
                         });
                 }
+                AppEvent::SnippetSaved { .. } => {
+                    tracing::info!("Snippet saved in app.rs");
+                    // Refresh snippets panel after save
+                    let _= snippets_panel_for_refresh.update(cx, |panel, cx| {
+                        panel.refresh_snippets(cx);
+                    });
+                }
                 _ => {}
             }
         });
         subscriptions.push(subscription);
 
+        // Subscribe to snippets panel events
+        let editor_panel_for_snippets = editor_panel.clone();
+
+        let snippets_panel_for_refresh = snippets_panel.clone();
+        let subscription = cx.subscribe_in(
+            &snippets_panel,
+            window,
+            move |app, _snippets_panel, event, window, cx| {
+                let editor_panel = editor_panel_for_snippets.clone();
+                let snippets_panel = snippets_panel_for_refresh.clone();
+                match event {
+                    AppEvent::OpenSnippetEditor { snippet_id } => {
+                        if let Some(id) = snippet_id {
+                            app.editor_panel.update(cx, |panel, cx| {
+                                panel.open_snippet_tab(*id, window, cx);
+                            });
+                        } else {
+                            app.editor_panel.update(cx, |panel, cx| {
+                                panel.create_snippet_tab(window, cx);
+                            });
+                        }
+                    }
+                    AppEvent::SnippetDeleted { .. } => {
+                        // Snippets panel already refreshed itself
+                    }
+                    _ => {}
+                }
+            },
+        );
+        subscriptions.push(subscription);
+
         Self {
             focus_handle: cx.focus_handle(),
             sidebar,
+            snippets_panel,
             editor_panel,
             sidebar_collapsed: false,
             app_menu_bar,
@@ -374,6 +432,23 @@ impl BlancoApp {
     fn on_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
         self.editor_panel.update(cx, |panel, cx| {
             panel.add_settings_tab(window, cx);
+        });
+    }
+
+    fn on_new_snippet(&mut self, _: &NewSnippet, window: &mut Window, cx: &mut Context<Self>) {
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.create_snippet_tab(window, cx);
+        });
+    }
+
+    fn on_refresh_snippets(
+        &mut self,
+        _: &RefreshSnippets,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.snippets_panel.update(cx, |panel, cx| {
+            panel.refresh_snippets(cx);
         });
     }
 
@@ -487,7 +562,10 @@ impl BlancoApp {
         });
 
         // Focus the first input field after the modal opens
-        content_for_focus.read(cx).focus_handle(cx).focus(window);
+        content_for_focus
+            .read(cx)
+            .focus_handle(cx)
+            .focus(window, cx);
     }
 
     fn on_commit_changes(
@@ -552,10 +630,12 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::on_settings))
             .on_action(cx.listener(Self::on_new_connection_modal))
+            .on_action(cx.listener(Self::on_new_snippet))
             .on_action(cx.listener(Self::on_commit_changes))
             .on_action(cx.listener(Self::on_rollback_changes))
             .on_action(cx.listener(Self::on_rename_tab))
             .on_action(cx.listener(Self::on_database_connected))
+            .on_action(cx.listener(Self::on_refresh_snippets))
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
@@ -590,10 +670,18 @@ impl Render for BlancoApp {
                             div()
                                 .h(window_height - TITLE_BAR_HEIGHT - px(25.))
                                 .w(px(256.))
+                                .pb_6()
                                 .overflow_hidden()
                                 .border_r_1()
                                 .border_color(cx.theme().border)
-                                .child(self.sidebar.clone()),
+                                .child(
+                                    div()
+                                        .size_full()
+                                        .flex()
+                                        .flex_col()
+                                        .child(self.sidebar.clone())
+                                        .child(self.snippets_panel.clone()),
+                                ),
                         )
                     })
                     // Main panel
@@ -629,6 +717,7 @@ fn init_menus(cx: &mut App) {
             name: "File".into(),
             items: vec![
                 MenuItem::action("New Connection", OpenNewConnectionModal),
+                MenuItem::action("New Snippet", NewSnippet),
                 MenuItem::action("Settings", OpenSettings),
                 MenuItem::Separator,
                 MenuItem::action("Quit", Quit),

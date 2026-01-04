@@ -1094,7 +1094,7 @@ impl TableDelegate for ResultsTableDelegate {
                                                             // Re-focus the input after recreation
                                                             new_input
                                                                 .focus_handle(cx)
-                                                                .focus(window);
+                                                                .focus(window, cx);
 
                                                             // Toggle expanded state
                                                             table
@@ -1198,7 +1198,7 @@ impl TableDelegate for ResultsTableDelegate {
                                                 );
 
                                                 // Re-focus the input after recreation
-                                                new_input.focus_handle(cx).focus(window);
+                                                new_input.focus_handle(cx).focus(window, cx);
 
                                                 table.refresh(cx);
                                                 cx.notify();
@@ -1516,7 +1516,7 @@ impl ResultsPanel {
         });
 
         // Focus the input automatically when editing starts
-        input.focus_handle(cx).focus(window);
+        input.focus_handle(cx).focus(window, cx);
 
         // Store the editing state in the panel for commit/cancel operations
         self.editing_input = Some(input.clone());
@@ -2628,11 +2628,8 @@ mod tests {
         let operations = delegate.create_change_operations();
         assert_eq!(operations.len(), 1);
 
-        if let OperationType::Update = &operations[0].operation_type
-        {
-            if let RowIdentifier::PrimaryKey { value, .. } =
-                &operations[0].row_identifier
-            {
+        if let OperationType::Update = &operations[0].operation_type {
+            if let RowIdentifier::PrimaryKey { value, .. } = &operations[0].row_identifier {
                 assert_eq!(value, "2"); // Should use original ID in WHERE clause
             } else {
                 panic!("Expected PrimaryKey row identifier");

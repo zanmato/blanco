@@ -218,10 +218,12 @@ impl DatabaseService {
                 config_id
             );
             sender
-                .send(DatabaseServiceMessage::Connected(DatabaseConnectedMessage {
-                    connection_id: config_id,
-                    database_name: database.unwrap_or("default").to_string(),
-                }))
+                .send(DatabaseServiceMessage::Connected(
+                    DatabaseConnectedMessage {
+                        connection_id: config_id,
+                        database_name: database.unwrap_or("default").to_string(),
+                    },
+                ))
                 .await?;
         } else {
             tracing::warn!("action_sender is None, cannot dispatch DatabaseServiceMessage");

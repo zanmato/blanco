@@ -207,6 +207,18 @@ pub enum AppEvent {
         tab_id: usize,
         error_message: String,
     },
+
+    /// Snippet events
+    SnippetSaved {
+        id: i64,
+        name: String,
+    },
+    SnippetDeleted {
+        id: i64,
+    },
+    OpenSnippetEditor {
+        snippet_id: Option<i64>,
+    },
 }
 
 /// Error severity levels
