@@ -632,7 +632,7 @@ impl ResultsTableDelegate {
         operations
     }
 
-    pub fn set_query_result(&mut self, result: QueryResult, window: &Window) {
+    pub fn set_query_result(&mut self, result: QueryResult, window: &Window, cx: &App) {
         // Clear previous edit state
         self.edit_state.clear_all();
         self.pending_edit_cell = None;
@@ -641,7 +641,8 @@ impl ResultsTableDelegate {
         self.column_types = result.column_types.clone();
 
         // Use the theme's font family for measurement (typically the mono font for tables)
-        let text_size = gpui::rems(0.875).to_pixels(window.rem_size());
+        let text_size = px(12.);
+        let font = gpui::font(cx.theme().mono_font_family.clone());
 
         // Calculate column widths based on actual text measurement
         let mut column_widths: Vec<f64> = result
@@ -655,7 +656,7 @@ impl ResultsTableDelegate {
                     text_size,
                     &[TextRun {
                         len: col_name.len(),
-                        font: Default::default(),
+                        font: font.clone(),
                         color: gpui::black(),
                         background_color: None,
                         underline: None,
@@ -673,7 +674,7 @@ impl ResultsTableDelegate {
                             text_size,
                             &[TextRun {
                                 len: cell_value.len(),
-                                font: Default::default(),
+                                font: font.clone(),
                                 color: gpui::black(),
                                 background_color: None,
                                 underline: None,
@@ -687,6 +688,9 @@ impl ResultsTableDelegate {
 
                 // Add padding for cell content (px_2 on each side = 8px * 2 = 16px)
                 max_width += 16.0;
+
+                // Add padding for sorting icon
+                max_width += 24.0;
 
                 // Account for cell borders and extra spacing
                 max_width += 2.0;
@@ -1005,7 +1009,7 @@ impl TableDelegate for ResultsTableDelegate {
         let col = &self.columns[col_ix];
         div()
             .font_family(cx.theme().mono_font_family.clone())
-            .text_sm()
+            .text_size(px(12.))
             .pt(px(1.))
             .child(col.name.to_string())
             .when(is_row_number_col, |this| {
@@ -1469,7 +1473,7 @@ impl ResultsPanel {
             }
             state
                 .delegate_mut()
-                .set_query_result(result.clone(), window);
+                .set_query_result(result.clone(), window, cx);
             state.refresh(cx);
         });
         self.current_result = Some(result.clone());
