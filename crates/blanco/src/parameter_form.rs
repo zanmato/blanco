@@ -1,9 +1,9 @@
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
-    Styled, Window, div, px,
+    Styled, Window, div,
 };
 use gpui_component::{
-    ActiveTheme, StyledExt, h_flex,
+    ActiveTheme, h_flex,
     input::{Input, InputState},
     v_flex,
 };
@@ -14,7 +14,6 @@ use crate::sql_statement_parser::QueryParameter;
 #[derive(Clone, Debug)]
 pub struct ParameterInput {
     pub label: String,            // e.g., "$1" or ":user_id"
-    pub raw_text: String,         // For display (e.g., "$1")
     pub byte_offsets: Vec<usize>, // All byte offsets where this parameter appears (sorted descending for replacement)
     pub byte_length: usize,       // Length in bytes of the parameter text
     pub input: Entity<InputState>,
@@ -56,14 +55,13 @@ impl ParameterForm {
             } else {
                 // Create new parameter input
                 let input = cx.new(|cx| {
-                    InputState::new(window, cx).placeholder(&format!("Value for {}", label))
+                    InputState::new(window, cx).placeholder(format!("Value for {}", label))
                 });
 
                 param_map.insert(
                     label.clone(),
                     ParameterInput {
                         label,
-                        raw_text: param.raw_text.clone(),
                         byte_offsets: vec![byte_offset],
                         byte_length,
                         input,

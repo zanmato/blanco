@@ -684,11 +684,6 @@ impl AppDatabase {
 
         Ok(connections)
     }
-
-    /// Get access to the database pool
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -720,6 +715,7 @@ pub struct QueryHistoryData {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct SnippetData {
     pub id: Option<i64>,
     pub name: String,

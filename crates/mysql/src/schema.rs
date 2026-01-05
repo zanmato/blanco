@@ -2,7 +2,7 @@
 
 use crate::connection::MysqlConnection;
 use anyhow::Result;
-use blanco_core::connection_trait::{TableSchemaInfo, ColumnInfo};
+use blanco_core::connection_trait::{ColumnInfo, TableSchemaInfo};
 use blanco_core::Connection;
 
 impl MysqlConnection {
@@ -61,8 +61,7 @@ impl MysqlConnection {
             let table_name = table_row[0].clone();
 
             // Get column information for this table
-            let column_query = format!(
-                "SELECT
+            let column_query = "SELECT
                     column_name,
                     data_type,
                     is_nullable,
@@ -71,11 +70,10 @@ impl MysqlConnection {
                     column_key
                 FROM information_schema.columns
                 WHERE table_schema = DATABASE() AND table_name = ?
-                ORDER BY ordinal_position"
-            );
+                ORDER BY ordinal_position";
 
             let column_result = self
-                .execute_query(&column_query, None, Some(&[table_name.clone()]))
+                .execute_query(column_query, None, Some(std::slice::from_ref(&table_name)))
                 .await
                 .map_err(|e| {
                     anyhow::anyhow!("Failed to get columns for table {}: {}", table_name, e)
@@ -83,7 +81,7 @@ impl MysqlConnection {
 
             let mut columns_array = Vec::new();
 
-            for (_col_index, col_row) in column_result.rows.iter().enumerate() {
+            for col_row in column_result.rows.iter() {
                 if col_row.len() < 6 {
                     continue;
                 }

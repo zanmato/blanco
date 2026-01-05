@@ -114,7 +114,6 @@ impl SettingsView {
                                 min: 5.0,
                                 max: 300.0,
                                 step: 5.0,
-                                ..Default::default()
                             },
                             move |cx: &App| {
                                 AppSettings::global(cx)
@@ -157,7 +156,6 @@ impl SettingsView {
                                 min: 10.0,
                                 max: 600.0,
                                 step: 10.0,
-                                ..Default::default()
                             },
                             move |cx: &App| {
                                 AppSettings::global(cx)

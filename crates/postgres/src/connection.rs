@@ -6,7 +6,7 @@ use blanco_core::{ColumnInfo, Connection, ConnectionUIMetadata, QueryResult, Tab
 use futures::{Stream, StreamExt};
 use sqlx::postgres::types::PgMoney;
 use sqlx::postgres::PgPoolOptions;
-use sqlx::{Column, Execute, Row, TypeInfo, ValueRef};
+use sqlx::{Column, Row, TypeInfo, ValueRef};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -403,123 +403,6 @@ impl PostgresConnection {
         )
     }
 
-    /// Find an available database to connect to when no specific database is specified
-    async fn get_available_database(&self) -> Result<String> {
-        // Try the initial database from the connection string first
-        if let Some(ref initial_db) = self.initial_database {
-            tracing::debug!(
-                "Trying initial database '{}' from connection string",
-                initial_db
-            );
-            if self.try_connect_to_database(initial_db).await {
-                tracing::info!(
-                    "Using initial database '{}' for metadata queries",
-                    initial_db
-                );
-                return Ok(initial_db.clone());
-            } else {
-                tracing::warn!(
-                    "Initial database '{}' is not accessible, trying alternatives",
-                    initial_db
-                );
-            }
-        }
-
-        // Common PostgreSQL databases that are likely to exist and be accessible
-        let common_databases = ["postgres", "template1", "template0"];
-        tracing::debug!("Trying common databases: {}", common_databases.join(", "));
-
-        for &db_name in &common_databases {
-            if self.try_connect_to_database(db_name).await {
-                tracing::info!(
-                    "Successfully connected to common database '{}' for metadata queries",
-                    db_name
-                );
-                return Ok(db_name.to_string());
-            }
-        }
-
-        let mut tried_databases = Vec::new();
-        if let Some(ref initial_db) = self.initial_database {
-            tried_databases.push(initial_db.clone());
-        }
-        tried_databases.extend(common_databases.iter().map(|s| s.to_string()));
-
-        Err(anyhow::anyhow!(
-            "Could not connect to any database (tried: {})",
-            tried_databases.join(", ")
-        ))
-    }
-
-    /// Try to connect to a specific database and return true if successful
-    async fn try_connect_to_database(&self, database: &str) -> bool {
-        let database_connection_string = if let Some(local_port) = self.local_tunnel_port {
-            self.server_key
-                .to_database_connection_string_with_tunnel(database, local_port)
-        } else {
-            self.server_key.to_database_connection_string(database)
-        };
-        tracing::debug!(
-            "Trying to connect to database '{}' for metadata queries",
-            database
-        );
-        tracing::debug!("Connection string: {}", database_connection_string);
-
-        tracing::debug!("Attempting connection with 5-second timeout...");
-        match PgPoolOptions::new()
-            .max_connections(1) // Just for testing connectivity
-            .connect(&database_connection_string)
-            .await
-        {
-            Ok(pool) => {
-                tracing::debug!(
-                    "Connected to database '{}', testing query execution",
-                    database
-                );
-                // Test if we can actually execute queries
-                match sqlx::query("SELECT 1").fetch_one(&pool).await {
-                    Ok(_) => {
-                        tracing::info!(
-                            "✅ Successfully connected to database '{}' for metadata queries",
-                            database
-                        );
-                        // Pre-cache this pool for future use
-                        let mut pools = self.pools.write().await;
-                        if !pools.contains_key(database) {
-                            pools.insert(database.to_string(), pool);
-                        }
-                        true
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "⚠️ Connected to database '{}' but query test failed: {}",
-                            database,
-                            e
-                        );
-                        false
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::warn!("❌ Failed to connect to database '{}': {}", database, e);
-                // Provide additional diagnostic info for common connection issues
-                let error_str = e.to_string().to_lowercase();
-                if error_str.contains("timeout") {
-                    tracing::warn!(
-                        "   → Connection timeout - check network connectivity and firewall"
-                    );
-                } else if error_str.contains("authentication") || error_str.contains("password") {
-                    tracing::warn!("   → Authentication failed - check username/password");
-                } else if error_str.contains("database") && error_str.contains("not exist") {
-                    tracing::warn!("   → Database does not exist");
-                } else if error_str.contains("connection") && error_str.contains("refused") {
-                    tracing::warn!("   → Connection refused - check if PostgreSQL is running and accepting connections");
-                }
-                false
-            }
-        }
-    }
-
     /// Get or create a connection pool for a specific database
     async fn get_or_create_pool(&self, database: &str) -> Result<sqlx::PgPool> {
         let mut pools = self.pools.write().await;
@@ -565,25 +448,6 @@ impl PostgresConnection {
         &self.server_key
     }
 
-    /// Check if the database connection is healthy with a ping query
-    async fn is_connection_healthy(&self) -> bool {
-        let pools = self.pools.read().await;
-
-        // Check if we have any active pools
-        if pools.is_empty() {
-            return false;
-        }
-
-        // Check health of all pools - if any are healthy, connection is considered healthy
-        for (_, pool) in pools.iter() {
-            if (sqlx::query("SELECT 1").fetch_one(pool).await).is_ok() {
-                return true;
-            }
-        }
-
-        false
-    }
-
     /// Check if a column type is an array type
     fn is_array_type(column_type: &str) -> bool {
         column_type == "ARRAY" || column_type.ends_with("[]")
@@ -591,11 +455,7 @@ impl PostgresConnection {
 
     /// Extract the base type from an array type (e.g., "TEXT[]" -> Some("TEXT"))
     fn extract_base_array_type(array_type: &str) -> Option<&str> {
-        if array_type.ends_with("[]") {
-            Some(&array_type[..array_type.len() - 2])
-        } else {
-            None
-        }
+        array_type.strip_suffix("[]")
     }
 
     /// Extract precision information from numeric types (e.g., "numeric(10,2)" -> Some("numeric"))
@@ -1347,6 +1207,7 @@ impl PostgresConnection {
             for param in parameters {
                 query = query.bind(param);
             }
+            #[allow(deprecated)]
             query.fetch_many(pool)
         };
 
@@ -1555,7 +1416,7 @@ impl Connection for PostgresConnection {
         let database_name = database_name.ok_or(anyhow::anyhow!("missing database"))?;
 
         // Get or create connection pool for the specific database
-        let pool = self.get_or_create_pool(&database_name).await.map_err(|e| {
+        let pool = self.get_or_create_pool(database_name).await.map_err(|e| {
             anyhow::anyhow!(
                 "Failed to get connection pool for database '{}': {}",
                 database_name,
@@ -1796,7 +1657,7 @@ impl Connection for PostgresConnection {
         );
 
         // Get connection pool
-        let pool = self.get_or_create_pool(&database_name).await.map_err(|e| {
+        let pool = self.get_or_create_pool(database_name).await.map_err(|e| {
             anyhow::anyhow!(
                 "Failed to get connection pool for database '{}': {}",
                 database_name,

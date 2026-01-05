@@ -964,7 +964,7 @@ impl CompletionProvider for SqlCompletionProvider {
         rope: &Rope,
         offset: usize,
         _trigger: CompletionContext,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<InputState>,
     ) -> Task<Result<CompletionResponse>> {
         // Get the full text and extract current query context
@@ -1003,7 +1003,7 @@ impl CompletionProvider for SqlCompletionProvider {
             let start_pos_clone = start_pos;
             let end_pos_clone = end_pos;
             let text_before_cursor_clone = text_before_cursor.clone();
-            let current_query_context_clone = current_query_context.clone();
+            let _current_query_context_clone = current_query_context.clone();
             let full_text_clone = full_text.clone();
 
             // Spawn background task to extract table name and fetch columns
@@ -1037,7 +1037,7 @@ impl CompletionProvider for SqlCompletionProvider {
 
                             // Sort by shortest first to prioritize shorter names
                             let mut filtered_columns = filtered_columns;
-                            filtered_columns.sort_by(|a, b| a.len().cmp(&b.len()));
+                            filtered_columns.sort_by_key(|a| a.len());
 
                             // Convert to LSP completion items
                             let completion_items = filtered_columns
@@ -1095,7 +1095,7 @@ impl CompletionProvider for SqlCompletionProvider {
                         };
 
                         // Sort by shortest first to prioritize shorter names
-                        filtered_tables.sort_by(|a, b| a.len().cmp(&b.len()));
+                        filtered_tables.sort_by_key(|a| a.len());
 
                         tracing::debug!("SQL Completion: Filter logic - current_word_is_empty: {}, filtered_tables: {:?}", current_word_clone.is_empty(), filtered_tables);
 

@@ -11,6 +11,7 @@ impl AppSettings {
     pub fn new(cx: &mut App, settings: Settings) -> Self {
         // List of secret settings that should be loaded from credentials
         let secret_keys = vec!["chat.api_key"];
+        #[allow(clippy::type_complexity)]
         let mut tasks: Vec<Task<Result<Option<(String, Vec<u8>)>, anyhow::Error>>> = Vec::new();
 
         // Create a task for each secret setting

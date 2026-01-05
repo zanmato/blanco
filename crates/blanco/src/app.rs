@@ -99,13 +99,6 @@ pub struct EditCellInPopover {
 
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
-pub struct SnippetSaved {
-    pub id: i64,
-    pub name: String,
-}
-
-#[derive(Action, Clone, PartialEq, Eq)]
-#[action(namespace = blanco_app, no_json)]
 pub struct OpenSnippetEditor {
     pub snippet_id: Option<i64>,
 }
@@ -241,63 +234,61 @@ impl BlancoApp {
         let mut subscriptions = Vec::new();
 
         // Subscribe to sidebar events with window access for tab restoration
-        let editor_panel_clone = editor_panel.clone();
+        let _editor_panel_clone = editor_panel.clone();
         let subscription =
-            cx.subscribe_in(&sidebar, window, move |app, sidebar, event, window, cx| {
-                match event {
-                    AppEvent::CreateNewQueryTab {
+            cx.subscribe_in(&sidebar, window, move |app, _sidebar, event, window, cx| {
+                if let AppEvent::CreateNewQueryTab {
+                    connection_id,
+                    connection_name,
+                    database_name,
+                    schema_name,
+                    table_name,
+                    environment_type,
+                } = event
+                {
+                    tracing::info!(
+                        "CreateNewQueryTab called: {} (database: {:?}, schema: {:?}, table: {:?})",
                         connection_id,
-                        connection_name,
                         database_name,
                         schema_name,
                         table_name,
-                        environment_type,
-                    } => {
-                        tracing::info!(
-                            "CreateNewQueryTab called: {} (database: {:?}, schema: {:?}, table: {:?})",
-                            connection_id,
-                            database_name,
-                            schema_name,
-                            table_name,
+                    );
+
+                    // Generate appropriate title based on provided parameters
+                    let title = match (&schema_name, &table_name) {
+                        (None, None) => database_name.clone(),
+                        (Some(schema), None) => format!("{}.{}", database_name, schema),
+                        (Some(schema), Some(table)) => {
+                            format!("{}.{}.{}", database_name, schema, table)
+                        }
+                        (None, Some(table)) => table.to_string(),
+                    };
+
+                    // Generate content for table queries if not provided
+                    let content = table_name.as_ref().map(|table| match &schema_name {
+                        Some(schema) => format!("SELECT * FROM {}.{} LIMIT 100;", schema, table),
+                        None => format!("SELECT * FROM {} LIMIT 100;", table),
+                    });
+
+                    // Create a new query tab with the specified parameters
+                    app.editor_panel.update(cx, |panel, cx| {
+                        panel.create_and_add_tab_with_connection(
+                            window,
+                            TabCreationParams {
+                                title,
+                                content,
+                                db_id: None,
+                                connection_id: *connection_id,
+                                connection_type: "".to_owned(),
+                                connection_name: Some(connection_name.clone()),
+                                database_name: database_name.clone(),
+                                schema_name: schema_name.clone(),
+                                environment_type: *environment_type,
+                            },
+                            cx,
                         );
-
-                        // Generate appropriate title based on provided parameters
-                        let title = match (&schema_name, &table_name) {
-                            (None, None) => database_name.clone(),
-                            (Some(schema), None) => format!("{}.{}", database_name, schema),
-                            (Some(schema), Some(table)) => format!("{}.{}.{}", database_name, schema, table),
-                            (None, Some(table)) => format!("{}", table),
-                        };
-
-                        // Generate content for table queries if not provided
-                        let content = table_name
-                                .as_ref()
-                                .map(|table| match &schema_name {
-                                    Some(schema) => format!("SELECT * FROM {}.{} LIMIT 100;", schema, table),
-                                    None => format!("SELECT * FROM {} LIMIT 100;", table),
-                                });
-
-                        // Create a new query tab with the specified parameters
-                        app.editor_panel.update(cx, |panel, cx| {
-                            panel.create_and_add_tab_with_connection(
-                                window,
-                                TabCreationParams {
-                                    title,
-                                    content,
-                                    db_id: None,
-                                    connection_id: *connection_id,
-                                    connection_type: "".to_owned(),
-                                    connection_name: Some(connection_name.clone()),
-                                    database_name: database_name.clone(),
-                                    schema_name: schema_name.clone(),
-                                    environment_type: *environment_type,
-                                },
-                                cx,
-                            );
-                        });
-                        cx.notify();
-                    }
-                    _ => {}
+                    });
+                    cx.notify();
                 }
             });
         subscriptions.push(subscription);
@@ -355,13 +346,6 @@ impl BlancoApp {
                             new_name: new_name.clone(),
                         });
                 }
-                AppEvent::SnippetSaved { .. } => {
-                    tracing::info!("Snippet saved in app.rs");
-                    // Refresh snippets panel after save
-                    let _= snippets_panel_for_refresh.update(cx, |panel, cx| {
-                        panel.refresh_snippets(cx);
-                    });
-                }
                 _ => {}
             }
         });
@@ -375,8 +359,8 @@ impl BlancoApp {
             &snippets_panel,
             window,
             move |app, _snippets_panel, event, window, cx| {
-                let editor_panel = editor_panel_for_snippets.clone();
-                let snippets_panel = snippets_panel_for_refresh.clone();
+                let _editor_panel = editor_panel_for_snippets.clone();
+                let _snippets_panel = snippets_panel_for_refresh.clone();
                 match event {
                     AppEvent::OpenSnippetEditor { snippet_id } => {
                         if let Some(id) = snippet_id {
@@ -455,7 +439,7 @@ impl BlancoApp {
     fn on_database_connected(
         &mut self,
         action: &DatabaseConnected,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.sidebar.update(cx, |sidebar, cx| {

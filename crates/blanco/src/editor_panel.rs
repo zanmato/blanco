@@ -1,10 +1,10 @@
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
     IntoElement, KeybindingKeystroke, Keystroke, MouseButton, ParentElement, Render, SharedString,
-    Styled, Task, Window, actions, div, prelude::FluentBuilder, px, rems,
+    Styled, Task, Window, div, prelude::FluentBuilder, px, rems,
 };
 use gpui_component::{
-    ActiveTheme, Sizable, StyledExt, WindowExt as _,
+    ActiveTheme, Sizable, WindowExt as _,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputState, TabSize},
@@ -15,11 +15,10 @@ use gpui_component::{
     v_flex,
 };
 use gpui_tokio::Tokio;
-use std::{rc::Rc, sync::Arc, time::Duration};
+use std::{rc::Rc, sync::Arc};
 use tracing::{debug, error, info};
 
 // Use reqwest
-use reqwest;
 
 use crate::app::ExecuteSubstitutedQuery;
 use crate::app_database::{EnvironmentType, QueryTabData};
@@ -29,8 +28,6 @@ use crate::parameter_form::ParameterForm;
 use crate::rename_form::RenameTabForm;
 use crate::results_panel::ResultsPanel;
 use crate::snippet_editor::SnippetEditor;
-use crate::snippets_panel::SnippetsPanel;
-use crate::snippets_panel_delegate::SnippetItemMetadata;
 use crate::sql_completion_provider::SqlCompletionProvider;
 use crate::sql_selection_range_provider::SqlSelectionRangeProvider;
 use crate::sql_statement_parser::extract_statement_info;
@@ -236,7 +233,7 @@ impl EditorPanel {
         self.next_tab_id += 1;
 
         // Settings are now stored in the global AppDatabase
-        let settings_view = cx.new(|cx| crate::settings_view::SettingsView::new(cx));
+        let settings_view = cx.new(crate::settings_view::SettingsView::new);
 
         let settings_tab = SettingsTab {
             id: tab_id,
@@ -252,10 +249,9 @@ impl EditorPanel {
     }
 
     pub fn create_snippet_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let tab_id = self.next_tab_id;
         self.next_tab_id += 1;
 
-        let snippet_editor = cx.new(|cx| SnippetEditor::new(tab_id, window, cx));
+        let snippet_editor = cx.new(|cx| SnippetEditor::new(window, cx));
 
         self.tabs.push(TabType::Snippet(snippet_editor));
         self.active_tab_ix = self.tabs.len() - 1;
@@ -270,10 +266,9 @@ impl EditorPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let tab_id = self.next_tab_id;
         self.next_tab_id += 1;
 
-        let snippet_editor = cx.new(|cx| SnippetEditor::new(tab_id, window, cx));
+        let snippet_editor = cx.new(|cx| SnippetEditor::new(window, cx));
 
         // Load snippet data
         let app_database = AppDatabase::global(cx);
@@ -306,64 +301,57 @@ impl EditorPanel {
         // Extract the values we need before any mutable borrows
         let tab_index = self.active_tab_ix;
 
-        if let Some(tab) = self.tabs.get(tab_index) {
-            if let TabType::Query(query_tab) = tab {
-                // Get text, cursor position, and selection from editor
-                let editor = query_tab.editor.read(cx);
-                let full_text = editor.text().to_string();
-                let cursor_pos = editor.cursor();
-                let selected_text = editor.selected_text().to_string();
+        if let Some(tab) = self.tabs.get(tab_index)
+            && let TabType::Query(query_tab) = tab
+        {
+            // Get text, cursor position, and selection from editor
+            let editor = query_tab.editor.read(cx);
+            let full_text = editor.text().to_string();
+            let cursor_pos = editor.cursor();
+            let selected_text = editor.selected_text().to_string();
 
-                // Clone the values we need
-                let connection_id = query_tab.connection_id;
-                let database_name = query_tab.database_name.clone();
+            // Clone the values we need
+            let connection_id = query_tab.connection_id;
+            let database_name = query_tab.database_name.clone();
 
-                // Use extract_statement_info to get parameters
-                // For selected text, parse from the selection; otherwise use cursor position
-                let statement_info = if !selected_text.trim().is_empty() {
-                    extract_statement_info(&selected_text, 0)
-                } else {
-                    extract_statement_info(&full_text, cursor_pos)
-                };
+            // Use extract_statement_info to get parameters
+            // For selected text, parse from the selection; otherwise use cursor position
+            let statement_info = if !selected_text.trim().is_empty() {
+                extract_statement_info(&selected_text, 0)
+            } else {
+                extract_statement_info(&full_text, cursor_pos)
+            };
 
-                // Determine the query to execute: use selected text if available, otherwise extract from statement_info
-                let query = if !selected_text.trim().is_empty() {
-                    selected_text
-                } else {
-                    statement_info
-                        .as_ref()
-                        .map(|info| info.text.clone())
-                        .unwrap_or_default()
-                };
-
-                if query.is_empty() {
-                    window.push_notification((NotificationType::Error, "No query to execute"), cx);
-                    return;
-                }
-
-                // Check if query has parameters
-                let has_params = statement_info
+            // Determine the query to execute: use selected text if available, otherwise extract from statement_info
+            let query = if !selected_text.trim().is_empty() {
+                selected_text
+            } else {
+                statement_info
                     .as_ref()
-                    .map(|info| !info.parameters.is_empty())
-                    .unwrap_or(false);
+                    .map(|info| info.text.clone())
+                    .unwrap_or_default()
+            };
 
-                tracing::info!("statement_info {:?}", statement_info);
+            if query.is_empty() {
+                window.push_notification((NotificationType::Error, "No query to execute"), cx);
+                return;
+            }
 
-                if has_params {
-                    // Show parameter modal instead of executing directly
-                    let params = statement_info.unwrap().parameters;
-                    self.show_parameter_modal(
-                        query,
-                        params,
-                        connection_id,
-                        database_name,
-                        window,
-                        cx,
-                    );
-                } else {
-                    // Execute directly
-                    self.execute_query(query, connection_id, &database_name, window, cx);
-                }
+            // Check if query has parameters
+            let has_params = statement_info
+                .as_ref()
+                .map(|info| !info.parameters.is_empty())
+                .unwrap_or(false);
+
+            tracing::info!("statement_info {:?}", statement_info);
+
+            if has_params {
+                // Show parameter modal instead of executing directly
+                let params = statement_info.unwrap().parameters;
+                self.show_parameter_modal(query, params, connection_id, database_name, window, cx);
+            } else {
+                // Execute directly
+                self.execute_query(query, connection_id, &database_name, window, cx);
             }
         }
     }
@@ -372,7 +360,7 @@ impl EditorPanel {
     fn execute_query(
         &mut self,
         query: String,
-        connection_id: i64,
+        _connection_id: i64,
         database_name: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -385,8 +373,8 @@ impl EditorPanel {
         if let Some(TabType::Query(query_tab)) = tab {
             let content = query_tab.editor.read(cx).text().to_string();
 
-            let results_panel = query_tab.results_panel.clone();
-            let sql_log = query_tab.sql_log.clone();
+            let _results_panel = query_tab.results_panel.clone();
+            let _sql_log = query_tab.sql_log.clone();
 
             let connection_type = None;
             let tab_data = QueryTabData {
@@ -425,13 +413,10 @@ impl EditorPanel {
                 };
 
                 let _ = entity_handle.update(cx, |editor_panel: &mut EditorPanel, _| {
-                    if let Some(tab) = editor_panel.tabs.get_mut(editor_panel.active_tab_ix) {
-                        match tab {
-                            TabType::Query(query_tab) => {
-                                query_tab.db_id = Some(tab_db_id);
-                            }
-                            _ => {}
-                        }
+                    if let Some(tab) = editor_panel.tabs.get_mut(editor_panel.active_tab_ix)
+                        && let TabType::Query(query_tab) = tab
+                    {
+                        query_tab.db_id = Some(tab_db_id);
                     }
                 });
             })
@@ -528,12 +513,12 @@ impl EditorPanel {
 
                                 let _ = window.update(move |_, cx| {
                                     // Update results panel
-                                    let _ = results_panel_clone.update(cx, |panel, cx| {
+                                    results_panel_clone.update(cx, |panel, cx| {
                                         panel.set_query_result(result, Some(connection_id), cx);
                                     });
 
                                     // Log execution result to SQL log
-                                    let _ = sql_log_clone.update(cx, |sql_log, cx| {
+                                    sql_log_clone.update(cx, |sql_log, cx| {
                                         let log_message = format!(
                                             "{}, {} rows in {}",
                                             crate::time_format::format_current_timestamp(),
@@ -569,7 +554,7 @@ impl EditorPanel {
                                 let _ = window.update(|window, cx| {
                                     // Log execution error to SQL log
                                     let _error_duration = start_time.elapsed().as_millis() as i64;
-                                    let _ = sql_log_clone.update(cx, |sql_log, cx| {
+                                    sql_log_clone.update(cx, |sql_log, cx| {
                                         let log_message = format!("query execution failed: {}", e);
                                         sql_log.append_text(
                                             &blanco_ui::SqlLogMessage::Comment(log_message),

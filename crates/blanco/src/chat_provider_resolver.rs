@@ -8,7 +8,6 @@ use anyhow::Result;
 use std::sync::Arc;
 
 // Use reqwest
-use reqwest;
 
 use crate::settings::{ChatSettings, Settings};
 use database::{DatabaseService, DatabaseServiceTrait};

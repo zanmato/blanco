@@ -7,23 +7,23 @@ use tree_sitter::{Language, Node, Parser};
 /// Parameter style in SQL query
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ParameterStyle {
-    Positional(usize),  // $1, $2, etc.
-    Named(String),      // :name, @name, etc.
+    Positional(usize), // $1, $2, etc.
+    Named(String),     // :name, @name, etc.
 }
 
 /// A parameter found in a SQL query
 #[derive(Clone, Debug)]
 pub struct QueryParameter {
     pub style: ParameterStyle,
-    pub raw_text: String,     // Original text from query (e.g., "$1", ":user_id")
-    pub byte_offset: usize,   // Byte offset of the parameter in the original query
+    pub raw_text: String,   // Original text from query (e.g., "$1", ":user_id")
+    pub byte_offset: usize, // Byte offset of the parameter in the original query
 }
 
 /// Information about an extracted SQL statement
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct StatementInfo {
     pub text: String,
-    #[allow(dead_code)]
     pub byte_range: Range<usize>,
     pub utf16_range: Range<usize>,
     pub is_complete: bool,
@@ -58,7 +58,7 @@ impl SqlStatementParser {
     fn new() -> Result<Self, String> {
         let mut parser = Parser::new();
         parser
-            .set_language(&*SQL_LANGUAGE)
+            .set_language(&SQL_LANGUAGE)
             .map_err(|e| format!("Failed to set SQL language: {}", e))?;
 
         Ok(Self { parser })
@@ -198,7 +198,11 @@ impl SqlStatementParser {
     }
 
     /// Extract parameters from a statement node
-    fn extract_parameters_from_node(&self, node: tree_sitter::Node, text: &str) -> Vec<QueryParameter> {
+    fn extract_parameters_from_node(
+        &self,
+        node: tree_sitter::Node,
+        text: &str,
+    ) -> Vec<QueryParameter> {
         let mut parameters = Vec::new();
         self.collect_parameters(node, text, &mut parameters);
 
@@ -217,7 +221,9 @@ impl SqlStatementParser {
         // Check if this node represents a parameter
         if let Some(param) = self.try_parse_parameter(node, text) {
             // Deduplicate by byte offset - each position can only have one parameter
-            let already_seen = parameters.iter().any(|p| p.byte_offset == param.byte_offset);
+            let already_seen = parameters
+                .iter()
+                .any(|p| p.byte_offset == param.byte_offset);
 
             if !already_seen {
                 parameters.push(param);
@@ -272,22 +278,26 @@ impl SqlStatementParser {
         }
 
         // Positional parameter: $1, $2, etc.
-        if let Some(rest) = trimmed.strip_prefix('$') {
-            if rest.chars().next().map_or(false, |c| c.is_ascii_digit()) {
-                if let Ok(index) = rest.parse::<usize>() {
-                    return Some(QueryParameter {
-                        style: ParameterStyle::Positional(index),
-                        raw_text: trimmed.to_string(),
-                        byte_offset,
-                    });
-                }
-            }
+        if let Some(rest) = trimmed.strip_prefix('$')
+            && rest.chars().next().is_some_and(|c| c.is_ascii_digit())
+            && let Ok(index) = rest.parse::<usize>()
+        {
+            return Some(QueryParameter {
+                style: ParameterStyle::Positional(index),
+                raw_text: trimmed.to_string(),
+                byte_offset,
+            });
         }
 
         // Named parameter: :name, @name, etc. (?name is also supported as named)
         if trimmed.starts_with(':') || trimmed.starts_with('@') || trimmed.starts_with('?') {
             let name = trimmed[1..].to_string();
-            if !name.is_empty() && name.chars().next().map_or(false, |c| c.is_alphabetic() || c == '_') {
+            if !name.is_empty()
+                && name
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_alphabetic() || c == '_')
+            {
                 return Some(QueryParameter {
                     style: ParameterStyle::Named(name),
                     raw_text: trimmed.to_string(),
@@ -298,26 +308,6 @@ impl SqlStatementParser {
 
         None
     }
-}
-
-/// Extract the current SQL query at the cursor position
-///
-/// This is a convenience function that maintains compatibility with the existing
-/// extract_current_query function signature while using robust tree-sitter parsing.
-///
-/// Uses a thread-local parser instance to avoid creating a new parser on every call.
-///
-/// # Arguments
-/// * `text` - Full SQL text
-/// * `cursor_pos` - Cursor position in characters (not bytes)
-/// * `_has_selection` - Currently unused (selection detection not implemented)
-///
-/// # Returns
-/// The extracted SQL statement, or empty string if no statement found
-pub fn extract_current_query(text: &str, cursor_pos: usize, _has_selection: bool) -> String {
-    extract_statement_info(text, cursor_pos)
-        .map(|info| info.text.trim().to_string())
-        .unwrap_or_default()
 }
 
 /// Extract statement info at cursor position using thread-local parser.
@@ -687,7 +677,8 @@ DELETE FROM users WHERE id = 1;";
 
         // Test cursor at various positions in the statement
         for cursor_pos in [0, 10, 30, 50, 70, 90, text.len().saturating_sub(1)] {
-            let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, cursor_pos));
+            let result =
+                parser.extract_statement_at_cursor(text, char_to_byte_pos(text, cursor_pos));
             assert!(
                 result.is_some(),
                 "Should extract statement at cursor position {}",

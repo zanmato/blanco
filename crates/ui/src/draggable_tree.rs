@@ -566,8 +566,8 @@ impl<D: DraggableTreeDelegate> Render for DraggableTreeState<D> {
                 move |this, window: &mut Window, cx: &mut Context<PopupMenu>| {
                     let ix = view.read(cx).right_clicked_index;
                     view.update(cx, |state, cx| {
-                        let entry = if ix.is_some() {
-                            state.entries.get(ix.unwrap())
+                        let entry = if let Some(ix) = ix {
+                            state.entries.get(ix)
                         } else {
                             None
                         };

@@ -28,7 +28,7 @@ impl ChatMessageState {
 }
 
 impl Render for ChatMessageState {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex().w_full().child(match self.role {
             MessageRole::Assistant => {
                 // Assistant: No padding, no background, just markdown content

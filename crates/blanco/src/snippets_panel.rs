@@ -1,23 +1,17 @@
-use crate::app::{NewSnippet, OpenSnippetEditor, SnippetSaved};
+use crate::app::{NewSnippet, OpenSnippetEditor};
 use crate::app_database::{AppDatabase, SnippetData};
 use crate::app_events::AppEvent;
 use crate::snippets_panel_delegate::{SnippetItemMetadata, SnippetsTreeDelegate};
-use blanco_ui::draggable_tree::{DraggableTree, DraggableTreeState, TreeItem};
+use blanco_ui::draggable_tree::{DraggableTreeState, TreeItem};
 use gpui::{
-    App, AppContext, ClipboardItem, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
-    KeyDownEvent, ParentElement, Render, SharedString, Styled, Window, actions, div,
+    AppContext, ClipboardItem, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
+    KeyDownEvent, ParentElement, Render, SharedString, Styled, Window, actions,
     prelude::FluentBuilder, px,
 };
 use gpui_component::input::Input;
 use gpui_component::scroll::ScrollableElement as _;
 use gpui_component::{
-    ActiveTheme as _, Sizable, StyledExt,
-    button::{Button, ButtonVariants},
-    h_flex,
-    input::InputState,
-    label::Label,
-    menu::ContextMenuExt,
-    v_flex,
+    ActiveTheme as _, StyledExt, h_flex, input::InputState, label::Label, v_flex,
 };
 
 actions!(snippets, [CreateGroup, RefreshSnippets]);
@@ -105,7 +99,7 @@ impl SnippetsPanel {
     fn build_tree_item(&self, snippet: &SnippetData, all_snippets: &[SnippetData]) -> TreeItem {
         let id = SharedString::from(format!("snippet:{}", snippet.id.unwrap_or(0)));
         let label = SharedString::from(snippet.name.clone());
-        let metadata = SnippetItemMetadata {
+        let _metadata = SnippetItemMetadata {
             id: snippet.id.unwrap_or(0),
             name: snippet.name.clone(),
             is_group: snippet.is_group,
@@ -135,17 +129,16 @@ impl SnippetsPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(id_str) = item_id.strip_prefix("snippet:") {
-            if let Ok(id) = id_str.parse::<i64>() {
-                if let Some(snippet) = self.snippets.iter().find(|s| s.id == Some(id)) {
-                    if snippet.is_group {
-                        // The draggable tree handles this automatically
-                    } else {
-                        cx.emit(AppEvent::OpenSnippetEditor {
-                            snippet_id: Some(id),
-                        });
-                    }
-                }
+        if let Some(id_str) = item_id.strip_prefix("snippet:")
+            && let Ok(id) = id_str.parse::<i64>()
+            && let Some(snippet) = self.snippets.iter().find(|s| s.id == Some(id))
+        {
+            if snippet.is_group {
+                // The draggable tree handles this automatically
+            } else {
+                cx.emit(AppEvent::OpenSnippetEditor {
+                    snippet_id: Some(id),
+                });
             }
         }
     }
@@ -279,7 +272,7 @@ impl SnippetsPanel {
 }
 
 impl Render for SnippetsPanel {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let group_input = self.group_name_input.clone();
         let creating_group = self.creating_group;
 
@@ -290,11 +283,11 @@ impl Render for SnippetsPanel {
             .gap_2()
             .border_t_1()
             .border_color(cx.theme().border)
-            .on_action(cx.listener(|this, _: &NewSnippet, _window, cx| {
+            .on_action(cx.listener(|_this, _: &NewSnippet, _window, cx| {
                 cx.emit(AppEvent::OpenSnippetEditor { snippet_id: None });
             }))
             .on_action(
-                cx.listener(|this, action: &OpenSnippetEditor, _window, cx| {
+                cx.listener(|_this, action: &OpenSnippetEditor, _window, cx| {
                     cx.emit(AppEvent::OpenSnippetEditor {
                         snippet_id: action.snippet_id,
                     });

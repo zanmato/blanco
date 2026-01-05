@@ -10,7 +10,7 @@ use gpui::{
     Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, StyledExt, h_flex,
+    ActiveTheme, Icon,
     input::{Input, InputEvent, InputState},
     menu::PopupMenu,
     table::{Column, ColumnSort, Table, TableDelegate, TableState},
@@ -20,7 +20,7 @@ use gpui_component::{
 use crate::app::{AddRow, DuplicateRow};
 use crate::app_events::AppEvent;
 use crate::transformers::CopyHandler;
-use database::{DatabaseService, DatabaseServiceTrait};
+use database::DatabaseService;
 
 // Response structure for table operations
 #[derive(Debug, Clone)]
@@ -191,15 +191,15 @@ impl CellEditState {
     pub fn add_change(&mut self, change: TableChange) {
         // For UpdateCell changes, replace any existing change for the same cell
         // This prevents duplicate SET clauses for the same column
-        if change.change_type == ChangeType::UpdateCell {
-            if let Some(col_idx) = change.column_index {
-                // Remove any existing UpdateCell change for this same (row, column) combination
-                self.changes.retain(|existing_change| {
-                    existing_change.change_type != ChangeType::UpdateCell
-                        || existing_change.row_index != change.row_index
-                        || existing_change.column_index != Some(col_idx)
-                });
-            }
+        if change.change_type == ChangeType::UpdateCell
+            && let Some(col_idx) = change.column_index
+        {
+            // Remove any existing UpdateCell change for this same (row, column) combination
+            self.changes.retain(|existing_change| {
+                existing_change.change_type != ChangeType::UpdateCell
+                    || existing_change.row_index != change.row_index
+                    || existing_change.column_index != Some(col_idx)
+            });
         }
         self.changes.push(change);
     }
@@ -640,6 +640,24 @@ impl ResultsTableDelegate {
         // Store column types
         self.column_types = result.column_types.clone();
 
+        // TODO: calculate actual width
+        // let width = window
+        //         .text_system()
+        //         .shape_line(
+        //             longest_line.clone(),
+        //             text_size,
+        //             &[TextRun {
+        //                 len: longest_line.len(),
+        //                 font: style.font(),
+        //                 color: gpui::black(),
+        //                 background_color: None,
+        //                 underline: None,
+        //                 strikethrough: None,
+        //             }],
+        //             wrap_width,
+        //         )
+        //         .width;
+
         // Calculate column widths based on content and type
         let mut column_widths: Vec<f32> = result
             .columns
@@ -1063,15 +1081,10 @@ impl TableDelegate for ResultsTableDelegate {
                                                                 .delegate_mut()
                                                                 .edit_state
                                                                 .editing_input
-                                                                .as_ref()
-                                                                .and_then(|input| {
-                                                                    Some(
-                                                                        input
+                                                                .as_ref().map(|input| input
                                                                             .read(cx)
                                                                             .text()
-                                                                            .to_string(),
-                                                                    )
-                                                                })
+                                                                            .to_string())
                                                                 .unwrap_or_default();
 
                                                             // Recreate InputState with single-line mode and subscribe to events
@@ -1154,9 +1167,7 @@ impl TableDelegate for ResultsTableDelegate {
                                                     .edit_state
                                                     .editing_input
                                                     .as_ref()
-                                                    .and_then(|input| {
-                                                        Some(input.read(cx).text().to_string())
-                                                    })
+                                                    .map(|input| input.read(cx).text().to_string())
                                                     .unwrap_or_default();
 
                                                 // Toggle expanded state
@@ -1364,36 +1375,34 @@ impl TableDelegate for ResultsTableDelegate {
         _cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
         // Basic copy operations
-        let menu = menu
-            .menu_with_icon(
-                "Copy as CSV",
-                Icon::new(IconName::Sheet),
-                Box::new(crate::app::CopyAsCSV),
-            )
-            .menu_with_icon(
-                "Copy as JSON",
-                Icon::new(IconName::Braces),
-                Box::new(crate::app::CopyAsJSON),
-            )
-            .menu_with_icon(
-                "Copy as SQL",
-                Icon::new(IconName::Database),
-                Box::new(crate::app::CopyAsSQL),
-            )
-            .menu_with_icon(
-                "Copy as Markdown",
-                Icon::new(IconName::Markdown),
-                Box::new(crate::app::CopyAsMarkdown),
-            )
-            .separator()
-            .menu_with_icon("Add Row", Icon::new(IconName::Plus), Box::new(AddRow))
-            .menu_with_icon(
-                "Duplicate Row",
-                Icon::new(IconName::Copy),
-                Box::new(DuplicateRow { row: row_ix }),
-            );
 
-        menu
+        menu.menu_with_icon(
+            "Copy as CSV",
+            Icon::new(IconName::Sheet),
+            Box::new(crate::app::CopyAsCSV),
+        )
+        .menu_with_icon(
+            "Copy as JSON",
+            Icon::new(IconName::Braces),
+            Box::new(crate::app::CopyAsJSON),
+        )
+        .menu_with_icon(
+            "Copy as SQL",
+            Icon::new(IconName::Database),
+            Box::new(crate::app::CopyAsSQL),
+        )
+        .menu_with_icon(
+            "Copy as Markdown",
+            Icon::new(IconName::Markdown),
+            Box::new(crate::app::CopyAsMarkdown),
+        )
+        .separator()
+        .menu_with_icon("Add Row", Icon::new(IconName::Plus), Box::new(AddRow))
+        .menu_with_icon(
+            "Duplicate Row",
+            Icon::new(IconName::Copy),
+            Box::new(DuplicateRow { row: row_ix }),
+        )
     }
 }
 
@@ -1438,7 +1447,7 @@ impl ResultsPanel {
     pub fn set_query_result(
         &mut self,
         result: QueryResult,
-        connection_id: Option<i64>,
+        _connection_id: Option<i64>,
         cx: &mut Context<Self>,
     ) {
         self.table_state.update(cx, |state, cx| {
@@ -1525,7 +1534,7 @@ impl ResultsPanel {
 
     /// Subscribe to input events (blur/change) for a given cell
     fn subscribe_to_input_events(
-        state: &mut TableState<ResultsTableDelegate>,
+        _state: &mut TableState<ResultsTableDelegate>,
         input: &Entity<InputState>,
         row: usize,
         col: usize,

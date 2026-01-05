@@ -566,7 +566,7 @@ impl Connection for MysqlConnection {
         parameters: Option<&[String]>,
     ) -> Result<QueryResult, anyhow::Error> {
         let database = database_name
-            .or(self.initial_database.as_ref().map(|s| s.as_str()))
+            .or(self.initial_database.as_deref())
             .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
 
         let pool = self.get_or_create_pool(database).await?;
@@ -587,6 +587,7 @@ impl Connection for MysqlConnection {
                 for param in params {
                     q = q.bind(param);
                 }
+                #[allow(deprecated)]
                 q.fetch_many(&pool)
             }
             _ => sqlx::raw_sql(query).fetch_many(&pool),
@@ -742,12 +743,11 @@ impl Connection for MysqlConnection {
 
         let pool = self.get_or_create_pool(database).await?;
 
-        let query = format!(
+        let query =
             "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
-             WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND CONSTRAINT_NAME = 'PRIMARY'"
-        );
+             WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND CONSTRAINT_NAME = 'PRIMARY'";
 
-        let rows = sqlx::query(&query)
+        let rows = sqlx::query(query)
             .bind(database)
             .bind(table_name)
             .fetch_all(&pool)
@@ -777,14 +777,13 @@ impl Connection for MysqlConnection {
 
         let pool = self.get_or_create_pool(database).await?;
 
-        let query = format!(
+        let query = 
             "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT, CHARACTER_MAXIMUM_LENGTH, COLUMN_KEY
              FROM INFORMATION_SCHEMA.COLUMNS
              WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
-             ORDER BY ORDINAL_POSITION"
-        );
+             ORDER BY ORDINAL_POSITION";
 
-        let rows = sqlx::query(&query)
+        let rows = sqlx::query(query)
             .bind(database)
             .bind(table_name)
             .fetch_all(&pool)

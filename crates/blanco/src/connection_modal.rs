@@ -188,7 +188,7 @@ impl PostgresForm {
         }
     }
 
-    fn render(&self, cx: &App) -> gpui::AnyElement {
+    fn render(&self, _cx: &App) -> gpui::AnyElement {
         v_flex()
             .gap_4()
             .child(

@@ -81,7 +81,7 @@ pub trait DataTransformer: Send + Sync {
     /// Transform header row specifically (helper method)
     fn transform_header_row(&self, columns: &[String]) -> Result<String, TransformError> {
         // Default implementation - transform headers as a regular row
-        self.transform_stream_row(columns, columns, &vec![])
+        self.transform_stream_row(columns, columns, &[])
     }
 
     /// Check if this transformer supports streaming

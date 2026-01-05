@@ -73,6 +73,7 @@ pub struct ConnectionConfig {
 
 impl ConnectionConfig {
     /// Create a new connection config from individual parameters
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: i64,
         name: String,

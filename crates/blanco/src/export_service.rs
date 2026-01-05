@@ -51,6 +51,7 @@ impl ExportService {
     }
 
     /// Export data using streaming with transformers that support streaming
+    #[allow(clippy::too_many_arguments)]
     pub async fn export_data_streaming_with_transformer<C>(
         &self,
         connection: &C,
@@ -120,7 +121,7 @@ impl ExportService {
                 };
 
                 // Send row through channel
-                if let Err(_) = sender.send(stream_data).await {
+                if (sender.send(stream_data).await).is_err() {
                     tracing::info!("Export receiver disconnected, stopping producer");
                     break;
                 }

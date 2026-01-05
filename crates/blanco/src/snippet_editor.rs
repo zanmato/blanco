@@ -1,12 +1,11 @@
 use blanco_ui::IconName;
 use gpui::{
-    App, AppContext as _, Context, Entity, Focusable, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, Styled, WeakEntity, Window, actions, div,
-    prelude::FluentBuilder, px,
+    App, AppContext as _, Context, Entity, Focusable, IntoElement, ParentElement, Render, Styled,
+    WeakEntity, Window, div,
 };
 use gpui_component::{
     ActiveTheme, Sizable,
-    button::{Button, ButtonVariants},
+    button::Button,
     h_flex,
     input::{Input, InputState, TabSize},
     v_flex,
@@ -16,7 +15,6 @@ use crate::app_database::{AppDatabase, SnippetData};
 use crate::snippets_panel::RefreshSnippets;
 
 pub struct SnippetEditor {
-    pub id: usize,
     pub snippet_id: Option<i64>,
     pub name: String,
     pub name_input: Entity<InputState>,
@@ -24,7 +22,7 @@ pub struct SnippetEditor {
 }
 
 impl SnippetEditor {
-    pub fn new(id: usize, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Snippet name..."));
 
         let editor = cx.new(|cx| {
@@ -39,7 +37,6 @@ impl SnippetEditor {
         });
 
         Self {
-            id,
             snippet_id: None,
             name: String::new(),
             name_input,
@@ -109,7 +106,7 @@ impl SnippetEditor {
             };
 
             // Update the entity with the new snippet ID
-            let _ = weak_handle.update(cx, |editor, cx| {
+            let _ = weak_handle.update(cx, |editor, _cx| {
                 editor.snippet_id = Some(id);
                 editor.name = saved_name.clone();
             });

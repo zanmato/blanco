@@ -1,5 +1,5 @@
 use chrono::Utc;
-use database::{DatabaseService, DatabaseServiceTrait};
+use database::DatabaseService;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
     Styled, Subscription, Task, Window, div, prelude::FluentBuilder, px,
@@ -14,7 +14,6 @@ use gpui_component::{
     v_flex,
 };
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Export format options
@@ -44,13 +43,9 @@ impl ExportFormat {
 }
 
 #[derive(Clone)]
+#[derive(Default)]
 pub struct ExportOptions {}
 
-impl Default for ExportOptions {
-    fn default() -> Self {
-        Self {}
-    }
-}
 
 pub struct ExportModal {
     focus_handle: FocusHandle,
@@ -157,9 +152,8 @@ impl ExportModal {
         let mut file_path = dir_path.join(filename.as_ref());
 
         // Ensure the filename has the correct extension
-        if !file_path
-            .extension()
-            .map_or(false, |ext| ext == format.file_extension())
+        if file_path
+            .extension().is_none_or(|ext| ext != format.file_extension())
         {
             file_path.set_extension(format.file_extension());
         }
@@ -177,9 +171,9 @@ impl ExportModal {
 
         let directory_input = self.directory_input.clone();
         cx.spawn_in(window, async move |_, window| {
-            if let Some(path) = path.await.ok()?.ok()? {
-                if let Some(dir_path) = path.iter().next() {
-                    if let Some(dir_str) = dir_path.to_str() {
+            if let Some(path) = path.await.ok()?.ok()?
+                && let Some(dir_path) = path.first()
+                    && let Some(dir_str) = dir_path.to_str() {
                         window
                             .update(|window, cx| {
                                 directory_input.update(cx, |input, cx| {
@@ -188,8 +182,6 @@ impl ExportModal {
                             })
                             .ok();
                     }
-                }
-            }
             Some(())
         })
         .detach();

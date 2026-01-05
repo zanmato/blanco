@@ -14,7 +14,6 @@ use gpui_component::{
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::agent::chat_types::MessageRole;
 
 use super::chat_message_view::ChatMessageState;
 use super::chat_session::ChatSession;

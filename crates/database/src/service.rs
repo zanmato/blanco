@@ -172,7 +172,7 @@ impl DatabaseService {
 
         // Get connection string with optional database, host, and port overrides
         let connection_string =
-            config.connection_string(database, connection_host.as_deref(), connection_port);
+            config.connection_string(database, connection_host, connection_port);
         if let Some(database_name) = database {
             tracing::debug!(
                 "Applied database override '{}' to connection string: {}",

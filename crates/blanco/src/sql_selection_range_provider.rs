@@ -32,7 +32,7 @@ impl SelectionRangeProvider for SqlSelectionRangeProvider {
     ) -> Task<Result<Option<SelectionRange>>> {
         let text = text.to_string();
 
-        let result = (|| {
+        let result = {
             // Convert LSP Position to byte offset using RopeExt
             let rope = Rope::from_str(&text);
             let cursor_byte_pos = rope.position_to_offset(&position);
@@ -53,7 +53,7 @@ impl SelectionRangeProvider for SqlSelectionRangeProvider {
                     parent: None,
                 }
             }))
-        })();
+        };
 
         Task::ready(result)
     }

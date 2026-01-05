@@ -76,7 +76,7 @@ impl DataTransformer for JsonTransformer {
 
     fn initialize_stream(
         &self,
-        columns: &[String],
+        _columns: &[String],
         _column_types: &[String],
     ) -> Result<String, TransformError> {
         // Start JSON array

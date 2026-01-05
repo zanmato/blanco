@@ -9,6 +9,7 @@ pub struct TableChangeOperation {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[allow(dead_code)]
 pub enum OperationType {
     Insert,
     Update,
@@ -59,47 +60,12 @@ impl TableChangeOperation {
         }
     }
 
-    pub fn update_cell(
-        table_name: String,
-        pk_column: String,
-        pk_value: String,
-        column_name: String,
-        old_value: Option<String>,
-        new_value: Option<String>,
-    ) -> Self {
-        Self {
-            operation_type: OperationType::Update,
-            table_name,
-            row_identifier: RowIdentifier::PrimaryKey {
-                column: pk_column,
-                value: pk_value,
-            },
-            changes: vec![ColumnChange {
-                column_name,
-                old_value,
-                new_value,
-            }],
-        }
-    }
-
     pub fn insert_row(table_name: String, column_changes: Vec<ColumnChange>) -> Self {
         Self {
             operation_type: OperationType::Insert,
             table_name,
             row_identifier: RowIdentifier::RowIndex(0), // Will be determined after insertion
             changes: column_changes,
-        }
-    }
-
-    pub fn delete_row(table_name: String, pk_column: String, pk_value: String) -> Self {
-        Self {
-            operation_type: OperationType::Delete,
-            table_name,
-            row_identifier: RowIdentifier::PrimaryKey {
-                column: pk_column,
-                value: pk_value,
-            },
-            changes: vec![],
         }
     }
 

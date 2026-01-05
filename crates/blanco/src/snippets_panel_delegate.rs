@@ -1,11 +1,11 @@
-use crate::app::{NewSnippet, OpenSnippetEditor};
+use crate::app::NewSnippet;
 use crate::snippets_panel::CreateGroup;
 use gpui::ClickEvent;
 use gpui::{
-    App, Entity, InteractiveElement, IntoElement, ParentElement, Styled, Window, div,
+    App, Entity, InteractiveElement, ParentElement, Styled, Window, div,
     prelude::FluentBuilder, px,
 };
-use gpui_component::{ActiveTheme, Icon, StyledExt, h_flex};
+use gpui_component::{ActiveTheme, Icon, h_flex};
 use gpui_component::{
     label::Label,
     list::ListItem,
@@ -36,8 +36,8 @@ impl SnippetsTreeDelegate {
     }
 
     fn get_snippet_metadata(&self, item_id: &str, cx: &App) -> Option<SnippetItemMetadata> {
-        if let Some(id_str) = item_id.strip_prefix("snippet:") {
-            if let Ok(id) = id_str.parse::<i64>() {
+        if let Some(id_str) = item_id.strip_prefix("snippet:")
+            && let Ok(id) = id_str.parse::<i64>() {
                 let panel = self.parent.read(cx);
                 if let Some(snippet) = panel.snippets.iter().find(|s| s.id == Some(id)) {
                     return Some(SnippetItemMetadata {
@@ -48,7 +48,6 @@ impl SnippetsTreeDelegate {
                     });
                 }
             }
-        }
         None
     }
 }
@@ -237,11 +236,7 @@ impl DraggableTreeDelegate for SnippetsTreeDelegate {
 
         let parent_id = if let Some(target_id) = target_entry_id {
             if let Some(id_str) = target_id.strip_prefix("snippet:") {
-                if let Ok(id) = id_str.parse::<i64>() {
-                    Some(id)
-                } else {
-                    None
-                }
+                id_str.parse::<i64>().ok()
             } else {
                 None
             }

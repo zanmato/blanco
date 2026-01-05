@@ -2,20 +2,17 @@ use crate::app_database::{AppDatabase, ConnectionData, EnvironmentType};
 use crate::app_events::{AppEvent, TreeItemType};
 use crate::connections_panel_delegate::ConnectionsTreeDelegate;
 use blanco_ui::IconName;
-use blanco_ui::tree::{Tree, TreeEntry, TreeItem, TreeState};
-use database::{DatabaseService, DatabaseServiceTrait};
-use gpui::rems;
+use blanco_ui::tree::{Tree, TreeItem, TreeState};
+use database::DatabaseService;
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, InteractiveElement, IntoElement, ParentElement,
-    Render, Styled, Window, div, prelude::FluentBuilder, px,
+    App, AppContext, Context, Entity, EventEmitter, IntoElement, ParentElement, Render, Styled,
+    Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme as _, Icon, StyledExt, WindowExt,
+    ActiveTheme as _, StyledExt, WindowExt,
     button::{Button, ButtonVariants},
     label::Label,
-    v_flex,
 };
-use std::sync::Arc;
 
 /// Icon and color combination for tree items
 #[derive(Clone)]
@@ -256,17 +253,6 @@ impl ConnectionsPanel {
                 }
             }
         });
-    }
-
-    /// Build a TreeItem for a connection including its children if loaded
-    fn build_connection_tree_item(
-        &self,
-        connection: &ConnectionData,
-        cx: &Context<Self>,
-    ) -> TreeItem<TreeItemMetadata> {
-        let connection_id = connection.id.unwrap_or(0);
-        let should_expand = self.expanded_connections.contains(&connection_id);
-        self.build_connection_tree_item_with_expand(connection, should_expand, cx)
     }
 
     /// Build a TreeItem for a connection including its children if loaded, with specified expand state
@@ -790,12 +776,11 @@ impl ConnectionsPanel {
                     let _ = this_handle.update(cx, |this, cx| {
                         if let Some(metadata) = this.database_metadata.get_mut(&connection_id) {
                             // Find the database and schema, then update its tables
-                            if let Some(database) = metadata.databases.iter_mut().find(|db| db.name == database_name) {
-                                if let Some(schema) = database.schemas.iter_mut().find(|s| s.name == schema_name) {
+                            if let Some(database) = metadata.databases.iter_mut().find(|db| db.name == database_name)
+                                && let Some(schema) = database.schemas.iter_mut().find(|s| s.name == schema_name) {
                                     schema.tables = tables;
                                     schema.is_expanded = true; // Mark as expanded
                                 }
-                            }
 
                             // Rebuild tree to show loaded tables
                             this.update_tree_items(cx);
@@ -841,41 +826,28 @@ impl ConnectionsPanel {
                     });
                 }
                 TreeItemKind::Database => {
-                    if let Some(database_name) = &metadata.database_name {
-                        if let Some(connection_metadata) =
+                    if let Some(database_name) = &metadata.database_name
+                        && let Some(connection_metadata) =
                             self.database_metadata.get(&connection_id)
-                        {
-                            if let Some(database) = connection_metadata
-                                .databases
-                                .iter()
-                                .find(|db| db.name == *database_name)
-                            {
-                                if database.schemas.is_empty() {
-                                    tracing::debug!(
-                                        "Loading schemas for database: {}",
-                                        database_name
-                                    );
-                                    // Set loading state before starting async operation
-                                    self.set_item_loading(item_id, true, cx);
-                                    self.load_database_children(
-                                        connection_id,
-                                        database_name.clone(),
-                                        cx,
-                                    );
-                                } else {
-                                    // Already loaded, toggle expansion
-                                    tracing::debug!(
-                                        "Toggling expansion for database: {}",
-                                        database_name
-                                    );
-                                    self.toggle_database_expansion(
-                                        connection_id,
-                                        database_name,
-                                        window,
-                                        cx,
-                                    );
-                                }
-                            }
+                        && let Some(database) = connection_metadata
+                            .databases
+                            .iter()
+                            .find(|db| db.name == *database_name)
+                    {
+                        if database.schemas.is_empty() {
+                            tracing::debug!("Loading schemas for database: {}", database_name);
+                            // Set loading state before starting async operation
+                            self.set_item_loading(item_id, true, cx);
+                            self.load_database_children(connection_id, database_name.clone(), cx);
+                        } else {
+                            // Already loaded, toggle expansion
+                            tracing::debug!("Toggling expansion for database: {}", database_name);
+                            self.toggle_database_expansion(
+                                connection_id,
+                                database_name,
+                                window,
+                                cx,
+                            );
                         }
                     }
                     cx.emit(AppEvent::TreeItemExpanded {
@@ -887,46 +859,40 @@ impl ConnectionsPanel {
                 TreeItemKind::Schema => {
                     if let (Some(database_name), Some(schema_name)) =
                         (&metadata.database_name, &metadata.schema_name)
-                    {
-                        if let Some(connection_metadata) =
+                        && let Some(connection_metadata) =
                             self.database_metadata.get(&connection_id)
-                        {
-                            if let Some(database) = connection_metadata
-                                .databases
-                                .iter()
-                                .find(|db| db.name == *database_name)
-                            {
-                                if let Some(schema) =
-                                    database.schemas.iter().find(|s| s.name == *schema_name)
-                                {
-                                    if schema.tables.is_empty() {
-                                        tracing::debug!(
-                                            "Loading tables for schema: {} in database: {}",
-                                            schema_name,
-                                            database_name
-                                        );
-                                        self.load_schema_children(
-                                            connection_id,
-                                            database_name.clone(),
-                                            schema_name.clone(),
-                                            cx,
-                                        );
-                                    } else {
-                                        // Already loaded, toggle expansion
-                                        tracing::debug!(
-                                            "Toggling expansion for schema: {} in database: {}",
-                                            schema_name,
-                                            database_name
-                                        );
-                                        self.toggle_schema_expansion(
-                                            connection_id,
-                                            database_name,
-                                            schema_name,
-                                            cx,
-                                        );
-                                    }
-                                }
-                            }
+                        && let Some(database) = connection_metadata
+                            .databases
+                            .iter()
+                            .find(|db| db.name == *database_name)
+                        && let Some(schema) =
+                            database.schemas.iter().find(|s| s.name == *schema_name)
+                    {
+                        if schema.tables.is_empty() {
+                            tracing::debug!(
+                                "Loading tables for schema: {} in database: {}",
+                                schema_name,
+                                database_name
+                            );
+                            self.load_schema_children(
+                                connection_id,
+                                database_name.clone(),
+                                schema_name.clone(),
+                                cx,
+                            );
+                        } else {
+                            // Already loaded, toggle expansion
+                            tracing::debug!(
+                                "Toggling expansion for schema: {} in database: {}",
+                                schema_name,
+                                database_name
+                            );
+                            self.toggle_schema_expansion(
+                                connection_id,
+                                database_name,
+                                schema_name,
+                                cx,
+                            );
                         }
                     }
                     cx.emit(AppEvent::TreeItemExpanded {
@@ -953,7 +919,7 @@ impl ConnectionsPanel {
     fn toggle_connection_expansion(
         &mut self,
         connection_id: i64,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         // Toggle the expansion state
@@ -974,25 +940,24 @@ impl ConnectionsPanel {
         &mut self,
         connection_id: i64,
         database_name: &str,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(metadata) = self.database_metadata.get_mut(&connection_id) {
-            if let Some(database) = metadata
+        if let Some(metadata) = self.database_metadata.get_mut(&connection_id)
+            && let Some(database) = metadata
                 .databases
                 .iter_mut()
                 .find(|db| db.name == database_name)
-            {
-                database.is_expanded = !database.is_expanded;
-                tracing::debug!(
-                    "Toggling database '{}' expansion to: {}",
-                    database_name,
-                    database.is_expanded
-                );
+        {
+            database.is_expanded = !database.is_expanded;
+            tracing::debug!(
+                "Toggling database '{}' expansion to: {}",
+                database_name,
+                database.is_expanded
+            );
 
-                // Rebuild tree with updated expansion state
-                self.update_tree_items(cx);
-            }
+            // Rebuild tree with updated expansion state
+            self.update_tree_items(cx);
         }
     }
 
@@ -1004,43 +969,24 @@ impl ConnectionsPanel {
         schema_name: &str,
         cx: &mut Context<Self>,
     ) {
-        if let Some(metadata) = self.database_metadata.get_mut(&connection_id) {
-            if let Some(database) = metadata
+        if let Some(metadata) = self.database_metadata.get_mut(&connection_id)
+            && let Some(database) = metadata
                 .databases
                 .iter_mut()
                 .find(|db| db.name == database_name)
-            {
-                if let Some(schema) = database.schemas.iter_mut().find(|s| s.name == schema_name) {
-                    schema.is_expanded = !schema.is_expanded;
-                    tracing::debug!(
-                        "Toggling schema '{}' in database '{}' expansion to: {}",
-                        schema_name,
-                        database_name,
-                        schema.is_expanded
-                    );
+            && let Some(schema) = database.schemas.iter_mut().find(|s| s.name == schema_name)
+        {
+            schema.is_expanded = !schema.is_expanded;
+            tracing::debug!(
+                "Toggling schema '{}' in database '{}' expansion to: {}",
+                schema_name,
+                database_name,
+                schema.is_expanded
+            );
 
-                    // Rebuild tree with updated expansion state
-                    self.update_tree_items(cx);
-                }
-            }
-        }
-    }
-
-    /// Handle connection established event
-    pub fn handle_connection_established(&mut self, _connection_id: i64, cx: &mut Context<Self>) {
-        // Refresh the tree to show all connections as connected
-        self.update_tree_items(cx);
-        cx.notify();
-    }
-
-    /// Handle connection lost event
-    pub fn handle_connection_lost(&mut self, connection_id: i64, cx: &mut Context<Self>) {
-        // Remove the metadata for this connection and refresh tree
-        if self.database_metadata.remove(&connection_id).is_some() {
-            self.loaded_connections.remove(&connection_id);
+            // Rebuild tree with updated expansion state
             self.update_tree_items(cx);
         }
-        cx.notify();
     }
 
     /// Disconnect and remove a connection
@@ -1100,10 +1046,11 @@ impl ConnectionsPanel {
             )
     }
 
-    fn render_connections_tree(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_connections_tree(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         Tree::new(&self.tree_state)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn export_table_data(
         &mut self,
         connection_id: i64,

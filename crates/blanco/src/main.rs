@@ -21,7 +21,6 @@ mod snippet_editor;
 mod snippets_panel;
 mod snippets_panel_delegate;
 mod sql_completion_provider;
-mod sql_document_color_provider;
 mod sql_selection_range_provider;
 mod sql_statement_parser;
 mod time_format;
@@ -119,17 +118,17 @@ fn main() {
                         );
 
                         // Add SSH configuration if present
-                        if let Some(ssh_host) = connection.ssh_host {
-                            if let Some(ssh_user) = connection.ssh_user {
-                                config = config.with_ssh_config(
-                                    ssh_host,
-                                    ssh_user,
-                                    connection.ssh_password,
-                                    connection.ssh_private_key_path,
-                                    connection.ssh_private_key_password,
-                                    connection.ssh_port,
-                                );
-                            }
+                        if let Some(ssh_host) = connection.ssh_host
+                            && let Some(ssh_user) = connection.ssh_user
+                        {
+                            config = config.with_ssh_config(
+                                ssh_host,
+                                ssh_user,
+                                connection.ssh_password,
+                                connection.ssh_private_key_path,
+                                connection.ssh_private_key_password,
+                                connection.ssh_port,
+                            );
                         }
 
                         config

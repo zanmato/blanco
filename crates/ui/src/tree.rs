@@ -1,17 +1,17 @@
 use std::{cell::RefCell, ops::Range, rc::Rc};
 
 use gpui::{
-    div, prelude::FluentBuilder as _, px, uniform_list, App, Context, ElementId, Entity,
-    FocusHandle, InteractiveElement as _, IntoElement, KeyBinding, ListSizingBehavior, MouseButton,
-    ParentElement, Render, RenderOnce, SharedString, StyleRefinement, Styled,
-    UniformListScrollHandle, Window,
+    App, Context, ElementId, Entity, FocusHandle, InteractiveElement as _, IntoElement, KeyBinding,
+    ListSizingBehavior, MouseButton, ParentElement, Render, RenderOnce, SharedString,
+    StyleRefinement, Styled, UniformListScrollHandle, Window, div, prelude::FluentBuilder as _, px,
+    uniform_list,
 };
 
 use gpui_component::{
+    StyledExt,
     list::ListItem,
     menu::{ContextMenuExt, PopupMenu},
     scroll::Scrollbar,
-    StyledExt,
 };
 
 use crate::actions::{Confirm, SelectDown, SelectLeft, SelectRight, SelectUp};
@@ -168,7 +168,7 @@ impl<M> TreeItem<M> {
     /// Whether this item is a folder (has children).
     #[inline]
     pub fn is_folder(&self) -> bool {
-        self.children.len() > 0
+        !self.children.is_empty()
     }
 
     /// Return true if the item is disabled.
@@ -222,7 +222,11 @@ impl<D: TreeDelegate> TreeState<D> {
     }
 
     /// Update an entry at specific index and notify the UI
-    pub fn update_entry(&mut self, ix: usize, cx: &mut Context<Self>) -> Option<&mut TreeEntry<D::Metadata>> {
+    pub fn update_entry(
+        &mut self,
+        ix: usize,
+        cx: &mut Context<Self>,
+    ) -> Option<&mut TreeEntry<D::Metadata>> {
         let entry = self.entries.get_mut(ix);
         if entry.is_some() {
             cx.notify();
@@ -236,7 +240,11 @@ impl<D: TreeDelegate> TreeState<D> {
     }
 
     /// Find entry by ID and get mutable reference
-    pub fn find_mut(&mut self, id: &str, cx: &mut Context<Self>) -> Option<&mut TreeEntry<D::Metadata>> {
+    pub fn find_mut(
+        &mut self,
+        id: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<&mut TreeEntry<D::Metadata>> {
         if let Some(ix) = self.find_index(id) {
             self.update_entry(ix, cx)
         } else {
@@ -245,7 +253,11 @@ impl<D: TreeDelegate> TreeState<D> {
     }
 
     /// Set the tree items.
-    pub fn set_items(&mut self, items: impl Into<Vec<TreeItem<D::Metadata>>>, cx: &mut Context<Self>) {
+    pub fn set_items(
+        &mut self,
+        items: impl Into<Vec<TreeItem<D::Metadata>>>,
+        cx: &mut Context<Self>,
+    ) {
         let items = items.into();
         self.entries.clear();
         for item in items.into_iter() {
@@ -319,33 +331,35 @@ impl<D: TreeDelegate> TreeState<D> {
 
     fn on_action_confirm(&mut self, _: &Confirm, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(selected_ix) = self.selected_ix {
-            if let Some(entry) = self.entries.get(selected_ix) {
-                if entry.is_folder() {
-                    self.toggle_expand(selected_ix);
-                    cx.notify();
-                }
+            if let Some(entry) = self.entries.get(selected_ix)
+                && entry.is_folder()
+            {
+                self.toggle_expand(selected_ix);
+                cx.notify();
             }
         }
     }
 
     fn on_action_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(selected_ix) = self.selected_ix {
-            if let Some(entry) = self.entries.get(selected_ix) {
-                if entry.is_folder() && entry.is_expanded() {
-                    self.toggle_expand(selected_ix);
-                    cx.notify();
-                }
+            if let Some(entry) = self.entries.get(selected_ix)
+                && entry.is_folder()
+                && entry.is_expanded()
+            {
+                self.toggle_expand(selected_ix);
+                cx.notify();
             }
         }
     }
 
     fn on_action_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(selected_ix) = self.selected_ix {
-            if let Some(entry) = self.entries.get(selected_ix) {
-                if entry.is_folder() && !entry.is_expanded() {
-                    self.toggle_expand(selected_ix);
-                    cx.notify();
-                }
+            if let Some(entry) = self.entries.get(selected_ix)
+                && entry.is_folder()
+                && !entry.is_expanded()
+            {
+                self.toggle_expand(selected_ix);
+                cx.notify();
             }
         }
     }
@@ -354,7 +368,7 @@ impl<D: TreeDelegate> TreeState<D> {
         let mut selected_ix = self.selected_ix.unwrap_or(0);
 
         if selected_ix > 0 {
-            selected_ix = selected_ix - 1;
+            selected_ix -= 1;
         } else {
             selected_ix = self.entries.len().saturating_sub(1);
         }
@@ -368,7 +382,7 @@ impl<D: TreeDelegate> TreeState<D> {
     fn on_action_down(&mut self, _: &SelectDown, _: &mut Window, cx: &mut Context<Self>) {
         let mut selected_ix = self.selected_ix.unwrap_or(0);
         if selected_ix + 1 < self.entries.len() {
-            selected_ix = selected_ix + 1;
+            selected_ix += 1;
         } else {
             selected_ix = 0;
         }

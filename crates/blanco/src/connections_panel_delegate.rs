@@ -1,9 +1,9 @@
 use gpui::{
-    App, Entity, InteractiveElement, IntoElement, ParentElement, Styled, Window, div,
+    App, Entity, InteractiveElement, ParentElement, Styled, Window, div,
     prelude::FluentBuilder, px, rems,
 };
 use gpui_component::{
-    ActiveTheme as _, Icon, Sizable, Size, h_flex,
+    ActiveTheme as _, Icon, h_flex,
     label::Label,
     list::ListItem,
     menu::{PopupMenu, PopupMenuItem},

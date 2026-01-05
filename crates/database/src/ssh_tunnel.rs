@@ -165,7 +165,7 @@ impl SshTunnel {
 
         // Handle authentication
         if let Some(key_path) = &self.config.ssh_private_key_path {
-            let key = load_secret_key(&key_path, self.config.ssh_private_key_password.as_deref())
+            let key = load_secret_key(key_path, self.config.ssh_private_key_password.as_deref())
                 .map_err(|e| anyhow::anyhow!("Failed to load private key: {}", e))?;
 
             session
@@ -243,7 +243,7 @@ impl SshTunnel {
                             local_port,
                             remote_host,
                             remote_port,
-                            uuid::Uuid::new_v4().to_string()
+                            uuid::Uuid::new_v4()
                         ));
 
                         // Add connection to tracking

@@ -134,6 +134,7 @@ impl SqliteConnection {
                 for param in params {
                     q = q.bind(param);
                 }
+                #[allow(deprecated)]
                 q.fetch_many(pool)
             }
             _ => sqlx::raw_sql(query).fetch_many(pool),
