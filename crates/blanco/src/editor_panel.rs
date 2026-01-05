@@ -511,10 +511,15 @@ impl EditorPanel {
                                 let rows_affected =
                                     std::cmp::max(result.rows_affected, result.row_count() as u64);
 
-                                let _ = window.update(move |_, cx| {
+                                let _ = window.update(move |window, cx| {
                                     // Update results panel
                                     results_panel_clone.update(cx, |panel, cx| {
-                                        panel.set_query_result(result, Some(connection_id), cx);
+                                        panel.set_query_result(
+                                            result,
+                                            Some(connection_id),
+                                            window,
+                                            cx,
+                                        );
                                     });
 
                                     // Log execution result to SQL log

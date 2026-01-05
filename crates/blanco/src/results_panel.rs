@@ -6,8 +6,8 @@ use serde_json::Value;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
-    InteractiveElement, IntoElement, MouseButton, ParentElement, Render, Styled, Subscription,
-    Window, div, px,
+    InteractiveElement, IntoElement, MouseButton, ParentElement, Render, SharedString, Styled,
+    Subscription, TextRun, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, Icon,
@@ -632,7 +632,7 @@ impl ResultsTableDelegate {
         operations
     }
 
-    pub fn set_query_result(&mut self, result: QueryResult) {
+    pub fn set_query_result(&mut self, result: QueryResult, window: &Window) {
         // Clear previous edit state
         self.edit_state.clear_all();
         self.pending_edit_cell = None;
@@ -640,48 +640,58 @@ impl ResultsTableDelegate {
         // Store column types
         self.column_types = result.column_types.clone();
 
-        // TODO: calculate actual width
-        // let width = window
-        //         .text_system()
-        //         .shape_line(
-        //             longest_line.clone(),
-        //             text_size,
-        //             &[TextRun {
-        //                 len: longest_line.len(),
-        //                 font: style.font(),
-        //                 color: gpui::black(),
-        //                 background_color: None,
-        //                 underline: None,
-        //                 strikethrough: None,
-        //             }],
-        //             wrap_width,
-        //         )
-        //         .width;
+        // Use the theme's font family for measurement (typically the mono font for tables)
+        let text_size = gpui::rems(0.875).to_pixels(window.rem_size());
 
-        // Calculate column widths based on content and type
-        let mut column_widths: Vec<f32> = result
+        // Calculate column widths based on actual text measurement
+        let mut column_widths: Vec<f64> = result
             .columns
             .iter()
             .enumerate()
             .map(|(i, col_name)| {
-                let mut max_width = col_name.len() as f32 * 9.0; // Smaller font size = smaller multiplier
+                // Measure column name width
+                let shaped_line = window.text_system().shape_line(
+                    SharedString::from(col_name),
+                    text_size,
+                    &[TextRun {
+                        len: col_name.len(),
+                        font: Default::default(),
+                        color: gpui::black(),
+                        background_color: None,
+                        underline: None,
+                        strikethrough: None,
+                    }],
+                    None,
+                );
+                let mut max_width = shaped_line.width.to_f64();
 
-                // Check some sample rows to determine content width
-                for row in result.rows.iter().take(20) {
-                    // Sample more rows for better accuracy
+                // Check sample rows to determine content width (limit to first 5 rows for performance)
+                for row in result.rows.iter().take(5) {
                     if let Some(cell_value) = row.get(i) {
-                        let content_width = cell_value.len() as f32 * 9.0; // Adjusted for smaller font
-                        max_width = max_width.max(content_width);
+                        let shaped_line = window.text_system().shape_line(
+                            SharedString::from(cell_value),
+                            text_size,
+                            &[TextRun {
+                                len: cell_value.len(),
+                                font: Default::default(),
+                                color: gpui::black(),
+                                background_color: None,
+                                underline: None,
+                                strikethrough: None,
+                            }],
+                            None,
+                        );
+                        max_width = max_width.max(shaped_line.width.to_f64());
                     }
                 }
 
-                // Add padding for cell content
-                max_width += 16.0; // Account for px_2 padding on each side
+                // Add padding for cell content (px_2 on each side = 8px * 2 = 16px)
+                max_width += 16.0;
 
                 // Account for cell borders and extra spacing
                 max_width += 2.0;
 
-                // Apply minimum and maximum bounds (adjusted for smaller font)
+                // Apply minimum and maximum bounds
                 max_width.clamp(60.0, 400.0)
             })
             .collect();
@@ -1449,6 +1459,7 @@ impl ResultsPanel {
         &mut self,
         result: QueryResult,
         _connection_id: Option<i64>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.table_state.update(cx, |state, cx| {
@@ -1456,7 +1467,9 @@ impl ResultsPanel {
             if let Some(ref query) = result.query_text {
                 state.delegate_mut().set_original_query(query.clone());
             }
-            state.delegate_mut().set_query_result(result.clone());
+            state
+                .delegate_mut()
+                .set_query_result(result.clone(), window);
             state.refresh(cx);
         });
         self.current_result = Some(result.clone());
