@@ -1488,7 +1488,7 @@ mod tests {
         assert_eq!(provider.generate_table_abbreviation(""), " ");
     }
 
-    #[async_std::test]
+    #[smol::test]
     async fn test_should_show_tables() {
         let provider = SqlCompletionProvider::new_with_database(
             1,
@@ -1515,7 +1515,7 @@ mod tests {
         assert!(!provider.should_show_tables("SELECT "));
     }
 
-    #[async_std::test]
+    #[smol::test]
     async fn test_should_show_columns() {
         let provider = SqlCompletionProvider::new_with_database(
             1,
@@ -1545,7 +1545,7 @@ mod tests {
         assert!(!provider.should_show_columns("SELECT * FROM "));
     }
 
-    #[async_std::test]
+    #[smol::test]
     async fn test_extract_table_for_columns() {
         let provider = SqlCompletionProvider::new_with_database(
             1,
@@ -1618,7 +1618,7 @@ mod tests {
     }
 
     // Test the 6 scenarios mentioned in the plan
-    #[async_std::test]
+    #[smol::test]
     async fn test_six_scenarios() {
         let provider = SqlCompletionProvider::new_with_database(
             1,

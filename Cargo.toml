@@ -18,7 +18,7 @@ publish = false
 
 [workspace.dependencies]
 # Core GPUI dependencies
-gpui = { git = "https://github.com/zed-industries/zed" }
+gpui = { git = "https://github.com/zed-industries/zed", rev = "da992374b3a702e1675902325c6fc0870fbbd23a" }
 gpui-macros = "0.2.2"
 gpui-component = { path = "vendor/gpui-component/crates/ui", features = [
     "tree-sitter-languages",
@@ -63,14 +63,10 @@ sqlx = { version = "0.8", features = [
     "json",
     "bigdecimal",
 ] }
-async-std = { version = "1.13", features = ["attributes"] }
 rust_decimal = "1.32"
 
 # SQL parsing
 sql-parse = "0.2"
-
-# Markdown parser
-pulldown-cmark = "0.9"
 
 # HTTP client
 http = "1.0"
@@ -79,7 +75,7 @@ dirs = "5"
 
 # Additional dependencies
 env_logger = "0.11"
-smol = "1"
+smol = "2"
 async-compat = "0.2"
 async-io = "1"
 rust-embed = { version = "8", features = ["interpolate-folder-path"] }

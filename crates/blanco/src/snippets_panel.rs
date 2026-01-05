@@ -28,7 +28,7 @@ pub struct SnippetsPanel {
 impl SnippetsPanel {
     pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
         let app_database = AppDatabase::global(cx);
-        let snippets = async_std::task::block_on(async {
+        let snippets = smol::block_on(async {
             match app_database.load_snippets().await {
                 Ok(snippets) => snippets,
                 Err(e) => {
@@ -59,7 +59,7 @@ impl SnippetsPanel {
             self.snippets.len()
         );
         let app_database = AppDatabase::global(cx);
-        self.snippets = async_std::task::block_on(async {
+        self.snippets = smol::block_on(async {
             match app_database.load_snippets().await {
                 Ok(snippets) => {
                     tracing::info!("Loaded {} snippets from database", snippets.len());
@@ -158,7 +158,7 @@ impl SnippetsPanel {
     ) {
         let app_database = AppDatabase::global(cx);
 
-        async_std::task::block_on(async {
+        smol::block_on(async {
             match app_database.delete_snippet(snippet_id).await {
                 Ok(_) => {
                     tracing::info!("Deleted snippet: {}", snippet_id);
@@ -247,7 +247,7 @@ impl SnippetsPanel {
             updated_at: 0,
         };
 
-        async_std::task::block_on(async {
+        smol::block_on(async {
             match app_database.save_snippet(&new_group).await {
                 Ok(id) => {
                     tracing::info!("Created new group '{}' with id {}", name, id);

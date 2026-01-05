@@ -1,9 +1,9 @@
 use crate::sql_parser::PostgresTableExtractor;
 use anyhow::Result;
-use async_std::sync::RwLock;
 use async_trait::async_trait;
 use blanco_core::{ColumnInfo, Connection, ConnectionUIMetadata, QueryResult, TableMetadata};
 use futures::{Stream, StreamExt};
+use smol::lock::RwLock;
 use sqlx::postgres::types::PgMoney;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Column, Row, TypeInfo, ValueRef};

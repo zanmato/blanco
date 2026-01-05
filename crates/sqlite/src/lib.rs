@@ -23,7 +23,7 @@ mod tests {
     use std::env;
     use tempfile::NamedTempFile;
 
-    #[async_std::test]
+    #[smol::test]
     async fn test_sqlite_data_type_serialization() -> Result<(), Box<dyn std::error::Error>> {
         // Use environment variable for connection string or fallback to temporary file
         let connection_string = env::var("SQLITE_CONNECTION_STRING").unwrap_or_else(|_| {

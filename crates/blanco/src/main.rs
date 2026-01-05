@@ -63,7 +63,7 @@ fn main() {
         }
 
         // Initialize app database (for query tabs, history, connections) synchronously
-        let db = async_std::task::block_on(async { AppDatabase::new().await });
+        let db = smol::block_on(async { AppDatabase::new().await });
 
         if let Err(e) = db {
             tracing::error!("Critical: Failed to initialize database: {}", e);
@@ -77,9 +77,8 @@ fn main() {
 
         // Load connections from app database and add them to the database service
         let app_database = AppDatabase::global(cx).clone();
-        let connections =
-            async_std::task::block_on(async move { app_database.load_connections().await })
-                .unwrap_or(Vec::new());
+        let connections = smol::block_on(async move { app_database.load_connections().await })
+            .unwrap_or(Vec::new());
 
         for connection in connections {
             if let Some(connection_id) = connection.id {
@@ -144,9 +143,8 @@ fn main() {
         }
 
         let app_database = AppDatabase::global(cx).clone();
-        let settings =
-            async_std::task::block_on(async move { app_database.load_all_settings().await })
-                .unwrap_or(Vec::new());
+        let settings = smol::block_on(async move { app_database.load_all_settings().await })
+            .unwrap_or(Vec::new());
 
         let app_settings = AppSettings::new(cx, Settings::from_key_values(&settings));
         cx.set_global(app_settings);

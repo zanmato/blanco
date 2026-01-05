@@ -1,6 +1,6 @@
+use crate::types::OpenAIErrorResponse;
 use http::StatusCode;
 use std::fmt;
-use crate::types::OpenAIErrorResponse;
 
 /// Error type for OpenAI client operations
 #[derive(Clone, Debug)]
@@ -62,8 +62,17 @@ pub enum OpenAIError {
 impl fmt::Display for OpenAIError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            OpenAIError::ApiError { status, message, error_type, code } => {
-                write!(f, "OpenAI API error [{}]: {} ({})", status, message, error_type)?;
+            OpenAIError::ApiError {
+                status,
+                message,
+                error_type,
+                code,
+            } => {
+                write!(
+                    f,
+                    "OpenAI API error [{}]: {} ({})",
+                    status, message, error_type
+                )?;
                 if let Some(code) = code {
                     write!(f, " - code: {}", code)?;
                 }
@@ -87,7 +96,10 @@ impl fmt::Display for OpenAIError {
             OpenAIError::JsonError(msg) => write!(f, "JSON error: {}", msg),
             OpenAIError::IoError(msg) => write!(f, "IO error: {}", msg),
             OpenAIError::ConfigError(msg) => write!(f, "Configuration error: {}", msg),
-            OpenAIError::ToolError { tool_call_id, message } => {
+            OpenAIError::ToolError {
+                tool_call_id,
+                message,
+            } => {
                 write!(f, "Tool error [{}]: {}", tool_call_id, message)
             }
             OpenAIError::StreamError(msg) => write!(f, "Stream error: {}", msg),
@@ -118,7 +130,10 @@ impl OpenAIError {
     }
 
     /// Create a rate limit error with reset time
-    pub fn rate_limit_error_with_reset(message: String, reset_at: chrono::DateTime<chrono::Utc>) -> Self {
+    pub fn rate_limit_error_with_reset(
+        message: String,
+        reset_at: chrono::DateTime<chrono::Utc>,
+    ) -> Self {
         Self::RateLimitError {
             message,
             reset_at: Some(reset_at),
@@ -132,7 +147,10 @@ impl OpenAIError {
 
     /// Create a tool error
     pub fn tool_error(tool_call_id: String, message: String) -> Self {
-        Self::ToolError { tool_call_id, message }
+        Self::ToolError {
+            tool_call_id,
+            message,
+        }
     }
 
     /// Check if this is a retryable error
@@ -186,8 +204,8 @@ impl From<serde_json::Error> for OpenAIError {
     }
 }
 
-impl From<async_std::io::Error> for OpenAIError {
-    fn from(err: async_std::io::Error) -> Self {
+impl From<smol::io::Error> for OpenAIError {
+    fn from(err: smol::io::Error) -> Self {
         Self::IoError(err.to_string())
     }
 }
@@ -197,7 +215,6 @@ impl From<crate::config::ConfigError> for OpenAIError {
         Self::ConfigError(err.to_string())
     }
 }
-
 
 impl From<futures::channel::mpsc::SendError> for OpenAIError {
     fn from(err: futures::channel::mpsc::SendError) -> Self {
@@ -210,7 +227,6 @@ impl From<OpenAIError> for blanco_core::chat_provider::ProviderError {
         anyhow::anyhow!("OpenAI error: {}", err).into()
     }
 }
-
 
 /// Result type for OpenAI operations
 pub type OpenAIResult<T> = Result<T, OpenAIError>;
@@ -236,15 +252,23 @@ mod tests {
         let timeout_err = OpenAIError::Timeout;
         assert_eq!(timeout_err.to_string(), "Request timeout");
 
-        let tool_err = OpenAIError::tool_error("call_123".to_string(), "Function failed".to_string());
-        assert_eq!(tool_err.to_string(), "Tool error [call_123]: Function failed");
+        let tool_err =
+            OpenAIError::tool_error("call_123".to_string(), "Function failed".to_string());
+        assert_eq!(
+            tool_err.to_string(),
+            "Tool error [call_123]: Function failed"
+        );
     }
 
     #[test]
     fn test_retryable_errors() {
         assert!(OpenAIError::Timeout.is_retryable());
         assert!(OpenAIError::rate_limit_error("Too many requests".to_string()).is_retryable());
-        assert!(OpenAIError::server_error(StatusCode::INTERNAL_SERVER_ERROR, "Server error".to_string()).is_retryable());
+        assert!(OpenAIError::server_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Server error".to_string()
+        )
+        .is_retryable());
         assert!(!OpenAIError::InvalidRequest("Bad input".to_string()).is_retryable());
         assert!(!OpenAIError::AuthenticationError("Bad token".to_string()).is_retryable());
     }
@@ -296,7 +320,8 @@ mod tests {
     #[test]
     fn test_error_conversions() {
         // Create a JSON error by parsing invalid JSON
-        let json_err: serde_json::Error = serde_json::from_str::<serde_json::Value>("{invalid json}").unwrap_err();
+        let json_err: serde_json::Error =
+            serde_json::from_str::<serde_json::Value>("{invalid json}").unwrap_err();
         let openai_err: OpenAIError = json_err.into();
         assert!(matches!(openai_err, OpenAIError::JsonError(_)));
 

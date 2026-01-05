@@ -273,7 +273,7 @@ impl EditorPanel {
         // Load snippet data
         let app_database = AppDatabase::global(cx);
         if let Ok(Some(snippet_data)) =
-            async_std::task::block_on(async { app_database.get_snippet_by_id(snippet_id).await })
+            smol::block_on(async { app_database.get_snippet_by_id(snippet_id).await })
         {
             snippet_editor.update(cx, |editor, cx| {
                 editor.load_snippet(snippet_data, window, cx);

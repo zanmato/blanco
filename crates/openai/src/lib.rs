@@ -18,7 +18,7 @@
 //! use zed_reqwest as reqwest;
 //! use std::sync::Arc;
 //!
-//! #[async_std::main]
+//! #[smol::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     // Create configuration
 //!     let config = OpenAIConfig::new("your-api-key-here");

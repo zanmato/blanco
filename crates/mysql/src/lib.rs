@@ -20,7 +20,7 @@ mod tests {
     use sqlx::{mysql::MySqlPoolOptions, Column, Row};
     use std::env;
 
-    #[async_std::test]
+    #[smol::test]
     async fn test_mysql_data_type_serialization() -> Result<(), Box<dyn std::error::Error>> {
         // Use the provided MySQL test database
         let connection_string = env::var("MYSQL_CONNECTION_STRING")

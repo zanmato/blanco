@@ -135,9 +135,7 @@ impl OpenAIClient {
         // Use tokio's timeout function
         let response = self
             .runtime_handle
-            .spawn(async move {
-                tokio::time::timeout(timeout, req_builder.send()).await
-            })
+            .spawn(async move { tokio::time::timeout(timeout, req_builder.send()).await })
             .await
             .map_err(|_| OpenAIError::Timeout)?
             .map_err(|e| OpenAIError::HttpError(e.to_string()))?
@@ -412,14 +410,10 @@ impl ChatProvider for OpenAIClient {
         // Send the request with timeout
         let response = self
             .runtime_handle
-            .spawn(async move {
-                tokio::time::timeout(timeout, req_builder.send()).await
-            })
+            .spawn(async move { tokio::time::timeout(timeout, req_builder.send()).await })
             .await
             .map_err(|_| -> ProviderError { anyhow::anyhow!("Request timeout").into() })?
-            .map_err(|e| -> ProviderError {
-                anyhow::anyhow!("HTTP request failed: {}", e).into()
-            })?
+            .map_err(|e| -> ProviderError { anyhow::anyhow!("HTTP request failed: {}", e).into() })?
             .map_err(|err| -> ProviderError {
                 anyhow::anyhow!("HTTP request failed: {}", err).into()
             })?;
@@ -504,165 +498,3 @@ impl ChatProvider for OpenAIClient {
             .map(|executor| executor.get_tool_definitions())
     }
 }
-
-// Tests temporarily disabled due to HttpClient trait implementation complexity
-/*
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Mock HTTP client for testing
-    struct MockHttpClient {
-        response_text: String,
-        status_code: StatusCode,
-    }
-
-    impl MockHttpClient {
-        fn new(response_text: &str, status_code: StatusCode) -> Self {
-            Self {
-                response_text: response_text.to_string(),
-                status_code,
-            }
-        }
-    }
-
-    // Simple mock for testing - we'll comment out the trait implementation for now
-    /*
-    #[async_trait::async_trait]
-    impl HttpClient for MockHttpClient {
-        async fn send(
-            &self,
-            _request: http::Request<AsyncBody>,
-        ) -> Result<http::Response<AsyncBody>, Box<dyn std::error::Error + Send + Sync + 'static>> {
-            Ok(http::Response::builder()
-                .status(self.status_code)
-                .body(AsyncBody::from(self.response_text.clone()))?)
-        }
-
-        fn type_name(&self) -> &'static str {
-            "mock"
-        }
-
-        fn user_agent(&self) -> Option<&http::header::HeaderValue> {
-            None
-        }
-
-        fn proxy(&self) -> Option<&http::Uri> {
-            None
-        }
-    }
-    */
-
-    // Test temporarily disabled due to HttpClient trait implementation complexity
-    /*
-    #[test]
-    fn test_client_creation() {
-        let http_client = Arc::new(MockHttpClient::new("", StatusCode::OK));
-        let config = OpenAIConfig::new("test-key");
-
-        let client = OpenAIClient::new(http_client, config);
-        assert!(client.is_ok());
-    }
-    */
-
-    #[test]
-    fn test_client_validation() {
-        let http_client = Arc::new(MockHttpClient::new("", StatusCode::OK));
-
-        // Test with empty API key
-        let config = OpenAIConfig::new("");
-        let client = OpenAIClient::new(http_client, config);
-        assert!(client.is_err());
-    }
-
-    #[test]
-    fn test_config_validation() {
-        let mut config = OpenAIConfig::new("test-key");
-        assert!(config.validate().is_ok());
-
-        config.temperature = 3.0;
-        assert!(config.validate().is_err());
-
-        config.temperature = 0.7;
-        config.max_tokens = 0;
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_chat_completions_url() {
-        let config = OpenAIConfig::new("test-key");
-        assert_eq!(
-            config.chat_completions_url(),
-            "https://api.openai.com/v1/chat/completions"
-        );
-
-        let config = config.with_base_url("https://api.example.com");
-        assert_eq!(
-            config.chat_completions_url(),
-            "https://api.example.com/chat/completions"
-        );
-    }
-
-    #[cfg(test)]
-    mod integration_tests {
-        use super::*;
-
-        #[async_std::test]
-        async fn test_chat_completion_success() {
-            let mock_response = r#"
-            {
-                "id": "chatcmpl-123",
-                "object": "chat.completion",
-                "created": 1677652288,
-                "model": "gpt-4",
-                "choices": [{
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": "Hello!"
-                    },
-                    "finish_reason": "stop"
-                }],
-                "usage": {
-                    "prompt_tokens": 9,
-                    "completion_tokens": 12,
-                    "total_tokens": 21
-                }
-            }
-            "#;
-
-            let http_client = Arc::new(MockHttpClient::new(mock_response, StatusCode::OK));
-            let config = OpenAIConfig::new("test-key");
-            let client = OpenAIClient::new(http_client, config).unwrap();
-
-            let request = ChatCompletionRequest {
-                model: "gpt-4".to_string(),
-                messages: vec![Message::user("Hello")],
-                ..Default::default()
-            };
-
-            let result = client.chat_completion(request).await;
-            assert!(result.is_ok());
-
-            let response = result.unwrap();
-            assert_eq!(response.id, "chatcmpl-123");
-            assert_eq!(response.model, "gpt-4");
-            assert_eq!(response.choices.len(), 1);
-            assert_eq!(response.choices[0].message.content, "Hello!");
-        }
-
-        #[async_std::test]
-        async fn test_chat_completion_error() {
-            let http_client = Arc::new(MockHttpClient::new("", StatusCode::UNAUTHORIZED));
-            let config = OpenAIConfig::new("invalid-key");
-            let client = OpenAIClient::new(http_client, config).unwrap();
-
-            let request = ChatCompletionRequest::default();
-            let result = client.chat_completion(request).await;
-            assert!(result.is_err());
-            // The error should be converted to ProviderError
-            // Just check that we get an error, specific error type depends on conversion
-        }
-    }
-}
-*/

@@ -9,7 +9,7 @@ description = "MySQL/MariaDB database implementation for Blanco SQL editor"
 blanco-core = { path = "../blanco-core" }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-async-std = { workspace = true }
+smol = { workspace = true }
 
 # GPUI dependencies
 gpui = { workspace = true }
@@ -51,5 +51,4 @@ hex = "0.4"
 
 [dev-dependencies]
 # Dependencies for integration tests
-async-std = { workspace = true }
 env_logger = { workspace = true }

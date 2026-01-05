@@ -203,7 +203,7 @@ impl BlancoApp {
 
         // Synchronously load tabs from database - wait for database to be initialized
         let app_database = AppDatabase::global(cx);
-        let saved_tabs = async_std::task::block_on(async {
+        let saved_tabs = smol::block_on(async {
             // Database should already be initialized synchronously{
             match app_database.load_query_tabs().await {
                 Ok(tabs) => {
@@ -297,7 +297,6 @@ impl BlancoApp {
         let sidebar_clone = sidebar.clone();
         let editor_panel_for_subscription = editor_panel.clone();
 
-        let snippets_panel_for_refresh = snippets_panel.downgrade();
         let subscription = cx.subscribe(&editor_panel, move |app, _editor_panel, event, cx| {
             let editor_panel_for_events = editor_panel_for_subscription.clone();
             match event {

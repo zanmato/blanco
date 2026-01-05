@@ -1,7 +1,7 @@
 use anyhow::Result;
-use async_std::channel::Sender;
 use futures::StreamExt;
 use gpui::{Context, EventEmitter, Task};
+use smol::channel::Sender;
 use std::sync::Arc;
 
 use super::chat_types::{
@@ -194,7 +194,7 @@ impl ChatSession {
 
         cx.spawn(async move |chat_session_handle, async_cx| {
             // Create an async channel for real-time UI updates
-            let (tx, mut rx) = async_std::channel::unbounded::<ChatMessage>();
+            let (tx, rx) = smol::channel::unbounded::<ChatMessage>();
 
             // Set initial loading state to connecting
             let _ = chat_session_handle.update(async_cx, |session, cx| {
@@ -205,6 +205,7 @@ impl ChatSession {
             let handle_clone = chat_session_handle.clone();
             async_cx
                 .spawn(async move |cx| {
+                    futures::pin_mut!(rx);
                     while let Some(message) = rx.next().await {
                         if handle_clone
                             .update(cx, |chat_session, cx| {

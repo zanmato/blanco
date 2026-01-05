@@ -39,5 +39,5 @@ tempfile = "3.8"
 
 [dev-dependencies]
 # Dependencies for integration tests
-async-std = { workspace = true }
+smol = { workspace = true }
 env_logger = { workspace = true }

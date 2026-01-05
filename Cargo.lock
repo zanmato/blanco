@@ -245,8 +245,8 @@ version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6cbdf310d77fd3aaee6ea2093db7011dc2d35d2eb3481e5607f1f8d942ed99df"
 dependencies = [
- "async-fs 2.2.0",
- "async-net 2.0.0",
+ "async-fs",
+ "async-net",
  "enumflags2",
  "futures-channel",
  "futures-util",
@@ -266,8 +266,8 @@ version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da0986d5b4f0802160191ad75f8d33ada000558757db3defb70299ca95d9fcbd"
 dependencies = [
- "async-fs 2.2.0",
- "async-net 2.0.0",
+ "async-fs",
+ "async-net",
  "enumflags2",
  "futures-channel",
  "futures-util",
@@ -276,16 +276,6 @@ dependencies = [
  "serde_repr",
  "url",
  "zbus",
-]
-
-[[package]]
-name = "async-attributes"
-version = "1.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3203e79f4dd9bdda415ed03cf14dae5a2bf775c683a00f94e9cd1faf0f596e5"
-dependencies = [
- "quote",
- "syn 1.0.109",
 ]
 
 [[package]]
@@ -348,18 +338,6 @@ dependencies = [
  "futures-lite 2.6.1",
  "pin-project-lite",
  "slab",
-]
-
-[[package]]
-name = "async-fs"
-version = "1.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "279cf904654eeebfa37ac9bb1598880884924aab82e290aa65c9e77a0e142e06"
-dependencies = [
- "async-lock 2.8.0",
- "autocfg",
- "blocking",
- "futures-lite 1.13.0",
 ]
 
 [[package]]
@@ -448,17 +426,6 @@ dependencies = [
 
 [[package]]
 name = "async-net"
-version = "1.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0434b1ed18ce1cf5769b8ac540e33f01fa9471058b5e89da9e06f3c882a8c12f"
-dependencies = [
- "async-io 1.13.0",
- "blocking",
- "futures-lite 1.13.0",
-]
-
-[[package]]
-name = "async-net"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b948000fad4873c1c9339d60f2623323a0cfd3816e5181033c6a5cb68b2accf7"
@@ -466,23 +433,6 @@ dependencies = [
  "async-io 2.6.0",
  "blocking",
  "futures-lite 2.6.1",
-]
-
-[[package]]
-name = "async-process"
-version = "1.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea6438ba0a08d81529c69b36700fa2f95837bfe3e776ab39cde9c14d9149da88"
-dependencies = [
- "async-io 1.13.0",
- "async-lock 2.8.0",
- "async-signal",
- "blocking",
- "cfg-if",
- "event-listener 3.1.0",
- "futures-lite 1.13.0",
- "rustix 0.38.44",
- "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -538,12 +488,11 @@ version = "1.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2c8e079a4ab67ae52b7403632e4618815d6db36d2a010cfe41b02c1b1578f93b"
 dependencies = [
- "async-attributes",
  "async-channel 1.9.0",
  "async-global-executor",
  "async-io 2.6.0",
  "async-lock 3.4.1",
- "async-process 2.5.0",
+ "async-process",
  "crossbeam-utils",
  "futures-channel",
  "futures-core",
@@ -876,7 +825,6 @@ name = "blanco"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-std",
  "async-stream",
  "async-trait",
  "blanco-core",
@@ -897,7 +845,6 @@ dependencies = [
  "mysql",
  "once_cell",
  "postgres",
- "pulldown-cmark",
  "regex",
  "reqwest",
  "ropey",
@@ -905,7 +852,7 @@ dependencies = [
  "rust_decimal",
  "serde",
  "serde_json",
- "smol 1.3.0",
+ "smol",
  "sql-parse",
  "sqlite",
  "sqlx",
@@ -943,7 +890,6 @@ name = "blanco-openai"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-std",
  "async-stream",
  "async-trait",
  "blanco-core",
@@ -954,6 +900,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "smol",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
@@ -1364,7 +1311,7 @@ dependencies = [
 [[package]]
 name = "collections"
 version = "0.1.0"
-source = "git+https://github.com/zed-industries/zed#e1a09e290c48fc02d07aaf2150856d77996414df"
+source = "git+https://github.com/zed-industries/zed?rev=da992374b3a702e1675902325c6fc0870fbbd23a#da992374b3a702e1675902325c6fc0870fbbd23a"
 dependencies = [
  "indexmap",
  "rustc-hash 2.1.1",
@@ -1783,7 +1730,6 @@ name = "database"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-std",
  "async-trait",
  "blanco-core",
  "gpui",
@@ -1793,6 +1739,7 @@ dependencies = [
  "russh",
  "serde",
  "serde_json",
+ "smol",
  "sqlite",
  "sqlx",
  "tokio",
@@ -1835,7 +1782,7 @@ dependencies = [
 [[package]]
 name = "derive_refineable"
 version = "0.1.0"
-source = "git+https://github.com/zed-industries/zed#e1a09e290c48fc02d07aaf2150856d77996414df"
+source = "git+https://github.com/zed-industries/zed?rev=da992374b3a702e1675902325c6fc0870fbbd23a#da992374b3a702e1675902325c6fc0870fbbd23a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2256,17 +2203,6 @@ name = "event-listener"
 version = "2.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0206175f82b8d6bf6652ff7d71a1e27fd2e4efde587fd368662814d6ec1d9ce0"
-
-[[package]]
-name = "event-listener"
-version = "3.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d93877bcde0eb80ca09131a08d23f0a5c18a620b01db137dba666d18cd9b30c2"
-dependencies = [
- "concurrent-queue",
- "parking",
- "pin-project-lite",
-]
 
 [[package]]
 name = "event-listener"
@@ -2737,15 +2673,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "getopts"
-version = "0.2.24"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfe4fbac503b8d1f88e6676011885f34b7174f46e59956bba534ba83abded4df"
-dependencies = [
- "unicode-width",
-]
-
-[[package]]
 name = "getrandom"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2896,7 +2823,7 @@ dependencies = [
 [[package]]
 name = "gpui"
 version = "0.2.2"
-source = "git+https://github.com/zed-industries/zed#e1a09e290c48fc02d07aaf2150856d77996414df"
+source = "git+https://github.com/zed-industries/zed?rev=da992374b3a702e1675902325c6fc0870fbbd23a#da992374b3a702e1675902325c6fc0870fbbd23a"
 dependencies = [
  "anyhow",
  "as-raw-xcb-connection",
@@ -2964,7 +2891,7 @@ dependencies = [
  "serde_json",
  "slotmap",
  "smallvec",
- "smol 2.0.2",
+ "smol",
  "spin 0.10.0",
  "stacksafe",
  "strum 0.27.2",
@@ -3024,7 +2951,7 @@ dependencies = [
  "serde_json",
  "serde_repr",
  "smallvec",
- "smol 1.3.0",
+ "smol",
  "tracing",
  "tree-sitter",
  "tree-sitter-bash",
@@ -3085,7 +3012,7 @@ dependencies = [
 [[package]]
 name = "gpui_macros"
 version = "0.1.0"
-source = "git+https://github.com/zed-industries/zed#e1a09e290c48fc02d07aaf2150856d77996414df"
+source = "git+https://github.com/zed-industries/zed?rev=da992374b3a702e1675902325c6fc0870fbbd23a#da992374b3a702e1675902325c6fc0870fbbd23a"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -3322,11 +3249,11 @@ dependencies = [
 [[package]]
 name = "http_client"
 version = "0.1.0"
-source = "git+https://github.com/zed-industries/zed#e1a09e290c48fc02d07aaf2150856d77996414df"
+source = "git+https://github.com/zed-industries/zed?rev=da992374b3a702e1675902325c6fc0870fbbd23a#da992374b3a702e1675902325c6fc0870fbbd23a"
 dependencies = [
  "anyhow",
  "async-compression",
- "async-fs 2.2.0",
+ "async-fs",
  "async-tar",
  "bytes",
  "derive_more",
@@ -4221,7 +4148,7 @@ checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
 [[package]]
 name = "media"
 version = "0.1.0"
-source = "git+https://github.com/zed-industries/zed#e1a09e290c48fc02d07aaf2150856d77996414df"
+source = "git+https://github.com/zed-industries/zed?rev=da992374b3a702e1675902325c6fc0870fbbd23a#da992374b3a702e1675902325c6fc0870fbbd23a"
 dependencies = [
  "anyhow",
  "bindgen",
@@ -4327,7 +4254,6 @@ name = "mysql"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-std",
  "async-trait",
  "blanco-core",
  "chrono",
@@ -4341,6 +4267,7 @@ dependencies = [
  "rust_decimal",
  "serde",
  "serde_json",
+ "smol",
  "sql-parse",
  "sqlx",
  "tracing",
@@ -4788,7 +4715,7 @@ checksum = "e3299dd401feaf1d45afd8fd1c0586f10fcfb22f244bb9afa942cec73503b89d"
 dependencies = [
  "aes",
  "ashpd 0.12.0",
- "async-fs 2.2.0",
+ "async-fs",
  "async-io 2.6.0",
  "async-lock 3.4.1",
  "blocking",
@@ -5041,7 +4968,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 [[package]]
 name = "perf"
 version = "0.1.0"
-source = "git+https://github.com/zed-industries/zed#e1a09e290c48fc02d07aaf2150856d77996414df"
+source = "git+https://github.com/zed-industries/zed?rev=da992374b3a702e1675902325c6fc0870fbbd23a#da992374b3a702e1675902325c6fc0870fbbd23a"
 dependencies = [
  "collections",
  "serde",
@@ -5301,7 +5228,6 @@ name = "postgres"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-std",
  "async-trait",
  "blanco-core",
  "chrono",
@@ -5314,6 +5240,7 @@ dependencies = [
  "rust_decimal",
  "serde",
  "serde_json",
+ "smol",
  "sql-parse",
  "sqlx",
  "tokio",
@@ -5452,18 +5379,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "pulldown-cmark"
-version = "0.9.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57206b407293d2bcd3af849ce869d52068623f19e1b5ff8e8778e3309439682b"
-dependencies = [
- "bitflags 2.10.0",
- "getopts",
- "memchr",
- "unicase",
 ]
 
 [[package]]
@@ -5755,7 +5670,7 @@ dependencies = [
 [[package]]
 name = "refineable"
 version = "0.1.0"
-source = "git+https://github.com/zed-industries/zed#e1a09e290c48fc02d07aaf2150856d77996414df"
+source = "git+https://github.com/zed-industries/zed?rev=da992374b3a702e1675902325c6fc0870fbbd23a#da992374b3a702e1675902325c6fc0870fbbd23a"
 dependencies = [
  "derive_refineable",
 ]
@@ -6742,34 +6657,17 @@ dependencies = [
 
 [[package]]
 name = "smol"
-version = "1.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13f2b548cd8447f8de0fdf1c592929f70f4fc7039a05e47404b0d096ec6987a1"
-dependencies = [
- "async-channel 1.9.0",
- "async-executor",
- "async-fs 1.6.0",
- "async-io 1.13.0",
- "async-lock 2.8.0",
- "async-net 1.8.0",
- "async-process 1.8.1",
- "blocking",
- "futures-lite 1.13.0",
-]
-
-[[package]]
-name = "smol"
 version = "2.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a33bd3e260892199c3ccfc487c88b2da2265080acb316cd920da72fdfd7c599f"
 dependencies = [
  "async-channel 2.5.0",
  "async-executor",
- "async-fs 2.2.0",
+ "async-fs",
  "async-io 2.6.0",
  "async-lock 3.4.1",
- "async-net 2.0.0",
- "async-process 2.5.0",
+ "async-net",
+ "async-process",
  "blocking",
  "futures-lite 2.6.1",
 ]
@@ -6848,7 +6746,6 @@ name = "sqlite"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-std",
  "async-trait",
  "blanco-core",
  "chrono",
@@ -6860,6 +6757,7 @@ dependencies = [
  "ropey",
  "serde",
  "serde_json",
+ "smol",
  "sql-parse",
  "sqlx",
  "tempfile",
@@ -7277,7 +7175,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "sum_tree"
 version = "0.1.0"
-source = "git+https://github.com/zed-industries/zed#e1a09e290c48fc02d07aaf2150856d77996414df"
+source = "git+https://github.com/zed-industries/zed?rev=da992374b3a702e1675902325c6fc0870fbbd23a#da992374b3a702e1675902325c6fc0870fbbd23a"
 dependencies = [
  "arrayvec",
  "log",
@@ -8518,10 +8416,10 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 [[package]]
 name = "util"
 version = "0.1.0"
-source = "git+https://github.com/zed-industries/zed#e1a09e290c48fc02d07aaf2150856d77996414df"
+source = "git+https://github.com/zed-industries/zed?rev=da992374b3a702e1675902325c6fc0870fbbd23a#da992374b3a702e1675902325c6fc0870fbbd23a"
 dependencies = [
  "anyhow",
- "async-fs 2.2.0",
+ "async-fs",
  "async_zip",
  "collections",
  "command-fds",
@@ -8544,7 +8442,7 @@ dependencies = [
  "serde_json",
  "serde_json_lenient",
  "shlex",
- "smol 2.0.2",
+ "smol",
  "take-until",
  "tempfile",
  "tendril",
@@ -8557,7 +8455,7 @@ dependencies = [
 [[package]]
 name = "util_macros"
 version = "0.1.0"
-source = "git+https://github.com/zed-industries/zed#e1a09e290c48fc02d07aaf2150856d77996414df"
+source = "git+https://github.com/zed-industries/zed?rev=da992374b3a702e1675902325c6fc0870fbbd23a#da992374b3a702e1675902325c6fc0870fbbd23a"
 dependencies = [
  "perf",
  "quote",
@@ -9637,7 +9535,7 @@ dependencies = [
  "async-executor",
  "async-io 2.6.0",
  "async-lock 3.4.1",
- "async-process 2.5.0",
+ "async-process",
  "async-recursion",
  "async-task",
  "async-trait",
@@ -9861,7 +9759,7 @@ dependencies = [
 [[package]]
 name = "zlog"
 version = "0.1.0"
-source = "git+https://github.com/zed-industries/zed#e1a09e290c48fc02d07aaf2150856d77996414df"
+source = "git+https://github.com/zed-industries/zed?rev=da992374b3a702e1675902325c6fc0870fbbd23a#da992374b3a702e1675902325c6fc0870fbbd23a"
 dependencies = [
  "anyhow",
  "chrono",
@@ -9872,7 +9770,7 @@ dependencies = [
 [[package]]
 name = "ztracing"
 version = "0.1.0"
-source = "git+https://github.com/zed-industries/zed#e1a09e290c48fc02d07aaf2150856d77996414df"
+source = "git+https://github.com/zed-industries/zed?rev=da992374b3a702e1675902325c6fc0870fbbd23a#da992374b3a702e1675902325c6fc0870fbbd23a"
 dependencies = [
  "tracing",
  "tracing-subscriber",
@@ -9883,7 +9781,7 @@ dependencies = [
 [[package]]
 name = "ztracing_macro"
 version = "0.1.0"
-source = "git+https://github.com/zed-industries/zed#e1a09e290c48fc02d07aaf2150856d77996414df"
+source = "git+https://github.com/zed-industries/zed?rev=da992374b3a702e1675902325c6fc0870fbbd23a#da992374b3a702e1675902325c6fc0870fbbd23a"
 
 [[package]]
 name = "zune-core"

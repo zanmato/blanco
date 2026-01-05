@@ -1,8 +1,6 @@
-use async_std::{
-    fs::File,
-    io::{BufWriter, WriteExt},
-    task,
-};
+use futures::io::{AsyncWriteExt, BufWriter};
+use smol;
+use smol::fs::File;
 use futures::channel::mpsc;
 use futures::{SinkExt, StreamExt};
 use std::path::Path;
@@ -95,7 +93,7 @@ impl ExportService {
         let column_types_clone = column_types.clone();
 
         // Start the producer task in the background
-        let producer_task = task::spawn(async move {
+        smol::spawn(async move {
             let mut row_count = 0;
 
             // Process the stream and send rows through the channel
@@ -132,7 +130,8 @@ impl ExportService {
 
             // Send completion signal
             drop(sender);
-        });
+        })
+        .detach();
 
         // Consumer task: write transformed rows to file
         let file = File::create(file_path)
@@ -205,9 +204,6 @@ impl ExportService {
             .flush()
             .await
             .map_err(|e| anyhow::anyhow!("Failed to flush file: {}", e))?;
-
-        // Wait for producer task to complete
-        producer_task.await;
 
         // Get final file size
         let file_size = std::fs::metadata(file_path).map(|m| m.len()).unwrap_or(0);

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use async_std::sync::RwLock;
+use smol::lock::RwLock;
 use async_trait::async_trait;
 use blanco_core::{ColumnInfo, Connection, ConnectionUIMetadata, QueryResult, TableMetadata};
 use futures::StreamExt;

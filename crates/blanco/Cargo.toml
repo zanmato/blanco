@@ -17,7 +17,6 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 sqlx = { workspace = true }
 sql-parse = { workspace = true }
-async-std = { workspace = true }
 
 # Local dependencies
 gpui_tokio = { path = "../gpui_tokio" }
@@ -38,7 +37,6 @@ url = { workspace = true }
 crossbeam-channel = "0.5"
 async-trait = "0.1"
 lsp-types = { workspace = true }
-pulldown-cmark = { workspace = true }
 regex = { workspace = true }
 rust_decimal = { workspace = true }
 ropey = { workspace = true }

@@ -19,7 +19,7 @@ sqlite = { path = "../sqlite" }
 
 # Async and utilities
 tokio = { version = "1.0", features = ["full", "net", "io-util"] }
-async-std = { workspace = true }
+smol = { workspace = true }
 anyhow = { workspace = true }
 
 # Logging

@@ -1,11 +1,11 @@
 //! Database service implementation with connection and SSH tunnel management
 
 use anyhow::Result;
-use async_std::channel;
-use async_std::sync::RwLock;
 use async_trait::async_trait;
 use blanco_core::{Connection, ConnectionFactory, DatabaseService as DatabaseServiceTrait};
 use gpui::Global;
+use smol::channel;
+use smol::lock::RwLock;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
 

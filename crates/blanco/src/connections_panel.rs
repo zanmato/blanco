@@ -124,7 +124,7 @@ impl ConnectionsPanel {
     pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
         // Load initial connections
         let app_database = AppDatabase::global(cx);
-        let connections = async_std::task::block_on(async {
+        let connections = smol::block_on(async {
             match app_database.load_connections().await {
                 Ok(connections) => connections,
                 Err(e) => {

@@ -1180,7 +1180,8 @@ impl TableDelegate for ResultsTableDelegate {
                                                 let new_input = cx.new(|cx| {
                                                     let editor = InputState::new(window, cx)
                                                         .multi_line(true)
-                                                        .soft_wrap(true);
+                                                        .soft_wrap(true)
+                                                        .show_context_menu(false);
 
                                                     if is_json {
                                                         // Prettify JSON if valid
@@ -1913,7 +1914,7 @@ impl ResultsPanel {
         let database_name = delegate.database_name.clone();
 
         // Create response channel for table operations
-        let (response_tx, response_rx) = async_std::channel::bounded(1);
+        let (response_tx, response_rx) = smol::channel::bounded(1);
 
         // Emit a query execution started event
         cx.emit(AppEvent::QueryExecutionStarted {
