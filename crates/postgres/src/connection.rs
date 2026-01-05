@@ -6,7 +6,7 @@ use blanco_core::{ColumnInfo, Connection, ConnectionUIMetadata, QueryResult, Tab
 use futures::{Stream, StreamExt};
 use sqlx::postgres::types::PgMoney;
 use sqlx::postgres::PgPoolOptions;
-use sqlx::{Column, Row, TypeInfo, ValueRef};
+use sqlx::{Column, Execute, Row, TypeInfo, ValueRef};
 use std::collections::HashMap;
 use std::sync::Arc;
 

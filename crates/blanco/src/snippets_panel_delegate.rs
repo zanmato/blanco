@@ -1,5 +1,6 @@
 use crate::app::{NewSnippet, OpenSnippetEditor};
 use crate::snippets_panel::CreateGroup;
+use gpui::ClickEvent;
 use gpui::{
     App, Entity, InteractiveElement, IntoElement, ParentElement, Styled, Window, div,
     prelude::FluentBuilder, px,
@@ -118,11 +119,14 @@ impl DraggableTreeDelegate for SnippetsTreeDelegate {
                     .child(Label::new(item.label.clone()).text_sm())
                     .child(div().flex_1()),
             )
-            .on_click(
-                window.listener_for(&self.parent, move |this, _event, window, cx| {
-                    this.handle_snippet_double_click(&item_id_for_click, window, cx);
-                }),
-            )
+            .on_click(window.listener_for(
+                &self.parent,
+                move |this, event: &ClickEvent, window, cx| {
+                    if event.click_count() == 2 {
+                        this.handle_snippet_double_click(&item_id_for_click, window, cx);
+                    }
+                },
+            ))
     }
 
     fn context_menu(

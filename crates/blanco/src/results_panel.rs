@@ -976,7 +976,7 @@ impl TableDelegate for ResultsTableDelegate {
         let is_row_number_col = col_ix == 0;
         let col = &self.columns[col_ix];
         div()
-            .font_family("Fira Code")
+            .font_family(cx.theme().mono_font_family.clone())
             .text_sm()
             .pt(px(1.))
             .child(col.name.to_string())
@@ -1039,7 +1039,7 @@ impl TableDelegate for ResultsTableDelegate {
                         .border_2()
                         .border_color(cx.theme().yellow)
                         .p_0()
-                        .font_family("Fira Code")
+                        .font_family(cx.theme().mono_font_family.clone())
                         .child(
                             gpui::deferred(
                                 div()
@@ -1051,7 +1051,7 @@ impl TableDelegate for ResultsTableDelegate {
                                     .bg(cx.theme().background)
                                     .shadow_lg()
                                     .child(
-                                        Input::new(&input).size_full().font_family("Fira Code").text_size(px(12.)).suffix(
+                                        Input::new(&input).size_full().font_family(cx.theme().mono_font_family.clone()).text_size(px(12.)).suffix(
                                             div()
                                                 .cursor_pointer()
                                                 .on_mouse_down(
@@ -1116,7 +1116,7 @@ impl TableDelegate for ResultsTableDelegate {
                 } else {
                     // Normal inline edit with expand icon as suffix
                     div()
-                        .font_family("Fira Code")
+                        .font_family(cx.theme().mono_font_family.clone())
                         .text_xs()
                         .size_full()
                         .flex()
@@ -1217,7 +1217,7 @@ impl TableDelegate for ResultsTableDelegate {
 
             // Render static cell with appropriate handlers
             div()
-                .font_family("Fira Code")
+                .font_family(cx.theme().mono_font_family.clone())
                 .text_size(px(12.))
                 .size_full() // Fill the entire cell container
                 .flex() // Enable flexbox layout

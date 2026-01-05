@@ -112,10 +112,6 @@ impl SnippetEditor {
             let _ = weak_handle.update(cx, |editor, cx| {
                 editor.snippet_id = Some(id);
                 editor.name = saved_name.clone();
-
-                // cx.
-                // Dispatch refresh snippets action
-                //cx.dispatch_action(&RefreshSnippets);
             });
             let _ = cx.update(|cx| {
                 cx.dispatch_action(&RefreshSnippets);
@@ -148,8 +144,10 @@ impl Render for SnippetEditor {
             .child(
                 // Main code editor area
                 Input::new(&self.editor)
+                    .bordered(false)
                     .rounded_none()
                     .font_family(cx.theme().mono_font_family.clone())
+                    .focus_bordered(false)
                     .size_full(),
             )
             .child(

@@ -1129,7 +1129,6 @@ impl Render for EditorPanel {
                             }
                             TabType::Snippet(snippet_editor) => {
                                 let label = snippet_editor.read(cx).get_title();
-                                let show_close_button = self.tabs.len() > 1;
                                 let tab_index = ix;
 
                                 Tab::new()
@@ -1139,29 +1138,20 @@ impl Render for EditorPanel {
                                             .gap_2()
                                             .items_center()
                                             .pr_1()
+                                            .child(Icon::new(IconName::File).text_color(cx.theme().green))
                                             .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .child(snippet_editor.read(cx).get_title())
+                                                Button::new(("close-snippet-tab", ix))
+                                                    .ghost()
+                                                    .xsmall()
+                                                    .icon(IconName::Close)
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.close_tab(tab_index, cx);
+                                                    }))
                                             )
-                                            .when(show_close_button, |this| {
-                                                this.child(
-                                                    Button::new(("close-snippet-tab", ix))
-                                                        .ghost()
-                                                        .xsmall()
-                                                        .icon(IconName::Close)
-                                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                                            this.close_tab(tab_index, cx);
-                                                        }))
-                                                )
-                                            })
-                                            .into_any_element()
                                     )
                             }
                             TabType::Settings(settings_tab) => {
                                 let label = settings_tab.title.clone();
-                                let show_close_button = self.tabs.len() > 1;
                                 let tab_index = ix;
 
                                 Tab::new()
@@ -1171,24 +1161,16 @@ impl Render for EditorPanel {
                                             .gap_2()
                                             .items_center()
                                             .pr_1()
+                                            .child(Icon::new(IconName::Settings))
                                             .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .child(settings_tab.title.clone())
+                                                Button::new(("close-settings-tab", ix))
+                                                    .ghost()
+                                                    .xsmall()
+                                                    .icon(IconName::Close)
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.close_tab(tab_index, cx);
+                                                    }))
                                             )
-                                            .when(show_close_button, |this| {
-                                                this.child(
-                                                    Button::new(("close-settings-tab", ix))
-                                                        .ghost()
-                                                        .xsmall()
-                                                        .icon(IconName::Close)
-                                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                                            this.close_tab(tab_index, cx);
-                                                        }))
-                                                )
-                                            })
-                                            .into_any_element()
                                     )
                             }
                         }
@@ -1233,10 +1215,9 @@ impl Render for EditorPanel {
                                                                 .child(
                                                                     Input::new(&query_tab.editor)
                                                                         .bordered(false)
-                                                                        .p_0()
                                                                         .h_full()
                                                                         .rounded_none()
-                                                                        .font_family("Fira Code")
+                                                                        .font_family(cx.theme().mono_font_family.clone())
                                                                         .text_size(px(14.))
                                                                         .focus_bordered(false)
                                                                 )
