@@ -1,13 +1,50 @@
 use anyhow::Result;
 use futures::StreamExt;
-use gpui::{Context, EventEmitter, Task};
+use gpui::{Context, EventEmitter, SharedString, Task, WeakEntity, Window};
 use smol::channel::Sender;
 use std::sync::Arc;
 
 use super::chat_types::{
     ChatCommand, ChatEvent, ChatMessage, LoadingState, MessageRole, SqlContext,
 };
-use blanco_core::chat_provider::{ChatCompletionRequest, ChatProvider, ProviderError};
+use super::tool_handlers::ToolMode;
+use blanco_core::chat_provider::{ChatCompletionRequest, ChatProvider, ProviderError, ToolResult};
+use database::DatabaseService;
+use gpui_component::input::InputState;
+
+/// Context for creating a ChatSession with database/editor access
+pub struct ChatSessionContext {
+    pub input_state: Option<WeakEntity<InputState>>,
+    pub connection_id: Option<i64>,
+    pub database_name: Option<String>,
+}
+
+impl ChatSessionContext {
+    pub fn new() -> Self {
+        Self {
+            input_state: None,
+            connection_id: None,
+            database_name: None,
+        }
+    }
+
+    pub fn with_input_state(mut self, input_state: WeakEntity<InputState>) -> Self {
+        self.input_state = Some(input_state);
+        self
+    }
+
+    pub fn with_connection(mut self, connection_id: i64, database_name: String) -> Self {
+        self.connection_id = Some(connection_id);
+        self.database_name = Some(database_name);
+        self
+    }
+}
+
+impl Default for ChatSessionContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 pub struct ChatSession {
     pub messages: Vec<ChatMessage>,
@@ -18,7 +55,11 @@ pub struct ChatSession {
     pub sql_context: SqlContext,
     #[allow(dead_code)]
     pub streaming_message_id: Option<String>,
-    pub read_tab_callback: Option<Box<dyn Fn() -> String + Send + Sync>>,
+    // New fields for tool execution
+    pub tool_registry: Option<std::sync::Arc<super::tool_handlers::AgentToolRegistry>>,
+    pub input_state: Option<WeakEntity<InputState>>,
+    pub connection_id: Option<i64>,
+    pub database_name: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -28,7 +69,7 @@ impl ChatSession {
         provider: Arc<dyn ChatProvider<Error = ProviderError>>,
         provider_name: String,
         model_name: String,
-        read_tab_callback: Option<Box<dyn Fn() -> String + Send + Sync>>,
+        context: ChatSessionContext,
     ) -> Self {
         Self {
             messages: Vec::new(),
@@ -38,7 +79,12 @@ impl ChatSession {
             loading_state: LoadingState::Idle,
             sql_context: SqlContext::empty(),
             streaming_message_id: None,
-            read_tab_callback,
+            tool_registry: Some(std::sync::Arc::new(
+                super::tool_handlers::AgentToolRegistry::new(),
+            )),
+            input_state: context.input_state,
+            connection_id: context.connection_id,
+            database_name: context.database_name,
         }
     }
 
@@ -52,7 +98,12 @@ impl ChatSession {
             loading_state: LoadingState::Idle,
             sql_context: SqlContext::empty(),
             streaming_message_id: None,
-            read_tab_callback: None,
+            tool_registry: Some(std::sync::Arc::new(
+                super::tool_handlers::AgentToolRegistry::new(),
+            )),
+            input_state: None,
+            connection_id: None,
+            database_name: None,
         }
     }
 
@@ -66,7 +117,10 @@ impl ChatSession {
             loading_state: LoadingState::Idle,
             sql_context: SqlContext::empty(),
             streaming_message_id: None,
-            read_tab_callback: None,
+            tool_registry: None,
+            input_state: None,
+            connection_id: None,
+            database_name: None,
         }
     }
 
@@ -107,6 +161,18 @@ impl ChatSession {
         self.sql_context = context;
     }
 
+    pub fn set_tool_mode(&mut self, mode: ToolMode, cx: &mut Context<Self>) {
+        if let Some(registry) = &self.tool_registry {
+            // Clone the Arc to get mutable access to inner value
+            // We need to update through a different approach since Arc doesn't allow direct mutation
+            // For now, we'll recreate the registry with the new mode
+            self.tool_registry = Some(Arc::new(
+                crate::agent::tool_handlers::AgentToolRegistry::with_mode(mode),
+            ));
+            cx.notify();
+        }
+    }
+
     pub fn get_system_prompt(&self) -> String {
         self.sql_context.to_system_prompt()
     }
@@ -114,6 +180,7 @@ impl ChatSession {
     pub fn send_message(
         &mut self,
         user_message: String,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<Result<String>> {
         let message = ChatMessage::user(user_message.clone());
@@ -124,17 +191,9 @@ impl ChatSession {
             return self.handle_command(command, cx);
         }
 
-        // Check for "read-tab" tool request
-        // TODO: implement correctly instead of intercepting here
-        if user_message.to_lowercase().contains("read-tab")
-            || user_message.to_lowercase().contains("read tab")
-        {
-            return self.handle_read_tab_tool(cx);
-        }
-
         // Handle regular message based on available provider
         if let Some(provider) = &self.provider {
-            self.send_provider_message(provider.clone(), &user_message, cx)
+            self.send_provider_message(provider.clone(), &user_message, window, cx)
         } else {
             Task::ready(Err(anyhow::anyhow!("no provider")))
         }
@@ -161,29 +220,11 @@ impl ChatSession {
         Task::ready(Ok(response))
     }
 
-    fn handle_read_tab_tool(&mut self, cx: &mut Context<Self>) -> Task<Result<String>> {
-        // Get current query from SqlContext
-        let current_query = if !self.sql_context.current_query.is_empty() {
-            self.sql_context.current_query.clone()
-        } else if let Some(callback) = &self.read_tab_callback {
-            callback()
-        } else {
-            "No SQL query found in the current tab.".to_string()
-        };
-
-        let response = format!("Current tab content:\n```sql\n{}\n```", current_query);
-
-        let message = ChatMessage::assistant(response.clone(), self.model_name.clone());
-        self.add_message(message.clone(), cx);
-        cx.emit(ChatEvent::MessageAdded { message });
-
-        Task::ready(Ok(response))
-    }
-
     fn send_provider_message(
         &mut self,
         provider: Arc<dyn ChatProvider<Error = ProviderError>>,
         user_message: &str,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<Result<String>> {
         let system_prompt = self.sql_context.to_system_prompt();
@@ -192,7 +233,7 @@ impl ChatSession {
         let user_message = user_message.to_string();
         let provider_clone = provider.clone();
 
-        cx.spawn(async move |chat_session_handle, async_cx| {
+        cx.spawn_in(window, async move |chat_session_handle, async_cx| {
             // Create an async channel for real-time UI updates
             let (tx, rx) = smol::channel::unbounded::<ChatMessage>();
 
@@ -256,7 +297,7 @@ impl ChatSession {
         model_name: String,
         user_message: String,
         ui_sender: Sender<ChatMessage>,
-        async_cx: &mut gpui::AsyncApp,
+        async_cx: &mut gpui::AsyncWindowContext,
     ) -> Result<String> {
         // Build initial request messages with conversation history
         let mut request_messages =
@@ -282,6 +323,20 @@ impl ChatSession {
                 session.set_loading_state(LoadingState::Streaming, cx);
             });
 
+            // Get tools from session's tool registry
+            let tools = chat_session_handle
+                .update_in(async_cx, |session, window, _cx| {
+                    Ok::<_, anyhow::Error>(
+                        session
+                            .tool_registry
+                            .as_ref()
+                            .map(|registry| registry.get_tool_definitions()),
+                    )
+                })
+                .ok()
+                .and_then(|r| r.ok())
+                .unwrap_or_default();
+
             // Create and send request
             let request = ChatCompletionRequest {
                 model: model_name.clone(),
@@ -289,7 +344,7 @@ impl ChatSession {
                 stream: false,
                 temperature: 0.7,
                 max_tokens: Some(2048),
-                tools: provider.get_tools(),
+                tools: tools,
                 tool_choice: None,
                 top_p: None,
                 frequency_penalty: None,
@@ -341,11 +396,12 @@ impl ChatSession {
 
                     // Process tool calls with real-time UI updates
                     request_messages = Self::process_tool_calls_with_realtime_ui(
-                        &provider,
+                        &chat_session_handle,
                         &choice.message,
                         request_messages,
                         &model_name,
                         &ui_sender,
+                        async_cx,
                     )
                     .await
                     .map_err(|e| {
@@ -401,11 +457,12 @@ impl ChatSession {
 
     /// Process tool calls with real-time UI updates
     async fn process_tool_calls_with_realtime_ui(
-        provider: &Arc<dyn ChatProvider<Error = ProviderError>>,
+        chat_session_handle: &gpui::WeakEntity<ChatSession>,
         assistant_message: &blanco_core::chat_provider::Message,
         mut current_messages: Vec<blanco_core::chat_provider::Message>,
         model_name: &str,
         ui_sender: &Sender<ChatMessage>,
+        async_cx: &mut gpui::AsyncWindowContext,
     ) -> Result<Vec<blanco_core::chat_provider::Message>> {
         let tool_calls = assistant_message
             .tool_calls
@@ -461,7 +518,80 @@ impl ChatSession {
             let tool_call = tool_call.clone();
             let tool_call_for_error = tool_call.clone();
 
-            match provider.call_tool(tool_call).await {
+            // Get tool context and registry from session
+            let (tool_registry, input_state, connection_id, database_name, db_service) =
+                match chat_session_handle.update_in(async_cx, |session, window, cx| {
+                    let db_service = database::DatabaseService::global(cx);
+                    Ok::<_, anyhow::Error>((
+                        session.tool_registry.clone(),
+                        session.input_state.clone(),
+                        session.connection_id,
+                        session.database_name.clone(),
+                        Arc::new(db_service.clone()) as Arc<dyn blanco_core::DatabaseService>,
+                    ))
+                }) {
+                    Ok(Ok(result)) => result,
+                    Ok(Err(e)) => {
+                        let error_content = format!("Failed to get session state: {}", e);
+                        let tool_ui_message = ChatMessage::tool(
+                            error_content.clone(),
+                            tool_call_for_error.id.clone(),
+                            model_name.to_string(),
+                        );
+                        let _ = ui_sender.send(tool_ui_message).await;
+
+                        current_messages.push(blanco_core::chat_provider::Message {
+                            role: "tool".to_string(),
+                            content: error_content,
+                            tool_call_id: Some(tool_call_for_error.id.clone()),
+                            tool_calls: None,
+                            additional_data: None,
+                        });
+
+                        failed_tool_calls += 1;
+                        continue;
+                    }
+                    Err(e) => {
+                        let error_content = format!("Failed to access session: {}", e);
+                        let tool_ui_message = ChatMessage::tool(
+                            error_content.clone(),
+                            tool_call_for_error.id.clone(),
+                            model_name.to_string(),
+                        );
+                        let _ = ui_sender.send(tool_ui_message).await;
+
+                        current_messages.push(blanco_core::chat_provider::Message {
+                            role: "tool".to_string(),
+                            content: error_content,
+                            tool_call_id: Some(tool_call_for_error.id.clone()),
+                            tool_calls: None,
+                            additional_data: None,
+                        });
+
+                        failed_tool_calls += 1;
+                        continue;
+                    }
+                };
+
+            let tool_context = super::tool_handlers::ToolContext {
+                db_service,
+                connection_id,
+                database_name,
+                input_state,
+            };
+
+            let result: Result<ToolResult, anyhow::Error> = if let Some(registry) = tool_registry {
+                Ok(registry
+                    .execute_tool(&tool_call, &tool_context, async_cx)
+                    .await)
+            } else {
+                Ok(ToolResult::error(
+                    tool_call.id.clone(),
+                    "No tool registry available",
+                ))
+            };
+
+            match result {
                 Ok(result) => {
                     tracing::debug!(
                         "Tool call {}/{} succeeded - success: {}, content length: {}",

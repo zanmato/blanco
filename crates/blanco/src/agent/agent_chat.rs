@@ -1,27 +1,29 @@
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
-    KeybindingKeystroke, Keystroke, ParentElement, Render, StatefulInteractiveElement as _, Styled,
-    Subscription, Window, actions, div, prelude::FluentBuilder, px,
+    KeybindingKeystroke, Keystroke, ParentElement, Render, SharedString,
+    StatefulInteractiveElement as _, Styled, Subscription, Window, actions, div,
+    prelude::FluentBuilder, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, Sizable, StyledExt as _,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputState},
+    scroll::Scrollbar,
+    select::{Select, SelectDelegate, SelectEvent, SelectItem, SelectState},
     spinner::Spinner,
     v_flex,
 };
 use std::sync::Arc;
 use std::time::Duration;
 
-
 use super::chat_message_view::ChatMessageState;
-use super::chat_session::ChatSession;
+use super::chat_session::{ChatSession, ChatSessionContext};
 use super::chat_types::{ChatEvent, LoadingState, SqlContext};
+use super::tool_handlers::ToolMode;
 use blanco_core::chat_provider::{ChatProvider, ProviderError};
 use blanco_ui::IconName;
 use gpui::ScrollHandle;
-use gpui_component::scroll::Scrollbar;
 
 actions!(agent_chat, [SendMessage, ClearChat]);
 
@@ -36,6 +38,7 @@ pub struct ChatPanel {
     pub tab_id: usize,
     pub send_message_keystroke: KeybindingKeystroke,
     pub read_tab_callback: Option<Box<dyn Fn() -> String + Send + Sync>>,
+    pub tool_mode_select: Entity<SelectState<ToolModeSelectDelegate>>,
 }
 
 impl ChatPanel {
@@ -44,11 +47,13 @@ impl ChatPanel {
         provider: Arc<dyn ChatProvider<Error = ProviderError>>,
         provider_name: String,
         model_name: String,
+        session_context: ChatSessionContext,
         read_tab_callback: Option<Box<dyn Fn() -> String + Send + Sync>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let session = cx.new(|_cx| ChatSession::new(provider, provider_name, model_name, None));
+        let session =
+            cx.new(|_cx| ChatSession::new(provider, provider_name, model_name, session_context));
 
         // If we have a callback, we'll need to set it after session creation
         // For now, we'll skip this since the simple approach doesn't need the callback
@@ -128,6 +133,38 @@ impl ChatPanel {
 
         subscriptions.push(subscription);
 
+        // Create tool mode select (Read/Write)
+        let tool_mode_select = cx.new(|cx| {
+            SelectState::new(
+                ToolModeSelectDelegate::new(),
+                Some(gpui_component::IndexPath::default().row(0)), // Default to "Read"
+                window,
+                cx,
+            )
+        });
+
+        // Subscribe to tool mode select changes
+        let session_clone = session.clone();
+        subscriptions.push(
+            cx.subscribe(
+                &tool_mode_select,
+                move |_panel, _select, event, cx| match event {
+                    SelectEvent::Confirm(selected) => {
+                        let mode = if selected.as_ref().map(|s| s.as_str()) == Some("Write") {
+                            ToolMode::Write
+                        } else {
+                            ToolMode::Read
+                        };
+
+                        _ = session_clone.update(cx, |session, cx| {
+                            session.set_tool_mode(mode, cx);
+                        });
+                    }
+                    _ => {}
+                },
+            ),
+        );
+
         Self {
             focus_handle: cx.focus_handle(),
             scroll_handle: ScrollHandle::new(),
@@ -141,6 +178,7 @@ impl ChatPanel {
                 Keystroke::parse("shift-enter").unwrap(),
             ),
             read_tab_callback,
+            tool_mode_select,
         }
     }
 
@@ -162,7 +200,9 @@ impl ChatPanel {
         cx.notify();
 
         self.session.update(cx, |session, cx| {
-            session.send_message(input_text.clone(), cx).detach();
+            session
+                .send_message(input_text.clone(), window, cx)
+                .detach();
         });
     }
 
@@ -280,16 +320,9 @@ impl Render for ChatPanel {
                                             matches!(self.loading_state, LoadingState::Error(_)),
                                             |this| {
                                                 this.child(
-                                                    div()
-                                                        .flex()
-                                                        .items_center()
-                                                        .gap_1()
-                                                        .child(
-                                                            Icon::new(IconName::TriangleAlert)
-                                                                .size(px(14.))
-                                                                .text_color(gpui::red()),
-                                                        )
-                                                        .child("Error"),
+                                                    Icon::new(IconName::TriangleAlert)
+                                                        .size(px(14.))
+                                                        .text_color(gpui::red()),
                                                 )
                                             },
                                         ),
@@ -337,19 +370,77 @@ impl Render for ChatPanel {
                                 .editor_background
                                 .unwrap_or(cx.theme().background)),
                     )
-                    // Send button positioned further to bottom right corner
+                    // Tool mode select and send button in a row below the input
                     .child(
-                        div().absolute().bottom_3().right_3().child(
-                            Button::new("send-message")
-                                .icon(IconName::ArrowUp)
-                                .primary()
-                                .xsmall()
-                                .disabled(self.loading_state.is_loading())
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.send_message(window, cx);
-                                })),
-                        ),
+                        div()
+                            .w_full()
+                            .p_3()
+                            .flex()
+                            .items_center()
+                            .justify_end()
+                            .gap_2()
+                            .child(
+                                div().w(px(80.)).child(
+                                    Select::new(&self.tool_mode_select)
+                                        .xsmall()
+                                        .appearance(false)
+                                        .menu_width(px(80.)),
+                                ),
+                            )
+                            .child(
+                                Button::new("send-message")
+                                    .icon(IconName::ArrowUp)
+                                    .primary()
+                                    .xsmall()
+                                    .disabled(self.loading_state.is_loading())
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.send_message(window, cx);
+                                    })),
+                            ),
                     ),
             )
+    }
+}
+
+/// Select delegate for tool mode (Read/Write)
+#[derive(Clone)]
+pub struct ToolModeSelectDelegate {
+    modes: Vec<SharedString>,
+}
+
+impl ToolModeSelectDelegate {
+    pub fn new() -> Self {
+        Self {
+            modes: vec!["Read".into(), "Write".into()],
+        }
+    }
+}
+
+impl Default for ToolModeSelectDelegate {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SelectDelegate for ToolModeSelectDelegate {
+    type Item = SharedString;
+
+    fn items_count(&self, _section: usize) -> usize {
+        self.modes.len()
+    }
+
+    fn item(&self, ix: gpui_component::IndexPath) -> Option<&Self::Item> {
+        self.modes.get(ix.row)
+    }
+
+    fn position<V>(&self, value: &V) -> Option<gpui_component::IndexPath>
+    where
+        Self::Item: gpui_component::select::SelectItem<Value = V>,
+        V: PartialEq,
+    {
+        self.modes
+            .iter()
+            .position(|v| *v.value() == *value)
+            .map(|ix| gpui_component::IndexPath::default().row(ix))
     }
 }

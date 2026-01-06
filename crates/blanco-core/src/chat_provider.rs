@@ -51,10 +51,8 @@ pub trait ChatProvider: Send + Sync {
         request: ChatCompletionRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamChunk, Self::Error>> + Send>>, Self::Error>;
 
-    /// Call a tool/function
-    async fn call_tool(&self, tool_call: ToolCall) -> Result<ToolResult, Self::Error>;
-
     /// Get the available tools for this provider
+    /// Returns None if provider doesn't support tools or tools are managed externally
     fn get_tools(&self) -> Option<Vec<ToolDefinition>>;
 }
 

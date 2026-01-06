@@ -104,13 +104,13 @@ impl LoadingState {
         !matches!(self, LoadingState::Idle)
     }
 
-    pub fn message(&self) -> &'static str {
+    pub fn message(&self) -> String {
         match self {
-            LoadingState::Idle => "",
-            LoadingState::Connecting => "Connecting...",
-            LoadingState::Streaming => "Thinking",
-            LoadingState::ProcessingTools => "Processing tools...",
-            LoadingState::Error(_) => "Error occurred",
+            LoadingState::Idle => String::new(),
+            LoadingState::Connecting => "Connecting...".to_string(),
+            LoadingState::Streaming => "Thinking".to_string(),
+            LoadingState::ProcessingTools => "Processing tools...".to_string(),
+            LoadingState::Error(e) => e.clone(),
         }
     }
 

@@ -42,7 +42,7 @@ impl Render for ChatMessageState {
 
                             h_flex()
                                 .gap_1()
-                                .child(Clipboard::new(code.clone()).value(code.clone()))
+                                .child(Clipboard::new("copy").value(code.clone()))
                         }),
                 )
             }

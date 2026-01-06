@@ -909,6 +909,7 @@ impl Connection for MysqlConnection {
 
     async fn get_database_schema_paginated(
         &self,
+        _database_name: Option<&str>,
         table_names: Option<&str>,
         limit: Option<i64>,
         offset: Option<i64>,

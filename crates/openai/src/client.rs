@@ -13,19 +13,17 @@ use reqwest;
 use crate::config::OpenAIConfig;
 use crate::error::{OpenAIError, OpenAIResult};
 use crate::provider::*;
-use crate::tools::ToolExecutor;
 
 // Import the ChatProvider trait and types from blanco-core
 use blanco_core::chat_provider::{
-    ChatCompletionRequest, ChatCompletionResponse, ChatProvider, Message, ProviderError,
-    StreamChunk, ToolCall, ToolDefinition, ToolResult,
+    ChatCompletionRequest, ChatCompletionResponse, ChatProvider, ProviderError, StreamChunk,
+    ToolDefinition,
 };
 
 /// OpenAI client that implements the ChatProvider trait
 pub struct OpenAIClient {
     config: OpenAIConfig,
     http_client: Arc<reqwest::Client>,
-    tool_executor: Option<ToolExecutor>,
     runtime_handle: tokio::runtime::Handle,
 }
 
@@ -41,47 +39,6 @@ impl OpenAIClient {
         Ok(Self {
             config,
             http_client,
-            tool_executor: None,
-            runtime_handle,
-        })
-    }
-
-    /// Create a new OpenAI client with a tool executor
-    pub fn with_tool_executor(
-        http_client: Arc<reqwest::Client>,
-        config: OpenAIConfig,
-        tool_executor: ToolExecutor,
-        runtime_handle: tokio::runtime::Handle,
-    ) -> OpenAIResult<Self> {
-        config.validate()?;
-
-        Ok(Self {
-            config,
-            http_client,
-            tool_executor: Some(tool_executor),
-            runtime_handle,
-        })
-    }
-
-    /// Create a new OpenAI client with a tool executor with context provider
-    pub fn with_context_provider<F>(
-        http_client: Arc<reqwest::Client>,
-        config: OpenAIConfig,
-        provider: F,
-        runtime_handle: tokio::runtime::Handle,
-    ) -> OpenAIResult<Self>
-    where
-        F: Fn() -> crate::tools::ConnectionContext + Send + Sync + 'static,
-    {
-        config.validate()?;
-
-        // Create a new tool executor with the context provider
-        let tool_executor = ToolExecutor::with_context_provider(provider);
-
-        Ok(Self {
-            config,
-            http_client,
-            tool_executor: Some(tool_executor),
             runtime_handle,
         })
     }
@@ -96,16 +53,6 @@ impl OpenAIClient {
         config.validate()?;
         self.config = config;
         Ok(())
-    }
-
-    /// Get a reference to the tool executor
-    pub fn tool_executor(&self) -> Option<&ToolExecutor> {
-        self.tool_executor.as_ref()
-    }
-
-    /// Set the tool executor
-    pub fn set_tool_executor(&mut self, tool_executor: Option<ToolExecutor>) {
-        self.tool_executor = tool_executor;
     }
 
     /// Send an HTTP request to the OpenAI API
@@ -206,36 +153,6 @@ impl OpenAIClient {
             .await
             .map_err(|e| OpenAIError::HttpError(e.to_string()))?
             .map_err(|err| OpenAIError::HttpError(format!("Failed to read response: {}", err)))
-    }
-
-    /// Handle tool calls in a response
-    #[allow(dead_code)]
-    async fn handle_tool_calls(&self, tool_calls: &[ToolCall]) -> Vec<Message> {
-        if let Some(executor) = &self.tool_executor {
-            let results = executor.execute_tool_calls(tool_calls).await;
-            results
-                .into_iter()
-                .map(|result| {
-                    if result.success {
-                        Message::tool_result(result.tool_call_id, result.content)
-                    } else {
-                        let error_msg = result.error.unwrap_or_else(|| "Unknown error".to_string());
-                        Message::tool_result(result.tool_call_id, format!("Error: {}", error_msg))
-                    }
-                })
-                .collect()
-        } else {
-            // No tool executor, return error messages
-            tool_calls
-                .iter()
-                .map(|tool_call| {
-                    Message::tool_result(
-                        tool_call.id.clone(),
-                        format!("Tool execution not available: {}", tool_call.function.name),
-                    )
-                })
-                .collect()
-        }
     }
 
     /// Create a streaming response from a bytes stream
@@ -481,20 +398,8 @@ impl ChatProvider for OpenAIClient {
         Ok(Box::pin(parsed_stream))
     }
 
-    async fn call_tool(&self, tool_call: ToolCall) -> Result<ToolResult, Self::Error> {
-        if let Some(executor) = &self.tool_executor {
-            Ok(executor.execute_tool_call(&tool_call).await)
-        } else {
-            Err(ProviderError::from(anyhow::anyhow!(
-                "No tool executor configured for tool: {}",
-                tool_call.id
-            )))
-        }
-    }
-
     fn get_tools(&self) -> Option<Vec<ToolDefinition>> {
-        self.tool_executor
-            .as_ref()
-            .map(|executor| executor.get_tool_definitions())
+        // Tools are managed by the ChatSession
+        None
     }
 }

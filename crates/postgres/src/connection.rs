@@ -10,6 +10,59 @@ use sqlx::{Column, Row, TypeInfo, ValueRef};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Typed parameter for PostgreSQL queries
+#[derive(Debug, Clone)]
+pub enum QueryParam {
+    String(String),
+    StringArray(Vec<String>),
+    I64(i64),
+    I32(i32),
+    F64(f64),
+    Bool(bool),
+}
+
+impl From<String> for QueryParam {
+    fn from(s: String) -> Self {
+        QueryParam::String(s)
+    }
+}
+
+impl From<&str> for QueryParam {
+    fn from(s: &str) -> Self {
+        QueryParam::String(s.to_string())
+    }
+}
+
+impl From<Vec<String>> for QueryParam {
+    fn from(v: Vec<String>) -> Self {
+        QueryParam::StringArray(v)
+    }
+}
+
+impl From<i64> for QueryParam {
+    fn from(n: i64) -> Self {
+        QueryParam::I64(n)
+    }
+}
+
+impl From<i32> for QueryParam {
+    fn from(n: i32) -> Self {
+        QueryParam::I32(n)
+    }
+}
+
+impl From<f64> for QueryParam {
+    fn from(n: f64) -> Self {
+        QueryParam::F64(n)
+    }
+}
+
+impl From<bool> for QueryParam {
+    fn from(b: bool) -> Self {
+        QueryParam::Bool(b)
+    }
+}
+
 /// PostgreSQL connection implementation of the Connection trait
 /// This uses SQLX directly to provide a unified interface with database-specific connection pools
 pub struct PostgresConnection {
@@ -404,7 +457,7 @@ impl PostgresConnection {
     }
 
     /// Get or create a connection pool for a specific database
-    async fn get_or_create_pool(&self, database: &str) -> Result<sqlx::PgPool> {
+    pub(crate) async fn get_or_create_pool(&self, database: &str) -> Result<sqlx::PgPool> {
         let mut pools = self.pools.write().await;
 
         if let Some(pool) = pools.get(database) {
@@ -1186,11 +1239,11 @@ impl PostgresConnection {
 
 impl PostgresConnection {
     /// Helper method to execute a query with parameters
-    async fn execute_query_with_params(
+    pub(crate) async fn execute_query_with_params(
         &self,
         pool: &sqlx::PgPool,
         sql_template: &str,
-        parameters: &[String],
+        parameters: &[QueryParam],
     ) -> Result<QueryResult> {
         use sqlx::Either;
 
@@ -1205,7 +1258,14 @@ impl PostgresConnection {
         } else {
             let mut query = sqlx::query(sql_template);
             for param in parameters {
-                query = query.bind(param);
+                query = match param {
+                    QueryParam::String(s) => query.bind(s.as_str()),
+                    QueryParam::StringArray(arr) => query.bind(arr.as_slice()),
+                    QueryParam::I64(n) => query.bind(*n),
+                    QueryParam::I32(n) => query.bind(*n),
+                    QueryParam::F64(n) => query.bind(*n),
+                    QueryParam::Bool(b) => query.bind(*b),
+                };
             }
             #[allow(deprecated)]
             query.fetch_many(pool)
@@ -1424,10 +1484,15 @@ impl Connection for PostgresConnection {
             )
         })?;
 
-        // Execute the query, passing an empty slice if no parameters are provided
-        let params = parameters.unwrap_or(&[]);
+        // Convert String parameters to QueryParam
+        let params: Vec<QueryParam> = parameters
+            .unwrap_or(&[])
+            .iter()
+            .map(|s| QueryParam::String(s.clone()))
+            .collect();
+
         let result = self
-            .execute_query_with_params(&pool, query, params)
+            .execute_query_with_params(&pool, query, &params)
             .await
             .map_err(|e| anyhow::anyhow!("PostgreSQL query execution failed: {}", e))?;
 
@@ -1774,6 +1839,7 @@ impl Connection for PostgresConnection {
 
     async fn get_database_schema_paginated(
         &self,
+        database_name: Option<&str>,
         table_names: Option<&str>,
         limit: Option<i64>,
         offset: Option<i64>,
@@ -1782,7 +1848,7 @@ impl Connection for PostgresConnection {
         let offset = offset.unwrap_or(0);
 
         let tables = self
-            .get_schema_paginated(table_names, limit, offset)
+            .get_schema_paginated(database_name, table_names, limit, offset)
             .await?;
         let table_count = tables.len();
 

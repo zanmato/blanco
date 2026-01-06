@@ -55,14 +55,12 @@ pub mod client;
 pub mod config;
 pub mod error;
 pub mod provider;
-pub mod tools;
 pub mod types;
 
 // Re-export the main types for convenience
 pub use client::OpenAIClient;
 pub use config::{ConfigError, OpenAIConfig};
 pub use error::{OpenAIError, OpenAIResult};
-pub use tools::{ListTablesTool, ReadTabTool, ToolExecutor, ToolHandler, ToolRegistry};
 pub use types::*;
 
 /// Current version of the crate

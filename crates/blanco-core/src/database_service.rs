@@ -63,51 +63,13 @@ pub trait DatabaseService: Send + Sync {
         let connection = self
             .get_or_create_connection_by_id(connection_id, database)
             .await?;
-        connection.execute_query(sql, database, Some(parameters)).await
+        connection
+            .execute_query(sql, database, Some(parameters))
+            .await
     }
 
     /// Get database schema information as JSON with pagination support
     async fn get_database_schema_paginated(
-        &self,
-        connection_id: i64,
-        table_names: Option<&str>,
-        limit: Option<i64>,
-        offset: Option<i64>,
-    ) -> Result<Value> {
-        let connection = self
-            .get_or_create_connection_by_id(connection_id, None)
-            .await?;
-
-        tracing::info!(
-            "Getting database schema for {} ({}) with limit={:?}, offset={:?}",
-            connection.get_display_name(),
-            connection.get_connection_type(),
-            limit,
-            offset
-        );
-
-        // Use the Connection trait's unified method
-        let schema_result = connection
-            .get_database_schema_paginated(table_names, limit, offset)
-            .await?;
-
-        // Convert the structured result to JSON for compatibility with existing code
-        let json_result = serde_json::json!({
-            "connection_type": schema_result.connection_type,
-            "database_name": schema_result.display_name,
-            "tables": schema_result.tables,
-            "pagination": {
-                "limit": schema_result.pagination.limit,
-                "offset": schema_result.pagination.offset,
-                "has_more": schema_result.pagination.has_more
-            }
-        });
-
-        Ok(json_result)
-    }
-
-    /// Get database schema information as JSON with pagination support for specific database
-    async fn get_database_schema_paginated_with_database(
         &self,
         connection_id: i64,
         database: Option<&str>,
@@ -129,7 +91,7 @@ pub trait DatabaseService: Send + Sync {
 
         // Use the Connection trait's unified method
         let schema_result = connection
-            .get_database_schema_paginated(table_names, limit, offset)
+            .get_database_schema_paginated(database, table_names, limit, offset)
             .await?;
 
         // Convert the structured result to JSON for compatibility with existing code

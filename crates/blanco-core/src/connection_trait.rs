@@ -288,6 +288,7 @@ pub trait Connection: Send + Sync + fmt::Debug {
     /// Returns structured schema information including tables and columns
     async fn get_database_schema_paginated(
         &self,
+        database_name: Option<&str>,
         table_names: Option<&str>,
         limit: Option<i64>,
         offset: Option<i64>,

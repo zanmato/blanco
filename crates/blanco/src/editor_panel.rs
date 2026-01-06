@@ -32,7 +32,7 @@ use crate::sql_completion_provider::SqlCompletionProvider;
 use crate::sql_selection_range_provider::SqlSelectionRangeProvider;
 use crate::sql_statement_parser::extract_statement_info;
 use crate::{
-    agent::{ChatPanel, SqlContext},
+    agent::{ChatPanel, ChatSessionContext, SqlContext},
     app_database::AppDatabase,
 };
 use crate::{app::RenameTab, app_settings::AppSettings};
@@ -912,6 +912,14 @@ impl EditorPanel {
                         // The tab content will be accessed through the existing SqlContext mechanism
                         let read_tab_callback: Option<Box<dyn Fn() -> String + Send + Sync>> = None;
 
+                        // Build the session context from QueryTab
+                        let session_context = ChatSessionContext::new()
+                            .with_input_state(query_tab.editor.downgrade())
+                            .with_connection(
+                                query_tab.connection_id,
+                                query_tab.database_name.clone(),
+                            );
+
                         // Create chat panel with the provider info
                         let chat_panel = cx.new(|cx| {
                             ChatPanel::new(
@@ -919,6 +927,7 @@ impl EditorPanel {
                                 provider_info.provider,
                                 provider_info.provider_name.clone(),
                                 provider_info.model_name.clone(),
+                                session_context,
                                 read_tab_callback,
                                 window,
                                 cx,

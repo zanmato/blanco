@@ -13,7 +13,7 @@ use crate::settings::{ChatSettings, Settings};
 use database::{DatabaseService, DatabaseServiceTrait};
 use blanco_core::chat_provider::{ChatProvider, ProviderError};
 
-use blanco_openai::{ListTablesTool, OpenAIClient, OpenAIConfig, ReadTabTool, ToolExecutor};
+use blanco_openai::{OpenAIClient, OpenAIConfig};
 
 /// Provider cache entry with configuration hash
 #[derive(Clone)]
@@ -120,40 +120,10 @@ impl ChatProviderResolver {
             config = config.with_base_url(&chat_settings.base_url);
         }
 
-        // Create a context provider for tools with real database service
-        let db_service = self.db_service.clone();
-        let current_connection_id = self.current_connection_id;
-
-        let context_provider = move || {
-            // Create a context with the database service and current connection ID
-            if let Some(conn_id) = current_connection_id {
-                // Convert to Arc<dyn DatabaseServiceTrait> then to Arc<dyn DatabaseService>
-                let db_service_arc: Arc<dyn DatabaseServiceTrait> = Arc::new(db_service.clone());
-                let db_service_dyn: Arc<dyn blanco_core::DatabaseService> = db_service_arc;
-                blanco_openai::tools::ConnectionContext::with_database_service(
-                    db_service_dyn,
-                    conn_id,
-                )
-            } else {
-                blanco_openai::tools::ConnectionContext::new()
-            }
-        };
-
-        // Create a tool executor with the context provider
-        let mut tool_executor = ToolExecutor::with_context_provider(context_provider);
-
-        // Register the list-tables tool
-        let list_tables_tool = Box::new(ListTablesTool::new());
-        tool_executor.register_tool(list_tables_tool);
-
-        // Register the read tab tool
-        let read_tab_tool = Box::new(ReadTabTool::new());
-        tool_executor.register_tool(read_tab_tool);
-
-        let client = OpenAIClient::with_tool_executor(
+        // Create client without tool executor (tools are managed by ChatSession)
+        let client = OpenAIClient::new(
             self.http_client.clone(),
             config,
-            tool_executor,
             self.runtime_handle.clone(),
         )
         .map_err(|e| anyhow::anyhow!("Failed to create OpenAI client: {}", e))?;
