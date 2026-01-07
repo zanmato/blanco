@@ -1,6 +1,6 @@
 use anyhow::Result;
 use futures::StreamExt;
-use gpui::{Context, EventEmitter, SharedString, Task, WeakEntity, Window};
+use gpui::{Context, EventEmitter, Task, WeakEntity, Window};
 use smol::channel::Sender;
 use std::sync::Arc;
 
@@ -60,6 +60,7 @@ pub struct ChatSession {
     pub input_state: Option<WeakEntity<InputState>>,
     pub connection_id: Option<i64>,
     pub database_name: Option<String>,
+    pub current_message_task: Option<Task<Result<String>>>,
 }
 
 #[allow(dead_code)]
@@ -85,6 +86,7 @@ impl ChatSession {
             input_state: context.input_state,
             connection_id: context.connection_id,
             database_name: context.database_name,
+            current_message_task: None,
         }
     }
 
@@ -104,6 +106,7 @@ impl ChatSession {
             input_state: None,
             connection_id: None,
             database_name: None,
+            current_message_task: None,
         }
     }
 
@@ -121,6 +124,7 @@ impl ChatSession {
             input_state: None,
             connection_id: None,
             database_name: None,
+            current_message_task: None,
         }
     }
 
@@ -162,15 +166,10 @@ impl ChatSession {
     }
 
     pub fn set_tool_mode(&mut self, mode: ToolMode, cx: &mut Context<Self>) {
-        if let Some(registry) = &self.tool_registry {
-            // Clone the Arc to get mutable access to inner value
-            // We need to update through a different approach since Arc doesn't allow direct mutation
-            // For now, we'll recreate the registry with the new mode
-            self.tool_registry = Some(Arc::new(
-                crate::agent::tool_handlers::AgentToolRegistry::with_mode(mode),
-            ));
-            cx.notify();
-        }
+        self.tool_registry = Some(Arc::new(
+            crate::agent::tool_handlers::AgentToolRegistry::with_mode(mode),
+        ));
+        cx.notify();
     }
 
     pub fn get_system_prompt(&self) -> String {
@@ -182,20 +181,21 @@ impl ChatSession {
         user_message: String,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Task<Result<String>> {
+    ) {
         let message = ChatMessage::user(user_message.clone());
         self.add_message(message.clone(), cx);
 
         // Check if this is a command
         if let Some(command) = ChatCommand::parse(&user_message) {
-            return self.handle_command(command, cx);
+            let task = self.handle_command(command, cx);
+            self.current_message_task = Some(task);
+            return;
         }
 
         // Handle regular message based on available provider
         if let Some(provider) = &self.provider {
-            self.send_provider_message(provider.clone(), &user_message, window, cx)
-        } else {
-            Task::ready(Err(anyhow::anyhow!("no provider")))
+            let task = self.send_provider_message(provider.clone(), &user_message, window, cx);
+            self.current_message_task = Some(task);
         }
     }
 
@@ -281,6 +281,7 @@ impl ChatSession {
 
             let _ = chat_session_handle.update(async_cx, |session, cx| {
                 session.set_loading_state(final_state, cx);
+                session.current_message_task = None;
             });
 
             response
@@ -325,7 +326,7 @@ impl ChatSession {
 
             // Get tools from session's tool registry
             let tools = chat_session_handle
-                .update_in(async_cx, |session, window, _cx| {
+                .update_in(async_cx, |session, _, _| {
                     Ok::<_, anyhow::Error>(
                         session
                             .tool_registry
@@ -520,8 +521,8 @@ impl ChatSession {
 
             // Get tool context and registry from session
             let (tool_registry, input_state, connection_id, database_name, db_service) =
-                match chat_session_handle.update_in(async_cx, |session, window, cx| {
-                    let db_service = database::DatabaseService::global(cx);
+                match chat_session_handle.update_in(async_cx, |session, _window, cx| {
+                    let db_service = DatabaseService::global(cx);
                     Ok::<_, anyhow::Error>((
                         session.tool_registry.clone(),
                         session.input_state.clone(),
@@ -770,6 +771,17 @@ impl ChatSession {
 
     pub fn message_count(&self) -> usize {
         self.messages.len()
+    }
+
+    pub fn is_generating(&self) -> bool {
+        self.current_message_task.is_some() || self.loading_state.is_loading()
+    }
+
+    pub fn abort(&mut self, cx: &mut Context<Self>) {
+        if let Some(task) = self.current_message_task.take() {
+            drop(task);
+        }
+        self.set_loading_state(LoadingState::Idle, cx);
     }
 }
 

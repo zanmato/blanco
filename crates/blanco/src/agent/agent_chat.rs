@@ -37,7 +37,6 @@ pub struct ChatPanel {
     pub loading_state: LoadingState,
     pub tab_id: usize,
     pub send_message_keystroke: KeybindingKeystroke,
-    pub read_tab_callback: Option<Box<dyn Fn() -> String + Send + Sync>>,
     pub tool_mode_select: Entity<SelectState<ToolModeSelectDelegate>>,
 }
 
@@ -48,7 +47,6 @@ impl ChatPanel {
         provider_name: String,
         model_name: String,
         session_context: ChatSessionContext,
-        read_tab_callback: Option<Box<dyn Fn() -> String + Send + Sync>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -177,7 +175,6 @@ impl ChatPanel {
             send_message_keystroke: KeybindingKeystroke::from_keystroke(
                 Keystroke::parse("shift-enter").unwrap(),
             ),
-            read_tab_callback,
             tool_mode_select,
         }
     }
@@ -200,10 +197,16 @@ impl ChatPanel {
         cx.notify();
 
         self.session.update(cx, |session, cx| {
-            session
-                .send_message(input_text.clone(), window, cx)
-                .detach();
+            session.send_message(input_text.clone(), window, cx);
         });
+    }
+
+    pub fn abort_message(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.session.update(cx, |session, cx| {
+            session.abort(cx);
+        });
+        self.loading_state = LoadingState::Idle;
+        cx.notify();
     }
 
     pub fn clear_chat(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -387,16 +390,29 @@ impl Render for ChatPanel {
                                         .menu_width(px(80.)),
                                 ),
                             )
-                            .child(
-                                Button::new("send-message")
-                                    .icon(IconName::ArrowUp)
-                                    .primary()
-                                    .xsmall()
-                                    .disabled(self.loading_state.is_loading())
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.send_message(window, cx);
-                                    })),
-                            ),
+                            .when(self.session.read(cx).is_generating(), |this| {
+                                this.child(
+                                    Button::new("stop-generation")
+                                        .icon(IconName::SquareStop)
+                                        .danger()
+                                        .xsmall()
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.abort_message(window, cx);
+                                        })),
+                                )
+                            })
+                            .when(!self.session.read(cx).is_generating(), |this| {
+                                this.child(
+                                    Button::new("send-message")
+                                        .icon(IconName::ArrowUp)
+                                        .primary()
+                                        .xsmall()
+                                        .disabled(self.loading_state.is_loading())
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.send_message(window, cx);
+                                        })),
+                                )
+                            }),
                     ),
             )
     }

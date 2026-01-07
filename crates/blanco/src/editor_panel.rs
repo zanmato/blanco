@@ -908,10 +908,6 @@ impl EditorPanel {
                 // Create chat provider info first
                 match create_chat_provider_info(query_tab.connection_id, cx) {
                     Ok(provider_info) => {
-                        // For now, we'll pass None and implement a simpler approach
-                        // The tab content will be accessed through the existing SqlContext mechanism
-                        let read_tab_callback: Option<Box<dyn Fn() -> String + Send + Sync>> = None;
-
                         // Build the session context from QueryTab
                         let session_context = ChatSessionContext::new()
                             .with_input_state(query_tab.editor.downgrade())
@@ -928,7 +924,6 @@ impl EditorPanel {
                                 provider_info.provider_name.clone(),
                                 provider_info.model_name.clone(),
                                 session_context,
-                                read_tab_callback,
                                 window,
                                 cx,
                             )
