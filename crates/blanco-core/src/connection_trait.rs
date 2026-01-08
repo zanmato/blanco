@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use futures::Stream;
 use std::collections::HashMap;
-use std::fmt;
 
 /// Database driver types supported by the application
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -140,7 +139,7 @@ impl QueryResult {
 /// Core trait that defines the interface for all database connections
 /// This trait provides a unified interface for SQLite, PostgreSQL, and future database types
 #[async_trait]
-pub trait Connection: Send + Sync + fmt::Debug {
+pub trait Connection: Send + Sync {
     /// Get the unique connection key for this connection
     fn get_connection_key_str(&self) -> String;
 

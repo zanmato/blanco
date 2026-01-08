@@ -65,8 +65,7 @@ impl russh_client::Handler for SshClientHandler {
         &mut self,
         _server_public_key: &russh::keys::key::PublicKey,
     ) -> Result<bool, Self::Error> {
-        // In production, you should verify the server key against a known hosts file
-        // For now, accept all keys
+        // TODO: verify the server key against a known hosts file
         tracing::debug!("Accepting SSH server key");
         Ok(true)
     }

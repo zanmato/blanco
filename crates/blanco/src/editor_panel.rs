@@ -70,31 +70,6 @@ pub struct QueryTab {
     pub chat_panel: Option<Entity<ChatPanel>>,
 }
 
-impl QueryTab {
-    /// Get SQL context for the chat session
-    pub fn get_sql_context(&self, cx: &mut gpui::App) -> SqlContext {
-        let current_query = self.editor.read(cx).text().to_string();
-        let connection_id = if self.connection_id != 0 {
-            Some(self.connection_id)
-        } else {
-            None
-        };
-
-        // Note: Resolving connection_type from connection_id would require async context
-        // For now, we leave database_type as None - the chat tools can resolve it when needed
-        let database_type = None;
-
-        let mut context = SqlContext::with_query(current_query);
-        context.connection_id = connection_id;
-        context.database_type = database_type;
-
-        // TODO: Add recent results when we implement a public method in ResultsPanel
-        // For now, we'll leave recent_results as None
-
-        context
-    }
-}
-
 impl EventEmitter<AppEvent> for QueryTab {}
 
 pub struct SettingsTab {
@@ -886,19 +861,6 @@ impl EditorPanel {
         }
     }
 
-    /// Update chat context for the active tab
-    pub fn update_chat_context_for_active_tab(&mut self, cx: &mut Context<Self>) {
-        if let Some(TabType::Query(query_tab)) = self.tabs.get_mut(self.active_tab_ix)
-            && query_tab.chat_enabled
-            && let Some(ref chat_panel) = query_tab.chat_panel
-        {
-            let sql_context = query_tab.get_sql_context(cx);
-            chat_panel.update(cx, |panel, cx| {
-                panel.update_sql_context(sql_context, cx);
-            });
-        }
-    }
-
     /// Toggle chat for the active tab
     pub fn toggle_chat_for_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(TabType::Query(query_tab)) = self.tabs.get_mut(self.active_tab_ix) {
@@ -957,12 +919,6 @@ impl EditorPanel {
                 tab_id: query_tab.id,
                 enabled: query_tab.chat_enabled,
             });
-
-            // Update chat context when toggled on
-            if query_tab.chat_enabled {
-                // Use the EditorPanel's method to update chat context
-                self.update_chat_context_for_active_tab(cx);
-            }
 
             cx.notify();
         }
@@ -1039,7 +995,7 @@ impl Render for EditorPanel {
                                             // Check for double click (click_count == 2)
                                             if event.click_count == 2 {
                                                 // Open rename modal on double click
-                                                let form = RenameTabForm::new(tab_index, tab_title.clone(), window, cx);
+                                                let form = RenameTabForm::new(tab_title.clone(), window, cx);
                                                 let form_for_modal = form.clone();
 
                                                 window.open_dialog(cx, move |modal, _window, _cx| {

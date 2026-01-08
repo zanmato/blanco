@@ -86,20 +86,6 @@ pub struct PostgresSshConfig {
     pub ssh_private_key_password: Option<String>,
 }
 
-impl std::fmt::Debug for PostgresConnection {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Cannot use async in Debug trait, so show simplified info
-        let pooled_databases = vec!["[async_debug]".to_string()];
-
-        f.debug_struct("PostgresConnection")
-            .field("server_key", &self.server_key)
-            .field("display_name", &self.display_name)
-            .field("pooled_databases", &pooled_databases)
-            .field("server_connection_string", &"[REDACTED]")
-            .finish()
-    }
-}
-
 /// Server-level connection key for PostgreSQL connections (no database)
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct PgServerKey {

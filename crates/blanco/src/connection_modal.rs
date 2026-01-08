@@ -3,7 +3,9 @@ use gpui::{
     Styled, Window, div, prelude::FluentBuilder,
 };
 use gpui_component::{
-    button::{Button, ButtonVariants}, ActiveTheme, Icon, IconName, IndexPath, Sizable, h_flex,
+    ActiveTheme, Icon, IconName, IndexPath, Sizable,
+    button::{Button, ButtonVariants},
+    h_flex,
     input::{Input, InputState},
     select::{Select, SelectState},
     switch::Switch,
@@ -722,7 +724,7 @@ impl NewConnectionModal {
             prompt: Some("Select SSH private key file".into()),
         });
 
-        cx.spawn_in(window, async move |_, mut window| {
+        cx.spawn_in(window, async move |_, window| {
             if let Some(paths) = paths.await.ok()?.ok()?
                 && let Some(path) = paths.first()
             {
@@ -750,7 +752,7 @@ impl NewConnectionModal {
             prompt: Some("Select SSH private key file".into()),
         });
 
-        cx.spawn_in(window, async move |_, mut window| {
+        cx.spawn_in(window, async move |_, window| {
             if let Some(paths) = paths.await.ok()?.ok()?
                 && let Some(path) = paths.first()
             {
@@ -778,7 +780,7 @@ impl NewConnectionModal {
             prompt: Some("Select SQLite database file".into()),
         });
 
-        cx.spawn_in(window, async move |_, mut window| {
+        cx.spawn_in(window, async move |_, window| {
             if let Some(paths) = paths.await.ok()?.ok()?
                 && let Some(path) = paths.first()
             {

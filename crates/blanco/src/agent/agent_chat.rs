@@ -35,6 +35,7 @@ pub struct ChatPanel {
     pub messages: Vec<Entity<ChatMessageState>>,
     pub _subscriptions: Vec<Subscription>,
     pub loading_state: LoadingState,
+    #[allow(dead_code)]
     pub tab_id: usize,
     pub send_message_keystroke: KeybindingKeystroke,
     pub tool_mode_select: Entity<SelectState<ToolModeSelectDelegate>>,
@@ -52,9 +53,6 @@ impl ChatPanel {
     ) -> Self {
         let session =
             cx.new(|_cx| ChatSession::new(provider, provider_name, model_name, session_context));
-
-        // If we have a callback, we'll need to set it after session creation
-        // For now, we'll skip this since the simple approach doesn't need the callback
 
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)

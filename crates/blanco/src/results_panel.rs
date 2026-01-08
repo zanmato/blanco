@@ -279,7 +279,7 @@ impl TableChangeBuilder {
     }
 
     pub fn build(self) -> TableChange {
-        let mut change = TableChange {
+        TableChange {
             change_type: self.change_type,
             table_name: self.table_name,
             row_index: self.row_index,
@@ -291,11 +291,7 @@ impl TableChangeBuilder {
             sql_template: None,
             parameters: Vec::new(),
             insert_values: self.insert_values,
-        };
-
-        // Generate prepared statement immediately
-        let _ = change.generate_prepared_statement();
-        change
+        }
     }
 }
 
@@ -320,71 +316,6 @@ impl TableChange {
             .primary_key_column(primary_key_column)
             .insert_values(insert_values)
             .build()
-    }
-
-    fn generate_prepared_statement(&mut self) -> Result<(), String> {
-        match self.change_type {
-            ChangeType::UpdateCell => {
-                // For now, generate a template without column name
-                // The actual column name will be filled in when we have access to columns
-                let pk_column = self
-                    .primary_key_column
-                    .clone()
-                    .or_else(|| Some("id".to_string())) // Default fallback
-                    .ok_or_else(|| "No primary key column".to_string())?;
-
-                // UPDATE table_name SET column_name = $1 WHERE pk_column = $2
-                // Note: column_name will be substituted when we have column info
-                self.sql_template = Some(format!(
-                    "UPDATE {} SET {} = $1 WHERE {} = $2",
-                    self.table_name, "COLUMN_PLACEHOLDER", pk_column
-                ));
-
-                // Parameters: $1 = new_value, $2 = pk_value
-                self.parameters.clear();
-                if let Some(new_val) = &self.new_value {
-                    self.parameters.push(new_val.clone());
-                } else {
-                    self.parameters.push("NULL".to_string());
-                }
-
-                if let Some(pk_val) = &self.primary_key_value {
-                    self.parameters.push(pk_val.clone());
-                } else {
-                    return Err("No primary key value available".to_string());
-                }
-            }
-            ChangeType::InsertRow => {
-                // For INSERT, use the insert_values if available, otherwise fall back to new_value
-                if let Some(values) = &self.insert_values {
-                    // Create parameter placeholders ($1, $2, $3, ...)
-                    let placeholders: Vec<String> =
-                        (1..=values.len()).map(|i| format!("${}", i)).collect();
-
-                    self.sql_template = Some(format!(
-                        "INSERT INTO {} VALUES ({})",
-                        self.table_name,
-                        placeholders.join(", ")
-                    ));
-
-                    // Use the individual values as parameters
-                    self.parameters.clear();
-                    self.parameters.extend(values.clone());
-                } else if let Some(new_val) = &self.new_value {
-                    // Fallback for backward compatibility
-                    self.sql_template =
-                        Some(format!("INSERT INTO {} VALUES ($1)", self.table_name));
-                    self.parameters.clear();
-                    self.parameters.push(new_val.clone());
-                } else {
-                    self.sql_template =
-                        Some(format!("INSERT INTO {} VALUES ($1)", self.table_name));
-                    self.parameters.clear();
-                    self.parameters.push("NULL".to_string());
-                }
-            }
-        }
-        Ok(())
     }
 }
 

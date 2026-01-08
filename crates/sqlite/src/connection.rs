@@ -16,16 +16,6 @@ pub struct SqliteConnection {
     database_path: String,
 }
 
-impl std::fmt::Debug for SqliteConnection {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SqliteConnection")
-            .field("connection_key", &self.connection_key)
-            .field("display_name", &self.display_name)
-            .field("database_path", &self.database_path)
-            .finish()
-    }
-}
-
 /// Connection key for SQLite connections
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct SqliteConnectionKey {
@@ -667,7 +657,7 @@ impl Connection for SqliteConnection {
 
     async fn get_database_schema_paginated(
         &self,
-        database_name: Option<&str>,
+        _database_name: Option<&str>,
         table_names: Option<&str>,
         limit: Option<i64>,
         offset: Option<i64>,
