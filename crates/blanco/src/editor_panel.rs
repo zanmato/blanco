@@ -1,7 +1,7 @@
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, KeybindingKeystroke, Keystroke, MouseButton, ParentElement, Render, SharedString,
-    Styled, Task, Window, div, prelude::FluentBuilder, px, rems,
+    App, AppContext, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, KeybindingKeystroke, Keystroke, MouseButton, ParentElement,
+    Render, SharedString, Styled, Task, Window, div, prelude::FluentBuilder, px, rems,
 };
 use gpui_component::{
     ActiveTheme, Sizable, WindowExt as _,
@@ -959,9 +959,60 @@ impl Render for EditorPanel {
                     .menu(true)
                     .w_full()
                     .selected_index(self.active_tab_ix)
-                    .on_click(cx.listener(|this, ix: &usize, window, cx| {
-                        this.set_active_tab(*ix, window, cx);
-                    }))
+                    .on_click({
+                        let view = cx.entity().downgrade();
+                        move |ix: &usize, event: &ClickEvent, window: &mut Window, cx: &mut App| {
+                            view.update(cx, |this, cx| {
+                                if event.click_count() == 1 {
+                                    this.set_active_tab(*ix, window, cx);
+                                    return;
+                                }
+
+                                let tab = this.tabs.get(*ix);
+                                match tab {
+                                    Some(TabType::Query(query_tab)) => {
+                                        let tab_title = query_tab.title.clone();
+
+                                         // Open rename modal on double click
+                                        let form = RenameTabForm::new(tab_title, window, cx);
+                                        let form_for_modal = form.clone();
+                                        let tab_index = *ix;
+
+                                        window.open_dialog(cx, move |modal, _window, _cx| {
+                                            let form_clone = form_for_modal.clone();
+                                            let tab_index = tab_index.clone();
+                                            modal
+                                                .title("Rename Tab")
+                                                .w(px(300.))
+                                                .child(form_for_modal.clone())
+                                                .footer({
+                                                    let _form = form_clone.clone();
+                                                    move |ok, cancel, window, cx| {
+                                                        vec![cancel(window, cx), ok(window, cx)]
+                                                    }
+                                                })
+                                                .on_ok({
+                                                    let form = form_clone.clone();
+                                                    move |_modal, window, cx| {
+                                                        // Get the current value from the form
+                                                        let new_name = form.read(cx).get_value(cx);
+
+                                                        // Use the app's global action system instead of local context
+                                                        // Create a new RenameTab action and dispatch it through the app
+                                                        window.dispatch_action(Box::new(RenameTab {
+                                                            tab_index,
+                                                            new_name,
+                                                        }), cx);
+                                                        true
+                                                    }
+                                                })
+                                        });
+                                    }
+                                    _ => {}
+                                };
+                            }).ok();
+                        }
+                    })
                     .prefix(
                         Button::new("toggle-sidebar")
                             .ghost()
@@ -971,12 +1022,8 @@ impl Render for EditorPanel {
                             } else {
                                 Icon::new(IconName::PanelLeftClose).size_4()
                             })
-                            .on_click(cx.listener(|_this, _event, _window, cx| {
-                                tracing::info!("🖱️ Sidebar collapse button clicked!");
-                                // Emit the toggle sidebar event
-                                tracing::info!("🖱️ Emitting ToggleSidebar event...");
+                            .on_click(cx.listener(|_, _, _, cx| {
                                 cx.emit(AppEvent::ToggleSidebar);
-                                tracing::info!("🖱️ ToggleSidebar event emitted");
                             }))
                     )
                     .children(self.tabs.iter().enumerate().map(|(ix, tab)| {
@@ -985,56 +1032,8 @@ impl Render for EditorPanel {
                                 let show_close_button = self.tabs.len() > 1;
                                 let tab_index = ix;
 
-                                // Clone the tab title to avoid lifetime issues
-                                let tab_title = query_tab.title.clone();
                                 Tab::new()
-                                    .label(&tab_title)
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |_this, event: &gpui::MouseDownEvent, window, cx| {
-                                            // Check for double click (click_count == 2)
-                                            if event.click_count == 2 {
-                                                // Open rename modal on double click
-                                                let form = RenameTabForm::new(tab_title.clone(), window, cx);
-                                                let form_for_modal = form.clone();
-
-                                                window.open_dialog(cx, move |modal, _window, _cx| {
-                                                    let form_clone = form_for_modal.clone();
-                                                    let tab_index_clone = tab_index;
-                                                    modal
-                                                        .title("Rename Tab")
-                                                        .w(px(300.))
-                                                        .child(form_for_modal.clone())
-                                                        .footer({
-                                                            let _form = form_clone.clone();
-                                                            move |ok, cancel, window, cx| {
-                                                                vec![cancel(window, cx), ok(window, cx)]
-                                                            }
-                                                        })
-                                                        .on_ok({
-                                                            let form = form_clone.clone();
-                                                            move |_modal, window, cx| {
-                                                                // Get the current value from the form
-                                                                let new_name = form.read(cx).get_value(cx);
-
-                                                                tracing::info!("Modal OK button clicked - tab_index={}, new_name='{}'", tab_index_clone, new_name);
-
-                                                                // Use the app's global action system instead of local context
-                                                                // Create a new RenameTab action and dispatch it through the app
-                                                                window.dispatch_action(Box::new(RenameTab {
-                                                                    tab_index: tab_index_clone,
-                                                                    new_name,
-                                                                }), cx);
-                                                                true
-                                                            }
-                                                        })
-                                                });
-                                            } else {
-                                                // Single click - activate the tab by setting active tab index
-                                                cx.emit(AppEvent::TabChanged { tab_id: tab_index });
-                                            }
-                                        })
-                                    )
+                                    .label(& query_tab.title)
                                     .suffix(
                                         h_flex()
                                             .gap_1()
