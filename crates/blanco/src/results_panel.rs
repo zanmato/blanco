@@ -813,6 +813,13 @@ impl ResultsTableDelegate {
             self.edit_state.edited_values
         );
 
+        // Bail early if table is not editable (no table_name or primary_key_column)
+        if !self.is_editable() {
+            tracing::info!("Table is not editable, bailing commit");
+            self.edit_state.editing_cell = None;
+            return None;
+        }
+
         if let Some(new_value) = self.edit_state.edited_values.get(&(row, col)).cloned() {
             tracing::info!("Found edited value: '{}' for ({}, {})", new_value, row, col);
 
@@ -1083,7 +1090,7 @@ impl TableDelegate for ResultsTableDelegate {
                                     .bg(cx.theme().background)
                                     .shadow_lg()
                                     .child(
-                                        Input::new(&input).size_full().font_family(cx.theme().mono_font_family.clone()).text_size(px(12.)).suffix(
+                                        Input::new(&input).disabled(!self.is_editable()).size_full().font_family(cx.theme().mono_font_family.clone()).text_size(px(12.)).suffix(
                                             div()
                                                 .cursor_pointer()
                                                 .on_mouse_down(
@@ -1166,6 +1173,7 @@ impl TableDelegate for ResultsTableDelegate {
                         })
                         .child(
                             Input::new(&input)
+                                .disabled(!self.is_editable())
                                 .flex_1()
                                 .text_size(px(12.))
                                 .border_0()
@@ -1309,12 +1317,10 @@ impl TableDelegate for ResultsTableDelegate {
                         cx.listener(move |table, event: &gpui::MouseDownEvent, _window, cx| {
                             if event.click_count == 2 {
                                 let delegate = table.delegate_mut();
-                                if delegate.is_editable() {
-                                    delegate.clear_selection();
-                                    delegate.set_pending_edit_cell(row_ix, col_ix);
-                                    table.refresh(cx);
-                                    cx.notify();
-                                }
+                                delegate.clear_selection();
+                                delegate.set_pending_edit_cell(row_ix, col_ix);
+                                table.refresh(cx);
+                                cx.notify();
                             }
                         }),
                     )
@@ -1624,6 +1630,13 @@ impl ResultsPanel {
 
         self.table_state.update(cx, |state, cx| {
             let delegate = state.delegate_mut();
+
+            // Bail early if table is not editable (no table_name or primary_key_column)
+            if !delegate.is_editable() {
+                tracing::info!("Table is not editable, bailing commit");
+                delegate.edit_state.editing_cell = None;
+                return;
+            }
 
             // Get the original value before updating
             old_value = delegate.rows.get(row).and_then(|r| r.get(col)).cloned();
