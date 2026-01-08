@@ -466,8 +466,8 @@ impl BlancoApp {
 
             modal
                 .title("New Connection")
-                .h(gpui::px(600.))
-                .w(gpui::px(400.))
+                .h(gpui::px(700.))
+                .w(gpui::px(650.))
                 .child(modal_content.clone())
                 .footer({
                     let content = content_clone.clone();

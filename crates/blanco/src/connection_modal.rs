@@ -3,7 +3,7 @@ use gpui::{
     Styled, Window, div, prelude::FluentBuilder,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, IndexPath, StyledExt, h_flex,
+    button::{Button, ButtonVariants}, ActiveTheme, Icon, IconName, IndexPath, Sizable, h_flex,
     input::{Input, InputState},
     select::{Select, SelectState},
     switch::Switch,
@@ -73,14 +73,6 @@ struct SqliteForm {
 impl SqliteForm {
     fn new(file_path_input: Entity<InputState>) -> Self {
         Self { file_path_input }
-    }
-
-    fn render(&self, _cx: &App) -> gpui::AnyElement {
-        v_flex()
-            .gap_2()
-            .child(div().text_sm().child("File Path"))
-            .child(Input::new(&self.file_path_input))
-            .into_any_element()
     }
 
     fn get_connection_data(
@@ -190,7 +182,7 @@ impl PostgresForm {
 
     fn render(&self, _cx: &App) -> gpui::AnyElement {
         v_flex()
-            .gap_4()
+            .gap_3()
             .child(
                 h_flex()
                     .gap_3()
@@ -203,96 +195,36 @@ impl PostgresForm {
                     )
                     .child(
                         v_flex()
-                            .w_32()
+                            .flex_1()
                             .gap_2()
                             .child(div().text_sm().child("Port"))
                             .child(Input::new(&self.port_input)),
                     ),
             )
             .child(
+                h_flex()
+                    .gap_3()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .gap_2()
+                            .child(div().text_sm().child("User"))
+                            .child(Input::new(&self.username_input)),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .gap_2()
+                            .child(div().text_sm().child("Password"))
+                            .child(Input::new(&self.password_input)),
+                    ),
+            )
+            .child(
                 v_flex()
                     .gap_2()
-                    .child(div().text_sm().child("Database"))
+                    .child(div().text_sm().child("Database name"))
                     .child(Input::new(&self.database_input)),
             )
-            .child(
-                v_flex()
-                    .gap_2()
-                    .child(div().text_sm().child("Username"))
-                    .child(Input::new(&self.username_input)),
-            )
-            .child(
-                v_flex()
-                    .gap_2()
-                    .child(div().text_sm().child("Password"))
-                    .child(Input::new(&self.password_input)),
-            )
-            // SSH Tunnel Configuration Section
-            .when(self.ssh_enabled, |this| {
-                this.child(
-                    div().mt_4().child(
-                        h_flex().gap_2().items_center().child(
-                            div()
-                                .text_sm()
-                                .font_semibold()
-                                .child("SSH Tunnel Configuration"),
-                        ),
-                    ),
-                )
-                .child(
-                    v_flex()
-                        .gap_3()
-                        .mt_2()
-                        .child(
-                            h_flex()
-                                .gap_3()
-                                .child(
-                                    v_flex()
-                                        .flex_1()
-                                        .gap_2()
-                                        .child(div().text_sm().child("SSH Host"))
-                                        .child(Input::new(&self.ssh_host_input)),
-                                )
-                                .child(
-                                    v_flex()
-                                        .w_32()
-                                        .gap_2()
-                                        .child(div().text_sm().child("SSH Port"))
-                                        .child(Input::new(&self.ssh_port_input)),
-                                ),
-                        )
-                        .child(
-                            v_flex()
-                                .gap_2()
-                                .child(div().text_sm().child("SSH Username"))
-                                .child(Input::new(&self.ssh_user_input)),
-                        )
-                        .child(
-                            h_flex()
-                                .gap_3()
-                                .child(
-                                    v_flex()
-                                        .flex_1()
-                                        .gap_2()
-                                        .child(div().text_sm().child("SSH Password"))
-                                        .child(Input::new(&self.ssh_password_input)),
-                                )
-                                .child(
-                                    v_flex()
-                                        .flex_1()
-                                        .gap_2()
-                                        .child(div().text_sm().child("Private Key Path"))
-                                        .child(Input::new(&self.ssh_private_key_input)),
-                                ),
-                        )
-                        .child(
-                            v_flex()
-                                .gap_2()
-                                .child(div().text_sm().child("Private Key Password"))
-                                .child(Input::new(&self.ssh_private_key_password_input)),
-                        ),
-                )
-            })
             .into_any_element()
     }
 
@@ -500,9 +432,9 @@ impl MysqlForm {
         }
     }
 
-    fn render(&self, cx: &App) -> gpui::AnyElement {
+    fn render(&self, _cx: &App) -> gpui::AnyElement {
         v_flex()
-            .gap_4()
+            .gap_3()
             .child(
                 h_flex()
                     .gap_3()
@@ -515,88 +447,36 @@ impl MysqlForm {
                     )
                     .child(
                         v_flex()
-                            .w_32()
+                            .flex_1()
                             .gap_2()
                             .child(div().text_sm().child("Port"))
                             .child(Input::new(&self.port_input)),
                     ),
             )
             .child(
+                h_flex()
+                    .gap_3()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .gap_2()
+                            .child(div().text_sm().child("User"))
+                            .child(Input::new(&self.username_input)),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .gap_2()
+                            .child(div().text_sm().child("Password"))
+                            .child(Input::new(&self.password_input)),
+                    ),
+            )
+            .child(
                 v_flex()
                     .gap_2()
-                    .child(div().text_sm().child("Database"))
+                    .child(div().text_sm().child("Database name"))
                     .child(Input::new(&self.database_input)),
             )
-            .child(
-                v_flex()
-                    .gap_2()
-                    .child(div().text_sm().child("Username"))
-                    .child(Input::new(&self.username_input)),
-            )
-            .child(
-                v_flex()
-                    .gap_2()
-                    .child(div().text_sm().child("Password"))
-                    .child(Input::new(&self.password_input)),
-            )
-            .when(self.ssh_enabled, |this| {
-                // SSH Tunnel Configuration Section
-                this.child(
-                    div().mt_4().child(
-                        h_flex()
-                            .gap_2()
-                            .items_center()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_semibold()
-                                    .child("SSH Tunnel Configuration"),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child("(Optional)"),
-                            ),
-                    ),
-                )
-                .child(
-                    v_flex()
-                        .gap_2()
-                        .child(div().text_sm().child("SSH Host"))
-                        .child(Input::new(&self.ssh_host_input)),
-                )
-                .child(
-                    v_flex()
-                        .gap_2()
-                        .child(div().text_sm().child("SSH Port"))
-                        .child(Input::new(&self.ssh_port_input)),
-                )
-                .child(
-                    v_flex()
-                        .gap_2()
-                        .child(div().text_sm().child("SSH User"))
-                        .child(Input::new(&self.ssh_user_input)),
-                )
-                .child(
-                    v_flex()
-                        .gap_2()
-                        .child(div().text_sm().child("SSH Password"))
-                        .child(Input::new(&self.ssh_password_input)),
-                )
-                .child(
-                    v_flex()
-                        .gap_2()
-                        .child(div().text_sm().child("SSH Private Key"))
-                        .child(Input::new(&self.ssh_private_key_input)),
-                )
-                .child(
-                    v_flex()
-                        .gap_2()
-                        .child(div().text_sm().child("Private Key Password"))
-                        .child(Input::new(&self.ssh_private_key_password_input)),
-                )
-            })
             .into_any_element()
     }
 
@@ -833,6 +713,90 @@ impl NewConnectionModal {
         cx.notify();
     }
 
+    fn pick_postgres_ssh_private_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let private_key_input = self.postgres_form.ssh_private_key_input.clone();
+        let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Select SSH private key file".into()),
+        });
+
+        cx.spawn_in(window, async move |_, mut window| {
+            if let Some(paths) = paths.await.ok()?.ok()?
+                && let Some(path) = paths.first()
+            {
+                let path_str = path.to_str()?.to_string();
+                window
+                    .update(|window, cx| {
+                        _ = private_key_input.update(cx, |input, cx| {
+                            input.set_value(path_str, window, cx);
+                        });
+                    })
+                    .ok();
+            }
+
+            Some(())
+        })
+        .detach();
+    }
+
+    fn pick_mysql_ssh_private_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let private_key_input = self.mysql_form.ssh_private_key_input.clone();
+        let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Select SSH private key file".into()),
+        });
+
+        cx.spawn_in(window, async move |_, mut window| {
+            if let Some(paths) = paths.await.ok()?.ok()?
+                && let Some(path) = paths.first()
+            {
+                let path_str = path.to_str()?.to_string();
+                window
+                    .update(|window, cx| {
+                        _ = private_key_input.update(cx, |input, cx| {
+                            input.set_value(path_str, window, cx);
+                        });
+                    })
+                    .ok();
+            }
+
+            Some(())
+        })
+        .detach();
+    }
+
+    fn pick_sqlite_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let file_path_input = self.sqlite_form.file_path_input.clone();
+        let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Select SQLite database file".into()),
+        });
+
+        cx.spawn_in(window, async move |_, mut window| {
+            if let Some(paths) = paths.await.ok()?.ok()?
+                && let Some(path) = paths.first()
+            {
+                let path_str = path.to_str()?.to_string();
+                window
+                    .update(|window, cx| {
+                        _ = file_path_input.update(cx, |input, cx| {
+                            input.set_value(path_str, window, cx);
+                        });
+                    })
+                    .ok();
+            }
+
+            Some(())
+        })
+        .detach();
+    }
+
     pub fn test_connection(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let connector_type = self.get_selected_connector_type(cx);
 
@@ -893,31 +857,59 @@ impl Render for NewConnectionModal {
                         .child(Input::new(&self.name_input)),
                 )
                 .child(
-                    v_flex()
-                        .gap_2()
-                        .child(div().text_sm().child("Database Type"))
-                        .child(Select::new(&self.db_type_select)),
-                )
-                .child(
-                    v_flex()
-                        .gap_2()
-                        .child(div().text_sm().child("Environment"))
-                        .child(Select::new(&self.environment_type_select)),
+                    h_flex()
+                        .gap_3()
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .gap_2()
+                                .child(div().text_sm().child("Type"))
+                                .child(Select::new(&self.db_type_select)),
+                        )
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .gap_2()
+                                .child(div().text_sm().child("Environment"))
+                                .child(Select::new(&self.environment_type_select)),
+                        ),
                 )
                 // Render the appropriate form based on selected type
                 .child(match connector_type {
-                    ConnectorType::SQLite => self.sqlite_form.render(cx),
-                    ConnectorType::PostgreSQL => {
-                        let form_elements = self.postgres_form.render(cx);
+                    ConnectorType::SQLite => {
                         v_flex()
-                            .gap_4()
-                            // SSH Switch Section - above the form
+                            .gap_3()
+                            .child(
+                                v_flex()
+                                    .gap_2()
+                                    .child(div().text_sm().child("Database path"))
+                                    .child(
+                                        Input::new(&self.sqlite_form.file_path_input).suffix(
+                                            Button::new("sqlite-file-picker")
+                                                .ghost()
+                                                .icon(IconName::Folder)
+                                                .xsmall()
+                                                .on_click(cx.listener(
+                                                    |modal: &mut Self, _event, window, cx| {
+                                                        modal.pick_sqlite_file(window, cx);
+                                                    },
+                                                )),
+                                        ),
+                                    ),
+                            )
+                            .into_any_element()
+                    }
+                    ConnectorType::PostgreSQL => {
+                        let base_fields = self.postgres_form.render(cx);
+                        v_flex()
+                            .gap_3()
+                            .child(base_fields)
                             .child(
                                 div().child(
                                     h_flex().gap_2().items_center().child(
                                         Switch::new("ssh-enabled-switch")
                                             .checked(self.postgres_form.ssh_enabled)
-                                            .label("Enable SSH Tunnel")
+                                            .label("SSH")
                                             .on_click(cx.listener(
                                                 |modal: &mut Self, _checked, _window, cx| {
                                                     modal.toggle_ssh_enabled(cx);
@@ -926,20 +918,91 @@ impl Render for NewConnectionModal {
                                     ),
                                 ),
                             )
-                            .child(form_elements) // Form renders SSH fields when enabled
+                            .when(self.postgres_form.ssh_enabled, |this| {
+                                this.child(
+                                    v_flex()
+                                        .gap_3()
+                                        .child(
+                                            h_flex()
+                                                .gap_3()
+                                                .child(
+                                                    v_flex()
+                                                        .flex_1()
+                                                        .gap_2()
+                                                        .child(div().text_sm().child("Host"))
+                                                        .child(Input::new(&self.postgres_form.ssh_host_input)),
+                                                )
+                                                .child(
+                                                    v_flex()
+                                                        .flex_1()
+                                                        .gap_2()
+                                                        .child(div().text_sm().child("Port"))
+                                                        .child(Input::new(&self.postgres_form.ssh_port_input)),
+                                                ),
+                                        )
+                                        .child(
+                                            h_flex()
+                                                .gap_3()
+                                                .child(
+                                                    v_flex()
+                                                        .flex_1()
+                                                        .gap_2()
+                                                        .child(div().text_sm().child("User"))
+                                                        .child(Input::new(&self.postgres_form.ssh_user_input)),
+                                                )
+                                                .child(
+                                                    v_flex()
+                                                        .flex_1()
+                                                        .gap_2()
+                                                        .child(div().text_sm().child("Password"))
+                                                        .child(Input::new(&self.postgres_form.ssh_password_input)),
+                                                ),
+                                        )
+                                        .child(
+                                            h_flex()
+                                                .gap_3()
+                                                .child(
+                                                    v_flex()
+                                                        .flex_1()
+                                                        .gap_2()
+                                                        .child(div().text_sm().child("Private key path"))
+                                                        .child(
+                                                            Input::new(&self.postgres_form.ssh_private_key_input).suffix(
+                                                                Button::new("postgres-ssh-key-picker")
+                                                                    .ghost()
+                                                                    .icon(IconName::Folder)
+                                                                    .xsmall()
+                                                                    .on_click(cx.listener(
+                                                                        |modal: &mut Self, _event, window, cx| {
+                                                                            modal.pick_postgres_ssh_private_key(window, cx);
+                                                                        },
+                                                                    )),
+                                                            ),
+                                                        ),
+                                                )
+                                                .child(
+                                                    v_flex()
+                                                        .flex_1()
+                                                        .gap_2()
+                                                        .child(div().text_sm().child("Private key password"))
+                                                        .child(Input::new(&self.postgres_form.ssh_private_key_password_input)),
+                                                ),
+                                        ),
+                                )
+                            })
                             .into_any_element()
                     }
                     ConnectorType::MySQL => {
-                        let form_elements = self.mysql_form.render(cx);
+                        let base_fields = self.mysql_form.render(cx);
                         v_flex()
-                            .gap_4()
-                            // SSH Switch Section - above the form
+                            .gap_3()
+                            .child(base_fields)
                             .child(
                                 div().child(
                                     h_flex().gap_2().items_center().child(
                                         Switch::new("mysql-ssh-enabled-switch")
                                             .checked(self.mysql_form.ssh_enabled)
-                                            .label("Enable SSH Tunnel")
+                                            .label("SSH")
                                             .on_click(cx.listener(
                                                 |modal: &mut Self, _checked, _window, cx| {
                                                     modal.toggle_mysql_ssh_enabled(cx);
@@ -948,7 +1011,78 @@ impl Render for NewConnectionModal {
                                     ),
                                 ),
                             )
-                            .child(form_elements) // Form renders SSH fields when enabled
+                            .when(self.mysql_form.ssh_enabled, |this| {
+                                this.child(
+                                    v_flex()
+                                        .gap_3()
+                                        .child(
+                                            h_flex()
+                                                .gap_3()
+                                                .child(
+                                                    v_flex()
+                                                        .flex_1()
+                                                        .gap_2()
+                                                        .child(div().text_sm().child("Host"))
+                                                        .child(Input::new(&self.mysql_form.ssh_host_input)),
+                                                )
+                                                .child(
+                                                    v_flex()
+                                                        .flex_1()
+                                                        .gap_2()
+                                                        .child(div().text_sm().child("Port"))
+                                                        .child(Input::new(&self.mysql_form.ssh_port_input)),
+                                                ),
+                                        )
+                                        .child(
+                                            h_flex()
+                                                .gap_3()
+                                                .child(
+                                                    v_flex()
+                                                        .flex_1()
+                                                        .gap_2()
+                                                        .child(div().text_sm().child("User"))
+                                                        .child(Input::new(&self.mysql_form.ssh_user_input)),
+                                                )
+                                                .child(
+                                                    v_flex()
+                                                        .flex_1()
+                                                        .gap_2()
+                                                        .child(div().text_sm().child("Password"))
+                                                        .child(Input::new(&self.mysql_form.ssh_password_input)),
+                                                ),
+                                        )
+                                        .child(
+                                            h_flex()
+                                                .gap_3()
+                                                .child(
+                                                    v_flex()
+                                                        .flex_1()
+                                                        .gap_2()
+                                                        .child(div().text_sm().child("Private key path"))
+                                                        .child(
+                                                            Input::new(&self.mysql_form.ssh_private_key_input).suffix(
+                                                                Button::new("mysql-ssh-key-picker")
+                                                                    .ghost()
+                                                                    .icon(IconName::Folder)
+                                                                    .xsmall()
+                                                                    .on_click(cx.listener(
+                                                                        |modal: &mut Self, _event, window, cx| {
+                                                                            modal.pick_mysql_ssh_private_key(window, cx);
+                                                                        },
+                                                                    )),
+                                                            ),
+                                                        ),
+                                                )
+                                                .child(
+                                                    v_flex()
+                                                        .flex_1()
+                                                        .gap_2()
+                                                        .child(div().text_sm().child("Private key password"))
+                                                        .child(Input::new(&self.mysql_form.ssh_private_key_password_input)),
+                                                ),
+                                        ),
+                                )
+                            })
                             .into_any_element()
                     }
                 })
