@@ -129,9 +129,13 @@ impl TableChangeOperation {
                     .changes
                     .iter()
                     .map(|c| {
-                        let escaped_value =
-                            escape_sql_value(c.new_value.as_ref().unwrap_or(&String::new()));
-                        format!("'{}'", escaped_value)
+                        match &c.new_value {
+                            None => "NULL".to_string(), // NULL without quotes
+                            Some(value) => {
+                                let escaped_value = escape_sql_value(value);
+                                format!("'{}'", escaped_value) // Empty string becomes ''
+                            }
+                        }
                     })
                     .collect();
                 format!(

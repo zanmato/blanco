@@ -30,20 +30,20 @@ impl SelectionRangeProvider for SqlSelectionRangeProvider {
         text: &Rope,
         position: Position,
     ) -> Task<Result<Option<SelectionRange>>> {
-        let text = text.to_string();
-
         let result = {
             // Convert LSP Position to byte offset using RopeExt
-            let rope = Rope::from_str(&text);
-            let cursor_byte_pos = rope.position_to_offset(&position);
+            let cursor_byte_pos = text.position_to_offset(&position);
 
             // Use extract_statement_info which internally uses the thread-local parser
-            let statement_info = extract_statement_info(&text, cursor_byte_pos);
+            tracing::info!("Hello {:?} {:?}", text, cursor_byte_pos);
+            let statement_info = extract_statement_info(text, cursor_byte_pos);
 
             Ok(statement_info.map(|info| {
                 // Convert byte range to LSP Range
-                let start_position = rope.offset_to_position(info.byte_range.start);
-                let end_position = rope.offset_to_position(info.byte_range.end);
+                let start_position = text.offset_to_position(info.byte_range.start);
+                let end_position = text.offset_to_position(info.byte_range.end);
+
+                tracing::info!("YEYE {:?} {:?}", start_position, end_position);
 
                 SelectionRange {
                     range: Range {

@@ -15,6 +15,7 @@ use gpui_component::{
     v_flex,
 };
 use gpui_tokio::Tokio;
+use ropey::Rope;
 use std::{rc::Rc, sync::Arc};
 use tracing::{debug, error, info};
 
@@ -292,8 +293,10 @@ impl EditorPanel {
             // Use extract_statement_info to get parameters
             // For selected text, parse from the selection; otherwise use cursor position
             let statement_info = if !selected_text.trim().is_empty() {
+                let selected_text = Rope::from_str(&selected_text);
                 extract_statement_info(&selected_text, 0)
             } else {
+                let full_text = Rope::from_str(&full_text);
                 extract_statement_info(&full_text, cursor_pos)
             };
 

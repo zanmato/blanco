@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
+use std::time::Duration;
 
 use serde_json::Value;
 
@@ -31,6 +32,7 @@ pub struct TableOperationResponse {
     pub rows_affected: Option<u64>,
     pub error_message: Option<String>,
     pub operations_executed: usize,
+    pub duration: Duration,
 }
 use blanco_core::QueryResult;
 mod table_operations;
@@ -79,8 +81,8 @@ pub struct TableChange {
     // New fields for prepared statements
     pub sql_template: Option<String>,
     pub parameters: Vec<String>,
-    // For INSERT operations, store multiple column values
-    pub insert_values: Option<Vec<String>>,
+    // For INSERT operations, store multiple column values (None represents NULL)
+    pub insert_values: Option<Vec<Option<String>>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -230,7 +232,7 @@ pub struct TableChangeBuilder {
     new_value: Option<String>,
     primary_key_value: Option<String>,
     primary_key_column: Option<String>,
-    insert_values: Option<Vec<String>>,
+    insert_values: Option<Vec<Option<String>>>,
 }
 
 impl TableChangeBuilder {
@@ -273,7 +275,7 @@ impl TableChangeBuilder {
         self
     }
 
-    pub fn insert_values(mut self, values: Option<Vec<String>>) -> Self {
+    pub fn insert_values(mut self, values: Option<Vec<Option<String>>>) -> Self {
         self.insert_values = values;
         self
     }
@@ -306,7 +308,7 @@ impl TableChange {
         new_value: Option<String>,
         primary_key_value: Option<String>,
         primary_key_column: Option<String>,
-        insert_values: Option<Vec<String>>,
+        insert_values: Option<Vec<Option<String>>>,
     ) -> Self {
         TableChangeBuilder::new(change_type, table_name, row_index)
             .column_index(column_index)
@@ -520,16 +522,16 @@ impl ResultsTableDelegate {
                         .into_iter()
                         .zip(row_values.iter())
                         .map(|(column_name, value)| {
-                            // Pass raw values - to_sql_query() will handle SQL formatting
-                            let formatted_value = if value.is_empty() || value == "NULL" {
-                                "NULL".to_string()
+                            // Use None for NULL values, Some for actual values (including empty strings)
+                            let new_value = if value == "NULL" {
+                                None
                             } else {
-                                value.to_string() // Pass raw value without SQL formatting
+                                Some(value.clone())
                             };
                             ColumnChange {
                                 column_name,
                                 old_value: None,
-                                new_value: Some(formatted_value),
+                                new_value,
                             }
                         })
                         .collect();
@@ -621,6 +623,9 @@ impl ResultsTableDelegate {
                 max_width += 16.0;
 
                 // Add padding for sorting icon
+                max_width += 24.0;
+
+                // Add padding for the input expansion icon
                 max_width += 24.0;
 
                 // Account for cell borders and extra spacing
@@ -1889,21 +1894,6 @@ impl ResultsPanel {
 
         tracing::info!("Commit Changes: Starting table operations execution");
 
-        // Log the operations to SQL log if available
-        if let Some(sql_log) = sql_log {
-            for operation in &change_operations_for_logging {
-                let sql_query =
-                    (operation as &table_operations::TableChangeOperation).to_sql_query();
-                sql_log.update(cx, |log, cx| {
-                    log.append_text(&blanco_ui::SqlLogMessage::SqlStatement(sql_query), cx);
-                    log.append_text(
-                        &blanco_ui::SqlLogMessage::Comment("Executing table operation".to_string()),
-                        cx,
-                    );
-                });
-            }
-        }
-
         // Spawn background task to execute table operations
         let db_service = DatabaseService::global(cx).clone();
         let _table_entity = self.table_state.clone();
@@ -1959,6 +1949,7 @@ impl ResultsPanel {
                         rows_affected: Some(total_rows_affected),
                         error_message,
                         operations_executed,
+                        duration: start_time.elapsed(),
                     }
                 }
                 Err(e) => {
@@ -1970,6 +1961,7 @@ impl ResultsPanel {
                         rows_affected: None,
                         error_message: Some(format!("Connection error: {}", e)),
                         operations_executed: 0,
+                        duration: start_time.elapsed(),
                     }
                 }
             };
@@ -1994,8 +1986,11 @@ impl ResultsPanel {
         cx.spawn(async move |entity, cx| {
             match response_rx.recv().await {
                 Ok(response) => {
-                    tracing::info!("Received table operation response: success={}, rows_affected={:?}",
-                        response.success, response.rows_affected);
+                    tracing::info!(
+                        "Received table operation response: success={}, rows_affected={:?}",
+                        response.success,
+                        response.rows_affected
+                    );
 
                     // Handle successful operations
                     if response.success {
@@ -2009,12 +2004,19 @@ impl ResultsPanel {
                             // Update SQL log with success message
                             if let Some(sql_log) = sql_log_response_entity {
                                 sql_log.update(cx, |log, cx| {
-                                    let success_msg = format!(
-                                        "✓ Table operations completed successfully\n-- {} operations executed, {} rows affected",
+                                    let log_message = format!(
+                                        "{}, {} operations, {} rows affected in {}",
+                                        crate::time_format::format_current_timestamp(),
                                         response.operations_executed,
-                                        response.rows_affected.unwrap_or(0)
+                                        response.rows_affected.unwrap_or(0),
+                                        crate::time_format::format_duration(
+                                            response.duration.as_millis() as i64
+                                        )
                                     );
-                                    log.append_text(&blanco_ui::SqlLogMessage::Comment(success_msg), cx);
+                                    log.append_text(
+                                        &blanco_ui::SqlLogMessage::Comment(log_message),
+                                        cx,
+                                    );
                                 });
                             }
                         });
@@ -2037,7 +2039,8 @@ impl ResultsPanel {
                             let _ = sql_log.update(cx, |log, cx| {
                                 let error_msg = format!(
                                     "✗ Table operations failed: {}",
-                                    error_message_clone.unwrap_or_else(|| "Unknown error".to_string())
+                                    error_message_clone
+                                        .unwrap_or_else(|| "Unknown error".to_string())
                                 );
                                 log.append_text(&blanco_ui::SqlLogMessage::Comment(error_msg), cx);
                             });
@@ -2068,7 +2071,8 @@ impl ResultsPanel {
                     }
                 }
             }
-        }).detach();
+        })
+        .detach();
     }
 
     /// Rollback all pending changes
@@ -2157,10 +2161,11 @@ impl ResultsPanel {
             if let Some(table_name) = &delegate.table_name {
                 // For new rows, exclude primary key to avoid UPDATE/INSERT confusion
                 let column_names = delegate.get_insert_column_names(true); // exclude_primary_key = true
+                // Use None for all NULL values (new row starts with all NULLs)
                 let values_vec = column_names
                     .iter()
-                    .map(|_| "NULL".to_string())
-                    .collect::<Vec<_>>();
+                    .map(|_| None)
+                    .collect::<Vec<Option<String>>>();
 
                 let change = TableChange::new(
                     ChangeType::InsertRow,
@@ -2201,16 +2206,16 @@ impl ResultsPanel {
                         // For new rows (duplicated rows), exclude primary key to avoid UPDATE/INSERT confusion
                         let _column_names = delegate.get_insert_column_names(true); // exclude_primary_key = true
                         let values = delegate.get_insert_values(new_row_index, true); // exclude_primary_key = true
-                        let values_vec = values
+                        let values_vec: Vec<Option<String>> = values
                             .iter()
                             .map(|val| {
-                                if val.is_empty() || val == "NULL" {
-                                    "NULL".to_string()
+                                if val == "NULL" {
+                                    None // Use None for actual NULL values
                                 } else {
-                                    val.to_string() // Keep raw value without SQL formatting
+                                    Some(val.clone()) // Keep value (including empty strings)
                                 }
                             })
-                            .collect::<Vec<_>>();
+                            .collect();
 
                         let change = TableChange::new(
                             ChangeType::InsertRow,

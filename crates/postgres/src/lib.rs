@@ -22,7 +22,7 @@ mod tests {
     use sqlx::{postgres::PgPoolOptions, Column, Row, TypeInfo};
     use std::env;
 
-    #[smol::test]
+    #[test]
     async fn test_postgres_data_type_serialization() -> Result<(), Box<dyn std::error::Error>> {
         // Use environment variable for connection string or fallback to default
         let connection_string = env::var("POSTGRES_CONNECTION_STRING").unwrap_or_else(|_| {
@@ -268,7 +268,7 @@ mod tests {
         Ok(())
     }
 
-    #[smol::test]
+    #[test]
     async fn test_computed_column_type_detection() -> Result<(), Box<dyn std::error::Error>> {
         // Use environment variable for connection string or fallback to default
         let connection_string = env::var("POSTGRES_CONNECTION_STRING").unwrap_or_else(|_| {

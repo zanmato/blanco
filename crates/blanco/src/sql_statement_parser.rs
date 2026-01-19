@@ -67,11 +67,11 @@ impl SqlStatementParser {
     /// Extract the SQL statement at the given cursor byte position
     pub fn extract_statement_at_cursor(
         &mut self,
-        text: &str,
+        text: &Rope,
         cursor_byte_pos: usize,
     ) -> Option<StatementInfo> {
         // Parse the text
-        let tree = self.parser.parse(text, None)?;
+        let tree = self.parser.parse(text.as_str().unwrap_or(""), None)?;
         let root_node = tree.root_node();
 
         // Find all statement nodes
@@ -87,13 +87,13 @@ impl SqlStatementParser {
 
             // If cursor is inside the statement, return it immediately
             if range.contains(&cursor_byte_pos) {
-                let rope = Rope::from_str(text);
                 let utf16_range =
-                    rope.byte_to_utf16_idx(range.start)..rope.byte_to_utf16_idx(range.end);
-                let statement_text = text[range.clone()].to_string();
+                    text.byte_to_utf16_idx(range.start)..text.byte_to_utf16_idx(range.end);
+                let statement_text = text.slice(range.clone()).to_string();
                 let is_complete = self.is_statement_complete(&statement_text);
                 // Extract parameters and adjust their offsets to be relative to the statement text
-                let mut parameters = self.extract_parameters_from_node(statement, text);
+                let mut parameters =
+                    self.extract_parameters_from_node(statement, text.as_str().unwrap_or(""));
                 // Adjust byte offsets to be relative to the statement text (not the full text)
                 for param in &mut parameters {
                     param.byte_offset = param.byte_offset.saturating_sub(range.start);
@@ -124,13 +124,13 @@ impl SqlStatementParser {
         // Return the closest statement (if any)
         if let Some(statement) = best_statement {
             let range = statement.byte_range();
-            let rope = Rope::from_str(text);
             let utf16_range =
-                rope.byte_to_utf16_idx(range.start)..rope.byte_to_utf16_idx(range.end);
-            let statement_text = text[range.clone()].to_string();
+                text.byte_to_utf16_idx(range.start)..text.byte_to_utf16_idx(range.end);
+            let statement_text = text.slice(range.clone()).to_string();
             let is_complete = self.is_statement_complete(&statement_text);
             // Extract parameters and adjust their offsets to be relative to the statement text
-            let mut parameters = self.extract_parameters_from_node(statement, text);
+            let mut parameters =
+                self.extract_parameters_from_node(statement, text.as_str().unwrap_or(""));
             // Adjust byte offsets to be relative to the statement text (not the full text)
             for param in &mut parameters {
                 param.byte_offset = param.byte_offset.saturating_sub(range.start);
@@ -318,18 +318,8 @@ impl SqlStatementParser {
 ///
 /// # Returns
 /// The statement info, or None if no statement found
-pub fn extract_statement_info(text: &str, cursor_pos: usize) -> Option<StatementInfo> {
-    TLS_PARSER.with_borrow_mut(|parser| {
-        // Use Rope for efficient character to byte position conversion
-        let rope = Rope::from_str(text);
-        let cursor_byte_pos = if cursor_pos < rope.len_chars() {
-            rope.char_to_byte_idx(cursor_pos)
-        } else {
-            text.len()
-        };
-
-        parser.extract_statement_at_cursor(text, cursor_byte_pos)
-    })
+pub fn extract_statement_info(text: &Rope, cursor_pos: usize) -> Option<StatementInfo> {
+    TLS_PARSER.with_borrow_mut(|parser| parser.extract_statement_at_cursor(text, cursor_pos))
 }
 
 #[cfg(test)]
@@ -341,10 +331,9 @@ mod tests {
     }
 
     /// Helper to convert character position to byte position for tests
-    fn char_to_byte_pos(text: &str, char_pos: usize) -> usize {
-        let rope = Rope::from_str(text);
-        if char_pos < rope.len_chars() {
-            rope.char_to_byte_idx(char_pos)
+    fn char_to_byte_pos(text: &Rope, char_pos: usize) -> usize {
+        if char_pos < text.len_chars() {
+            text.char_to_byte_idx(char_pos)
         } else {
             text.len()
         }
@@ -353,8 +342,8 @@ mod tests {
     #[test]
     fn test_simple_select() {
         let mut parser = create_test_parser();
-        let text = "SELECT * FROM users;";
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 10));
+        let text = Rope::from_str("SELECT * FROM users;");
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 10));
 
         assert!(result.is_some());
         let info = result.unwrap();
@@ -365,8 +354,8 @@ mod tests {
     #[test]
     fn test_insert_with_semicolon_in_string() {
         let mut parser = create_test_parser();
-        let text = "INSERT INTO orders (a) VALUES ('hello;');";
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 25));
+        let text = Rope::from_str("INSERT INTO orders (a) VALUES ('hello;');");
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 25));
 
         assert!(result.is_some());
         let info = result.unwrap();
@@ -377,10 +366,12 @@ mod tests {
     #[test]
     fn test_multiple_statements() {
         let mut parser = create_test_parser();
-        let text = "SELECT * FROM table1; INSERT INTO table2 (col) VALUES ('test;'); UPDATE table3 SET col = 'value';";
+        let text = Rope::from_str(
+            "SELECT * FROM table1; INSERT INTO table2 (col) VALUES ('test;'); UPDATE table3 SET col = 'value';",
+        );
 
         // Test cursor in first statement
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 10));
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 10));
         assert!(result.is_some());
         assert!(
             result
@@ -391,7 +382,7 @@ mod tests {
         );
 
         // Test cursor in second statement
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 50));
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 50));
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(
@@ -401,7 +392,7 @@ mod tests {
         assert!(info.is_complete);
 
         // Test cursor in third statement
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 85));
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 85));
         assert!(result.is_some());
         let info = result.unwrap();
         assert!(info.text.trim().starts_with("UPDATE table3"));
@@ -411,8 +402,8 @@ mod tests {
     #[test]
     fn test_comments_with_semicolons() {
         let mut parser = create_test_parser();
-        let text = "SELECT * FROM users -- This comment has a semicolon;";
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 15));
+        let text = Rope::from_str("SELECT * FROM users -- This comment has a semicolon;");
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 15));
 
         assert!(result.is_some());
         let info = result.unwrap();
@@ -425,8 +416,8 @@ mod tests {
     #[test]
     fn test_incomplete_statement() {
         let mut parser = create_test_parser();
-        let text = "SELECT * FROM users WHERE id = 1";
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 20));
+        let text = Rope::from_str("SELECT * FROM users WHERE id = 1");
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 20));
 
         assert!(result.is_some());
         let info = result.unwrap();
@@ -437,17 +428,18 @@ mod tests {
     #[test]
     fn test_empty_text() {
         let mut parser = create_test_parser();
-        let result = parser.extract_statement_at_cursor("", 0);
+        let text = Rope::from_str("");
+        let result = parser.extract_statement_at_cursor(&text, 0);
         assert!(result.is_none());
     }
 
     #[test]
     fn test_cursor_before_semicolon() {
         let mut parser = create_test_parser();
-        let text = "SELECT * FROM users;";
+        let text = Rope::from_str("SELECT * FROM users;");
 
         // Position cursor just before the semicolon (after 'users')
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 18));
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 18));
         assert!(
             result.is_some(),
             "Should extract statement when cursor is before semicolon"
@@ -457,7 +449,7 @@ mod tests {
         assert!(info.is_complete);
 
         // Also test at the semicolon position
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 19));
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 19));
         assert!(
             result.is_some(),
             "Should extract statement when cursor is at semicolon position"
@@ -470,10 +462,10 @@ mod tests {
     #[test]
     fn test_cursor_before_semicolon_with_whitespace() {
         let mut parser = create_test_parser();
-        let text = "SELECT * FROM users   ;";
+        let text = Rope::from_str("SELECT * FROM users   ;");
 
         // Position cursor at the first space after 'users'
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 16));
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 16));
         assert!(
             result.is_some(),
             "Should extract statement when cursor is before whitespace and semicolon"
@@ -484,25 +476,13 @@ mod tests {
     }
 
     #[test]
-    fn test_convenience_function() {
-        let text = "SELECT * FROM users; INSERT INTO table (col) VALUES ('hello; world');";
-        // Position 50 should be in the INSERT statement part
-        // "SELECT * FROM users; " = 21 chars, so position 50 is well into the INSERT
-        let result = extract_current_query(text, 50, false);
-        assert_eq!(
-            result.trim(),
-            "INSERT INTO table (col) VALUES ('hello; world')"
-        );
-    }
-
-    #[test]
     fn test_unicode_utf16_indices() {
         let mut parser = create_test_parser();
         // Test with Unicode characters (emoji and non-ASCII) in a valid SQL statement
-        let text = "SELECT * FROM testing WHERE text_col = '🏠';";
+        let text = Rope::from_str("SELECT * FROM testing WHERE text_col = '🏠';");
 
         // Position cursor in the middle of the statement
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 20));
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 20));
 
         assert!(
             result.is_some(),
@@ -529,15 +509,17 @@ mod tests {
     #[test]
     fn test_multiline_statements() {
         let mut parser = create_test_parser();
-        let text = "INSERT INTO orders (a)
+        let text = Rope::from_str(
+            "INSERT INTO orders (a)
 VALUES ('hello;');
 
 SELECT * FROM users; -- some comment
 
-DELETE FROM users WHERE id = 1;";
+DELETE FROM users WHERE id = 1;",
+        );
 
         // Test cursor on first line (INSERT)
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 5));
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 5));
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(
@@ -547,7 +529,7 @@ DELETE FROM users WHERE id = 1;";
         assert!(info.is_complete);
 
         // Test cursor on second line (VALUES part of INSERT)
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 30));
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 30));
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(
@@ -557,7 +539,7 @@ DELETE FROM users WHERE id = 1;";
         assert!(info.is_complete);
 
         // Test cursor on third line (empty line after INSERT semicolon)
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 40));
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 40));
         assert!(result.is_some());
         let info = result.unwrap();
         // The INSERT statement is still the closest at this position
@@ -565,14 +547,14 @@ DELETE FROM users WHERE id = 1;";
         assert!(info.is_complete);
 
         // Test cursor on fourth line (SELECT)
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 45));
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 45));
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "SELECT * FROM users");
         assert!(info.is_complete);
 
         // Test cursor on fifth line (comment after SELECT)
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 60));
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 60));
         assert!(result.is_some());
         let info = result.unwrap();
         // Should still return the SELECT statement even with cursor in comment
@@ -580,14 +562,14 @@ DELETE FROM users WHERE id = 1;";
         assert!(info.is_complete);
 
         // Test cursor on sixth line (empty line before DELETE)
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 80));
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 80));
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "DELETE FROM users WHERE id = 1");
         assert!(info.is_complete);
 
         // Test cursor on seventh line (DELETE)
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 85));
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 85));
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "DELETE FROM users WHERE id = 1");
@@ -598,17 +580,19 @@ DELETE FROM users WHERE id = 1;";
     fn test_mixed_formatting_statements() {
         let mut parser = create_test_parser();
         // Test statements with various formatting styles
-        let text = "  CREATE TABLE test (
+        let text = Rope::from_str(
+            "  CREATE TABLE test (
             id INTEGER PRIMARY KEY,
             name TEXT
         );  -- Create test table
 
         UPDATE test SET name = 'test' WHERE id = 1;
 
-        DROP TABLE test;";
+        DROP TABLE test;",
+        );
 
         // Test cursor in CREATE (first line)
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 4));
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 4));
         assert!(result.is_some());
         let info = result.unwrap();
         // Multi-line CREATE statement may not include the semicolon
@@ -616,14 +600,14 @@ DELETE FROM users WHERE id = 1;";
         assert!(info.is_complete);
 
         // Test cursor in CREATE (middle)
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 30));
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 30));
         assert!(result.is_some());
         let info = result.unwrap();
         assert!(info.text.trim().starts_with("CREATE TABLE test"));
         assert!(info.is_complete);
 
         // Test cursor in UPDATE
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 120));
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 120));
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(
@@ -633,7 +617,7 @@ DELETE FROM users WHERE id = 1;";
         assert!(info.is_complete);
 
         // Test cursor in DROP
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 175));
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 175));
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "DROP TABLE test");
@@ -644,24 +628,25 @@ DELETE FROM users WHERE id = 1;";
     fn test_no_whitespace_between_statements() {
         let mut parser = create_test_parser();
         // Test statements with minimal whitespace
-        let text = "SELECT a FROM b;INSERT INTO c VALUES (1);DELETE FROM d WHERE e = 2;";
+        let text =
+            Rope::from_str("SELECT a FROM b;INSERT INTO c VALUES (1);DELETE FROM d WHERE e = 2;");
 
         // Test cursor in SELECT
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 5));
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 5));
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "SELECT a FROM b");
         assert!(info.is_complete);
 
         // Test cursor in INSERT (position 20)
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 20));
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 20));
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "INSERT INTO c VALUES (1)");
         assert!(info.is_complete);
 
         // Test cursor in DELETE (position 45, well into DELETE)
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 45));
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 45));
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "DELETE FROM d WHERE e = 2");
@@ -673,12 +658,14 @@ DELETE FROM users WHERE id = 1;";
         let mut parser = create_test_parser();
         // This query caused a panic: byte index 177 is out of bounds
         // The issue was that tree-sitter returned a node with byte range extending beyond text length
-        let text = "UPDATE alternative_images ai SET updated_at = NOW() WHERE id = 'f893fd7a-45a2-4747-a726-5561bb4735ec'";
+        let text = Rope::from_str(
+            "UPDATE alternative_images ai SET updated_at = NOW() WHERE id = 'f893fd7a-45a2-4747-a726-5561bb4735ec'",
+        );
 
         // Test cursor at various positions in the statement
         for cursor_pos in [0, 10, 30, 50, 70, 90, text.len().saturating_sub(1)] {
             let result =
-                parser.extract_statement_at_cursor(text, char_to_byte_pos(text, cursor_pos));
+                parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, cursor_pos));
             assert!(
                 result.is_some(),
                 "Should extract statement at cursor position {}",
@@ -700,9 +687,9 @@ DELETE FROM users WHERE id = 1;";
         let mut parser = create_test_parser();
         // Test that single character named params don't panic
         // Note: :a is NOT recognized as a parameter by tree-sitter SQL grammar
-        let text = "SELECT * FROM users WHERE name = :a";
+        let text = Rope::from_str("SELECT * FROM users WHERE name = :a");
 
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 20));
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 20));
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "SELECT * FROM users WHERE name = :a");
@@ -711,8 +698,8 @@ DELETE FROM users WHERE id = 1;";
 
         // Test with positional parameter (PostgreSQL style)
         // Note: $1 IS recognized as a positional_parameter by tree-sitter
-        let text = "SELECT * FROM users WHERE id = $1";
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 20));
+        let text = Rope::from_str("SELECT * FROM users WHERE id = $1");
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 20));
         assert!(result.is_some());
         let info = result.unwrap();
         // PostgreSQL $1 IS recognized
@@ -721,8 +708,8 @@ DELETE FROM users WHERE id = 1;";
         matches!(info.parameters[0].style, ParameterStyle::Positional(1));
 
         // Test with multiple parameters
-        let text = "SELECT * FROM users WHERE id = $1 AND name = $2";
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 20));
+        let text = Rope::from_str("SELECT * FROM users WHERE id = $1 AND name = $2");
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 20));
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.parameters.len(), 2);
@@ -738,9 +725,9 @@ DELETE FROM users WHERE id = 1;";
         let mut parser = create_test_parser();
         // Test with ? style parameter
         // Note: ? IS recognized as a bind_parameter by tree-sitter SQL grammar
-        let text = "SELECT * FROM users WHERE id = ?";
+        let text = Rope::from_str("SELECT * FROM users WHERE id = ?");
 
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 20));
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 20));
         assert!(result.is_some());
         let info = result.unwrap();
         // ? IS recognized as a bind_parameter
@@ -750,8 +737,8 @@ DELETE FROM users WHERE id = 1;";
         matches!(info.parameters[0].style, ParameterStyle::Positional(0));
 
         // Test with multiple ? parameters
-        let text = "SELECT * FROM users WHERE id = ? AND name = ?";
-        let result = parser.extract_statement_at_cursor(text, char_to_byte_pos(text, 20));
+        let text = Rope::from_str("SELECT * FROM users WHERE id = ? AND name = ?");
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 20));
         assert!(result.is_some());
         let info = result.unwrap();
         // Multiple ? are recognized as separate bind_parameter nodes
