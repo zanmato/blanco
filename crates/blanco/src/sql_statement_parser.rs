@@ -70,8 +70,11 @@ impl SqlStatementParser {
         text: &Rope,
         cursor_byte_pos: usize,
     ) -> Option<StatementInfo> {
-        // Parse the text
-        let tree = self.parser.parse(text.as_str().unwrap_or(""), None)?;
+        // Convert Rope to string. as_str() only works if the rope is contiguous,
+        // so we need to iterate over chunks for non-contiguous ropes.
+        let text_str: String = text.chunks().collect();
+
+        let tree = self.parser.parse(&text_str, None)?;
         let root_node = tree.root_node();
 
         // Find all statement nodes
@@ -93,7 +96,7 @@ impl SqlStatementParser {
                 let is_complete = self.is_statement_complete(&statement_text);
                 // Extract parameters and adjust their offsets to be relative to the statement text
                 let mut parameters =
-                    self.extract_parameters_from_node(statement, text.as_str().unwrap_or(""));
+                    self.extract_parameters_from_node(statement, &text_str);
                 // Adjust byte offsets to be relative to the statement text (not the full text)
                 for param in &mut parameters {
                     param.byte_offset = param.byte_offset.saturating_sub(range.start);
@@ -130,7 +133,7 @@ impl SqlStatementParser {
             let is_complete = self.is_statement_complete(&statement_text);
             // Extract parameters and adjust their offsets to be relative to the statement text
             let mut parameters =
-                self.extract_parameters_from_node(statement, text.as_str().unwrap_or(""));
+                self.extract_parameters_from_node(statement, &text_str);
             // Adjust byte offsets to be relative to the statement text (not the full text)
             for param in &mut parameters {
                 param.byte_offset = param.byte_offset.saturating_sub(range.start);
@@ -743,5 +746,67 @@ DELETE FROM users WHERE id = 1;",
         let info = result.unwrap();
         // Multiple ? are recognized as separate bind_parameter nodes
         assert_eq!(info.parameters.len(), 2);
+    }
+
+    #[test]
+    fn test_select_above_cte() {
+        let mut parser = create_test_parser();
+        let text = Rope::from_str(
+            "SELECT * FROM ps_customer
+WHERE id_shop = 3
+ORDER BY date_add DESC
+LIMIT 100;
+
+
+WITH customer_addresses AS (
+    SELECT
+        c.id_customer,
+        JSON_ARRAYAGG(
+            JSON_OBJECT(
+                'ID', UUID_v7(),
+                'OrganizationName', a.company
+            )
+        ) AS addresses
+    FROM ps_customer c
+    INNER JOIN ps_orders o ON o.id_customer = c.id_customer
+    LEFT JOIN ps_address a ON a.id_customer = c.id_customer AND a.deleted = 0
+    WHERE c.email IS NOT NULL AND c.email != ''
+    GROUP BY c.id_customer
+)",
+        );
+
+        // Test cursor inside the first SELECT statement (position 10)
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 10));
+        assert!(
+            result.is_some(),
+            "Should extract first SELECT when cursor is inside it, even with CTE below"
+        );
+        let info = result.unwrap();
+        assert!(info.text.trim().contains("SELECT * FROM ps_customer"));
+        assert!(info.is_complete);
+
+        // Test cursor at different positions in first statement
+        for cursor_pos in [30, 50, 70] {
+            let result =
+                parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, cursor_pos));
+            assert!(
+                result.is_some(),
+                "Should extract first SELECT at cursor position {}",
+                cursor_pos
+            );
+            let info = result.unwrap();
+            assert!(info.text.trim().contains("SELECT * FROM ps_customer"));
+            assert!(info.is_complete);
+        }
+
+        // Test cursor inside the WITH/CTE statement (position around 150)
+        let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 150));
+        assert!(
+            result.is_some(),
+            "Should extract CTE statement when cursor is inside it"
+        );
+        let info = result.unwrap();
+        assert!(info.text.trim().contains("WITH customer_addresses"));
+        assert!(info.is_complete);
     }
 }
