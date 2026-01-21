@@ -629,6 +629,7 @@ impl Render for BlancoApp {
                         .flex()
                         .items_center()
                         .gap_x_3()
+                        .bg(cx.theme().title_bar)
                         .child(
                             svg()
                                 .h(px(32.))

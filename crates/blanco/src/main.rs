@@ -152,6 +152,8 @@ fn main() {
         // Store the database service globally for components to use
         cx.activate(true);
 
+        cx.set_text_rendering_mode(gpui::TextRenderingMode::Subpixel);
+
         let window_bounds = gpui::Bounds::centered(None, size(px(1400.), px(900.)), cx);
 
         let window_options = WindowOptions {

@@ -265,8 +265,8 @@ impl EditorPanel {
 
     fn set_active_tab(&mut self, ix: usize, _: &mut Window, cx: &mut Context<Self>) {
         if ix < self.tabs.len() {
-            // Tab switching no longer saves automatically - tabs are only saved on query execution
             self.active_tab_ix = ix;
+            self.tabbar_scroll_handle.scroll_to_item(ix);
             cx.notify();
         }
     }
@@ -1230,9 +1230,9 @@ impl Render for EditorPanel {
                                                                 .p_2()
                                                                 .gap_2()
                                                                 .border_t_1()
+                                                                .bg(cx.theme().title_bar)
                                                                 .border_color(cx.theme().border)
                                                                 .flex_wrap()
-                                                                .bg(cx.theme().muted.opacity(0.5))
                                                                 .child(
                                                                     Button::new("add-row")
                                                                         .outline()
