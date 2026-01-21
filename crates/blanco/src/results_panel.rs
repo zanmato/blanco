@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::time::Duration;
 
+use gpui_component::popover::{Popover, PopoverState};
+use gpui_component::scroll::ScrollableElement;
 use serde_json::Value;
 
 use gpui::prelude::FluentBuilder;
@@ -11,7 +13,10 @@ use gpui::{
     Subscription, TextRun, Window, div, px,
 };
 use gpui_component::{
-    clipboard::Clipboard, h_flex, ActiveTheme, Icon,
+    ActiveTheme, Icon, Sizable,
+    button::{Button, ButtonVariants},
+    clipboard::Clipboard,
+    h_flex,
     input::{Input, InputEvent, InputState},
     menu::PopupMenu,
     table::{Column, ColumnSort, Table, TableDelegate, TableState},
@@ -20,7 +25,11 @@ use gpui_component::{
 
 use crate::app::{AddRow, DuplicateRow};
 use crate::app_events::AppEvent;
+use crate::foreign_key_popover::ForeignKeyPopover;
 use crate::transformers::CopyHandler;
+use blanco_core::{
+    DatabaseService as DatabaseServiceTrait, QueryResult, connection_trait::ForeignKeyInfo,
+};
 use database::DatabaseService;
 
 // Response structure for table operations
@@ -34,7 +43,6 @@ pub struct TableOperationResponse {
     pub operations_executed: usize,
     pub duration: Duration,
 }
-use blanco_core::QueryResult;
 mod table_operations;
 use blanco_ui::IconName;
 use table_operations::{ColumnChange, OperationType, RowIdentifier, TableChangeOperation};
@@ -64,8 +72,6 @@ pub struct SelectedTableData {
     pub columns: Vec<String>,
     pub column_types: Vec<String>,
     pub selected_rows: Vec<SelectedRow>,
-    #[allow(dead_code)]
-    pub primary_key_column: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -77,12 +83,6 @@ pub struct TableChange {
     pub old_value: Option<String>,
     pub new_value: Option<String>,
     pub primary_key_value: Option<String>,
-    pub primary_key_column: Option<String>,
-    // New fields for prepared statements
-    pub sql_template: Option<String>,
-    pub parameters: Vec<String>,
-    // For INSERT operations, store multiple column values (None represents NULL)
-    pub insert_values: Option<Vec<Option<String>>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -231,7 +231,6 @@ pub struct TableChangeBuilder {
     old_value: Option<String>,
     new_value: Option<String>,
     primary_key_value: Option<String>,
-    primary_key_column: Option<String>,
     insert_values: Option<Vec<Option<String>>>,
 }
 
@@ -245,7 +244,6 @@ impl TableChangeBuilder {
             old_value: None,
             new_value: None,
             primary_key_value: None,
-            primary_key_column: None,
             insert_values: None,
         }
     }
@@ -270,11 +268,6 @@ impl TableChangeBuilder {
         self
     }
 
-    pub fn primary_key_column(mut self, primary_key_column: Option<String>) -> Self {
-        self.primary_key_column = primary_key_column;
-        self
-    }
-
     pub fn insert_values(mut self, values: Option<Vec<Option<String>>>) -> Self {
         self.insert_values = values;
         self
@@ -289,10 +282,6 @@ impl TableChangeBuilder {
             old_value: self.old_value,
             new_value: self.new_value,
             primary_key_value: self.primary_key_value,
-            primary_key_column: self.primary_key_column,
-            sql_template: None,
-            parameters: Vec::new(),
-            insert_values: self.insert_values,
         }
     }
 }
@@ -307,7 +296,6 @@ impl TableChange {
         old_value: Option<String>,
         new_value: Option<String>,
         primary_key_value: Option<String>,
-        primary_key_column: Option<String>,
         insert_values: Option<Vec<Option<String>>>,
     ) -> Self {
         TableChangeBuilder::new(change_type, table_name, row_index)
@@ -315,7 +303,6 @@ impl TableChange {
             .old_value(old_value)
             .new_value(new_value)
             .primary_key_value(primary_key_value)
-            .primary_key_column(primary_key_column)
             .insert_values(insert_values)
             .build()
     }
@@ -333,6 +320,8 @@ pub struct ResultsTableDelegate {
     connection_id: i64,
     database_name: String,
     original_query: Option<String>,
+    /// Foreign key metadata: column_index (excluding row number column) -> FK info
+    foreign_keys: HashMap<usize, ForeignKeyInfo>,
 }
 
 impl ResultsTableDelegate {
@@ -449,24 +438,16 @@ impl ResultsTableDelegate {
         for change in &self.edit_state.changes {
             match change.change_type {
                 ChangeType::UpdateCell => {
-                    // Get primary key information
-                    let (pk_column, pk_value) = if let (Some(pk_col), Some(pk_val)) =
-                        (&change.primary_key_column, &change.primary_key_value)
+                    // Get primary key information - always use delegate's primary key column
+                    let (pk_column, pk_value) = if let Some(ref pk_column) = self.primary_key_column
                     {
-                        (pk_col.clone(), pk_val.clone())
-                    } else {
-                        // Fallback: try to get primary key from delegate
-                        if let Some(ref pk_column) = self.primary_key_column {
-                            if let Some(pk_value) =
-                                self.rows.get(change.row_index).and_then(|row| row.first())
-                            {
-                                (pk_column.clone(), pk_value.clone())
-                            } else {
-                                continue; // Skip this change if we can't determine PK
-                            }
+                        if let Some(pk_val) = &change.primary_key_value {
+                            (pk_column.clone(), pk_val.clone())
                         } else {
-                            continue; // Skip this change if we can't determine PK
+                            continue;
                         }
+                    } else {
+                        continue; // Skip this change if we can't determine PK
                     };
 
                     // Get column name from index
@@ -583,6 +564,22 @@ impl ResultsTableDelegate {
             .iter()
             .enumerate()
             .map(|(i, col_name)| {
+                // Check if this column has a foreign key
+                let has_foreign_key = result
+                    .table_columns
+                    .as_ref()
+                    .and_then(|cols| cols.get(i))
+                    .and_then(|col| col.foreign_key.as_ref())
+                    .is_some();
+
+                // Check if this column is a primary key
+                let is_primary_key = result
+                    .table_columns
+                    .as_ref()
+                    .and_then(|cols| cols.get(i))
+                    .map(|col| col.is_primary_key)
+                    .unwrap_or(false);
+
                 // Measure column name width
                 let shaped_line = window.text_system().shape_line(
                     SharedString::from(col_name),
@@ -627,6 +624,11 @@ impl ResultsTableDelegate {
 
                 // Add padding for the input expansion icon
                 max_width += 24.0;
+
+                // Add padding for foreign key or primary key icon if applicable
+                if has_foreign_key || is_primary_key {
+                    max_width += 16.0;
+                }
 
                 // Account for cell borders and extra spacing
                 max_width += 2.0;
@@ -697,32 +699,36 @@ impl ResultsTableDelegate {
             }
         }
 
-        // Use primary key from QueryResult if available, otherwise fall back to heuristic
-        self.primary_key_column = result.primary_key_column.clone().or_else(|| {
-            self.table_name
-                .as_ref()
-                .and_then(|table_name| self.detect_primary_key_simple(table_name))
+        // Extract primary key column name from table_columns metadata
+        self.primary_key_column = result.table_columns.as_ref().and_then(|columns| {
+            columns
+                .iter()
+                .find(|c| c.is_primary_key)
+                .map(|c| c.name.clone())
         });
-    }
 
-    /// Simple heuristic method to detect primary key column (fallback)
-    fn detect_primary_key_simple(&self, _table_name: &str) -> Option<String> {
-        // Simple heuristic: look for common primary key column names
-        for column in self.columns.iter() {
-            let column_name_lower = column.name.to_lowercase();
-            if column_name_lower.contains("id")
-                || column_name_lower == "uuid"
-                || column_name_lower.ends_with("_id")
-                || column_name_lower == "pk"
-                || column_name_lower.ends_with("_pk")
-            {
-                return Some(column.name.to_string());
+        // Clear previous foreign keys
+        self.foreign_keys.clear();
+
+        // Load foreign key metadata from table_columns if available
+        if let Some(ref columns) = result.table_columns {
+            let foreign_keys: std::collections::HashMap<usize, ForeignKeyInfo> = columns
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, col)| col.foreign_key.as_ref().map(|fk| (idx, fk.clone())))
+                .collect();
+
+            if !foreign_keys.is_empty() {
+                tracing::debug!(
+                    "Loaded {} foreign key(s) for table '{}' from query result metadata",
+                    foreign_keys.len(),
+                    self.table_name.as_deref().unwrap_or("unknown")
+                );
             }
+            self.foreign_keys = foreign_keys;
         }
-
-        // Fallback: return the first column name
-        self.columns.first().map(|col| col.name.to_string())
     }
+
     pub fn start_editing_cell(&mut self, row: usize, col: usize) {
         if let Some(cell_value) = self.rows.get(row).and_then(|r| r.get(col)) {
             // Store the original value if not already stored
@@ -819,7 +825,6 @@ impl ResultsTableDelegate {
                         Some(original.clone()),
                         Some(new_value.clone()),
                         primary_key_value,
-                        self.primary_key_column.clone(),
                         None, // No insert_values for UpdateCell operations
                     );
 
@@ -950,11 +955,37 @@ impl TableDelegate for ResultsTableDelegate {
     ) -> impl IntoElement {
         let is_row_number_col = col_ix == 0;
         let col = &self.columns[col_ix];
+        let has_fk = !is_row_number_col && self.foreign_keys.contains_key(&(col_ix - 1));
+        let is_pk = !is_row_number_col
+            && self
+                .primary_key_column
+                .as_ref()
+                .is_some_and(|pk| pk == &col.name);
+
         div()
             .font_family(cx.theme().mono_font_family.clone())
             .text_size(px(12.))
             .pt(px(1.))
-            .child(col.name.to_string())
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_1()
+                    .child(col.name.to_string())
+                    .when(is_pk, |this| {
+                        this.child(
+                            Icon::new(IconName::Key)
+                                .size(px(10.))
+                                .text_color(cx.theme().yellow),
+                        )
+                    })
+                    .when(has_fk && !is_pk, |this| {
+                        this.child(
+                            Icon::new(IconName::Key)
+                                .size(px(10.))
+                                .text_color(cx.theme().blue),
+                        )
+                    }),
+            )
             .when(is_row_number_col, |this| {
                 this.on_mouse_down(
                     MouseButton::Left,
@@ -1191,7 +1222,13 @@ impl TableDelegate for ResultsTableDelegate {
                 .gap_1()
                 .flex_1()
                 .min_w_0()
-                .child(div().flex_1().min_w_0().overflow_hidden().child(display_text.clone()))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .child(display_text.clone()),
+                )
                 .when(!is_row_number_col, |this| {
                     this.child(
                         div()
@@ -1202,7 +1239,65 @@ impl TableDelegate for ResultsTableDelegate {
                                     .value(display_text.clone()),
                             ),
                     )
-                });
+                })
+                .when_some(
+                    self.foreign_keys
+                        .get(&(col_ix - 1))
+                        .filter(|_| !is_row_number_col),
+                    |this, fk_info| {
+                        let fk_info = fk_info.clone();
+                        let cell_value = display_text.clone();
+                        let popover_id = format!("fk-popover-{}-{}", row_ix, col_ix);
+                        let connection_id = self.connection_id.clone();
+                        let database_name = if self.database_name.is_empty() {
+                            None
+                        } else {
+                            Some(SharedString::from(self.database_name.clone()))
+                        };
+
+                        this.child(
+                            div()
+                                .invisible()
+                                .group_hover("", |this| this.visible())
+                                .child(
+                                    Popover::new(popover_id.clone())
+                                        .anchor(gpui::Corner::BottomRight)
+                                        .trigger(
+                                            Button::new(format!("fk-trigger-{}", popover_id))
+                                                .icon(IconName::Search)
+                                                .ghost()
+                                                .xsmall(),
+                                        )
+                                        .content(
+                                            move |_state: &mut PopoverState,
+                                                  window: &mut Window,
+                                                  cx: &mut Context<
+                                                PopoverState,
+                                            >| {
+                                                let database_name_clone = database_name.clone();
+
+                                                // Use use_keyed_state to lazily create the FK popover entity
+                                                let fk_popover = window.use_keyed_state(
+                                                    popover_id.clone(),
+                                                    cx,
+                                                    |_id, cx| {
+                                                        ForeignKeyPopover::new(
+                                                            &fk_info.foreign_table_name,
+                                                            &fk_info.foreign_column_name,
+                                                            &cell_value,
+                                                            connection_id,
+                                                            database_name_clone,
+                                                            cx,
+                                                        )
+                                                    },
+                                                );
+                                                div().max_w(px(300.)).child(fk_popover)
+                                            },
+                                        ),
+                                ),
+                        )
+                    },
+                );
 
             div()
                 .group("")
@@ -1253,18 +1348,6 @@ impl TableDelegate for ResultsTableDelegate {
                 .when(!is_row_number_col && !is_null && is_editable, |this| {
                     this.cursor_pointer()
                 })
-                // Apply muted grey color only to non-editable tables for cells WITHOUT type-based highlighting
-                // Type-based highlighting (UUID=blue, timestamp=green, JSON=yellow, array=blue) should work regardless
-                .when(
-                    !is_editable
-                        && !is_row_number_col
-                        && !is_null
-                        && !self.is_uuid_column(col_ix - 1)
-                        && !self.is_timestamp_column(col_ix - 1)
-                        && !self.is_json_column(col_ix - 1)
-                        && !self.is_array_column(col_ix - 1),
-                    |this| this.text_color(cx.theme().muted_foreground.opacity(0.6)),
-                )
                 // All data cells (non-row-number) should be selectable for copying
                 .when(!is_row_number_col, |this| {
                     this.on_mouse_down(
@@ -1280,7 +1363,6 @@ impl TableDelegate for ResultsTableDelegate {
                         }),
                     )
                 })
-                .px_2()
                 .py_1()
                 .child(cell_content)
         }
@@ -1672,7 +1754,6 @@ impl ResultsPanel {
                         Some(old_val.clone()),
                         Some(new_value.clone()),
                         primary_key_value,
-                        primary_key_column,
                         None, // No insert_values for UpdateCell operations
                     );
                     delegate.edit_state.add_change(change);
@@ -1744,7 +1825,6 @@ impl ResultsPanel {
                     Some(original_value.clone()),
                     Some(new_value.clone()),
                     None, // primary_key_value
-                    None, // primary_key_column
                     None, // No insert_values for UpdateCell operations
                 ));
             }
@@ -2192,9 +2272,8 @@ impl ResultsPanel {
                     new_row_index,
                     None,
                     None,
-                    None, // No single new_value for insert operations
-                    None, // No primary key value for new rows
-                    delegate.primary_key_column.clone(),
+                    None,             // No single new_value for insert operations
+                    None,             // No primary key value for new rows
                     Some(values_vec), // Use insert_values parameter instead
                 );
                 delegate.edit_state.add_change(change);
@@ -2244,7 +2323,6 @@ impl ResultsPanel {
                             None,
                             None, // No single new_value for insert operations
                             None, // No primary key value for new rows
-                            delegate.primary_key_column.clone(),
                             Some(values_vec.clone()), // Use insert_values parameter instead
                         );
                         delegate.edit_state.add_change(change);
@@ -2441,7 +2519,6 @@ impl ResultsPanel {
                 .collect::<Vec<_>>(),
             column_types: delegate.column_types.clone(),
             selected_rows: selected_rows_data,
-            primary_key_column: delegate.primary_key_column.clone(),
         }
     }
 }

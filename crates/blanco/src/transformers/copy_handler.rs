@@ -208,7 +208,6 @@ mod tests {
                 ],
                 primary_key_value: Some("2".to_string()),
             }],
-            primary_key_column: Some("id".to_string()),
         }
     }
 

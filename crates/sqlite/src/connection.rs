@@ -1,10 +1,14 @@
 use crate::sql_parser::SqliteTableExtractor;
 use anyhow::Result;
 use async_trait::async_trait;
-use blanco_core::{ColumnInfo, Connection, ConnectionUIMetadata, QueryResult, TableMetadata};
+use blanco_core::{
+    connection_trait::ForeignKeyInfo, ColumnInfo, Connection, ConnectionUIMetadata, QueryResult,
+    TableMetadata,
+};
 use futures::{Stream, StreamExt};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use sqlx::{Column, ConnectOptions, Row, TypeInfo, ValueRef};
+use std::collections::HashMap;
 use std::str::FromStr;
 
 /// SQLite connection implementation of the Connection trait
@@ -215,8 +219,8 @@ impl SqliteConnection {
             execution_time_ms: None,
             is_error: false,
             table_name: None,
-            primary_key_column: None,
             connection_id: None,
+            table_columns: None,
         })
     }
 
@@ -430,10 +434,32 @@ impl Connection for SqliteConnection {
     ) -> Result<Vec<ColumnInfo>> {
         tracing::debug!("Getting columns for SQLite table '{}'", table_name);
 
-        // Use PRAGMA table_info to get column information
+        // Fetch column info with PK data
         let query = format!("PRAGMA table_info({})", table_name);
-
         let result = self.execute_query(&query, None, None).await?;
+
+        // Fetch foreign key info in parallel
+        let fk_query = format!("PRAGMA foreign_key_list({})", table_name);
+        let fk_result = self.execute_query(&fk_query, None, None).await?;
+
+        // Build FK lookup map
+        let mut foreign_keys: HashMap<String, ForeignKeyInfo> = HashMap::new();
+        for row in fk_result.rows {
+            if row.len() >= 5 {
+                let from_column = &row[3]; // Local column
+                let to_table = &row[2]; // Foreign table
+                let to_column = &row[4]; // Foreign column
+
+                foreign_keys.insert(
+                    from_column.clone(),
+                    ForeignKeyInfo {
+                        foreign_table_name: to_table.clone(),
+                        foreign_column_name: to_column.clone(),
+                        constraint_name: None,
+                    },
+                );
+            }
+        }
 
         let mut columns = Vec::new();
         for row in result.rows {
@@ -456,6 +482,7 @@ impl Connection for SqliteConnection {
                         Some(default_value.clone())
                     },
                     character_maximum_length: None, // SQLite doesn't provide this info in PRAGMA
+                    foreign_key: foreign_keys.get(column_name).cloned(),
                 };
                 columns.push(column_info);
             }
@@ -463,56 +490,6 @@ impl Connection for SqliteConnection {
 
         tracing::debug!("Found {} columns for table '{}'", columns.len(), table_name);
         Ok(columns)
-    }
-
-    async fn get_table_metadata(
-        &self,
-        table_name: &str,
-        schema: Option<&str>,
-    ) -> Result<TableMetadata> {
-        let schema_name = schema.unwrap_or("main");
-        tracing::debug!("Getting metadata for SQLite table '{}'", table_name);
-
-        // Get basic table information
-        let columns = self
-            .get_columns_for_table(table_name, Some(schema_name))
-            .await?;
-
-        // Get row count
-        let row_count = match self
-            .execute_query(
-                &format!("SELECT COUNT(*) FROM \"{}\"", table_name),
-                None,
-                Some(&[]),
-            )
-            .await
-        {
-            Ok(count_result) if !count_result.rows.is_empty() => {
-                count_result.rows[0][0].parse().ok()
-            }
-            _ => None,
-        };
-
-        // Extract primary key information
-        let primary_keys: Vec<String> = columns
-            .iter()
-            .filter(|col| col.is_primary_key)
-            .map(|col| col.name.clone())
-            .collect();
-
-        let mut metadata = TableMetadata::new(table_name.to_string(), None); // SQLite doesn't use schemas
-        metadata.columns = columns;
-        metadata.row_count = row_count;
-        metadata.primary_keys = primary_keys;
-
-        tracing::debug!(
-            "Retrieved metadata for table '{}': {} columns, {} PKs",
-            table_name,
-            metadata.columns.len(),
-            metadata.primary_keys.len()
-        );
-
-        Ok(metadata)
     }
 
     fn get_file_safe_name(&self) -> String {

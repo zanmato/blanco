@@ -468,20 +468,14 @@ impl EditorPanel {
                                     .flatten();
                                 result.table_name = table_name.clone();
 
-                                // Extract primary key if we have a table name and results
+                                // Load full table metadata (including primary keys and foreign keys)
                                 if let (Some(table_name), false) =
                                     (&table_name, result.rows.is_empty())
                                 {
-                                    // Try to get primary key information for the table
-                                    if let Ok(Some(pk_column)) =
-                                        connection.get_primary_key_for_table(table_name).await
+                                    if let Ok(columns) =
+                                        connection.get_columns_for_table(table_name, None).await
                                     {
-                                        result.primary_key_column = Some(pk_column);
-                                        tracing::info!(
-                                            "Detected primary key '{}' for table '{}'",
-                                            result.primary_key_column.as_ref().unwrap(),
-                                            table_name
-                                        );
+                                        result.table_columns = Some(columns);
                                     }
                                 }
 

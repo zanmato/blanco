@@ -116,6 +116,7 @@ impl SqliteConnection {
                                     is_primary_key: primary_key,
                                     default_value,
                                     character_maximum_length: None, // SQLite doesn't specify this in pragma_table_info
+                                    foreign_key: None,
                                 })
                             } else {
                                 None

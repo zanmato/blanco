@@ -12,6 +12,7 @@ mod connections_panel_delegate;
 mod editor_panel;
 mod export_modal;
 mod export_service;
+mod foreign_key_popover;
 mod parameter_form;
 mod rename_form;
 mod results_panel;

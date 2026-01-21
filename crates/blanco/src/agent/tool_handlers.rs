@@ -102,13 +102,10 @@ impl AgentToolHandler for ListTablesHandler {
                                 .unwrap_or_else(|_| "Invalid JSON result".to_string()),
                         )
                     }
-                    Err(e) => {
-                        tracing::info!("YOLOOOOOOOOOOOOOO {}", e);
-                        ToolResult::error(
-                            "list-tables",
-                            format!("Failed to query database schema: {}", e),
-                        )
-                    }
+                    Err(e) => ToolResult::error(
+                        "list-tables",
+                        format!("Failed to query database schema: {}", e),
+                    ),
                 }
             }
             Err(e) => ToolResult::error(

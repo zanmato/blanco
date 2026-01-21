@@ -88,6 +88,7 @@ impl PostgresConnection {
                                                 is_primary_key: primary_key,
                                                 default_value,
                                                 character_maximum_length,
+                                                foreign_key: None,
                                             });
                                         }
                                     }

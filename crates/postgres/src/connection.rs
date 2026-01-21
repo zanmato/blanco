@@ -1,7 +1,10 @@
 use crate::sql_parser::PostgresTableExtractor;
 use anyhow::Result;
 use async_trait::async_trait;
-use blanco_core::{ColumnInfo, Connection, ConnectionUIMetadata, QueryResult, TableMetadata};
+use blanco_core::{
+    connection_trait::ForeignKeyInfo, ColumnInfo, Connection, ConnectionUIMetadata, QueryResult,
+    TableMetadata,
+};
 use futures::{Stream, StreamExt};
 use smol::lock::RwLock;
 use sqlx::postgres::types::PgMoney;
@@ -1374,8 +1377,8 @@ impl PostgresConnection {
             execution_time_ms: None,
             is_error: false,
             table_name: None,
-            primary_key_column: None,
             connection_id: None,
+            table_columns: None,
         })
     }
 }
@@ -1569,18 +1572,48 @@ impl Connection for PostgresConnection {
             table_name
         );
 
+        // Single query to get columns with PK and FK information
         let query = "
+            WITH foreign_keys AS (
+                SELECT
+                    conname,
+                    conrelid,
+                    confrelid,
+                    unnest(conkey)  AS conkey,
+                    unnest(confkey) AS confkey
+                FROM pg_constraint
+                WHERE contype = 'f' AND conrelid::regclass = $1::regclass
+            )
             SELECT
-                column_name,
-                data_type,
-                is_nullable,
-                column_default,
-                character_maximum_length,
-                numeric_precision,
-                numeric_scale
-            FROM information_schema.columns
-            WHERE table_name = $1 AND table_schema = $2
-            ORDER BY ordinal_position
+                c.column_name,
+                c.data_type,
+                c.is_nullable,
+                c.column_default,
+                c.character_maximum_length,
+                COALESCE(pk.column_name, '') AS is_primary_key,
+                COALESCE(fk.foreign_table_name::text, '') AS fk_table,
+                COALESCE(fk.foreign_column_name::text, '') AS fk_column,
+                fk.constraint_name
+            FROM information_schema.columns c
+            LEFT JOIN (
+                SELECT a.attname AS column_name
+                FROM   pg_index i 
+                JOIN   pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+                WHERE  i.indrelid = $1::regclass
+                AND    i.indisprimary
+            ) pk ON pk.column_name = c.column_name
+            LEFT JOIN (
+                SELECT
+                    a.attname AS column_name,
+                    fk.confrelid::regclass  AS foreign_table_name,
+                    af.attname AS foreign_column_name,
+                    fk.conname AS constraint_name
+                FROM foreign_keys fk
+                JOIN pg_attribute af ON af.attnum = fk.confkey AND af.attrelid = fk.confrelid
+                JOIN pg_attribute a ON a.attnum = conkey AND a.attrelid = fk.conrelid
+            ) fk ON fk.column_name = c.column_name
+            WHERE c.table_name = $1 AND c.table_schema = $2
+            ORDER BY c.ordinal_position
         ";
 
         let result = self
@@ -1591,34 +1624,46 @@ impl Connection for PostgresConnection {
             )
             .await?;
 
-        let primary_key = self
-            .get_primary_key_for_table(table_name)
-            .await?
-            .unwrap_or("".to_string());
-
         let mut columns = Vec::new();
         for row in result.rows {
-            if row.len() >= 7 {
+            if row.len() >= 9 {
                 let column_name = &row[0];
                 let data_type = &row[1];
-                let is_nullable = &row[2]; // YES/NO
-                let default_value = &row[3]; // Default value or NULL
-                let max_length = &row[4]; // character_maximum_length
-                                          // row[5] = numeric_precision, row[6] = numeric_scale (not used for now)
+                let is_nullable = &row[2];
+                let default_value = &row[3];
+                let max_length = &row[4];
+                let is_primary_key = &row[5]; // PK column name or empty
+                let fk_table = &row[6];
+                let fk_column = &row[7];
+                let fk_constraint = &row[8];
 
-                let column_info = ColumnInfo {
+                // Only create ForeignKeyInfo if we have actual FK values
+                let foreign_key = match (fk_table.as_str(), fk_column.as_str()) {
+                    ("", "") | (_, "") => None,
+                    (table, column) => Some(ForeignKeyInfo {
+                        foreign_table_name: table.to_string(),
+                        foreign_column_name: column.to_string(),
+                        constraint_name: if fk_constraint.is_empty() {
+                            None
+                        } else {
+                            Some(fk_constraint.clone())
+                        },
+                    }),
+                };
+
+                columns.push(ColumnInfo {
                     name: column_name.clone(),
                     data_type: data_type.clone(),
                     is_nullable: is_nullable == "YES",
-                    is_primary_key: primary_key == *column_name,
+                    is_primary_key: !is_primary_key.is_empty(),
                     default_value: if default_value.is_empty() {
                         None
                     } else {
                         Some(default_value.clone())
                     },
                     character_maximum_length: max_length.parse().ok(),
-                };
-                columns.push(column_info);
+                    foreign_key,
+                });
             }
         }
 
@@ -1629,50 +1674,6 @@ impl Connection for PostgresConnection {
             table_name
         );
         Ok(columns)
-    }
-
-    async fn get_table_metadata(
-        &self,
-        table_name: &str,
-        schema: Option<&str>,
-    ) -> Result<TableMetadata> {
-        let schema_name = schema.unwrap_or("public");
-        tracing::debug!(
-            "Getting metadata for PostgreSQL table '{}.{}",
-            schema_name,
-            table_name
-        );
-
-        // Get basic table information
-        let columns = self
-            .get_columns_for_table(table_name, Some(schema_name))
-            .await?;
-
-        // Get row count
-        let row_count = Some(0);
-
-        // Extract primary key information
-        let primary_keys: Vec<String> = columns
-            .iter()
-            .filter(|col| col.is_primary_key)
-            .map(|col| col.name.clone())
-            .collect();
-
-        let mut metadata =
-            TableMetadata::new(table_name.to_string(), Some(schema_name.to_string()));
-        metadata.columns = columns;
-        metadata.row_count = row_count;
-        metadata.primary_keys = primary_keys;
-
-        tracing::debug!(
-            "Retrieved metadata for table '{}.{}': {} columns, {} PKs",
-            schema_name,
-            table_name,
-            metadata.columns.len(),
-            metadata.primary_keys.len()
-        );
-
-        Ok(metadata)
     }
 
     fn get_file_safe_name(&self) -> String {

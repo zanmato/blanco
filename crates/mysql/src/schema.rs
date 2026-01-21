@@ -115,6 +115,7 @@ impl MysqlConnection {
                     is_primary_key,
                     default_value,
                     character_maximum_length: max_length,
+                    foreign_key: None,
                 });
             }
 

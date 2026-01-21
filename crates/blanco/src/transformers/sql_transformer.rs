@@ -66,21 +66,26 @@ impl DataTransformer for SqlTransformer {
             let mut row_indices: Vec<usize> = data.selected_rows.iter().map(|r| r.row).collect();
             row_indices.sort();
 
+            // Create the INSERT statement
+            output.push_str(&format!(
+                "INSERT INTO {} ({})\nVALUES\n",
+                sql_identifier(&table_name),
+                column_list
+            ));
+
+            let row_count = row_indices.len();
+            let mut i = 0;
             for row_idx in row_indices {
                 if let Some(row) = data.selected_rows.iter().find(|r| r.row == row_idx) {
-                    // Create the INSERT statement
-                    output.push_str(&format!(
-                        "INSERT INTO {} ({})\nVALUES (",
-                        sql_identifier(&table_name),
-                        column_list
-                    ));
-
                     // Add values with proper escaping
+                    output.push_str("(");
                     let values: Vec<String> = row
                         .cells
                         .iter()
                         .map(|cell| {
-                            if cell.value.is_empty() || cell.value.eq_ignore_ascii_case("null") {
+                            if cell.value.is_empty() {
+                                "''".to_string()
+                            } else if cell.value.eq_ignore_ascii_case("null") {
                                 "NULL".to_string()
                             } else {
                                 format!("'{}'", sql_escape_string(&cell.value))
@@ -89,7 +94,14 @@ impl DataTransformer for SqlTransformer {
                         .collect();
 
                     output.push_str(&values.join(", "));
-                    output.push_str(");\n\n");
+
+                    i += 1;
+
+                    if i < row_count {
+                        output.push_str("),\n");
+                    } else {
+                        output.push_str(");\n");
+                    }
                 }
             }
         }

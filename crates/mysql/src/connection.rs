@@ -1,8 +1,11 @@
 use anyhow::Result;
-use smol::lock::RwLock;
 use async_trait::async_trait;
-use blanco_core::{ColumnInfo, Connection, ConnectionUIMetadata, QueryResult, TableMetadata};
+use blanco_core::{
+    connection_trait::ForeignKeyInfo, ColumnInfo, Connection, ConnectionUIMetadata, QueryResult,
+    TableMetadata,
+};
 use futures::StreamExt;
+use smol::lock::RwLock;
 use sqlx::mysql::MySqlPoolOptions;
 use sqlx::{Column, Row};
 use std::collections::HashMap;
@@ -649,8 +652,8 @@ impl Connection for MysqlConnection {
             execution_time_ms: Some(execution_time),
             is_error: false,
             table_name: None,
-            primary_key_column: None,
             connection_id: None,
+            table_columns: None,
         })
     }
 
@@ -729,8 +732,7 @@ impl Connection for MysqlConnection {
 
         let pool = self.get_or_create_pool(database).await?;
 
-        let query =
-            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+        let query = "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
              WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND CONSTRAINT_NAME = 'PRIMARY'";
 
         let rows = sqlx::query(query)
@@ -763,11 +765,28 @@ impl Connection for MysqlConnection {
 
         let pool = self.get_or_create_pool(database).await?;
 
-        let query = 
-            "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT, CHARACTER_MAXIMUM_LENGTH, COLUMN_KEY
-             FROM INFORMATION_SCHEMA.COLUMNS
-             WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
-             ORDER BY ORDINAL_POSITION";
+        // Single query to get columns with PK and FK information
+        let query = "
+            SELECT
+                c.COLUMN_NAME,
+                c.DATA_TYPE,
+                c.IS_NULLABLE,
+                c.COLUMN_DEFAULT,
+                c.CHARACTER_MAXIMUM_LENGTH,
+                c.COLUMN_KEY = 'PRI' AS is_primary_key,
+                fk.REFERENCED_TABLE_NAME AS fk_table,
+                fk.REFERENCED_COLUMN_NAME AS fk_column,
+                fk.CONSTRAINT_NAME AS fk_constraint
+            FROM INFORMATION_SCHEMA.COLUMNS c
+            LEFT JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE fk
+                ON fk.TABLE_SCHEMA = c.TABLE_SCHEMA
+                AND fk.TABLE_NAME = c.TABLE_NAME
+                AND fk.COLUMN_NAME = c.COLUMN_NAME
+                AND fk.REFERENCED_TABLE_NAME IS NOT NULL
+            WHERE c.TABLE_SCHEMA = ?
+                AND c.TABLE_NAME = ?
+            ORDER BY c.ORDINAL_POSITION
+        ";
 
         let rows = sqlx::query(query)
             .bind(database)
@@ -782,10 +801,21 @@ impl Connection for MysqlConnection {
             let is_nullable_str: String = row.try_get(2)?;
             let default_value: Option<String> = row.try_get(3).ok();
             let max_length: Option<i32> = row.try_get(4).ok();
-            let column_key: String = row.try_get(5)?;
+            let is_primary_key: bool = row.try_get(5).unwrap_or(false);
+            let fk_table: Option<String> = row.try_get(6).ok();
+            let fk_column: Option<String> = row.try_get(7).ok();
+            let fk_constraint: Option<String> = row.try_get(8).ok();
+
+            let foreign_key = match (fk_table, fk_column) {
+                (Some(table), Some(column)) => Some(ForeignKeyInfo {
+                    foreign_table_name: table,
+                    foreign_column_name: column,
+                    constraint_name: fk_constraint,
+                }),
+                _ => None,
+            };
 
             let is_nullable = is_nullable_str == "YES";
-            let is_primary_key = column_key == "PRI";
 
             columns.push(ColumnInfo {
                 name,
@@ -794,6 +824,7 @@ impl Connection for MysqlConnection {
                 is_primary_key,
                 default_value,
                 character_maximum_length: max_length,
+                foreign_key,
             });
         }
 
@@ -803,21 +834,6 @@ impl Connection for MysqlConnection {
             table_name
         );
         Ok(columns)
-    }
-
-    async fn get_table_metadata(
-        &self,
-        table_name: &str,
-        _schema: Option<&str>,
-    ) -> Result<TableMetadata, anyhow::Error> {
-        let columns = self.get_columns_for_table(table_name, None).await?;
-        let primary_key = self.get_primary_key_for_table(table_name).await?;
-
-        let mut metadata = TableMetadata::new(table_name.to_string(), None);
-        metadata.columns = columns;
-        metadata.primary_keys = primary_key.into_iter().collect();
-
-        Ok(metadata)
     }
 
     fn extract_table_name_from_query(

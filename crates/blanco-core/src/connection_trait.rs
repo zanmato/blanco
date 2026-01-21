@@ -42,10 +42,18 @@ pub struct QueryResult {
     pub is_error: bool,
     /// Table metadata extracted from the query (if applicable)
     pub table_name: Option<String>,
-    /// Primary key column detected for the table (if applicable)
-    pub primary_key_column: Option<String>,
     /// Connection ID used for this query (for subsequent operations)
     pub connection_id: Option<i64>,
+    /// Full column metadata for the table (including foreign keys)
+    pub table_columns: Option<Vec<ColumnInfo>>,
+}
+
+/// Information about a foreign key relationship
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ForeignKeyInfo {
+    pub foreign_table_name: String,
+    pub foreign_column_name: String,
+    pub constraint_name: Option<String>,
 }
 
 /// Information about a database column
@@ -57,6 +65,7 @@ pub struct ColumnInfo {
     pub is_primary_key: bool,
     pub default_value: Option<String>,
     pub character_maximum_length: Option<i32>,
+    pub foreign_key: Option<ForeignKeyInfo>,
 }
 
 /// Information about a table in the database schema
@@ -248,14 +257,6 @@ pub trait Connection: Send + Sync {
         table_name: &str,
         schema: Option<&str>,
     ) -> Result<Vec<ColumnInfo>, anyhow::Error>;
-
-    /// Get comprehensive table metadata including columns and statistics
-    /// This method lazy-loads all necessary information for auto-completion and hover
-    async fn get_table_metadata(
-        &self,
-        table_name: &str,
-        schema: Option<&str>,
-    ) -> Result<TableMetadata, anyhow::Error>;
 
     /// Extract the primary table name from a SQL query
     /// Returns None if no table can be extracted (e.g., for complex queries or parsing errors)
