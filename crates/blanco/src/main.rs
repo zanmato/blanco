@@ -50,18 +50,6 @@ fn main() {
         // Get the tokio runtime handle for automatic SSH tunnel establishment
         let runtime_handle = gpui_tokio::Tokio::handle(cx);
 
-        // Use default theme for now
-        // Settings will be loaded asynchronously
-        let theme_name = SharedString::from("One Dark - Darkened");
-        if let Err(err) = ThemeRegistry::watch_dir(PathBuf::from("./themes"), cx, move |cx| {
-            if let Some(theme) = ThemeRegistry::global(cx).themes().get(&theme_name).cloned() {
-                Theme::global_mut(cx).apply_config(&theme);
-                tracing::info!("Applying theme {}", theme_name);
-            }
-        }) {
-            tracing::error!("Failed to watch themes directory: {}", err);
-        }
-
         // Initialize app database (for query tabs, history, connections) synchronously
         let db = smol::block_on(async { AppDatabase::new().await });
 
@@ -148,6 +136,17 @@ fn main() {
 
         let app_settings = AppSettings::new(cx, Settings::from_key_values(&settings));
         cx.set_global(app_settings);
+
+        // Apply theme
+        let theme_name = SharedString::from(&AppSettings::global(cx).settings.appearance.theme);
+        if let Err(err) = ThemeRegistry::watch_dir(PathBuf::from("./themes"), cx, move |cx| {
+            if let Some(theme) = ThemeRegistry::global(cx).themes().get(&theme_name).cloned() {
+                Theme::global_mut(cx).apply_config(&theme);
+                tracing::info!("Applying theme {}", theme_name);
+            }
+        }) {
+            tracing::error!("Failed to watch themes directory: {}", err);
+        }
 
         // Store the database service globally for components to use
         cx.activate(true);

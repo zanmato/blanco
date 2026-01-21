@@ -11,7 +11,7 @@ use gpui::{
     Subscription, TextRun, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon,
+    clipboard::Clipboard, h_flex, ActiveTheme, Icon,
     input::{Input, InputEvent, InputState},
     menu::PopupMenu,
     table::{Column, ColumnSort, Table, TableDelegate, TableState},
@@ -1186,7 +1186,26 @@ impl TableDelegate for ResultsTableDelegate {
             let is_numeric = !is_row_number_col && self.is_numeric_column(col_ix - 1);
 
             // Render static cell with appropriate handlers
+            let cell_content = h_flex()
+                .items_center()
+                .gap_1()
+                .flex_1()
+                .min_w_0()
+                .child(div().flex_1().min_w_0().overflow_hidden().child(display_text.clone()))
+                .when(!is_row_number_col, |this| {
+                    this.child(
+                        div()
+                            .invisible()
+                            .group_hover("", |this| this.visible())
+                            .child(
+                                Clipboard::new(format!("cell-clipboard-{}-{}", row_ix, col_ix))
+                                    .value(display_text.clone()),
+                            ),
+                    )
+                });
+
             div()
+                .group("")
                 .font_family(cx.theme().mono_font_family.clone())
                 .text_size(px(12.))
                 .size_full() // Fill the entire cell container
@@ -1263,7 +1282,7 @@ impl TableDelegate for ResultsTableDelegate {
                 })
                 .px_2()
                 .py_1()
-                .child(display_text)
+                .child(cell_content)
         }
     }
 
