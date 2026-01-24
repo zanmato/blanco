@@ -1144,6 +1144,7 @@ impl TableDelegate for ResultsTableDelegate {
                                 .flex_1()
                                 .text_size(px(12.))
                                 .border_0()
+                                .pl_0()
                                 .suffix(
                                     div()
                                         .cursor_pointer()
@@ -1338,6 +1339,7 @@ impl TableDelegate for ResultsTableDelegate {
                 )
                 .when(is_edited, |this| {
                     this.bg(cx.theme().yellow.opacity(0.3))
+                        .pl_2()
                         .border_l_2()
                         .border_color(cx.theme().yellow)
                 })

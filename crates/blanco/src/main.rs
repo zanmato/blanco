@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod agent;
 mod app;
 mod app_database;
@@ -149,9 +151,6 @@ fn main() {
             tracing::error!("Failed to watch themes directory: {}", err);
         }
 
-        // Store the database service globally for components to use
-        cx.activate(true);
-
         cx.set_text_rendering_mode(gpui::TextRenderingMode::Subpixel);
 
         let window_bounds = gpui::Bounds::centered(None, size(px(1400.), px(900.)), cx);
@@ -180,6 +179,13 @@ fn main() {
             app_id: Some("com.blanco.sql-editor".into()),
         };
 
+        cx.on_window_closed(|cx| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
+
         cx.spawn(async move |cx| {
             cx.open_window(window_options, |window, cx| {
                 let blanco_app = cx.new(|cx| app::BlancoApp::new(window, cx));
@@ -188,5 +194,7 @@ fn main() {
             Ok::<_, anyhow::Error>(())
         })
         .detach();
+
+        cx.activate(true);
     });
 }

@@ -695,6 +695,10 @@ fn init_menus(cx: &mut App) {
         // Register keyboard shortcuts for commit operations
         gpui::KeyBinding::new("super-shift-c", CommitChanges, None),
         gpui::KeyBinding::new("super-shift-r", RollbackChanges, None),
+        #[cfg(target_os = "macos")]
+        gpui::KeyBinding::new("cmd-q", Quit, None),
+        #[cfg(not(target_os = "macos"))]
+        gpui::KeyBinding::new("alt-f4", Quit, None),
     ]);
     cx.set_menus(vec![
         Menu {
