@@ -967,62 +967,61 @@ impl CompletionProvider for SqlCompletionProvider {
         _window: &mut Window,
         cx: &mut Context<InputState>,
     ) -> Task<Result<CompletionResponse>> {
-        // Get the full text and extract current query context
-        let full_text = rope.to_string();
+        // Clone values needed for background task
+        let rope_clone = rope.clone();
+        let provider_clone = self.clone();
 
-        // Extract only the current query context (handles multiple queries)
-        let current_query_context = self.extract_current_query_context(&full_text, offset);
+        // Get the background executor before entering the async block
+        // Context is not Send, so we can't move it into the async block
+        let executor = cx.background_executor().clone();
 
-        // Also get the text before cursor within the current query
-        let text_before_cursor = if let Some(last_semicolon) = full_text[..offset].rfind(';') {
-            // There's a semicolon before cursor, get text after it
-            full_text[last_semicolon + 1..offset].to_string()
-        } else {
-            // No semicolon before cursor, use everything before cursor
-            full_text[..offset].to_string()
-        };
+        // Spawn a single background task for all completion logic
+        // This ensures all text processing and context parsing happens off the UI thread
+        cx.background_spawn(async move {
+            // Debounce - wait before doing any work to avoid excessive completion requests
+            executor.timer(Duration::from_millis(100)).await;
 
-        // Extract current word for filtering
-        let current_word = extract_current_word(&text_before_cursor);
+            // All synchronous work now happens off the main thread
+            // Find the last semicolon before cursor using the rope (avoids full string conversion)
+            let slice_before_offset = rope_clone.slice(0..offset.min(rope_clone.len()));
+            let text_before_offset = slice_before_offset.to_string();
+            let text_before_cursor_start = if let Some(pos) = text_before_offset.rfind(';') {
+                pos + 1
+            } else {
+                0
+            };
 
-        // Check if we should show column or table completions
-        let should_show_columns = self.should_show_columns(&text_before_cursor);
-        let should_show_tables = self.should_show_tables(&text_before_cursor);
+            // Get the text before cursor as a string slice (only this portion, not the full text)
+            let text_before_cursor = rope_clone
+                .slice(text_before_cursor_start..offset.min(rope_clone.len()))
+                .to_string();
 
-        // For column completions, we'll use the new method inside the async task
+            // Extract current word for filtering
+            let current_word = extract_current_word(&text_before_cursor);
 
-        // Calculate positions for text replacement
-        let start_pos = rope.offset_to_position(offset.saturating_sub(current_word.len()));
-        let end_pos = rope.offset_to_position(offset);
+            // Check if we should show column or table completions
+            let should_show_columns = provider_clone.should_show_columns(&text_before_cursor);
+            let should_show_tables = provider_clone.should_show_tables(&text_before_cursor);
 
-        // Priority: Column completion > Table completion > Keywords
-        if should_show_columns {
-            // Clone values for the background task
-            let provider_clone = self.clone();
-            let current_word_clone = current_word.clone();
-            let start_pos_clone = start_pos;
-            let end_pos_clone = end_pos;
-            let text_before_cursor_clone = text_before_cursor.clone();
-            let _current_query_context_clone = current_query_context.clone();
-            let full_text_clone = full_text.clone();
+            // Calculate positions for text replacement
+            let start_pos = rope_clone.offset_to_position(offset.saturating_sub(current_word.len()));
+            let end_pos = rope_clone.offset_to_position(offset);
 
-            // Spawn background task to extract table name and fetch columns
-            let task = cx.background_spawn(async move {
-                smol::Timer::after(Duration::from_millis(100)).await;
+            // Priority: Column completion > Table completion > Keywords
+            if should_show_columns {
+                // Only convert full rope to string when we need it (for alias resolution)
+                let full_text = rope_clone.to_string();
 
                 // Extract table name and fetch columns using cache with current query context
                 // This ensures we only parse the current query, not previous ones
                 if let Some(table_name) = provider_clone
-                    .extract_table_for_columns_with_full_text(
-                        &text_before_cursor_clone,
-                        &full_text_clone,
-                    )
+                    .extract_table_for_columns_with_full_text(&text_before_cursor, &full_text)
                     .await
                 {
                     match provider_clone.get_cached_columns(&table_name).await {
                         Ok(columns) => {
                             // Filter columns based on current input
-                            let filtered_columns: Vec<String> = if current_word_clone.is_empty() {
+                            let filtered_columns: Vec<String> = if current_word.is_empty() {
                                 columns
                             } else {
                                 columns
@@ -1030,7 +1029,7 @@ impl CompletionProvider for SqlCompletionProvider {
                                     .filter(|column| {
                                         column
                                             .to_lowercase()
-                                            .starts_with(&current_word_clone.to_lowercase())
+                                            .starts_with(&current_word.to_lowercase())
                                     })
                                     .collect()
                             };
@@ -1046,7 +1045,7 @@ impl CompletionProvider for SqlCompletionProvider {
                                     label: column_name.clone(),
                                     kind: Some(CompletionItemKind::FIELD),
                                     text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
-                                        lsp_types::Range::new(start_pos_clone, end_pos_clone),
+                                        lsp_types::Range::new(start_pos, end_pos),
                                         column_name.clone(),
                                     ))),
                                     detail: Some(format!("Column from {}", table_name)),
@@ -1055,124 +1054,132 @@ impl CompletionProvider for SqlCompletionProvider {
                                 })
                                 .collect::<Vec<_>>();
 
-                            Ok(CompletionResponse::Array(completion_items))
+                            return Ok(CompletionResponse::Array(completion_items));
                         }
                         Err(_) => {
                             // If error fetching columns, return empty response
-                            Ok(CompletionResponse::Array(Vec::new()))
+                            return Ok(CompletionResponse::Array(Vec::new()));
                         }
                     }
                 } else {
                     // Could not extract table name, return empty response
-                    Ok(CompletionResponse::Array(Vec::new()))
+                    return Ok(CompletionResponse::Array(Vec::new()));
                 }
-            });
+            }
 
-            return task;
-        }
-
-        if should_show_tables {
-            // Clone values for the background task
-            let provider_clone = self.clone();
-            let current_word_clone = current_word.clone();
-            let start_pos_clone = start_pos;
-            let end_pos_clone = end_pos;
-
-            // Spawn background task to fetch tables using cache
-            let task = cx.background_spawn(async move {
+            if should_show_tables {
                 // Fetch tables using cache
                 tracing::debug!("SQL Completion: Fetching tables...");
                 match provider_clone.get_cached_tables().await {
                     Ok(tables) => {
-                        tracing::debug!("SQL Completion: Fetched {} tables: {:?}", tables.len(), tables);
+                        tracing::debug!(
+                            "SQL Completion: Fetched {} tables: {:?}",
+                            tables.len(),
+                            tables
+                        );
                         // Filter tables based on current input
-                        let mut filtered_tables: Vec<String> = if current_word_clone.is_empty() {
+                        let mut filtered_tables: Vec<String> = if current_word.is_empty() {
                             tables.clone()
                         } else {
-                            tables.into_iter()
-                                .filter(|table| table.to_lowercase().starts_with(&current_word_clone.to_lowercase()))
+                            tables
+                                .into_iter()
+                                .filter(|table| {
+                                    table
+                                        .to_lowercase()
+                                        .starts_with(&current_word.to_lowercase())
+                                })
                                 .collect()
                         };
 
                         // Sort by shortest first to prioritize shorter names
                         filtered_tables.sort_by_key(|a| a.len());
 
-                        tracing::debug!("SQL Completion: Filter logic - current_word_is_empty: {}, filtered_tables: {:?}", current_word_clone.is_empty(), filtered_tables);
+                        tracing::debug!(
+                            "SQL Completion: Filter logic - current_word_is_empty: {}, filtered_tables: {:?}",
+                            current_word.is_empty(),
+                            filtered_tables
+                        );
 
                         // Convert to LSP completion items
-                        let completion_items = filtered_tables.into_iter().take(20).map(|table_name| {
-                            let insert_text_with_alias = provider_clone.generate_table_abbreviation(&table_name);
-                            CompletionItem {
-                                label: table_name.clone(),
-                                kind: Some(CompletionItemKind::CLASS),
-                                text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
-                                    lsp_types::Range::new(start_pos_clone, end_pos_clone),
-                                    insert_text_with_alias.clone(),
-                                ))),
-                                detail: Some("Table".to_string()),
-                                insert_text: Some(insert_text_with_alias),
-                                ..Default::default()
-                            }
-                        }).collect::<Vec<_>>();
+                        let completion_items = filtered_tables
+                            .into_iter()
+                            .take(20)
+                            .map(|table_name| {
+                                let insert_text_with_alias =
+                                    provider_clone.generate_table_abbreviation(&table_name);
+                                CompletionItem {
+                                    label: table_name.clone(),
+                                    kind: Some(CompletionItemKind::CLASS),
+                                    text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
+                                        lsp_types::Range::new(start_pos, end_pos),
+                                        insert_text_with_alias.clone(),
+                                    ))),
+                                    detail: Some("Table".to_string()),
+                                    insert_text: Some(insert_text_with_alias),
+                                    ..Default::default()
+                                }
+                            })
+                            .collect::<Vec<_>>();
 
-                        tracing::debug!("SQL Completion: Returning {} table completion items", completion_items.len());
-                        Ok(CompletionResponse::Array(completion_items))
+                        tracing::debug!(
+                            "SQL Completion: Returning {} table completion items",
+                            completion_items.len()
+                        );
+                        return Ok(CompletionResponse::Array(completion_items));
                     }
                     Err(_) => {
                         // If error fetching tables, return empty response
-                        Ok(CompletionResponse::Array(Vec::new()))
+                        return Ok(CompletionResponse::Array(Vec::new()));
                     }
                 }
-            });
+            }
 
-            return task;
-        }
+            // Show SQL keywords when not in table context
+            let sql_keywords = vec![
+                "SELECT", "FROM", "WHERE", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP",
+                "TABLE", "INDEX", "VIEW", "JOIN", "INNER", "LEFT", "RIGHT", "OUTER", "ON", "GROUP",
+                "BY", "ORDER", "HAVING", "LIMIT", "OFFSET", "AND", "OR", "NOT", "IN", "EXISTS",
+                "BETWEEN", "LIKE", "IS", "NULL", "TRUE", "FALSE", "ASC", "DESC", "DISTINCT", "COUNT",
+                "SUM", "AVG", "MIN", "MAX", "UNION", "ALL", "AS", "CASE", "WHEN", "THEN", "ELSE",
+                "END",
+            ];
 
-        // Show SQL keywords when not in table context
-        let sql_keywords = vec![
-            "SELECT", "FROM", "WHERE", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP",
-            "TABLE", "INDEX", "VIEW", "JOIN", "INNER", "LEFT", "RIGHT", "OUTER", "ON", "GROUP",
-            "BY", "ORDER", "HAVING", "LIMIT", "OFFSET", "AND", "OR", "NOT", "IN", "EXISTS",
-            "BETWEEN", "LIKE", "IS", "NULL", "TRUE", "FALSE", "ASC", "DESC", "DISTINCT", "COUNT",
-            "SUM", "AVG", "MIN", "MAX", "UNION", "ALL", "AS", "CASE", "WHEN", "THEN", "ELSE",
-            "END",
-        ];
+            // Filter keywords based on current input
+            let filtered_keywords: Vec<&str> = if current_word.is_empty() {
+                sql_keywords
+            } else {
+                sql_keywords
+                    .iter()
+                    .filter(|keyword| {
+                        keyword
+                            .to_lowercase()
+                            .starts_with(&current_word.to_lowercase())
+                    })
+                    .copied()
+                    .collect()
+            };
 
-        // Filter keywords based on current input
-        let filtered_keywords: Vec<&str> = if current_word.is_empty() {
-            sql_keywords
-        } else {
-            sql_keywords
-                .iter()
-                .filter(|keyword| {
-                    keyword
-                        .to_lowercase()
-                        .starts_with(&current_word.to_lowercase())
+            // Convert keywords to LSP completion items
+            let lsp_items: Vec<CompletionItem> = filtered_keywords
+                .into_iter()
+                .map(|keyword| {
+                    let label = keyword.to_string();
+                    CompletionItem {
+                        label: label.clone(),
+                        kind: Some(CompletionItemKind::KEYWORD),
+                        text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
+                            lsp_types::Range::new(start_pos, end_pos),
+                            label.clone(),
+                        ))),
+                        detail: Some("SQL Keyword".to_string()),
+                        insert_text: Some(label),
+                        ..Default::default()
+                    }
                 })
-                .copied()
-                .collect()
-        };
+                .collect();
 
-        // Convert keywords to LSP completion items
-        let lsp_items: Vec<CompletionItem> = filtered_keywords
-            .into_iter()
-            .map(|keyword| {
-                let label = keyword.to_string();
-                CompletionItem {
-                    label: label.clone(),
-                    kind: Some(CompletionItemKind::KEYWORD),
-                    text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
-                        lsp_types::Range::new(start_pos, end_pos),
-                        label.clone(),
-                    ))),
-                    detail: Some("SQL Keyword".to_string()),
-                    insert_text: Some(label),
-                    ..Default::default()
-                }
-            })
-            .collect();
-
-        Task::ready(Ok(CompletionResponse::Array(lsp_items)))
+            Ok(CompletionResponse::Array(lsp_items))
+        })
     }
 
     fn is_completion_trigger(

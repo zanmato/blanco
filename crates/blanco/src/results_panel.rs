@@ -318,7 +318,7 @@ pub struct ResultsTableDelegate {
     primary_key_column: Option<String>,
     pending_edit_cell: Option<(usize, usize)>,
     connection_id: i64,
-    database_name: String,
+    database_name: SharedString,
     original_query: Option<String>,
     /// Foreign key metadata: column_index (excluding row number column) -> FK info
     foreign_keys: HashMap<usize, ForeignKeyInfo>,
@@ -417,7 +417,7 @@ impl ResultsTableDelegate {
     /// Set the connection ID for database operations
     pub fn set_connection_id(&mut self, connection_id: i64, database_name: &str) {
         self.connection_id = connection_id;
-        self.database_name = database_name.to_owned();
+        self.database_name = database_name.to_string().into();
     }
 
     /// Set the original SQL query for alias resolution
@@ -1253,7 +1253,7 @@ impl TableDelegate for ResultsTableDelegate {
                         let database_name = if self.database_name.is_empty() {
                             None
                         } else {
-                            Some(SharedString::from(self.database_name.clone()))
+                            Some(self.database_name.clone())
                         };
 
                         this.child(
