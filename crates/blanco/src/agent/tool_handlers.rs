@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use blanco_core::DatabaseService;
-use blanco_core::chat_provider::{ToolCall, ToolDefinition, ToolResult};
+use llm::{chat::FunctionTool, chat::ParameterProperty, chat::ParametersSchema, chat::Tool, FunctionCall, ToolCall};
 
 /// Context for executing tools with GPUI/database access
 pub struct ToolContext {
@@ -28,11 +28,12 @@ pub trait AgentToolHandler: Send + Sync {
         arguments: serde_json::Value,
         context: &ToolContext,
         cx: &mut AsyncWindowContext,
-    ) -> ToolResult;
+    ) -> ToolCall;
 
-    fn definition(&self) -> ToolDefinition;
+    /// Convert to llm Tool for use with llm crate
+    fn as_tool(&self) -> Tool;
 
-    fn call_summary(&self, arguments: &serde_json::Value, result: &ToolResult) -> String;
+    fn call_summary(&self, arguments: &serde_json::Value, result: &ToolCall) -> String;
 }
 
 /// List tables tool handler
@@ -45,7 +46,7 @@ impl AgentToolHandler for ListTablesHandler {
         arguments: serde_json::Value,
         context: &ToolContext,
         _cx: &mut AsyncWindowContext,
-    ) -> ToolResult {
+    ) -> ToolCall {
         // Extract parameters
         let table_names = arguments
             .get("table_names")
@@ -70,10 +71,17 @@ impl AgentToolHandler for ListTablesHandler {
                 .get_or_create_connection_by_id(conn_id, database_name_ref)
                 .await
         } else {
-            return ToolResult::error(
-                "list-tables",
-                "No database connection available. Please connect to a database first.",
-            );
+            return ToolCall {
+                id: "list-tables".to_string(),
+                call_type: "function".to_string(),
+                function: FunctionCall {
+                    name: "list-tables".to_string(),
+                    arguments: serde_json::json!({
+                        "error": "No database connection available. Please connect to a database first."
+                    })
+                    .to_string(),
+                },
+            };
         };
 
         match conn_result {
@@ -96,54 +104,83 @@ impl AgentToolHandler for ListTablesHandler {
                             "pagination": result.pagination
                         });
 
-                        ToolResult::success(
-                            "list-tables",
-                            serde_json::to_string_pretty(&json_result)
-                                .unwrap_or_else(|_| "Invalid JSON result".to_string()),
-                        )
+                        ToolCall {
+                            id: "list-tables".to_string(),
+                            call_type: "function".to_string(),
+                            function: FunctionCall {
+                                name: "list-tables".to_string(),
+                                arguments: serde_json::to_string(&json_result)
+                                    .unwrap_or_else(|_| "Invalid JSON result".to_string()),
+                            },
+                        }
                     }
-                    Err(e) => ToolResult::error(
-                        "list-tables",
-                        format!("Failed to query database schema: {}", e),
-                    ),
+                    Err(e) => ToolCall {
+                        id: "list-tables".to_string(),
+                        call_type: "function".to_string(),
+                        function: FunctionCall {
+                            name: "list-tables".to_string(),
+                            arguments: serde_json::json!({"error": format!("Failed to query database schema: {}", e)}).to_string(),
+                        },
+                    },
                 }
             }
-            Err(e) => ToolResult::error(
-                "list-tables",
-                format!("Failed to get database connection: {}", e),
-            ),
+            Err(e) => ToolCall {
+                id: "list-tables".to_string(),
+                call_type: "function".to_string(),
+                function: FunctionCall {
+                    name: "list-tables".to_string(),
+                    arguments: serde_json::json!({"error": format!("Failed to get database connection: {}", e)}).to_string(),
+                },
+            },
         }
     }
 
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition::new(
-            "list-tables",
-            "List detailed schema information for user-created tables. Returns object type, columns, constraints, indexes, triggers, owner, and comment as JSON. Supports pagination with limit and offset parameters.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "table_names": {
-                        "type": "string",
-                        "description": "Optional comma-separated list of table names to filter. If not provided, lists all tables in user schemas. Wildcard (%) is not supported."
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Maximum number of tables to return. Default: 20.",
-                        "minimum": 1,
-                        "maximum": 100
-                    },
-                    "offset": {
-                        "type": "integer",
-                        "description": "Number of tables to skip for pagination. Default: 0.",
-                        "minimum": 0
-                    }
-                },
-                "required": []
-            }),
-        )
+    fn as_tool(&self) -> Tool {
+        // Build parameters schema
+        let mut properties = HashMap::new();
+        properties.insert(
+            "table_names".to_string(),
+            ParameterProperty {
+                property_type: "string".to_string(),
+                description: "Optional comma-separated list of table names to filter. If not provided, lists all tables in user schemas. Wildcard (%) is not supported.".to_string(),
+                items: None,
+                enum_list: None,
+            },
+        );
+        properties.insert(
+            "limit".to_string(),
+            ParameterProperty {
+                property_type: "integer".to_string(),
+                description: "Maximum number of tables to return. Default: 20.".to_string(),
+                items: None,
+                enum_list: None,
+            },
+        );
+        properties.insert(
+            "offset".to_string(),
+            ParameterProperty {
+                property_type: "integer".to_string(),
+                description: "Number of tables to skip for pagination. Default: 0.".to_string(),
+                items: None,
+                enum_list: None,
+            },
+        );
+
+        Tool {
+            tool_type: "function".to_string(),
+            function: FunctionTool {
+                name: "list-tables".to_string(),
+                description: "List detailed schema information for user-created tables. Returns object type, columns, constraints, indexes, triggers, owner, and comment as JSON. Supports pagination with limit and offset parameters.".to_string(),
+                parameters: serde_json::to_value(ParametersSchema {
+                    schema_type: "object".to_string(),
+                    properties,
+                    required: vec![],
+                }).unwrap_or_default(),
+            },
+        }
     }
 
-    fn call_summary(&self, arguments: &serde_json::Value, _result: &ToolResult) -> String {
+    fn call_summary(&self, arguments: &serde_json::Value, _result: &ToolCall) -> String {
         let table_names = arguments
             .get("table_names")
             .and_then(|v| v.as_str())
@@ -173,36 +210,55 @@ impl AgentToolHandler for ReadTabHandler {
         _arguments: serde_json::Value,
         context: &ToolContext,
         cx: &mut AsyncWindowContext,
-    ) -> ToolResult {
+    ) -> ToolCall {
         if let Some(input_state) = &context.input_state {
             // Read from input state entity
             match input_state.read_with(cx, |input, _cx| input.text().to_string()) {
-                Ok(content) => ToolResult::success("read-tab", content),
-                Err(e) => {
-                    ToolResult::error("read-tab", format!("Failed to read tab content: {}", e))
-                }
+                Ok(content) => ToolCall {
+                    id: "read-tab".to_string(),
+                    call_type: "function".to_string(),
+                    function: FunctionCall {
+                        name: "read-tab".to_string(),
+                        arguments: serde_json::json!({"content": content}).to_string(),
+                    },
+                },
+                Err(e) => ToolCall {
+                    id: "read-tab".to_string(),
+                    call_type: "function".to_string(),
+                    function: FunctionCall {
+                        name: "read-tab".to_string(),
+                        arguments: serde_json::json!({"error": format!("Failed to read tab content: {}", e)}).to_string(),
+                    },
+                },
             }
         } else {
-            ToolResult::error(
-                "read-tab",
-                "No input state available. Please ensure the chat session is properly connected to a query tab.",
-            )
+            ToolCall {
+                id: "read-tab".to_string(),
+                call_type: "function".to_string(),
+                function: FunctionCall {
+                    name: "read-tab".to_string(),
+                    arguments: serde_json::json!({"error": "No input state available. Please ensure the chat session is properly connected to a query tab."}).to_string(),
+                },
+            }
         }
     }
 
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition::new(
-            "read-tab",
-            "Read the current query tab content including the SQL query text. Returns the SQL content from the active tab connected to this chat session.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {},
-                "required": []
-            }),
-        )
+    fn as_tool(&self) -> Tool {
+        Tool {
+            tool_type: "function".to_string(),
+            function: FunctionTool {
+                name: "read-tab".to_string(),
+                description: "Read the current query tab content including the SQL query text. Returns the SQL content from the active tab connected to this chat session.".to_string(),
+                parameters: serde_json::to_value(ParametersSchema {
+                    schema_type: "object".to_string(),
+                    properties: HashMap::new(),
+                    required: vec![],
+                }).unwrap_or_default(),
+            },
+        }
     }
 
-    fn call_summary(&self, _arguments: &serde_json::Value, _result: &ToolResult) -> String {
+    fn call_summary(&self, _arguments: &serde_json::Value, _result: &ToolCall) -> String {
         "Read Tab".to_string()
     }
 }
@@ -217,7 +273,7 @@ impl AgentToolHandler for WriteTabHandler {
         arguments: serde_json::Value,
         context: &ToolContext,
         cx: &mut AsyncWindowContext,
-    ) -> ToolResult {
+    ) -> ToolCall {
         if let Some(input_state) = &context.input_state {
             // Extract content from arguments
             let content = arguments
@@ -227,36 +283,56 @@ impl AgentToolHandler for WriteTabHandler {
                 .to_string();
 
             let _ = input_state.update_in(cx, |input_state, window, cx| {
-                input_state.set_value(content, window, cx);
+                input_state.set_value(content.clone(), window, cx);
             });
 
-            ToolResult::success("write-tab", "Content written to tab")
+            ToolCall {
+                id: "write-tab".to_string(),
+                call_type: "function".to_string(),
+                function: FunctionCall {
+                    name: "write-tab".to_string(),
+                    arguments: serde_json::json!({"success": true, "message": "Content written to tab"}).to_string(),
+                },
+            }
         } else {
-            ToolResult::error(
-                "write-tab",
-                "No input state available. Please ensure the chat session is properly connected to a query tab.",
-            )
+            ToolCall {
+                id: "write-tab".to_string(),
+                call_type: "function".to_string(),
+                function: FunctionCall {
+                    name: "write-tab".to_string(),
+                    arguments: serde_json::json!({"error": "No input state available. Please ensure the chat session is properly connected to a query tab."}).to_string(),
+                },
+            }
         }
     }
 
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition::new(
-            "write-tab",
-            "Write/update the current query tab content with the provided SQL query. This replaces the entire tab content with the new query.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "content": {
-                        "type": "string",
-                        "description": "The SQL query content to write to the tab."
-                    }
-                },
-                "required": ["content"]
-            }),
-        )
+    fn as_tool(&self) -> Tool {
+        let mut properties = HashMap::new();
+        properties.insert(
+            "content".to_string(),
+            ParameterProperty {
+                property_type: "string".to_string(),
+                description: "The SQL query content to write to the tab.".to_string(),
+                items: None,
+                enum_list: None,
+            },
+        );
+
+        Tool {
+            tool_type: "function".to_string(),
+            function: FunctionTool {
+                name: "write-tab".to_string(),
+                description: "Write/update the current query tab content with the provided SQL query. This replaces the entire tab content with the new query.".to_string(),
+                parameters: serde_json::to_value(ParametersSchema {
+                    schema_type: "object".to_string(),
+                    properties,
+                    required: vec!["content".to_string()],
+                }).unwrap_or_default(),
+            },
+        }
     }
 
-    fn call_summary(&self, arguments: &serde_json::Value, _result: &ToolResult) -> String {
+    fn call_summary(&self, arguments: &serde_json::Value, _result: &ToolCall) -> String {
         if let Some(content) = arguments.get("content").and_then(|v| v.as_str()) {
             let preview = if content.len() > 50 {
                 format!("{}...", &content[..50])
@@ -331,23 +407,22 @@ impl AgentToolRegistry {
     }
 
     pub fn register(&mut self, handler: Box<dyn AgentToolHandler>) {
-        let name = handler.definition().function.name.clone();
+        let name = handler.as_tool().function.name.clone();
         self.handlers.insert(name, handler);
     }
 
-    pub fn get_tool_definitions(&self) -> Vec<ToolDefinition> {
-        self.handlers
-            .values()
-            .map(|handler| handler.definition())
-            .collect()
+    /// Get llm tools for use with llm crate
+    pub fn get_llm_tools(&self) -> Vec<Tool> {
+        self.handlers.values().map(|h| h.as_tool()).collect()
     }
 
-    pub async fn execute_tool(
+    /// Execute a tool and return both the result and a human-readable summary
+    pub async fn execute_tool_with_summary(
         &self,
         tool_call: &ToolCall,
         context: &ToolContext,
         cx: &mut AsyncWindowContext,
-    ) -> ToolResult {
+    ) -> (ToolCall, String) {
         let handler = self.handlers.get(&tool_call.function.name);
 
         match handler {
@@ -357,29 +432,53 @@ impl AgentToolRegistry {
                     match serde_json::from_str(&tool_call.function.arguments) {
                         Ok(args) => args,
                         Err(err) => {
-                            return ToolResult::error(
-                                tool_call.id.clone(),
-                                format!("Invalid JSON arguments: {}", err),
-                            );
+                            let error_result = ToolCall {
+                                id: tool_call.id.clone(),
+                                call_type: tool_call.call_type.clone(),
+                                function: FunctionCall {
+                                    name: tool_call.function.name.clone(),
+                                    arguments: serde_json::json!({"error": format!("Invalid JSON arguments: {}", err)}).to_string(),
+                                },
+                            };
+                            return (error_result, format!("Error: {}", err));
                         }
                     };
 
                 // Execute tool
-                let mut result = handler.execute(arguments, context, cx).await;
+                let mut result = handler.execute(arguments.clone(), context, cx).await;
 
-                // Add summary
-                result.summary = Some(handler.call_summary(
-                    &serde_json::from_str(&tool_call.function.arguments).unwrap_or_default(),
-                    &result,
-                ));
+                // Preserve the original tool call id for result matching
+                result.id = tool_call.id.clone();
 
-                result
+                // Generate summary
+                let summary = handler.call_summary(&arguments, &result);
+
+                (result, summary)
             }
-            None => ToolResult::error(
-                tool_call.id.clone(),
-                format!("Unknown tool: {}", tool_call.function.name),
-            ),
+            None => {
+                let error_msg = format!("Unknown tool: {}", tool_call.function.name);
+                let error_result = ToolCall {
+                    id: tool_call.id.clone(),
+                    call_type: tool_call.call_type.clone(),
+                    function: FunctionCall {
+                        name: tool_call.function.name.clone(),
+                        arguments: serde_json::json!({"error": &error_msg}).to_string(),
+                    },
+                };
+                (error_result, error_msg)
+            }
         }
+    }
+
+    pub async fn execute_tool(
+        &self,
+        tool_call: &ToolCall,
+        context: &ToolContext,
+        cx: &mut AsyncWindowContext,
+    ) -> ToolCall {
+        self.execute_tool_with_summary(tool_call, context, cx)
+            .await
+            .0
     }
 }
 

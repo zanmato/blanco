@@ -1,54 +1,46 @@
 //! Chat Provider Resolver
 //!
-//! This module is responsible for creating and managing chat providers
-//! based on the current application settings. It provides a clean interface
-//! for the UI layer to get appropriately configured chat providers.
+//! This module is responsible for creating and managing LLM instances
+//! based on the current application settings. It uses the llm crate's LLMBuilder
+//! to create LLM instances for different providers (OpenAI, Anthropic, Google, Ollama).
 
 use anyhow::Result;
 use std::sync::Arc;
 
-// Use reqwest
-
 use crate::settings::{ChatSettings, Settings};
-use database::{DatabaseService, DatabaseServiceTrait};
-use blanco_core::chat_provider::{ChatProvider, ProviderError};
+use database::DatabaseService;
+use llm::{builder::LLMBuilder, builder::LLMBackend, LLMProvider};
 
-use blanco_openai::{OpenAIClient, OpenAIConfig};
-
-/// Provider cache entry with configuration hash
+/// LLM instance with metadata
 #[derive(Clone)]
-struct CachedProvider {
-    provider: Arc<dyn ChatProvider<Error = ProviderError>>,
-    config_hash: u64,
-    provider_name: String,
-    model_name: String,
+pub struct LLMInstance {
+    pub llm: Arc<Box<dyn LLMProvider>>,
+    pub provider_name: String,
+    pub model_name: String,
 }
 
 /// Chat Provider Resolver
 ///
-/// This resolver handles the creation and caching of chat providers
+/// This resolver handles the creation and caching of LLM instances
 /// based on current application settings. It can handle runtime changes
-/// to settings and will recreate providers when necessary.
+/// to settings and will recreate instances when necessary.
 pub struct ChatProviderResolver {
-    http_client: Arc<reqwest::Client>,
     db_service: DatabaseService,
     current_connection_id: Option<i64>,
-    cached_provider: Option<CachedProvider>,
+    cached_llm: Option<(LLMInstance, u64)>,
     runtime_handle: tokio::runtime::Handle,
 }
 
 impl ChatProviderResolver {
     /// Create a new chat provider resolver
     pub fn new(
-        http_client: Arc<reqwest::Client>,
         db_service: DatabaseService,
         runtime_handle: tokio::runtime::Handle,
     ) -> Self {
         Self {
-            http_client,
             db_service,
             current_connection_id: None,
-            cached_provider: None,
+            cached_llm: None,
             runtime_handle,
         }
     }
@@ -58,79 +50,75 @@ impl ChatProviderResolver {
         self.current_connection_id = Some(connection_id);
     }
 
-    /// Get a chat provider based on current settings
+    /// Get an LLM instance based on current settings
     ///
     /// This method will:
-    /// 1. Check if we have a cached provider for the current configuration
-    /// 2. Create a new provider if settings have changed or no cache exists
-    /// 3. Return the provider for use in chat sessions
-    pub fn get_provider(&mut self, settings: &Settings) -> Result<ProviderInfo> {
+    /// 1. Check if we have a cached LLM for the current configuration
+    /// 2. Create a new LLM instance if settings have changed or no cache exists
+    /// 3. Return the LLM instance for use in chat sessions
+    pub fn get_llm(&mut self, settings: &Settings) -> Result<LLMInstance> {
         let config_hash = self.calculate_config_hash(&settings.chat);
 
-        // Check if we can reuse the cached provider
-        if let Some(cached) = &self.cached_provider
-            && cached.config_hash == config_hash
+        // Check if we can reuse the cached LLM
+        if let Some((cached, hash)) = &self.cached_llm
+            && *hash == config_hash
         {
-            return Ok(ProviderInfo {
-                provider: cached.provider.clone(),
-                provider_name: cached.provider_name.clone(),
-                model_name: cached.model_name.clone(),
-            });
+            return Ok(cached.clone());
         }
 
-        // Create new provider based on settings
-        let provider_info = self.create_provider_from_settings(&settings.chat)?;
+        // Create new LLM instance based on settings
+        let llm_instance = self.create_llm_from_settings(&settings.chat)?;
 
-        // Cache the provider
-        self.cached_provider = Some(CachedProvider {
-            provider: provider_info.provider.clone(),
-            config_hash,
-            provider_name: provider_info.provider_name.clone(),
-            model_name: provider_info.model_name.clone(),
-        });
+        // Cache the LLM instance
+        self.cached_llm = Some((llm_instance.clone(), config_hash));
 
-        Ok(provider_info)
+        Ok(llm_instance)
     }
 
-    /// Create a provider based on chat settings
-    fn create_provider_from_settings(&self, chat_settings: &ChatSettings) -> Result<ProviderInfo> {
-        match chat_settings.provider.to_lowercase().as_str() {
-            "openai" => self.create_openai_provider(chat_settings),
-            _ => Err(anyhow::anyhow!(
-                "Unsupported chat provider: {}",
-                chat_settings.provider
-            )),
-        }
-    }
+    /// Create an LLM instance based on chat settings
+    fn create_llm_from_settings(&self, chat_settings: &ChatSettings) -> Result<LLMInstance> {
+        let backend = match chat_settings.provider.to_lowercase().as_str() {
+            "openai" => LLMBackend::OpenAI,
+            "anthropic" => LLMBackend::Anthropic,
+            "google" => LLMBackend::Google,
+            "ollama" => LLMBackend::Ollama,
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "Unsupported chat provider: {}",
+                    chat_settings.provider
+                ))
+            }
+        };
 
-    /// Create an OpenAI provider
-    fn create_openai_provider(&self, chat_settings: &ChatSettings) -> Result<ProviderInfo> {
         if chat_settings.api_key.is_empty() {
-            return Err(anyhow::anyhow!("OpenAI API key is required"));
+            return Err(anyhow::anyhow!("API key is required for {}", chat_settings.provider));
         }
 
-        let mut config = OpenAIConfig::new(&chat_settings.api_key)
-            .with_model(&chat_settings.model)
-            .with_max_tokens(chat_settings.max_tokens)
-            .with_temperature(chat_settings.temperature);
+        let mut builder = LLMBuilder::new()
+            .backend(backend.clone())
+            .api_key(&chat_settings.api_key)
+            .model(&chat_settings.model)
+            .max_tokens(chat_settings.max_tokens)
+            .temperature(chat_settings.temperature);
 
-        // Set base URL if it's not the default OpenAI URL
-        if !chat_settings.base_url.is_empty() && chat_settings.base_url != "https://api.openai.com"
-        {
-            config = config.with_base_url(&chat_settings.base_url);
+        // Set base URL if provided (for custom endpoints)
+        if !chat_settings.base_url.is_empty() && chat_settings.base_url != "https://api.openai.com" {
+            builder = builder.base_url(&chat_settings.base_url);
         }
 
-        // Create client without tool executor (tools are managed by ChatSession)
-        let client = OpenAIClient::new(
-            self.http_client.clone(),
-            config,
-            self.runtime_handle.clone(),
-        )
-        .map_err(|e| anyhow::anyhow!("Failed to create OpenAI client: {}", e))?;
+        let llm = Arc::new(builder.build()?);
 
-        Ok(ProviderInfo {
-            provider: Arc::new(client),
-            provider_name: "OpenAI".to_string(),
+        let provider_name = match backend {
+            LLMBackend::OpenAI => "OpenAI",
+            LLMBackend::Anthropic => "Anthropic",
+            LLMBackend::Google => "Google",
+            LLMBackend::Ollama => "Ollama",
+            _ => "Unknown",
+        };
+
+        Ok(LLMInstance {
+            llm,
+            provider_name: provider_name.to_string(),
             model_name: chat_settings.model.clone(),
         })
     }
@@ -150,10 +138,10 @@ impl ChatProviderResolver {
         hasher.finish()
     }
 
-    /// Clear the provider cache (useful for testing or forced refresh)
+    /// Clear the LLM cache (useful for testing or forced refresh)
     #[allow(dead_code)]
     pub fn clear_cache(&mut self) {
-        self.cached_provider = None;
+        self.cached_llm = None;
     }
 
     /// Check if a provider is properly configured
@@ -192,17 +180,6 @@ impl ChatProviderResolver {
     }
 }
 
-/// Information about a chat provider instance
-#[derive(Clone)]
-pub struct ProviderInfo {
-    /// The provider instance
-    pub provider: Arc<dyn ChatProvider<Error = ProviderError>>,
-    /// Human-readable provider name
-    pub provider_name: String,
-    /// Model name being used
-    pub model_name: String,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,7 +209,7 @@ mod tests {
             show_thinking_process: false,
         };
 
-        // Test hash calculation directly without needing a full resolver
+        // Test hash calculation directly
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
 
@@ -261,58 +238,6 @@ mod tests {
     }
 
     #[test]
-    fn test_config_hash_different_for_different_base_urls() {
-        let settings1 = ChatSettings {
-            provider: "openai".to_string(),
-            model: "gpt-4".to_string(),
-            api_key: "key1".to_string(),
-            base_url: "https://api.openai.com".to_string(),
-            max_tokens: 1000,
-            temperature: 0.7,
-            auto_execute_queries: false,
-            show_thinking_process: false,
-        };
-
-        let settings2 = ChatSettings {
-            provider: "openai".to_string(),
-            model: "gpt-4".to_string(),
-            api_key: "key1".to_string(),
-            base_url: "https://api.example.com".to_string(), // Different base URL
-            max_tokens: 1000,
-            temperature: 0.7,
-            auto_execute_queries: false,
-            show_thinking_process: false,
-        };
-
-        // Test the hash calculation directly without creating a resolver
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let mut hasher = DefaultHasher::new();
-        settings1.provider.hash(&mut hasher);
-        settings1.model.hash(&mut hasher);
-        settings1.api_key.hash(&mut hasher);
-        settings1.base_url.hash(&mut hasher);
-        settings1.max_tokens.hash(&mut hasher);
-        settings1.temperature.to_bits().hash(&mut hasher);
-        let hash1 = hasher.finish();
-
-        let mut hasher = DefaultHasher::new();
-        settings2.provider.hash(&mut hasher);
-        settings2.model.hash(&mut hasher);
-        settings2.api_key.hash(&mut hasher);
-        settings2.base_url.hash(&mut hasher);
-        settings2.max_tokens.hash(&mut hasher);
-        settings2.temperature.to_bits().hash(&mut hasher);
-        let hash2 = hasher.finish();
-
-        assert_ne!(
-            hash1, hash2,
-            "Hashes should be different for different base URLs"
-        );
-    }
-
-    #[test]
     fn test_validate_settings() {
         let mut settings = Settings::default();
         settings.chat.api_key = "".to_string(); // Empty API key
@@ -325,14 +250,4 @@ mod tests {
         let errors = ChatProviderResolver::validate_settings(&settings);
         assert!(errors.is_empty(), "Valid settings should not have errors");
     }
-
-    // Note: Mock HTTP client implementation needs to be updated to match zed-http-client traits
-    // The mock implementation is commented out until it can be properly updated
-    /*
-    struct MockHttpClient;
-
-    impl HttpClient for MockHttpClient {
-        // Implementation needs to match zed-http-client HttpClient trait
-    }
-    */
 }

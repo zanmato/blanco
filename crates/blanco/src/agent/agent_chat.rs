@@ -21,8 +21,8 @@ use super::chat_message_view::ChatMessageState;
 use super::chat_session::{ChatSession, ChatSessionContext};
 use super::chat_types::{ChatEvent, LoadingState, SqlContext};
 use super::tool_handlers::ToolMode;
-use blanco_core::chat_provider::{ChatProvider, ProviderError};
 use blanco_ui::IconName;
+use llm::LLMProvider;
 use gpui::ScrollHandle;
 
 actions!(agent_chat, [SendMessage, ClearChat]);
@@ -44,7 +44,7 @@ pub struct ChatPanel {
 impl ChatPanel {
     pub fn new(
         tab_id: usize,
-        provider: Arc<dyn ChatProvider<Error = ProviderError>>,
+        llm: Arc<Box<dyn LLMProvider>>,
         provider_name: String,
         model_name: String,
         session_context: ChatSessionContext,
@@ -52,7 +52,7 @@ impl ChatPanel {
         cx: &mut Context<Self>,
     ) -> Self {
         let session =
-            cx.new(|_cx| ChatSession::new(provider, provider_name, model_name, session_context));
+            cx.new(|_cx| ChatSession::new(llm, provider_name, model_name, session_context));
 
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)

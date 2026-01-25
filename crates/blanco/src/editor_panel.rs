@@ -24,7 +24,7 @@ use tracing::{debug, error, info};
 use crate::app::ExecuteSubstitutedQuery;
 use crate::app_database::{EnvironmentType, QueryTabData};
 use crate::app_events::AppEvent;
-use crate::chat_provider_resolver::ChatProviderResolver;
+use crate::chat_provider_resolver::{ChatProviderResolver, LLMInstance};
 use crate::parameter_form::ParameterForm;
 use crate::rename_form::RenameTabForm;
 use crate::results_panel::ResultsPanel;
@@ -37,8 +37,8 @@ use crate::{
     app_database::AppDatabase,
 };
 use crate::{app::RenameTab, app_settings::AppSettings};
-use blanco_core::chat_provider::{ChatProvider, ProviderError};
 use blanco_ui::{IconName, SqlLog};
+use llm::LLMProvider;
 use database::{DatabaseService, DatabaseServiceTrait};
 use gpui_component::Icon;
 
@@ -864,9 +864,9 @@ impl EditorPanel {
             query_tab.chat_enabled = !query_tab.chat_enabled;
 
             if query_tab.chat_enabled && query_tab.chat_panel.is_none() {
-                // Create chat provider info first
-                match create_chat_provider_info(query_tab.connection_id, cx) {
-                    Ok(provider_info) => {
+                // Create LLM instance first
+                match create_chat_llm_instance(query_tab.connection_id, cx) {
+                    Ok(llm_instance) => {
                         // Build the session context from QueryTab
                         let session_context = ChatSessionContext::new()
                             .with_input_state(query_tab.editor.downgrade())
@@ -875,13 +875,15 @@ impl EditorPanel {
                                 query_tab.database_name.clone(),
                             );
 
-                        // Create chat panel with the provider info
+                        // Create chat panel with the LLM instance
+                        // Clone the Arc to share the LLM instance between sessions
+                        let llm_for_panel = llm_instance.llm.clone();
                         let chat_panel = cx.new(|cx| {
                             ChatPanel::new(
                                 query_tab.id,
-                                provider_info.provider,
-                                provider_info.provider_name.clone(),
-                                provider_info.model_name.clone(),
+                                llm_for_panel,
+                                llm_instance.provider_name.clone(),
+                                llm_instance.model_name.clone(),
                                 session_context,
                                 window,
                                 cx,
@@ -892,8 +894,8 @@ impl EditorPanel {
                         // Emit chat session started event
                         cx.emit(crate::app_events::AppEvent::ChatSessionStarted {
                             tab_id: query_tab.id,
-                            provider: provider_info.provider_name,
-                            model: provider_info.model_name,
+                            provider: llm_instance.provider_name,
+                            model: llm_instance.model_name,
                         });
                     }
                     Err(e) => {
@@ -1352,14 +1354,8 @@ impl Render for EditorPanel {
     }
 }
 
-/// Create a chat panel with a real provider based on current settings
-struct ChatProviderInfo {
-    provider: Arc<dyn ChatProvider<Error = ProviderError>>,
-    provider_name: String,
-    model_name: String,
-}
-
-fn create_chat_provider_info(connection_id: i64, cx: &mut App) -> anyhow::Result<ChatProviderInfo> {
+/// Create a chat panel with a real LLM instance based on current settings
+fn create_chat_llm_instance(connection_id: i64, cx: &mut App) -> anyhow::Result<LLMInstance> {
     let app_settings = AppSettings::global(cx);
 
     // Validate settings
@@ -1370,19 +1366,14 @@ fn create_chat_provider_info(connection_id: i64, cx: &mut App) -> anyhow::Result
             validation_errors.join(", ")
         ));
     }
-    // Create HTTP client using zed-reqwest
-    let http_client = Arc::new(reqwest::Client::new());
+
     // Get db_service
     let db_service = DatabaseService::global(cx).clone();
     // Get the tokio runtime handle
     let runtime_handle = Tokio::handle(cx);
-    // Create chat provider
-    let mut resolver = ChatProviderResolver::new(http_client.clone(), db_service, runtime_handle);
+    // Create LLM instance
+    let mut resolver = ChatProviderResolver::new(db_service, runtime_handle);
     resolver.set_connection_id(connection_id);
-    let provider_info = resolver.get_provider(&app_settings.settings)?;
-    Ok(ChatProviderInfo {
-        provider: provider_info.provider,
-        provider_name: provider_info.provider_name,
-        model_name: provider_info.model_name,
-    })
+    let llm_instance = resolver.get_llm(&app_settings.settings)?;
+    Ok(llm_instance)
 }

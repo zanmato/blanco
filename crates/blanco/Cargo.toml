@@ -25,8 +25,10 @@ blanco-core = { path = "../blanco-core" }
 postgres = { path = "../postgres" }
 sqlite = { path = "../sqlite" }
 mysql = { path = "../mysql" }
-blanco-openai = { path = "../openai" }
 database = { path = "../database" }
+
+# LLM client
+llm = { version = "1.3.7", features = ["openai", "anthropic", "google"] }
 
 # Additional dependencies
 env_logger = { workspace = true }
