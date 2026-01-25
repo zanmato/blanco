@@ -29,7 +29,7 @@ use crate::parameter_form::ParameterForm;
 use crate::rename_form::RenameTabForm;
 use crate::results_panel::ResultsPanel;
 use crate::snippet_editor::SnippetEditor;
-use crate::sql_completion_provider::SqlCompletionProvider;
+use crate::sql_completion::SqlCompletionProvider;
 use crate::sql_selection_range_provider::SqlSelectionRangeProvider;
 use crate::sql_statement_parser::extract_statement_info;
 use crate::{

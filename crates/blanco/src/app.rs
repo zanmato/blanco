@@ -15,8 +15,8 @@ use crate::{
     app_database::AppDatabase,
     app_events::AppEvent,
     connection_modal::NewConnectionModal,
-    connections_panel::ConnectionsPanel,
-    editor_panel::{EditorPanel, TabCreationParams},
+    connections::ConnectionsPanel,
+    editor::{EditorPanel, TabCreationParams},
     snippets_panel::{RefreshSnippets, SnippetsPanel},
 };
 

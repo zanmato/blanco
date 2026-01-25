@@ -10,7 +10,7 @@ use gpui_component::{
     spinner::Spinner,
 };
 
-use crate::connections_panel::{
+use crate::connections::{
     CreateNewQueryTabParams, TreeItemIcon, TreeItemKind, TreeItemMetadata,
 };
 
@@ -21,11 +21,11 @@ use blanco_ui::{
 
 /// Delegate for handling the connections tree rendering and data loading
 pub struct ConnectionsTreeDelegate {
-    parent: Entity<crate::connections_panel::ConnectionsPanel>,
+    parent: Entity<crate::connections::ConnectionsPanel>,
 }
 
 impl ConnectionsTreeDelegate {
-    pub fn new(parent: &Entity<crate::connections_panel::ConnectionsPanel>) -> Self {
+    pub fn new(parent: &Entity<crate::connections::ConnectionsPanel>) -> Self {
         Self {
             parent: parent.clone(),
         }

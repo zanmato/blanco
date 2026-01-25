@@ -1,0 +1,145 @@
+use sqlx::Row;
+
+use crate::app_database::{AppDatabase, QueryTabData, EnvironmentType};
+
+impl AppDatabase {
+    pub async fn save_query_tab(&self, tab: &QueryTabData) -> Result<i64, sqlx::Error> {
+        let now = chrono::Utc::now().timestamp();
+
+        if let Some(id) = tab.id {
+            // Update existing tab
+            sqlx::query(
+                r#"
+                UPDATE query_tabs
+                SET title = ?, content = ?, position = ?, connection_id = ?, connection_type = ?, database_name = ?, schema_name = ?, updated_at = ?
+                WHERE id = ?
+                "#,
+            )
+            .bind(&tab.title)
+            .bind(&tab.content)
+            .bind(tab.position)
+            .bind(tab.connection_id)
+            .bind(&tab.connection_type)
+            .bind(&tab.database_name)
+            .bind(&tab.schema_name)
+            .bind(now)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+            Ok(id)
+        } else {
+            // Insert new tab
+            let result = sqlx::query(
+                r#"
+                INSERT INTO query_tabs (title, content, position, connection_id, connection_type, database_name, schema_name, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(&tab.title)
+            .bind(&tab.content)
+            .bind(tab.position)
+            .bind(tab.connection_id)
+            .bind(&tab.connection_type)
+            .bind(&tab.database_name)
+            .bind(&tab.schema_name)
+            .bind(now)
+            .bind(now)
+            .execute(&self.pool)
+            .await?;
+
+            Ok(result.last_insert_rowid())
+        }
+    }
+
+    pub async fn load_query_tabs(&self) -> Result<Vec<QueryTabData>, sqlx::Error> {
+        let rows = sqlx::query(
+            r#"
+            SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type, c.name, qt.database_name, qt.schema_name, c.environment_type
+            FROM query_tabs qt
+            INNER JOIN connections c ON c.id = qt.connection_id
+            ORDER BY qt.position ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let tabs = rows
+            .into_iter()
+            .map(|row| {
+                let id = row.get::<i64, _>(0);
+                let title: String = row.get(1);
+
+                // Provide fallback name if title is empty
+                let title = if title.trim().is_empty() {
+                    format!("Query {}", id)
+                } else {
+                    title
+                };
+
+                QueryTabData {
+                    id: Some(id),
+                    title,
+                    content: row.get(2),
+                    position: row.get(3),
+                    connection_id: row.get(4),
+                    connection_type: row.get(5),
+                    connection_name: Some(row.get(6)),
+                    database_name: Some(row.get(7)),
+                    schema_name: row.get(8),
+                    environment_type: Some(EnvironmentType::from_i32(row.get::<i64, _>(9) as i32)),
+                }
+            })
+            .collect();
+
+        Ok(tabs)
+    }
+
+    pub async fn load_query_tab_by_id(&self, id: i64) -> Result<Option<QueryTabData>, sqlx::Error> {
+        let row = sqlx::query(
+            r#"
+            SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type, c.name, qt.database_name, qt.schema_name
+            FROM query_tabs qt
+            INNER JOIN connections c ON c.id = qt.connection_id
+            WHERE qt.id = ?
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(row) = row {
+            let tab_id = row.get::<i64, _>(0);
+            let title: String = row.get(1);
+
+            // Provide fallback name if title is empty
+            let title = if title.trim().is_empty() {
+                format!("Query {}", tab_id)
+            } else {
+                title
+            };
+
+            Ok(Some(QueryTabData {
+                id: Some(tab_id),
+                title,
+                content: row.get(2),
+                position: row.get(3),
+                connection_id: row.get(4),
+                connection_type: row.get(5),
+                connection_name: Some(row.get(6)),
+                database_name: Some(row.get(7)),
+                schema_name: row.get(8),
+                environment_type: None, // We don't join with connections in this method
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn delete_query_tab(&self, id: i64) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM query_tabs WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+}

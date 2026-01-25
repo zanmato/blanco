@@ -1,164 +1,29 @@
-#![allow(dead_code)]
+mod cache;
+mod context;
+mod fetch;
 
-use std::collections::HashMap;
+pub use cache::{CacheEntry, MetadataCache};
+pub use context::{SqlContext, SqlContextParser, TableAlias};
+pub use fetch::{fetch_columns, fetch_tables};
+
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
 use anyhow::Result;
 use database::DatabaseServiceTrait;
-use gpui::{AppContext, Context, Task, Window};
+use gpui::{App, AppContext, Context, Task, Window};
 use gpui_component::input::{CompletionProvider, HoverProvider, InputState, Rope, RopeExt};
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
     Hover, HoverContents, MarkupContent, MarkupKind, Range, TextEdit,
 };
+use std::time::Duration;
 
-/// Cache entry with timestamp
-#[derive(Debug, Clone)]
-struct CacheEntry<T> {
-    data: T,
-    timestamp: u64,
-}
-
-/// Table alias information
-#[derive(Debug, Clone)]
-struct TableAlias {
-    table_name: String,
-    alias: String,
-}
-
-/// SQL parsing context
-#[derive(Debug, Clone)]
-struct SqlContext {
-    /// Current word being typed
-    current_word: String,
-    /// Last SQL keyword found
-    last_keyword: Option<String>,
-    /// Table aliases found in query
-    table_aliases: Vec<TableAlias>,
-    /// Whether we're in dot notation context (table.column)
-    is_dot_notation: bool,
-    /// Table name for dot notation (if found)
-    dot_table_name: Option<String>,
-}
-
-impl<T> CacheEntry<T> {
-    fn new(data: T) -> Self {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        Self { data, timestamp }
-    }
-
-    fn is_expired(&self, ttl_seconds: u64) -> bool {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        now.saturating_sub(self.timestamp) > ttl_seconds
-    }
-}
-
-/// Metadata cache for tables and columns
-#[derive(Debug, Clone)]
-struct MetadataCache {
-    tables: Option<CacheEntry<Vec<String>>>,
-    columns: HashMap<String, CacheEntry<Vec<String>>>,
-    table_info: HashMap<String, CacheEntry<String>>,
-    column_info: HashMap<String, CacheEntry<String>>,
-}
-
-impl MetadataCache {
-    fn new() -> Self {
-        Self {
-            tables: None,
-            columns: HashMap::new(),
-            table_info: HashMap::new(),
-            column_info: HashMap::new(),
-        }
-    }
-
-    fn clear(&mut self) {
-        self.tables = None;
-        self.columns.clear();
-        self.table_info.clear();
-        self.column_info.clear();
-    }
-
-    fn is_empty(&self) -> bool {
-        self.tables.is_none() && self.columns.is_empty()
-    }
-}
-
-/// Fetch table names using the DbService
-async fn fetch_tables(
-    db_service: &dyn DatabaseServiceTrait,
-    connection_id: i64,
-    database_name: &str,
-) -> Result<Vec<String>> {
-    tracing::debug!("Fetching tables for database '{}'", database_name);
-    if let Ok(connection) = db_service
-        .get_or_create_connection_by_id(connection_id, Some(database_name))
-        .await
-    {
-        let tables = connection.get_tables(None).await?;
-        tracing::debug!(
-            "Found {} tables for database '{}': {:?}",
-            tables.len(),
-            database_name,
-            tables
-        );
-        Ok(tables)
-    } else {
-        tracing::warn!(
-            "Failed to get connection for fetching tables from database '{}'",
-            database_name
-        );
-        Ok(Vec::new())
-    }
-}
-
-/// Fetch column names for a specific table using the DbService
-async fn fetch_columns(
-    db_service: &dyn DatabaseServiceTrait,
-    connection_id: i64,
-    table_name: &str,
-    database_name: &str,
-) -> Result<Vec<String>> {
-    tracing::debug!(
-        "Fetching columns for table '{}', database '{}'",
-        table_name,
-        database_name
-    );
-    if let Ok(connection) = db_service
-        .get_or_create_connection_by_id(connection_id, Some(database_name))
-        .await
-    {
-        let columns = connection.get_columns_for_table(table_name, None).await?;
-        let column_names: Vec<String> = columns.into_iter().map(|col| col.name).collect();
-        tracing::debug!(
-            "Found {} columns for table '{}': {:?}",
-            column_names.len(),
-            table_name,
-            column_names
-        );
-        Ok(column_names)
-    } else {
-        tracing::warn!(
-            "Failed to get connection for fetching columns from table '{}', database '{}'",
-            table_name,
-            database_name
-        );
-        Ok(Vec::new())
-    }
-}
+const CACHE_TTL_SECONDS: u64 = 300; // 5 minutes cache TTL
 
 /// SQL Completion Provider that implements gpui-component's CompletionProvider trait
 #[derive(Clone)]
 pub struct SqlCompletionProvider {
-    connection_id: i64,
-    database_name: String,
+    pub connection_id: i64,
+    pub database_name: String,
     db_service: Arc<dyn DatabaseServiceTrait>,
     cache: Arc<std::sync::Mutex<MetadataCache>>,
 }
@@ -173,9 +38,22 @@ impl SqlCompletionProvider {
         }
     }
 
+    pub fn new_with_database(
+        connection_id: i64,
+        database_name: String,
+        db_service: Arc<dyn DatabaseServiceTrait>,
+    ) -> Self {
+        Self {
+            connection_id,
+            database_name,
+            db_service,
+            cache: Arc::new(std::sync::Mutex::new(MetadataCache::new())),
+        }
+    }
+
     /// Extract the current query context from full text based on cursor position
     /// This handles multiple queries separated by semicolons
-    fn extract_current_query_context(&self, full_text: &str, cursor_offset: usize) -> String {
+    pub fn extract_current_query_context(&self, full_text: &str, cursor_offset: usize) -> String {
         // Ensure cursor_offset is within bounds
         let cursor_offset = cursor_offset.min(full_text.len());
 
@@ -196,21 +74,6 @@ impl SqlCompletionProvider {
         let current_context = &full_text[query_start..cursor_offset];
         current_context.trim().to_string()
     }
-
-    pub fn new_with_database(
-        connection_id: i64,
-        database_name: String,
-        db_service: Arc<dyn DatabaseServiceTrait>,
-    ) -> Self {
-        Self {
-            connection_id,
-            database_name,
-            db_service,
-            cache: Arc::new(std::sync::Mutex::new(MetadataCache::new())),
-        }
-    }
-
-    const CACHE_TTL_SECONDS: u64 = 300; // 5 minutes cache TTL
 
     fn invalidate_cache(&self) {
         if let Ok(mut cache) = self.cache.lock() {
@@ -233,11 +96,11 @@ impl SqlCompletionProvider {
     }
 
     /// Get cached tables or fetch them if not cached/expired
-    async fn get_cached_tables(&self) -> Result<Vec<String>> {
+    pub async fn get_cached_tables(&self) -> Result<Vec<String>> {
         // First, check if we have valid cached data
         if let Ok(cache) = self.cache.lock()
             && let Some(cached_tables) = &cache.tables
-            && !cached_tables.is_expired(Self::CACHE_TTL_SECONDS)
+            && !cached_tables.is_expired(CACHE_TTL_SECONDS)
         {
             tracing::debug!("Using cached tables for database '{}'", self.database_name);
             return Ok(cached_tables.data.clone());
@@ -248,8 +111,7 @@ impl SqlCompletionProvider {
             "Fetching fresh tables for database '{}'",
             self.database_name
         );
-        let tables =
-            fetch_tables(&*self.db_service, self.connection_id, &self.database_name).await?;
+        let tables = fetch_tables(&*self.db_service, self.connection_id, &self.database_name).await?;
 
         // Update cache
         if let Ok(mut cache) = self.cache.lock() {
@@ -260,11 +122,11 @@ impl SqlCompletionProvider {
     }
 
     /// Get cached columns for a table or fetch them if not cached/expired
-    async fn get_cached_columns(&self, table_name: &str) -> Result<Vec<String>> {
+    pub async fn get_cached_columns(&self, table_name: &str) -> Result<Vec<String>> {
         // First, check if we have valid cached data
         if let Ok(cache) = self.cache.lock()
             && let Some(cached_columns) = cache.columns.get(table_name)
-            && !cached_columns.is_expired(Self::CACHE_TTL_SECONDS)
+            && !cached_columns.is_expired(CACHE_TTL_SECONDS)
         {
             tracing::debug!(
                 "Using cached columns for table '{}', database '{}'",
@@ -299,13 +161,13 @@ impl SqlCompletionProvider {
     }
 
     /// Get cached table info or fetch it if not cached/expired
-    async fn get_cached_table_info(&self, table_name: &str) -> Result<String> {
+    pub async fn get_cached_table_info(&self, table_name: &str) -> Result<String> {
         let cache_key = format!("{}:{}", self.database_name, table_name);
 
         // First, check if we have valid cached data
         if let Ok(cache) = self.cache.lock()
             && let Some(cached_info) = cache.table_info.get(&cache_key)
-            && !cached_info.is_expired(Self::CACHE_TTL_SECONDS)
+            && !cached_info.is_expired(CACHE_TTL_SECONDS)
         {
             tracing::debug!(
                 "Using cached table info for '{}' in database '{}'",
@@ -334,13 +196,13 @@ impl SqlCompletionProvider {
     }
 
     /// Get cached column info or fetch it if not cached/expired
-    async fn get_cached_column_info(&self, table_name: &str, column_name: &str) -> Result<String> {
+    pub async fn get_cached_column_info(&self, table_name: &str, column_name: &str) -> Result<String> {
         let cache_key = format!("{}:{}.{}", self.database_name, table_name, column_name);
 
         // First, check if we have valid cached data
         if let Ok(cache) = self.cache.lock()
             && let Some(cached_info) = cache.column_info.get(&cache_key)
-            && !cached_info.is_expired(Self::CACHE_TTL_SECONDS)
+            && !cached_info.is_expired(CACHE_TTL_SECONDS)
         {
             tracing::debug!(
                 "Using cached column info for '{}.{}' in database '{}'",
@@ -434,266 +296,20 @@ impl SqlCompletionProvider {
 
     /// Parse SQL context from text before cursor
     fn parse_sql_context(&self, text_before_cursor: &str) -> SqlContext {
+        let parser = SqlContextParser;
+
         // Check for dot notation using proper lookbehind logic
         // Look for pattern: [identifier].[partial_word] where cursor is at the end
         let (is_dot_notation, dot_table_name, current_word) =
-            self.parse_dot_notation_context(text_before_cursor);
+            parser.parse_dot_notation_context(text_before_cursor);
 
         SqlContext {
             current_word,
-            last_keyword: self.find_last_keyword(text_before_cursor),
-            table_aliases: self.extract_table_aliases(text_before_cursor),
+            last_keyword: parser.find_last_keyword(text_before_cursor),
+            table_aliases: parser.extract_table_aliases(text_before_cursor),
             is_dot_notation,
             dot_table_name,
         }
-    }
-
-    /// Parse dot notation context using proper lookbehind logic
-    /// Returns: (is_dot_notation, table_name_before_dot, partial_word_after_dot)
-    fn parse_dot_notation_context(&self, text: &str) -> (bool, Option<String>, String) {
-        // Look for the last dot in the text
-        if let Some(dot_pos) = text.rfind('.') {
-            let before_dot = &text[..dot_pos];
-            let after_dot = &text[dot_pos + 1..];
-
-            // Extract the partial word after the dot (first word after the dot)
-            let partial_word_after_dot = if after_dot.trim().is_empty() {
-                "".to_string()
-            } else {
-                // Get the first word after the dot
-                after_dot
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("")
-                    .to_string()
-            };
-
-            // Extract the current word at the end of the text
-            let current_word = self.extract_current_word(text);
-
-            // Check if this should be considered dot notation:
-            // 1. Text ends with a dot (cursor right after dot)
-            // 2. OR the characters immediately after the dot form a word that could be a column name
-            if text.ends_with('.') || !partial_word_after_dot.is_empty() {
-                // Extract the table/alias name before the dot
-                if let Some(table_name) = self.extract_identifier_before_dot(before_dot) {
-                    return (true, Some(table_name), current_word);
-                }
-            }
-        }
-
-        // Not dot notation
-        (false, None, self.extract_current_word(text))
-    }
-
-    /// Extract identifier (table/alias name) before a dot using lookbehind
-    fn extract_identifier_before_dot(&self, text_before_dot: &str) -> Option<String> {
-        let chars: Vec<char> = text_before_dot.chars().collect();
-        let mut end = chars.len();
-
-        // Skip whitespace before the dot
-        while end > 0 && chars[end - 1].is_whitespace() {
-            end -= 1;
-        }
-
-        // Find the start of the identifier
-        let mut start = end;
-        while start > 0 {
-            let ch = chars[start - 1];
-            if ch.is_alphanumeric() || ch == '_' {
-                start -= 1;
-            } else {
-                break;
-            }
-        }
-
-        // Extract the identifier
-        if start < end {
-            let identifier: String = chars[start..end].iter().collect();
-            if self.is_valid_identifier(&identifier) {
-                return Some(identifier);
-            }
-        }
-
-        None
-    }
-
-    /// Extract current word being typed (for partial matching)
-    fn extract_current_word(&self, text: &str) -> String {
-        let chars: Vec<char> = text.chars().collect();
-        let mut end = chars.len();
-
-        // Move backwards while we have valid identifier characters
-        while end > 0 {
-            let ch = chars[end - 1];
-            if ch.is_alphanumeric() || ch == '_' {
-                end -= 1;
-            } else {
-                break;
-            }
-        }
-
-        text[end..].to_string()
-    }
-
-    /// Find the last SQL keyword (case-insensitive, simple lookbehind)
-    fn find_last_keyword(&self, text: &str) -> Option<String> {
-        // Sort keywords by length (longest first) to prioritize multi-word keywords
-        let keywords = [
-            "INNER JOIN",
-            "LEFT JOIN",
-            "RIGHT JOIN",
-            "OUTER JOIN",
-            "ORDER BY",
-            "GROUP BY",
-            "SELECT",
-            "FROM",
-            "WHERE",
-            "JOIN",
-            "UPDATE",
-            "INSERT",
-            "INTO",
-            "DELETE",
-            "SET",
-            "VALUES",
-            "HAVING",
-            "LIMIT",
-            "ON",
-            "AND",
-            "OR",
-            "NOT",
-        ];
-
-        let text_upper = text.to_uppercase();
-        let mut last_keyword_pos = -1;
-        let mut last_keyword = None;
-
-        // Simple approach: find the last occurrence of each keyword
-        for keyword in &keywords {
-            if let Some(pos) = text_upper.rfind(keyword) {
-                // Simple boundary check - ensure it's not part of a larger word
-                let is_word_boundary = (pos == 0
-                    || !text.chars().nth(pos - 1).unwrap_or(' ').is_alphanumeric())
-                    && (pos + keyword.len() >= text.len()
-                        || !text
-                            .chars()
-                            .nth(pos + keyword.len())
-                            .unwrap_or(' ')
-                            .is_alphanumeric());
-
-                if is_word_boundary && pos as i32 > last_keyword_pos {
-                    last_keyword_pos = pos as i32;
-                    last_keyword = Some(keyword.to_string());
-                }
-            }
-        }
-
-        last_keyword
-    }
-
-    /// Extract table aliases from SQL (e.g., "users u", "orders o", "users AS u")
-    fn extract_table_aliases(&self, text: &str) -> Vec<TableAlias> {
-        let mut aliases = Vec::new();
-        let words: Vec<&str> = text.split_whitespace().collect();
-
-        let mut i = 0;
-        while i < words.len() {
-            let word_upper = words[i].to_uppercase();
-
-            // Look for patterns like: table_name alias or table_name AS alias
-            if word_upper == "FROM"
-                || word_upper == "JOIN"
-                || word_upper == "UPDATE"
-                || word_upper == "INNER"
-                || word_upper == "LEFT"
-                || word_upper == "RIGHT"
-            {
-                let mut table_name_idx = i + 1;
-
-                // Skip JOIN keywords to get to table name
-                if (word_upper == "INNER" || word_upper == "LEFT" || word_upper == "RIGHT")
-                    && table_name_idx < words.len()
-                    && words[table_name_idx].to_uppercase() == "JOIN"
-                {
-                    table_name_idx += 1;
-                }
-
-                // Extract table name and alias
-                if table_name_idx < words.len() {
-                    let table_name = words[table_name_idx];
-
-                    // Stop if we hit a keyword that indicates end of table reference
-                    let table_name_upper = table_name.to_uppercase();
-                    if [
-                        "WHERE", "ON", "SET", "VALUES", "ORDER", "GROUP", "HAVING", "LIMIT",
-                        "UNION",
-                    ]
-                    .contains(&table_name_upper.as_str())
-                    {
-                        // Skip this word, it's not a table name
-                    } else {
-                        // Check for AS alias or direct alias
-                        if table_name_idx + 1 < words.len() {
-                            let next_word_upper = words[table_name_idx + 1].to_uppercase();
-                            if next_word_upper == "AS" && table_name_idx + 2 < words.len() {
-                                // table_name AS alias
-                                let alias = words[table_name_idx + 2];
-                                aliases.push(TableAlias {
-                                    table_name: table_name.trim_end_matches(';').to_string(),
-                                    alias: alias.trim_end_matches(';').to_string(),
-                                });
-                                i = table_name_idx + 2;
-                            } else if ![
-                                "WHERE", "JOIN", "INNER", "LEFT", "RIGHT", "ON", "SET", "VALUES",
-                                "ORDER", "GROUP", "HAVING", "LIMIT", "UNION", "AS",
-                            ]
-                            .contains(&next_word_upper.as_str())
-                            {
-                                // table_name alias
-                                let alias = words[table_name_idx + 1];
-                                aliases.push(TableAlias {
-                                    table_name: table_name.trim_end_matches(';').to_string(),
-                                    alias: alias.trim_end_matches(';').to_string(),
-                                });
-                                i = table_name_idx + 1;
-                            }
-                            // If we reach here, we have just table_name without alias
-                        }
-                        // If we reach here, we have just table_name at end of query
-                    }
-                }
-            }
-            i += 1;
-        }
-
-        aliases
-    }
-
-    /// Resolve table name from alias, returns None if not found
-    fn resolve_table_alias(&self, aliases: &[TableAlias], alias_name: &str) -> Option<String> {
-        for alias_info in aliases {
-            if alias_info.alias == alias_name {
-                return Some(alias_info.table_name.clone());
-            }
-        }
-        None
-    }
-
-    /// Generate table abbreviation from table name
-    /// Examples: "products" -> "products p", "localized_products" -> "localized_products lp"
-    fn generate_table_abbreviation(&self, table_name: &str) -> String {
-        // Split on underscores and take first letter of each part
-        let parts: Vec<&str> = table_name.split('_').collect();
-        let abbreviation: String = parts
-            .iter()
-            .map(|part| {
-                // Take first character of each part
-                part.chars().next().unwrap_or(' ')
-            })
-            .filter(|c| *c != ' ')
-            .collect();
-
-        format!("{} {}", table_name, abbreviation)
     }
 
     /// Determine if we should show table completions based on context
@@ -741,11 +357,13 @@ impl SqlCompletionProvider {
         text_before_cursor: &str,
         full_text: &str,
     ) -> Option<String> {
+        let parser = SqlContextParser;
+
         // Parse context using full text for alias extraction
         let mut context = self.parse_sql_context(text_before_cursor);
 
         // Extract aliases from the full text instead of just text before cursor
-        context.table_aliases = self.extract_table_aliases(full_text);
+        context.table_aliases = parser.extract_table_aliases(full_text);
 
         tracing::debug!(
             "SQL Completion: Using full text for alias extraction: '{}'",
@@ -771,7 +389,7 @@ impl SqlCompletionProvider {
 
             // First try to resolve as alias
             if let Some(resolved_table) =
-                self.resolve_table_alias(&context.table_aliases, table_name)
+                parser.resolve_table_alias(&context.table_aliases, table_name)
             {
                 tracing::debug!(
                     "SQL Completion: Resolved alias '{}' to table '{}'",
@@ -787,7 +405,7 @@ impl SqlCompletionProvider {
             );
             // If alias resolution fails and table_name is likely an alias (single letter),
             // we could try common table names or return None to avoid invalid table queries
-            if self.is_valid_identifier(table_name) && !self.is_sql_keyword(table_name) {
+            if is_valid_identifier(table_name) && !is_sql_keyword(table_name) {
                 // For now, return the table_name as-is, but in a real implementation,
                 // we might want to maintain alias history or provide better fallbacks
                 return Some(table_name.clone());
@@ -799,13 +417,13 @@ impl SqlCompletionProvider {
             Some("FROM") | Some("JOIN") | Some("INNER JOIN") | Some("LEFT JOIN")
             | Some("RIGHT JOIN") | Some("OUTER JOIN") | Some("UPDATE") | Some("INTO") => {
                 // Look for table name after the keyword
-                if let Some(table_name) = self.find_table_after_keyword(
+                if let Some(table_name) = parser.find_table_after_keyword(
                     text_before_cursor,
                     context.last_keyword.as_ref().unwrap(),
                 ) {
                     // Try to resolve through aliases
                     if let Some(resolved_table) =
-                        self.resolve_table_alias(&context.table_aliases, &table_name)
+                        parser.resolve_table_alias(&context.table_aliases, &table_name)
                     {
                         return Some(resolved_table);
                     }
@@ -816,7 +434,7 @@ impl SqlCompletionProvider {
             | Some("HAVING") => {
                 // For these contexts, find the last table mentioned in the query
                 if let Some(table_name) =
-                    self.find_last_table_mentioned(full_text, &context.table_aliases)
+                    parser.find_last_table_mentioned(full_text, &context.table_aliases)
                 {
                     return Some(table_name);
                 }
@@ -829,6 +447,7 @@ impl SqlCompletionProvider {
 
     /// Extract table name from context for column completion
     async fn extract_table_for_columns(&self, text_before_cursor: &str) -> Option<String> {
+        let parser = SqlContextParser;
         let context = self.parse_sql_context(text_before_cursor);
 
         // Handle dot notation: "table.column" or "alias.column"
@@ -837,12 +456,12 @@ impl SqlCompletionProvider {
         {
             // First try to resolve as alias
             if let Some(resolved_table) =
-                self.resolve_table_alias(&context.table_aliases, table_name)
+                parser.resolve_table_alias(&context.table_aliases, table_name)
             {
                 return Some(resolved_table);
             }
             // Otherwise treat as table name if it's valid
-            if self.is_valid_identifier(table_name) && !self.is_sql_keyword(table_name) {
+            if is_valid_identifier(table_name) && !is_sql_keyword(table_name) {
                 return Some(table_name.clone());
             }
         }
@@ -852,13 +471,13 @@ impl SqlCompletionProvider {
             Some("FROM") | Some("JOIN") | Some("INNER JOIN") | Some("LEFT JOIN")
             | Some("RIGHT JOIN") | Some("OUTER JOIN") | Some("UPDATE") | Some("INTO") => {
                 // Look for table name after the keyword
-                if let Some(table_name) = self.find_table_after_keyword(
+                if let Some(table_name) = parser.find_table_after_keyword(
                     text_before_cursor,
                     context.last_keyword.as_ref().unwrap(),
                 ) {
                     // Try to resolve through aliases
                     if let Some(resolved_table) =
-                        self.resolve_table_alias(&context.table_aliases, &table_name)
+                        parser.resolve_table_alias(&context.table_aliases, &table_name)
                     {
                         return Some(resolved_table);
                     }
@@ -869,7 +488,7 @@ impl SqlCompletionProvider {
             | Some("HAVING") => {
                 // For these contexts, find the last table mentioned in the query
                 if let Some(table_name) =
-                    self.find_last_table_mentioned(text_before_cursor, &context.table_aliases)
+                    parser.find_last_table_mentioned(text_before_cursor, &context.table_aliases)
                 {
                     return Some(table_name);
                 }
@@ -877,10 +496,10 @@ impl SqlCompletionProvider {
             Some("SET") => {
                 // For SET context, look for UPDATE keyword before SET
                 if let Some(table_name) =
-                    self.find_table_after_keyword(text_before_cursor, "UPDATE")
+                    parser.find_table_after_keyword(text_before_cursor, "UPDATE")
                 {
                     if let Some(resolved_table) =
-                        self.resolve_table_alias(&context.table_aliases, &table_name)
+                        parser.resolve_table_alias(&context.table_aliases, &table_name)
                     {
                         return Some(resolved_table);
                     }
@@ -892,70 +511,24 @@ impl SqlCompletionProvider {
 
         None
     }
+}
 
-    // Check if a word is a SQL keyword
-    fn is_sql_keyword(&self, word: &str) -> bool {
-        let sql_keywords = [
-            "SELECT", "FROM", "WHERE", "AND", "OR", "ORDER", "GROUP", "HAVING", "BY", "SET",
-            "VALUES", "INSERT", "DELETE", "UPDATE", "INTO", "JOIN", "INNER", "LEFT", "RIGHT",
-            "OUTER", "ON", "AS", "DISTINCT", "COUNT", "SUM", "AVG", "MAX", "MIN", "NOT", "NULL",
-            "IS", "IN", "EXISTS", "BETWEEN", "LIKE",
-        ];
+// Helper functions moved to module level
+fn is_valid_identifier(word: &str) -> bool {
+    !word.is_empty()
+        && word.chars().all(|c| c.is_alphanumeric() || c == '_')
+        && !word.chars().next().is_none_or(|c| c.is_ascii_digit())
+}
 
-        sql_keywords.contains(&word.to_uppercase().as_str())
-    }
+fn is_sql_keyword(word: &str) -> bool {
+    let sql_keywords = [
+        "SELECT", "FROM", "WHERE", "AND", "OR", "ORDER", "GROUP", "HAVING", "BY", "SET",
+        "VALUES", "INSERT", "DELETE", "UPDATE", "INTO", "JOIN", "INNER", "LEFT", "RIGHT",
+        "OUTER", "ON", "AS", "DISTINCT", "COUNT", "SUM", "AVG", "MAX", "MIN", "NOT", "NULL",
+        "IS", "IN", "EXISTS", "BETWEEN", "LIKE",
+    ];
 
-    // Check if a word is a valid identifier
-    fn is_valid_identifier(&self, word: &str) -> bool {
-        !word.is_empty()
-            && word.chars().all(|c| c.is_alphanumeric() || c == '_')
-            && !word.chars().next().is_none_or(|c| c.is_ascii_digit())
-    }
-
-    // Find table name after a specific keyword
-    fn find_table_after_keyword(&self, text: &str, keyword: &str) -> Option<String> {
-        let text_upper = text.to_uppercase();
-        if let Some(keyword_pos) = text_upper.rfind(keyword) {
-            let after_keyword = &text[keyword_pos + keyword.len()..].trim();
-            if let Some(first_word) = after_keyword.split_whitespace().next() {
-                let table_name = first_word.trim_end_matches(',').trim_end_matches('(');
-                if self.is_valid_identifier(table_name) && !self.is_sql_keyword(table_name) {
-                    return Some(table_name.to_string());
-                }
-            }
-        }
-        None
-    }
-
-    // Find the last table mentioned in the query (for SELECT contexts without explicit table)
-    fn find_last_table_mentioned(&self, text: &str, aliases: &[TableAlias]) -> Option<String> {
-        let text_upper = text.to_uppercase();
-
-        // Look for the last FROM or JOIN clause
-        let keywords = ["FROM", "JOIN", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN"];
-        let mut last_table = None;
-        let mut last_pos = -1;
-
-        for keyword in &keywords {
-            if let Some(pos) = text_upper.rfind(keyword)
-                && pos as i32 > last_pos
-                && let Some(table) = self.find_table_after_keyword(text, keyword)
-            {
-                last_pos = pos as i32;
-                last_table = Some(table);
-            }
-        }
-
-        // If we found a table, try to resolve it through aliases
-        if let Some(table_name) = last_table {
-            if let Some(resolved) = self.resolve_table_alias(aliases, &table_name) {
-                return Some(resolved);
-            }
-            return Some(table_name);
-        }
-
-        None
-    }
+    sql_keywords.contains(&word.to_uppercase().as_str())
 }
 
 impl CompletionProvider for SqlCompletionProvider {
@@ -997,7 +570,7 @@ impl CompletionProvider for SqlCompletionProvider {
                 .to_string();
 
             // Extract current word for filtering
-            let current_word = extract_current_word(&text_before_cursor);
+            let current_word = SqlContextParser::extract_current_word(&text_before_cursor);
 
             // Check if we should show column or table completions
             let should_show_columns = provider_clone.should_show_columns(&text_before_cursor);
@@ -1100,13 +673,15 @@ impl CompletionProvider for SqlCompletionProvider {
                             filtered_tables
                         );
 
+                        let parser = SqlContextParser;
+
                         // Convert to LSP completion items
                         let completion_items = filtered_tables
                             .into_iter()
                             .take(20)
                             .map(|table_name| {
                                 let insert_text_with_alias =
-                                    provider_clone.generate_table_abbreviation(&table_name);
+                                    parser.generate_table_abbreviation(&table_name);
                                 CompletionItem {
                                     label: table_name.clone(),
                                     kind: Some(CompletionItemKind::CLASS),
@@ -1208,7 +783,7 @@ impl HoverProvider for SqlCompletionProvider {
         let text_before_cursor = full_text[..offset].to_string();
 
         // Extract current word to check for hover
-        let current_word = extract_current_word(&text_before_cursor);
+        let current_word = SqlContextParser::extract_current_word(&text_before_cursor);
 
         if current_word.is_empty() {
             return Task::ready(Ok(None));
@@ -1281,39 +856,21 @@ async fn get_cached_hover_info(
     None
 }
 
-/// Extract the current word being typed based on text before cursor
-fn extract_current_word(text_before_cursor: &str) -> String {
-    let mut word_chars = Vec::new();
-
-    for c in text_before_cursor.chars().rev() {
-        if c.is_alphanumeric() || c == '_' {
-            word_chars.push(c);
-        } else {
-            break;
-        }
-    }
-
-    word_chars.iter().rev().collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
-    use blanco_core::{Connection, DatabaseService as DatabaseServiceTrait};
-    use std::sync::Arc;
 
     // Mock DatabaseService for tests
     #[derive(Clone)]
     struct MockDatabaseService;
 
-    #[async_trait]
+    #[async_trait::async_trait]
     impl DatabaseServiceTrait for MockDatabaseService {
         async fn get_or_create_connection_by_id(
             &self,
             _connection_id: i64,
             _database: Option<&str>,
-        ) -> Result<Arc<dyn Connection>> {
+        ) -> std::result::Result<Arc<dyn blanco_core::Connection>, anyhow::Error> {
             unimplemented!("Mock database service not implemented for unit tests")
         }
     }
@@ -1323,17 +880,8 @@ mod tests {
     }
 
     // Test-only constructor that uses a mock service
-    fn create_test_provider() -> SqlCompletionProvider {
+    pub fn create_test_provider() -> SqlCompletionProvider {
         SqlCompletionProvider::new(1, create_test_db_service())
-    }
-
-    #[test]
-    fn test_extract_current_word() {
-        assert_eq!(extract_current_word("SELECT * FROM"), "FROM");
-        assert_eq!(extract_current_word("SELECT * F"), "F");
-        assert_eq!(extract_current_word("SELECT * "), "");
-        assert_eq!(extract_current_word("user_name"), "user_name");
-        assert_eq!(extract_current_word("123"), "123");
     }
 
     #[test]
@@ -1356,32 +904,33 @@ mod tests {
     #[test]
     fn test_find_last_keyword() {
         let provider = create_test_provider();
+        let parser = SqlContextParser;
 
         // Test basic keyword detection
         assert_eq!(
-            provider.find_last_keyword("SELECT * FROM users"),
+            parser.find_last_keyword("SELECT * FROM users"),
             Some("FROM".to_string())
         );
         assert_eq!(
-            provider.find_last_keyword("SELECT * FROM users WHERE"),
+            parser.find_last_keyword("SELECT * FROM users WHERE"),
             Some("WHERE".to_string())
         );
         assert_eq!(
-            provider.find_last_keyword("UPDATE users SET name"),
+            parser.find_last_keyword("UPDATE users SET name"),
             Some("SET".to_string())
         );
         assert_eq!(
-            provider.find_last_keyword("INSERT INTO users"),
+            parser.find_last_keyword("INSERT INTO users"),
             Some("INTO".to_string())
         );
 
         // Test case-insensitive
         assert_eq!(
-            provider.find_last_keyword("select * from users"),
+            parser.find_last_keyword("select * from users"),
             Some("FROM".to_string())
         );
         assert_eq!(
-            provider.find_last_keyword("Select * From Users"),
+            parser.find_last_keyword("Select * From Users"),
             Some("FROM".to_string())
         );
 
@@ -1390,109 +939,17 @@ mod tests {
         // This is because "JOIN" appears later in the string than "LEFT JOIN"
         // This is actually acceptable behavior for our use case
         assert_eq!(
-            provider.find_last_keyword("LEFT JOIN users"),
+            parser.find_last_keyword("LEFT JOIN users"),
             Some("JOIN".to_string())
         );
         assert_eq!(
-            provider.find_last_keyword("ORDER BY name"),
+            parser.find_last_keyword("ORDER BY name"),
             Some("ORDER BY".to_string())
         );
         assert_eq!(
-            provider.find_last_keyword("GROUP BY category"),
+            parser.find_last_keyword("GROUP BY category"),
             Some("GROUP BY".to_string())
         );
-    }
-
-    #[test]
-    fn test_extract_table_aliases() {
-        let provider = create_test_provider();
-
-        // Test basic alias patterns
-        let aliases = provider.extract_table_aliases("FROM users u");
-        assert_eq!(aliases.len(), 1);
-        assert_eq!(aliases[0].table_name, "users");
-        assert_eq!(aliases[0].alias, "u");
-
-        // Test AS keyword
-        let aliases = provider.extract_table_aliases("FROM users AS u");
-        assert_eq!(aliases.len(), 1);
-        assert_eq!(aliases[0].table_name, "users");
-        assert_eq!(aliases[0].alias, "u");
-
-        // Test multiple tables
-        let aliases =
-            provider.extract_table_aliases("FROM users u JOIN orders o ON u.id = o.user_id");
-        assert_eq!(aliases.len(), 2);
-        assert_eq!(aliases[0].table_name, "users");
-        assert_eq!(aliases[0].alias, "u");
-        assert_eq!(aliases[1].table_name, "orders");
-        assert_eq!(aliases[1].alias, "o");
-
-        // Test with JOIN keywords
-        let aliases = provider.extract_table_aliases("SELECT * FROM users u INNER JOIN orders o");
-        assert_eq!(aliases.len(), 2);
-    }
-
-    #[test]
-    fn test_resolve_table_alias() {
-        let provider = SqlCompletionProvider::new_with_database(
-            1,
-            "test_db".to_string(),
-            create_test_db_service(),
-        );
-        let aliases = vec![
-            TableAlias {
-                table_name: "users".to_string(),
-                alias: "u".to_string(),
-            },
-            TableAlias {
-                table_name: "orders".to_string(),
-                alias: "o".to_string(),
-            },
-        ];
-
-        assert_eq!(
-            provider.resolve_table_alias(&aliases, "u"),
-            Some("users".to_string())
-        );
-        assert_eq!(
-            provider.resolve_table_alias(&aliases, "o"),
-            Some("orders".to_string())
-        );
-        assert_eq!(provider.resolve_table_alias(&aliases, "x"), None);
-    }
-
-    #[test]
-    fn test_generate_table_abbreviation() {
-        let provider = SqlCompletionProvider::new_with_database(
-            1,
-            "test_db".to_string(),
-            create_test_db_service(),
-        );
-
-        // Test simple table name
-        assert_eq!(
-            provider.generate_table_abbreviation("products"),
-            "products p"
-        );
-
-        // Test multi-word table name with underscores
-        assert_eq!(
-            provider.generate_table_abbreviation("localized_products"),
-            "localized_products lp"
-        );
-
-        // Test three parts
-        assert_eq!(
-            provider.generate_table_abbreviation("user_order_items"),
-            "user_order_items uoi"
-        );
-
-        // Test single character
-        assert_eq!(provider.generate_table_abbreviation("a"), "a a");
-
-        // Test empty string (edge case)
-        assert_eq!(provider.generate_table_abbreviation(""), " ");
     }
 
     #[test]
@@ -1520,7 +977,7 @@ mod tests {
         let text3 = "SELECT * FROM users; SELECT * FROM o";
         let after_semicolon3 = &text3[text3.rfind(';').map(|i| i + 1).unwrap_or(0)..];
         assert_eq!(
-            provider.find_last_keyword(after_semicolon3),
+            SqlContextParser::find_last_keyword(after_semicolon3),
             Some("FROM".to_string())
         );
     }

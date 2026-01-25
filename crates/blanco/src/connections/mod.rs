@@ -1,6 +1,9 @@
+mod delegate;
+
+pub use delegate::ConnectionsTreeDelegate;
+
 use crate::app_database::{AppDatabase, ConnectionData, EnvironmentType};
 use crate::app_events::{AppEvent, TreeItemType};
-use crate::connections_panel_delegate::ConnectionsTreeDelegate;
 use blanco_ui::IconName;
 use blanco_ui::tree::{Tree, TreeItem, TreeState};
 use database::DatabaseService;
