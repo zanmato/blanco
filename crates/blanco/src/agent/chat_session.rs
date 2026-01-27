@@ -4,9 +4,7 @@ use gpui::{Context, EventEmitter, Task, WeakEntity, Window};
 use smol::channel::Sender;
 use std::sync::Arc;
 
-use super::chat_types::{
-    ChatCommand, ChatEvent, ChatMessage, LoadingState, MessageRole, SqlContext,
-};
+use super::chat_types::{ChatCommand, ChatEvent, ChatMessage, LoadingState, MessageRole};
 use super::tool_handlers::ToolMode;
 use database::DatabaseService;
 use gpui_component::input::InputState;
@@ -52,7 +50,6 @@ pub struct ChatSession {
     pub model_name: String,
     pub provider_name: String,
     pub loading_state: LoadingState,
-    pub sql_context: SqlContext,
     #[allow(dead_code)]
     pub streaming_message_id: Option<String>,
     // New fields for tool execution
@@ -78,7 +75,6 @@ impl ChatSession {
             provider_name,
             model_name,
             loading_state: LoadingState::Idle,
-            sql_context: SqlContext::empty(),
             streaming_message_id: None,
             tool_registry: Some(std::sync::Arc::new(
                 super::tool_handlers::AgentToolRegistry::new(),
@@ -98,7 +94,6 @@ impl ChatSession {
             provider_name: "Mock".to_string(),
             model_name: "mock-gpt-4".to_string(),
             loading_state: LoadingState::Idle,
-            sql_context: SqlContext::empty(),
             streaming_message_id: None,
             tool_registry: Some(std::sync::Arc::new(
                 super::tool_handlers::AgentToolRegistry::new(),
@@ -118,7 +113,6 @@ impl ChatSession {
             provider_name: "Unknown".to_string(),
             model_name: "unknown".to_string(),
             loading_state: LoadingState::Idle,
-            sql_context: SqlContext::empty(),
             streaming_message_id: None,
             tool_registry: None,
             input_state: None,
@@ -161,10 +155,6 @@ impl ChatSession {
         self.streaming_message_id = None;
     }
 
-    pub fn update_sql_context(&mut self, context: SqlContext) {
-        self.sql_context = context;
-    }
-
     pub fn set_tool_mode(&mut self, mode: ToolMode, cx: &mut Context<Self>) {
         self.tool_registry = Some(Arc::new(
             crate::agent::tool_handlers::AgentToolRegistry::with_mode(mode),
@@ -173,7 +163,7 @@ impl ChatSession {
     }
 
     pub fn get_system_prompt(&self) -> String {
-        self.sql_context.to_system_prompt()
+        include_str!("system_prompt.md").to_string()
     }
 
     pub fn send_message(
@@ -227,7 +217,7 @@ impl ChatSession {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<Result<String>> {
-        let system_prompt = self.sql_context.to_system_prompt();
+        let system_prompt = self.get_system_prompt();
         let messages = self.messages.clone();
         let model_name = self.model_name.clone();
         let user_message = user_message.to_string();

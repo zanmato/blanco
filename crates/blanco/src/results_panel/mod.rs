@@ -1,11 +1,9 @@
-use std::time::Duration;
 use std::collections::HashSet;
+use std::time::Duration;
 
-use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ParentElement, Render, Styled,
-    Subscription, Window, div, px,
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, ParentElement, Render, Styled, Subscription, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme,
@@ -31,13 +29,11 @@ pub struct TableOperationResponse {
     pub operations_executed: usize,
     pub duration: Duration,
 }
-mod table_operations;
 mod results_table_delegate;
+mod table_operations;
 
 // Re-exports from results_table_delegate
-pub use results_table_delegate::{
-    ResultsTableDelegate, TableChange, ChangeType,
-};
+pub use results_table_delegate::{ChangeType, ResultsTableDelegate, TableChange};
 
 // Data structures for copy functionality
 #[derive(Clone, Debug)]

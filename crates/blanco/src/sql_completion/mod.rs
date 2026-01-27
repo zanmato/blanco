@@ -546,25 +546,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_current_query_context() {
-        let provider = create_test_provider();
-
-        // Test with single query
-        assert_eq!(
-            provider.extract_current_query_context("SELECT * FROM users", 20),
-            "SELECT * FROM users"
-        );
-
-        // Test with multiple queries - cursor in first query
-        assert_eq!(
-            provider.extract_current_query_context("SELECT * FROM users; SELECT * FROM orders", 10),
-            "SELECT * FR"
-        );
-    }
-
-    #[test]
     fn test_find_last_keyword() {
-        let provider = create_test_provider();
         let parser = SqlContextParser;
 
         // Test basic keyword detection

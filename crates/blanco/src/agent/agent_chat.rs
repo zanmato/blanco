@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use super::chat_message_view::ChatMessageState;
 use super::chat_session::{ChatSession, ChatSessionContext};
-use super::chat_types::{ChatEvent, LoadingState, SqlContext};
+use super::chat_types::{ChatEvent, LoadingState};
 use super::tool_handlers::ToolMode;
 use blanco_ui::IconName;
 use gpui::ScrollHandle;
@@ -143,17 +143,16 @@ impl ChatPanel {
         let session_clone = session.clone();
         subscriptions.push(
             cx.subscribe(&tool_mode_select, move |_panel, _select, event, cx| {
-                if let SelectEvent::Confirm(selected) = event {
-                    let mode = if selected.as_ref().map(|s| s.as_str()) == Some("Write") {
-                        ToolMode::Write
-                    } else {
-                        ToolMode::Read
-                    };
+                let SelectEvent::Confirm(selected) = event;
+                let mode = if selected.as_ref().map(|s| s.as_str()) == Some("Write") {
+                    ToolMode::Write
+                } else {
+                    ToolMode::Read
+                };
 
-                    session_clone.update(cx, |session, cx| {
-                        session.set_tool_mode(mode, cx);
-                    });
-                }
+                session_clone.update(cx, |session, cx| {
+                    session.set_tool_mode(mode, cx);
+                });
             }),
         );
 
@@ -207,12 +206,6 @@ impl ChatPanel {
         self.session.update(cx, |session, cx| {
             session.clear_messages();
             cx.emit(ChatEvent::SessionCleared);
-        });
-    }
-
-    pub fn update_sql_context(&mut self, context: SqlContext, cx: &mut Context<Self>) {
-        self.session.update(cx, |session, _cx| {
-            session.update_sql_context(context);
         });
     }
 
