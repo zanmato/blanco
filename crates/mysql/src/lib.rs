@@ -5,13 +5,11 @@
 //! - SQL parsing with MySQL dialect
 
 pub mod connection;
-pub mod factory;
 pub mod schema;
 pub mod sql_parser;
 
 // Re-export main types for convenience
 pub use connection::{MysqlConnection, MysqlConnectionKey};
-pub use factory::MysqlConnectionFactory;
 pub use sql_parser::{CompletionKind, MysqlTableExtractor, ParsedQuery, TableAlias};
 
 #[cfg(test)]

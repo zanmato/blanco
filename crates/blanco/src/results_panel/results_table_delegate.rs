@@ -3,8 +3,8 @@ use std::ops::Range;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, Context, Entity, Focusable, FontWeight,
-    InteractiveElement, IntoElement, MouseButton, ParentElement, SharedString, Styled, TextRun, Window, div, px,
+    App, AppContext, Context, Entity, Focusable, FontWeight, InteractiveElement, IntoElement,
+    MouseButton, ParentElement, SharedString, Styled, TextRun, Window, div, px,
 };
 use gpui_component::popover::{Popover, PopoverState};
 use gpui_component::{
@@ -18,9 +18,7 @@ use gpui_component::{
 };
 use serde_json::Value;
 
-use blanco_core::{
-    QueryResult, connection_trait::ForeignKeyInfo,
-};
+use blanco_core::{QueryResult, connection_trait::ForeignKeyInfo};
 
 use crate::app::{AddRow, DuplicateRow};
 use crate::foreign_key_popover::ForeignKeyPopover;
@@ -812,6 +810,7 @@ impl ResultsTableDelegate {
     pub fn is_numeric_column(&self, col_index: usize) -> bool {
         if let Some(column_type) = self.column_types.get(col_index) {
             let type_lower = column_type.to_lowercase();
+
             // SQL standard names
             type_lower.contains("int")
                 || type_lower.contains("float")

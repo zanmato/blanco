@@ -3,7 +3,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{Connection, ConnectionFactory};
-use postgres::{PostgresConnection, PgConnectionKey};
+use postgres::PostgresConnection;
 
 /// PostgreSQL connection factory
 pub struct PostgresConnectionFactory;
@@ -23,8 +23,7 @@ impl Default for PostgresConnectionFactory {
 #[async_trait]
 impl ConnectionFactory for PostgresConnectionFactory {
     async fn create_connection(&self, connection_string: &str) -> Result<Box<dyn Connection>> {
-        let key = PgConnectionKey::from_connection_string(connection_string)?;
-        let mut conn = PostgresConnection::from_key(key);
+        let mut conn = PostgresConnection::from_connection_string(connection_string)?;
         Connection::connect(&mut conn, connection_string).await?;
         Ok(Box::new(conn))
     }

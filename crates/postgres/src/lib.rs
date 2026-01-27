@@ -5,7 +5,6 @@
 //! - SQL parsing with PostgreSQL dialect
 
 pub mod connection;
-pub mod factory;
 pub mod schema;
 pub mod sql_parser;
 
@@ -13,8 +12,6 @@ pub mod sql_parser;
 pub use connection::{PgConnectionKey, PostgresConnection};
 
 pub use sql_parser::{CompletionKind, ParsedQuery, PostgresTableExtractor, TableAlias};
-
-pub use factory::PostgresConnectionFactory;
 
 #[cfg(test)]
 mod tests {

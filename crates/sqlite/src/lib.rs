@@ -5,7 +5,6 @@
 //! - SQL parsing with SQLite dialect
 
 pub mod connection;
-pub mod factory;
 pub mod schema;
 pub mod sql_parser;
 
@@ -13,8 +12,6 @@ pub mod sql_parser;
 pub use connection::{SqliteConnection, SqliteConnectionKey};
 
 pub use sql_parser::{CompletionKind, ParsedQuery, SqliteTableExtractor, TableAlias};
-
-pub use factory::SqliteConnectionFactory;
 
 #[cfg(test)]
 mod tests {

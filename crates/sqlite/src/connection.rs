@@ -3,7 +3,6 @@ use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
     connection_trait::ForeignKeyInfo, ColumnInfo, Connection, ConnectionUIMetadata, QueryResult,
-    TableMetadata,
 };
 use futures::{Stream, StreamExt};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
@@ -85,19 +84,6 @@ impl SqliteConnection {
             display_name,
             database_path,
         })
-    }
-
-    /// Create a new SQLite connection from a connection key
-    pub fn from_key(connection_key: SqliteConnectionKey) -> Self {
-        let display_name = Self::generate_display_name(&connection_key.database_path);
-        let database_path = connection_key.database_path.clone();
-
-        Self {
-            pool: None,
-            connection_key,
-            display_name,
-            database_path,
-        }
     }
 
     /// Helper method to connect asynchronously

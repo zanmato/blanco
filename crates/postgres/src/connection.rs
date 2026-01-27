@@ -3,7 +3,6 @@ use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
     connection_trait::ForeignKeyInfo, ColumnInfo, Connection, ConnectionUIMetadata, QueryResult,
-    TableMetadata,
 };
 use futures::{Stream, StreamExt};
 use smol::lock::RwLock;
@@ -349,23 +348,6 @@ impl PostgresConnection {
             ssh_config: None,
             local_tunnel_port: None,
         })
-    }
-
-    /// Create a new PostgreSQL connection from a PgConnectionKey
-    pub fn from_key(connection_key: PgConnectionKey) -> Self {
-        let server_key = connection_key.to_server_key();
-        let display_name = Self::generate_server_display_name(&server_key);
-        let server_connection_string = server_key.to_server_connection_string();
-
-        Self {
-            pools: Arc::new(RwLock::new(HashMap::new())),
-            server_key,
-            display_name,
-            server_connection_string,
-            initial_database: Some(connection_key.database.clone()),
-            ssh_config: None,
-            local_tunnel_port: None,
-        }
     }
 
     /// Create a new server-level PostgreSQL connection (preferred method for multi-database support)

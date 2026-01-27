@@ -3,7 +3,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{Connection, ConnectionFactory};
-use mysql::{MysqlConnection, MysqlConnectionKey};
+use mysql::MysqlConnection;
 
 /// MySQL connection factory
 pub struct MysqlConnectionFactory;
@@ -23,8 +23,7 @@ impl Default for MysqlConnectionFactory {
 #[async_trait]
 impl ConnectionFactory for MysqlConnectionFactory {
     async fn create_connection(&self, connection_string: &str) -> Result<Box<dyn Connection>> {
-        let key = MysqlConnectionKey::from_connection_string(connection_string)?;
-        let mut conn = MysqlConnection::from_key(key);
+        let mut conn = MysqlConnection::from_connection_string(connection_string)?;
         Connection::connect(&mut conn, connection_string).await?;
         Ok(Box::new(conn))
     }
