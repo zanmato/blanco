@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
-    connection_trait::ForeignKeyInfo, ColumnInfo, Connection, ConnectionUIMetadata, QueryResult,
+    connection_trait::ForeignKeyInfo, ColumnInfo, Connection, QueryResult,
 };
 use futures::StreamExt;
 use smol::lock::RwLock;
@@ -479,10 +479,6 @@ impl MysqlConnection {
 
 #[async_trait]
 impl Connection for MysqlConnection {
-    fn get_connection_key_str(&self) -> String {
-        self.server_key.to_server_connection_string()
-    }
-
     fn get_connection_type(&self) -> &'static str {
         "MySQL"
     }
@@ -701,38 +697,6 @@ impl Connection for MysqlConnection {
         false // MySQL doesn't support schemas in the PostgreSQL sense
     }
 
-    async fn get_primary_key_for_table(
-        &self,
-        table_name: &str,
-    ) -> Result<Option<String>, anyhow::Error> {
-        tracing::debug!("🔑 Getting primary key for table: {}", table_name);
-
-        let database = self
-            .initial_database
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
-
-        let pool = self.get_or_create_pool(database).await?;
-
-        let query = "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
-             WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND CONSTRAINT_NAME = 'PRIMARY'";
-
-        let rows = sqlx::query(query)
-            .bind(database)
-            .bind(table_name)
-            .fetch_all(&pool)
-            .await?;
-
-        if let Some(row) = rows.first() {
-            let pk_column: String = row.try_get(0)?;
-            tracing::debug!("✅ Found primary key: {}", pk_column);
-            Ok(Some(pk_column))
-        } else {
-            tracing::debug!("ℹ️ No primary key found for table: {}", table_name);
-            Ok(None)
-        }
-    }
-
     async fn get_columns_for_table(
         &self,
         table_name: &str,
@@ -845,50 +809,6 @@ impl Connection for MysqlConnection {
         }
 
         Ok(None)
-    }
-
-    fn resolve_table_alias(
-        &self,
-        query: &str,
-        alias: &str,
-    ) -> Result<Option<String>, anyhow::Error> {
-        // Simple regex-based alias resolution
-        let query_lower = query.to_lowercase();
-
-        // Look for alias patterns like "table_name AS alias" or "table_name alias"
-        let patterns = vec![
-            format!(" {} as ", alias),
-            format!(" {} ", alias),
-            format!("({} as ", alias),
-            format!("({} ", alias),
-        ];
-
-        for pattern in patterns {
-            if let Some(pos) = query_lower.find(&pattern) {
-                // Find the word before the alias
-                let before_alias = &query_lower[..pos];
-                let words: Vec<&str> = before_alias.split_whitespace().collect();
-                if let Some(last_word) = words.last() {
-                    return Ok(Some(last_word.to_string()));
-                }
-            }
-        }
-
-        Ok(None)
-    }
-
-    fn get_file_safe_name(&self) -> String {
-        format!("mysql_{}_{}", self.server_key.host, self.server_key.port)
-            .replace(':', "_")
-            .replace('.', "_")
-    }
-
-    fn get_ui_metadata(&self) -> ConnectionUIMetadata {
-        ConnectionUIMetadata {
-            display_name: self.display_name.clone(),
-            file_safe_name: self.get_file_safe_name(),
-            supports_schemas: false,
-        }
     }
 
     async fn get_database_schema_paginated(

@@ -4,6 +4,7 @@ pub use delegate::ConnectionsTreeDelegate;
 
 use crate::app_database::{AppDatabase, ConnectionData, EnvironmentType};
 use crate::app_events::{AppEvent, TreeItemType};
+use blanco_core::DatabaseService as DatabaseServiceTrait;
 use blanco_ui::IconName;
 use blanco_ui::tree::{Tree, TreeItem, TreeState};
 use database::DatabaseService;
@@ -73,7 +74,6 @@ pub struct ConnectionsPanel {
     tree_state: Entity<TreeState<ConnectionsTreeDelegate>>,
     pub loaded_connections: std::collections::HashSet<i64>,
     expanded_connections: std::collections::HashSet<i64>, // Track which connections are expanded
-    next_item_id: u32, // Serial ID for tree items within each connection
 }
 
 /// Type of tree item in the metadata context
@@ -154,7 +154,6 @@ impl ConnectionsPanel {
             tree_state,
             loaded_connections,
             expanded_connections,
-            next_item_id: 1, // Start with 1 to avoid potential issues with 0
         };
 
         cx.spawn(async |this_handle, cx| {
@@ -174,8 +173,14 @@ impl ConnectionsPanel {
 
         // Get active connections and current tree state to update metadata
         cx.spawn(async move |this_handle, cx| {
-            // Get active connections from DatabaseService
-            let active_connections = db_service.get_active_connections().await;
+            // Get active connection statuses from DatabaseService
+            let connection_statuses = match db_service.get_active_connection_statuses().await {
+                Ok(statuses) => statuses,
+                Err(e) => {
+                    tracing::error!("Failed to get connection statuses: {}", e);
+                    return;
+                }
+            };
 
             // Update connection status directly in tree metadata
             let _ = this_handle.update(cx, |this, cx| {
@@ -197,7 +202,7 @@ impl ConnectionsPanel {
                 });
 
                 // Update connection status directly in tree entries
-                this.update_connection_status_in_tree(&active_connections, cx);
+                this.update_connection_status_in_tree(&connection_statuses, cx);
 
                 cx.notify();
             });
@@ -205,12 +210,12 @@ impl ConnectionsPanel {
         .detach();
     }
 
-    /// Update connection status directly in tree entries without using HashMap
+    /// Update connection status directly in tree entries using ConnectionStatus
     fn update_connection_status_in_tree(
         &mut self,
-        active_connections: &std::collections::HashMap<
+        connection_statuses: &std::collections::HashMap<
             (i64, String),
-            std::sync::Arc<dyn blanco_core::Connection>,
+            blanco_core::ConnectionStatus,
         >,
         cx: &mut Context<Self>,
     ) {
@@ -221,8 +226,10 @@ impl ConnectionsPanel {
                 match metadata.kind {
                     TreeItemKind::Connection => {
                         // Connections are stored with "default" as the database name
-                        let is_connected = active_connections
-                            .contains_key(&(metadata.connection_id, "default".to_string()));
+                        let is_connected = connection_statuses
+                            .get(&(metadata.connection_id, "default".to_string()))
+                            .map(|status| status.is_connected)
+                            .unwrap_or(false);
                         if is_connected {
                             entry.item.metadata.icon = TreeItemIcon {
                                 icon: IconName::DatabaseConnected,
@@ -237,8 +244,10 @@ impl ConnectionsPanel {
                     }
                     TreeItemKind::Database => {
                         if let Some(ref db_name) = metadata.database_name {
-                            let is_connected = active_connections
-                                .contains_key(&(metadata.connection_id, db_name.clone()));
+                            let is_connected = connection_statuses
+                                .get(&(metadata.connection_id, db_name.clone()))
+                                .map(|status| status.is_connected)
+                                .unwrap_or(false);
                             if is_connected {
                                 entry.item.metadata.icon = TreeItemIcon {
                                     icon: IconName::DatabaseConnected,

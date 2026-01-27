@@ -46,7 +46,7 @@ impl ForeignKeyPopover {
                 );
 
                 let result = db_service
-                    .execute_query_by_id_with_params(
+                    .execute_query_with_params(
                         connection_id,
                         database_name_clone.as_ref().map(|s| s.as_ref()),
                         &query,

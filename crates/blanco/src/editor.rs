@@ -14,7 +14,6 @@ use gpui_component::{
     tab::{Tab, TabBar},
     v_flex,
 };
-use gpui_tokio::Tokio;
 use ropey::Rope;
 use std::{rc::Rc, sync::Arc};
 use tracing::{debug, error, info};
@@ -24,7 +23,6 @@ use tracing::{debug, error, info};
 use crate::app::ExecuteSubstitutedQuery;
 use crate::app_database::{EnvironmentType, QueryTabData};
 use crate::app_events::AppEvent;
-use crate::chat_provider_resolver::{ChatProviderResolver, LLMInstance};
 use crate::parameter_form::ParameterForm;
 use crate::rename_form::RenameTabForm;
 use crate::results_panel::ResultsPanel;
@@ -36,7 +34,7 @@ use crate::{
     agent::{ChatPanel, ChatSessionContext},
     app_database::AppDatabase,
 };
-use crate::{app::RenameTab, app_settings::AppSettings};
+use crate::app::RenameTab;
 use blanco_ui::{IconName, SqlLog};
 use database::{DatabaseService, DatabaseServiceTrait};
 use gpui_component::Icon;
@@ -76,7 +74,7 @@ pub struct SettingsTab {
     #[allow(dead_code)]
     pub id: usize,
     pub title: String,
-    pub settings_view: Entity<crate::settings_view::SettingsView>,
+    pub settings_view: Entity<crate::settings::SettingsView>,
 }
 
 pub struct EditorPanel {
@@ -208,7 +206,7 @@ impl EditorPanel {
         self.next_tab_id += 1;
 
         // Settings are now stored in the global AppDatabase
-        let settings_view = cx.new(crate::settings_view::SettingsView::new);
+        let settings_view = cx.new(crate::settings::SettingsView::new);
 
         let settings_tab = SettingsTab {
             id: tab_id,
@@ -432,152 +430,151 @@ impl EditorPanel {
                     connection_id,
                     database_name
                 );
+
                 match db_service
-                    .get_or_create_connection(connection_id, Some(&database_name))
+                    .execute_query(
+                        connection_id,
+                        Some(&database_name),
+                        &query_clone,
+                    )
                     .await
                 {
-                    Ok(connection) => {
-                        tracing::debug!(
-                            "Connection retrieved successfully, type: {}",
-                            connection.get_connection_type()
+                    Ok(mut result) => {
+                        let duration_ms = start_time.elapsed().as_millis() as i64;
+
+                        tracing::info!(
+                            "Query executed successfully: {} rows in {}ms",
+                            result.row_count(),
+                            duration_ms
                         );
-                        match connection
-                            .execute_query(&query_clone, Some(&database_name), None)
+
+                        // Add execution metadata
+                        result.query_text = Some(query_clone.clone());
+                        result.execution_time_ms = Some(duration_ms);
+                        result.is_error = false;
+                        result.connection_id = Some(connection_id);
+
+                        // Extract table metadata and get columns - still need connection for this
+                        if let Ok(connection) = db_service
+                            .get_or_create_connection_by_id(connection_id, Some(&database_name))
                             .await
                         {
-                            Ok(mut result) => {
-                                let duration_ms = start_time.elapsed().as_millis() as i64;
+                            // Extract table metadata from the query
+                            let table_name = connection
+                                .extract_table_name_from_query(&query_clone, false)
+                                .ok()
+                                .flatten();
+                            result.table_name = table_name.clone();
 
-                                tracing::info!(
-                                    "Query executed successfully: {} rows in {}ms",
-                                    result.row_count(),
-                                    duration_ms
-                                );
-
-                                // Add execution metadata
-                                result.query_text = Some(query_clone.clone());
-                                result.execution_time_ms = Some(duration_ms);
-                                result.is_error = false;
-                                result.connection_id = Some(connection_id);
-
-                                // Extract table metadata from the query
-                                let table_name = connection
-                                    .extract_table_name_from_query(&query_clone, false)
-                                    .ok()
-                                    .flatten();
-                                result.table_name = table_name.clone();
-
-                                // Load full table metadata (including primary keys and foreign keys)
-                                if let (Some(table_name), false) =
-                                    (&table_name, result.rows.is_empty())
-                                    && let Ok(columns) =
-                                        connection.get_columns_for_table(table_name, None).await
+                            // Load full table metadata (including primary keys and foreign keys)
+                            if let (Some(table_name), false) =
+                                (&table_name, result.rows.is_empty())
+                            {
+                                if let Ok(columns) =
+                                    connection.get_columns_for_table(table_name, None).await
                                 {
                                     result.table_columns = Some(columns);
                                 }
-
-                                // Store rows_affected before moving result
-                                let rows_affected =
-                                    std::cmp::max(result.rows_affected, result.row_count() as u64);
-
-                                let _ = window.update(move |window, cx| {
-                                    // Update results panel
-                                    results_panel_clone.update(cx, |panel, cx| {
-                                        panel.set_query_result(
-                                            result,
-                                            Some(connection_id),
-                                            window,
-                                            cx,
-                                        );
-                                    });
-
-                                    // Log execution result to SQL log
-                                    sql_log_clone.update(cx, |sql_log, cx| {
-                                        let log_message = format!(
-                                            "{}, {} rows in {}",
-                                            crate::time_format::format_current_timestamp(),
-                                            rows_affected,
-                                            crate::time_format::format_duration(duration_ms)
-                                        );
-                                        sql_log.append_text(
-                                            &blanco_ui::SqlLogMessage::Comment(log_message),
-                                            cx,
-                                        );
-                                    });
-
-                                    // Set loading to false and emit success event
-                                    editor_panel_entity
-                                        .update(cx, |editor_panel, cx| {
-                                            editor_panel.loading = false;
-                                            cx.emit(AppEvent::QueryExecutionCompleted {
-                                                connection_id: Some(connection_id),
-                                                database_name: Some(database_name.clone()),
-                                                success: true,
-                                                execution_time: start_time.elapsed(),
-                                                rows_affected: Some(rows_affected),
-                                                error_message: None,
-                                            });
-                                            cx.notify();
-                                        })
-                                        .ok();
-                                });
-                            }
-                            Err(e) => {
-                                tracing::error!("Query execution failed: {}", e);
-
-                                let _ = window.update(|window, cx| {
-                                    // Log execution error to SQL log
-                                    let _error_duration = start_time.elapsed().as_millis() as i64;
-                                    sql_log_clone.update(cx, |sql_log, cx| {
-                                        let log_message = format!("query execution failed: {}", e);
-                                        sql_log.append_text(
-                                            &blanco_ui::SqlLogMessage::Comment(log_message),
-                                            cx,
-                                        );
-                                    });
-
-                                    // Set loading to false and emit error event
-                                    editor_panel_entity
-                                        .update(cx, |editor_panel, cx| {
-                                            editor_panel.loading = false;
-                                            cx.notify();
-                                            cx.emit(AppEvent::QueryExecutionCompleted {
-                                                connection_id: Some(connection_id),
-                                                database_name: Some(database_name.clone()),
-                                                success: false,
-                                                execution_time: start_time.elapsed(),
-                                                rows_affected: None,
-                                                error_message: Some(e.to_string()),
-                                            });
-                                        })
-                                        .ok();
-
-                                    editor_panel_entity
-                                        .update(cx, |_, cx| {
-                                            cx.emit(AppEvent::ErrorOccurred {
-                                                context: format!(
-                                                    "Query execution on connection_id: {}",
-                                                    connection_id,
-                                                ),
-                                                error: e.to_string(),
-                                                severity: crate::app_events::ErrorSeverity::Error,
-                                            });
-                                        })
-                                        .ok();
-
-                                    window.push_notification(
-                                        (
-                                            NotificationType::Error,
-                                            SharedString::from(e.to_string()),
-                                        ),
-                                        cx,
-                                    );
-                                });
                             }
                         }
+
+                        // Store rows_affected before moving result
+                        let rows_affected =
+                            std::cmp::max(result.rows_affected, result.row_count() as u64);
+
+                        let _ = window.update(move |window, cx| {
+                            // Update results panel
+                            results_panel_clone.update(cx, |panel, cx| {
+                                panel.set_query_result(
+                                    result,
+                                    Some(connection_id),
+                                    window,
+                                    cx,
+                                );
+                            });
+
+                            // Log execution result to SQL log
+                            sql_log_clone.update(cx, |sql_log, cx| {
+                                let log_message = format!(
+                                    "{}, {} rows in {}",
+                                    crate::time_format::format_current_timestamp(),
+                                    rows_affected,
+                                    crate::time_format::format_duration(duration_ms)
+                                );
+                                sql_log.append_text(
+                                    &blanco_ui::SqlLogMessage::Comment(log_message),
+                                    cx,
+                                );
+                            });
+
+                            // Set loading to false and emit success event
+                            editor_panel_entity
+                                .update(cx, |editor_panel, cx| {
+                                    editor_panel.loading = false;
+                                    cx.emit(AppEvent::QueryExecutionCompleted {
+                                        connection_id: Some(connection_id),
+                                        database_name: Some(database_name.clone()),
+                                        success: true,
+                                        execution_time: start_time.elapsed(),
+                                        rows_affected: Some(rows_affected),
+                                        error_message: None,
+                                    });
+                                    cx.notify();
+                                })
+                                .ok();
+                        });
                     }
                     Err(e) => {
-                        tracing::error!("Failed to get connection: {}", e);
+                        tracing::error!("Query execution failed: {}", e);
+
+                        let _ = window.update(|window, cx| {
+                            // Log execution error to SQL log
+                            let _error_duration = start_time.elapsed().as_millis() as i64;
+                            sql_log_clone.update(cx, |sql_log, cx| {
+                                let log_message = format!("query execution failed: {}", e);
+                                sql_log.append_text(
+                                    &blanco_ui::SqlLogMessage::Comment(log_message),
+                                    cx,
+                                );
+                            });
+
+                            // Set loading to false and emit error event
+                            editor_panel_entity
+                                .update(cx, |editor_panel, cx| {
+                                    editor_panel.loading = false;
+                                    cx.notify();
+                                    cx.emit(AppEvent::QueryExecutionCompleted {
+                                        connection_id: Some(connection_id),
+                                        database_name: Some(database_name.clone()),
+                                        success: false,
+                                        execution_time: start_time.elapsed(),
+                                        rows_affected: None,
+                                        error_message: Some(e.to_string()),
+                                    });
+                                })
+                                .ok();
+
+                            editor_panel_entity
+                                .update(cx, |_, cx| {
+                                    cx.emit(AppEvent::ErrorOccurred {
+                                        context: format!(
+                                            "Query execution on connection_id: {}",
+                                            connection_id,
+                                        ),
+                                        error: e.to_string(),
+                                        severity: crate::app_events::ErrorSeverity::Error,
+                                    });
+                                })
+                                .ok();
+
+                            window.push_notification(
+                                (
+                                    NotificationType::Error,
+                                    SharedString::from(e.to_string()),
+                                ),
+                                cx,
+                            );
+                        });
                     }
                 }
             });
@@ -861,8 +858,8 @@ impl EditorPanel {
             query_tab.chat_enabled = !query_tab.chat_enabled;
 
             if query_tab.chat_enabled && query_tab.chat_panel.is_none() {
-                // Create LLM instance first
-                match create_chat_llm_instance(query_tab.connection_id, cx) {
+                // Create LLM instance for this connection
+                match crate::agent::ChatProviderResolver::get_llm_for_connection(cx) {
                     Ok(llm_instance) => {
                         // Build the session context from QueryTab
                         let session_context = ChatSessionContext::new()
@@ -1346,28 +1343,4 @@ impl Render for EditorPanel {
                 }
             }))
     }
-}
-
-/// Create a chat panel with a real LLM instance based on current settings
-fn create_chat_llm_instance(connection_id: i64, cx: &mut App) -> anyhow::Result<LLMInstance> {
-    let app_settings = AppSettings::global(cx);
-
-    // Validate settings
-    let validation_errors = ChatProviderResolver::validate_settings(&app_settings.settings);
-    if !validation_errors.is_empty() {
-        return Err(anyhow::anyhow!(
-            "Invalid chat settings: {}",
-            validation_errors.join(", ")
-        ));
-    }
-
-    // Get db_service
-    let db_service = DatabaseService::global(cx).clone();
-    // Get the tokio runtime handle
-    let runtime_handle = Tokio::handle(cx);
-    // Create LLM instance
-    let mut resolver = ChatProviderResolver::new(db_service, runtime_handle);
-    resolver.set_connection_id(connection_id);
-    let llm_instance = resolver.get_llm(&app_settings.settings)?;
-    Ok(llm_instance)
 }

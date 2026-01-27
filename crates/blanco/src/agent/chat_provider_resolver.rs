@@ -8,7 +8,6 @@ use anyhow::Result;
 use std::sync::Arc;
 
 use crate::settings::{ChatSettings, Settings};
-use database::DatabaseService;
 use llm::{builder::LLMBuilder, builder::LLMBackend, LLMProvider};
 
 /// LLM instance with metadata
@@ -25,31 +24,18 @@ pub struct LLMInstance {
 /// based on current application settings. It can handle runtime changes
 /// to settings and will recreate instances when necessary.
 pub struct ChatProviderResolver {
-    db_service: DatabaseService,
-    current_connection_id: Option<i64>,
     cached_llm: Option<(LLMInstance, u64)>,
-    runtime_handle: tokio::runtime::Handle,
+}
+
+impl Default for ChatProviderResolver {
+    fn default() -> Self {
+        Self {
+            cached_llm: None,
+        }
+    }
 }
 
 impl ChatProviderResolver {
-    /// Create a new chat provider resolver
-    pub fn new(
-        db_service: DatabaseService,
-        runtime_handle: tokio::runtime::Handle,
-    ) -> Self {
-        Self {
-            db_service,
-            current_connection_id: None,
-            cached_llm: None,
-            runtime_handle,
-        }
-    }
-
-    /// Set the current connection ID for tool execution
-    pub fn set_connection_id(&mut self, connection_id: i64) {
-        self.current_connection_id = Some(connection_id);
-    }
-
     /// Get an LLM instance based on current settings
     ///
     /// This method will:
@@ -177,6 +163,29 @@ impl ChatProviderResolver {
         }
 
         errors
+    }
+
+    /// Get an LLM instance based on current application settings
+    ///
+    /// This static method validates settings, creates a resolver,
+    /// and returns the LLM instance in one step.
+    pub fn get_llm_for_connection(cx: &mut gpui::App) -> Result<LLMInstance> {
+        use crate::app_settings::AppSettings;
+
+        // Get settings
+        let app_settings = AppSettings::global(cx);
+
+        // Validate settings
+        let validation_errors = Self::validate_settings(&app_settings.settings);
+        if !validation_errors.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Invalid chat settings: {}",
+                validation_errors.join(", ")
+            ));
+        }
+
+        // Create resolver and get LLM instance
+        Self::default().get_llm(&app_settings.settings)
     }
 }
 

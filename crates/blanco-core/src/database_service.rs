@@ -7,9 +7,20 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::Connection;
+
+/// Connection status information for UI display
+#[derive(Clone, Debug)]
+pub struct ConnectionStatus {
+    pub connection_id: i64,
+    pub database_name: String,
+    pub is_connected: bool,
+    /// Connection type identifier (e.g., "SQLite", "PostgreSQL", "MySQL")
+    pub connection_type: String,
+}
 
 /// A trait that provides database connection management for tools and providers
 #[async_trait]
@@ -27,20 +38,8 @@ pub trait DatabaseService: Send + Sync {
         ))
     }
 
-    /// Execute a query using the provided connection ID
-    async fn execute_query_by_id(
-        &self,
-        connection_id: i64,
-        sql: &str,
-    ) -> Result<crate::QueryResult> {
-        let connection = self
-            .get_or_create_connection_by_id(connection_id, None)
-            .await?;
-        connection.execute_query(sql, None, None).await
-    }
-
     /// Execute a query using the provided connection ID and optional database
-    async fn execute_query_by_id_with_database(
+    async fn execute_query(
         &self,
         connection_id: i64,
         database: Option<&str>,
@@ -53,7 +52,7 @@ pub trait DatabaseService: Send + Sync {
     }
 
     /// Execute a parameterized query using the provided connection ID
-    async fn execute_query_by_id_with_params(
+    async fn execute_query_with_params(
         &self,
         connection_id: i64,
         database: Option<&str>,
@@ -107,5 +106,27 @@ pub trait DatabaseService: Send + Sync {
         });
 
         Ok(json_result)
+    }
+
+    /// Get connection status for UI display
+    async fn get_connection_status(
+        &self,
+        _connection_id: i64,
+        _database_name: Option<&str>,
+    ) -> Result<ConnectionStatus> {
+        // Default implementation - should be overridden
+        Err(anyhow::anyhow!(
+            "get_connection_status not implemented - trait default only"
+        ))
+    }
+
+    /// Get all active connection statuses for UI tree
+    async fn get_active_connection_statuses(
+        &self,
+    ) -> Result<HashMap<(i64, String), ConnectionStatus>> {
+        // Default implementation - should be overridden
+        Err(anyhow::anyhow!(
+            "get_active_connection_statuses not implemented - trait default only"
+        ))
     }
 }

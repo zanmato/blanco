@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use futures::Stream;
-use std::collections::HashMap;
 
 /// Database driver types supported by the application
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -149,9 +148,6 @@ impl QueryResult {
 /// This trait provides a unified interface for SQLite, PostgreSQL, and future database types
 #[async_trait]
 pub trait Connection: Send + Sync {
-    /// Get the unique connection key for this connection
-    fn get_connection_key_str(&self) -> String;
-
     /// Get the connection type identifier (e.g., "SQLite", "PostgreSQL")
     fn get_connection_type(&self) -> &'static str;
 
@@ -242,14 +238,6 @@ pub trait Connection: Send + Sync {
     /// Check if this connection type supports schemas (like PostgreSQL) or uses flat table structure (like SQLite)
     fn supports_schemas(&self) -> bool;
 
-    /// Get the primary key column for a specific table
-    /// Returns the column name if a primary key exists, None if no primary key
-    #[allow(dead_code)]
-    async fn get_primary_key_for_table(
-        &self,
-        table_name: &str,
-    ) -> Result<Option<String>, anyhow::Error>;
-
     /// Get column information for a specific table
     /// Returns detailed column metadata including names, types, and constraints
     async fn get_columns_for_table(
@@ -266,24 +254,6 @@ pub trait Connection: Send + Sync {
         alias: bool,
     ) -> Result<Option<String>, anyhow::Error>;
 
-    /// Resolve a table alias to its actual table name using the original SQL query
-    /// Returns the actual table name if the alias is found, None otherwise
-    fn resolve_table_alias(
-        &self,
-        query: &str,
-        alias: &str,
-    ) -> Result<Option<String>, anyhow::Error>;
-
-    /// Get connection statistics and metadata
-    async fn get_connection_info(&self) -> Result<ConnectionInfo, anyhow::Error> {
-        Ok(ConnectionInfo {
-            connection_type: self.get_connection_type().to_string(),
-            display_name: self.get_display_name(),
-            is_connected: self.is_connected(),
-            schema_count: self.get_schemas().await.map(|s| s.len()).unwrap_or(0),
-        })
-    }
-
     /// Get database schema with pagination support
     /// Returns structured schema information including tables and columns
     async fn get_database_schema_paginated(
@@ -293,67 +263,6 @@ pub trait Connection: Send + Sync {
         limit: Option<i64>,
         offset: Option<i64>,
     ) -> Result<DatabaseSchemaResult, anyhow::Error>;
-
-    // === UI Integration Methods ===
-
-    /// Get a consistent file-safe name for this connection
-    #[allow(dead_code)]
-    fn get_file_safe_name(&self) -> String;
-
-    /// Get connection metadata optimized for UI display
-    #[allow(dead_code)]
-    fn get_ui_metadata(&self) -> ConnectionUIMetadata;
-}
-
-/// Table change operations for schema modifications
-#[derive(Debug, Clone)]
-pub enum TableChangeOperation {
-    AddColumn {
-        name: String,
-        data_type: String,
-        nullable: bool,
-    },
-    DropColumn {
-        name: String,
-    },
-    RenameColumn {
-        old_name: String,
-        new_name: String,
-    },
-    ModifyColumn {
-        name: String,
-        new_type: String,
-    },
-}
-
-/// Information about a database connection
-#[derive(Debug, Clone)]
-pub struct ConnectionInfo {
-    pub connection_type: String,
-    #[allow(dead_code)]
-    pub display_name: String,
-    pub is_connected: bool,
-    pub schema_count: usize,
-}
-
-/// Connection metadata optimized for UI display
-#[derive(Clone)]
-#[allow(dead_code)]
-pub struct ConnectionUIMetadata {
-    pub display_name: String,
-    pub file_safe_name: String,
-    pub supports_schemas: bool,
-}
-
-impl std::fmt::Debug for ConnectionUIMetadata {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ConnectionUIMetadata")
-            .field("display_name", &self.display_name)
-            .field("file_safe_name", &self.file_safe_name)
-            .field("supports_schemas", &self.supports_schemas)
-            .field("icon_name", &"<icon>")
-            .finish()
-    }
 }
 
 /// Factory trait for creating connections of different types
@@ -364,49 +273,4 @@ pub trait ConnectionFactory: Send + Sync {
         &self,
         connection_string: &str,
     ) -> Result<Box<dyn Connection>, anyhow::Error>;
-
-    /// Parse a connection string and return the connection key
-    #[allow(dead_code)]
-    fn parse_connection_string(&self, connection_string: &str) -> Result<String, anyhow::Error>;
-
-    /// Get the connection type this factory creates
-    #[allow(dead_code)]
-    fn get_connection_type(&self) -> &'static str;
-}
-
-/// Registry for managing different connection types
-pub struct ConnectionRegistry {
-    factories: HashMap<String, Box<dyn ConnectionFactory>>,
-}
-
-impl ConnectionRegistry {
-    pub fn new() -> Self {
-        Self {
-            factories: HashMap::new(),
-        }
-    }
-
-    pub fn register_factory(
-        &mut self,
-        connection_type: String,
-        factory: Box<dyn ConnectionFactory>,
-    ) {
-        self.factories.insert(connection_type, factory);
-    }
-
-    #[allow(dead_code)]
-    pub fn get_factory(&self, connection_type: &str) -> Option<&dyn ConnectionFactory> {
-        self.factories.get(connection_type).map(|f| f.as_ref())
-    }
-
-    #[allow(dead_code)]
-    pub fn get_supported_types(&self) -> Vec<&str> {
-        self.factories.keys().map(|s| s.as_str()).collect()
-    }
-}
-
-impl Default for ConnectionRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
 }

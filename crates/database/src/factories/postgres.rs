@@ -27,12 +27,4 @@ impl ConnectionFactory for PostgresConnectionFactory {
         Connection::connect(&mut conn, connection_string).await?;
         Ok(Box::new(conn))
     }
-
-    fn parse_connection_string(&self, connection_string: &str) -> Result<String> {
-        Ok(connection_string.to_string())
-    }
-
-    fn get_connection_type(&self) -> &'static str {
-        "PostgreSQL"
-    }
 }

@@ -197,11 +197,6 @@ mod tests {
             .extract_table_name_from_query("SELECT * FROM users u WHERE id = 1", false)?;
         assert_eq!(with_alias, Some("users".to_string()));
 
-        // Test alias resolution
-        let alias_result =
-            mysql_connection.resolve_table_alias("SELECT * FROM users u WHERE u.id = 1", "u")?;
-        assert_eq!(alias_result, Some("users".to_string()));
-
         Ok(())
     }
 }

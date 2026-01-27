@@ -2,7 +2,7 @@ use crate::sql_parser::SqliteTableExtractor;
 use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
-    connection_trait::ForeignKeyInfo, ColumnInfo, Connection, ConnectionUIMetadata, QueryResult,
+    connection_trait::ForeignKeyInfo, ColumnInfo, Connection, QueryResult,
 };
 use futures::{Stream, StreamExt};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
@@ -257,10 +257,6 @@ impl SqliteConnection {
 
 #[async_trait]
 impl Connection for SqliteConnection {
-    fn get_connection_key_str(&self) -> String {
-        format!("sqlite:{}", self.connection_key.database_path)
-    }
-
     fn get_connection_type(&self) -> &'static str {
         "SQLite"
     }
@@ -376,43 +372,6 @@ impl Connection for SqliteConnection {
         false // SQLite doesn't support schemas in the traditional sense
     }
 
-    async fn get_primary_key_for_table(&self, table_name: &str) -> Result<Option<String>> {
-        // Query SQLite's table_info to get primary key information
-        let query = format!("PRAGMA table_info({})", table_name);
-
-        match self.execute_query(&query, None, None).await {
-            Ok(result) => {
-                // Find the column with pk > 0 (primary key)
-                for row in &result.rows {
-                    if row.len() >= 6 {
-                        let column_name = &row[1];
-                        let pk_info = &row[5]; // The 6th column (index 5) indicates primary key
-
-                        // SQLite uses 1 for primary key, 0 for non-primary key
-                        if pk_info == "1" {
-                            tracing::debug!(
-                                "Found primary key '{}' for table '{}'",
-                                column_name,
-                                table_name
-                            );
-                            return Ok(Some(column_name.clone()));
-                        }
-                    }
-                }
-                tracing::debug!("No primary key found for table '{}'", table_name);
-                Ok(None)
-            }
-            Err(e) => {
-                tracing::error!(
-                    "Failed to query primary key for table '{}': {}",
-                    table_name,
-                    e
-                );
-                Err(e)
-            }
-        }
-    }
-
     async fn get_columns_for_table(
         &self,
         table_name: &str,
@@ -478,28 +437,6 @@ impl Connection for SqliteConnection {
         Ok(columns)
     }
 
-    fn get_file_safe_name(&self) -> String {
-        // Create a file-safe name from SQLite database path
-        let path = std::path::Path::new(&self.database_path);
-        let name = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("sqlite_db");
-
-        // Make it file-safe
-        name.chars()
-            .map(|c| if c.is_alphanumeric() { c } else { '_' })
-            .collect()
-    }
-
-    fn get_ui_metadata(&self) -> ConnectionUIMetadata {
-        ConnectionUIMetadata {
-            display_name: self.display_name.clone(),
-            file_safe_name: self.get_file_safe_name(),
-            supports_schemas: self.supports_schemas(),
-        }
-    }
-
     fn extract_table_name_from_query(&self, query: &str, alias: bool) -> Result<Option<String>> {
         tracing::debug!("Extracting table name from SQLite query: {}", query);
 
@@ -511,36 +448,6 @@ impl Connection for SqliteConnection {
             }
             Err(e) => {
                 tracing::debug!("Could not extract table name from query: {}", e);
-                Ok(None)
-            }
-        }
-    }
-
-    fn resolve_table_alias(&self, query: &str, alias: &str) -> Result<Option<String>> {
-        tracing::debug!(
-            "Resolving table alias '{}' from SQLite query: {}",
-            alias,
-            query
-        );
-
-        let extractor = SqliteTableExtractor::new();
-        match extractor.extract_table_aliases_with_names(query) {
-            Ok(aliases) => {
-                for (table_name, alias_name) in aliases {
-                    if alias_name == alias {
-                        tracing::debug!(
-                            "Successfully resolved alias '{}' to table '{}'",
-                            alias,
-                            table_name
-                        );
-                        return Ok(Some(table_name));
-                    }
-                }
-                tracing::debug!("Alias '{}' not found in query", alias);
-                Ok(None)
-            }
-            Err(e) => {
-                tracing::debug!("Could not resolve table alias from query: {}", e);
                 Ok(None)
             }
         }

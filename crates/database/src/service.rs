@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use blanco_core::{Connection, ConnectionFactory, DatabaseService as DatabaseServiceTrait};
+use blanco_core::{Connection, ConnectionFactory, DatabaseService as DatabaseServiceTrait, DriverType};
 use gpui::Global;
 use smol::channel;
 use smol::lock::RwLock;
@@ -412,6 +412,64 @@ impl DatabaseServiceTrait for DatabaseService {
         database: Option<&str>,
     ) -> Result<Arc<dyn Connection>> {
         self.get_or_create_connection(connection_id, database).await
+    }
+
+    async fn get_connection_status(
+        &self,
+        connection_id: i64,
+        database_name: Option<&str>,
+    ) -> Result<blanco_core::database_service::ConnectionStatus> {
+        let db_name = database_name.unwrap_or("default").to_string();
+        let connection_id_key = (connection_id, db_name.clone());
+
+        let is_connected = {
+            let connections = self.active_connections.read().await;
+            connections.contains_key(&connection_id_key)
+        };
+
+        let connection_type = if is_connected {
+            let connections = self.active_connections.read().await;
+            connections
+                .get(&connection_id_key)
+                .map(|conn| conn.get_connection_type().to_owned())
+                .unwrap_or_else(|| "Unknown".to_string())
+        } else {
+            // Get connection type from config if not connected
+            let configs = self.connection_configs.read().await;
+            configs
+                .get(&connection_id)
+                .map(|config| DriverType::from(config.db_type.clone()).to_string().to_owned())
+                .unwrap_or_else(|| "Unknown".to_string())
+        };
+
+        Ok(blanco_core::database_service::ConnectionStatus {
+            connection_id,
+            database_name: db_name,
+            is_connected,
+            connection_type,
+        })
+    }
+
+    async fn get_active_connection_statuses(
+        &self,
+    ) -> Result<std::collections::HashMap<(i64, String), blanco_core::database_service::ConnectionStatus>>
+    {
+        let connections = self.active_connections.read().await;
+        let mut statuses = std::collections::HashMap::new();
+
+        for ((config_id, db_name), connection) in connections.iter() {
+            statuses.insert(
+                (config_id.clone(), db_name.clone()),
+                blanco_core::database_service::ConnectionStatus {
+                    connection_id: config_id.clone(),
+                    database_name: db_name.clone(),
+                    is_connected: true,
+                    connection_type: connection.get_connection_type().to_owned(),
+                },
+            );
+        }
+
+        Ok(statuses)
     }
 }
 

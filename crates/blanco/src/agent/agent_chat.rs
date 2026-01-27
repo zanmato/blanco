@@ -22,8 +22,8 @@ use super::chat_session::{ChatSession, ChatSessionContext};
 use super::chat_types::{ChatEvent, LoadingState, SqlContext};
 use super::tool_handlers::ToolMode;
 use blanco_ui::IconName;
-use llm::LLMProvider;
 use gpui::ScrollHandle;
+use llm::LLMProvider;
 
 actions!(agent_chat, [SendMessage, ClearChat]);
 
@@ -142,9 +142,8 @@ impl ChatPanel {
         // Subscribe to tool mode select changes
         let session_clone = session.clone();
         subscriptions.push(
-            cx.subscribe(
-                &tool_mode_select,
-                move |_panel, _select, event, cx| if let SelectEvent::Confirm(selected) = event {
+            cx.subscribe(&tool_mode_select, move |_panel, _select, event, cx| {
+                if let SelectEvent::Confirm(selected) = event {
                     let mode = if selected.as_ref().map(|s| s.as_str()) == Some("Write") {
                         ToolMode::Write
                     } else {
@@ -154,8 +153,8 @@ impl ChatPanel {
                     session_clone.update(cx, |session, cx| {
                         session.set_tool_mode(mode, cx);
                     });
-                },
-            ),
+                }
+            }),
         );
 
         Self {
@@ -246,7 +245,7 @@ impl Render for ChatPanel {
         v_flex()
             .size_full()
             .min_h_0()
-            .bg(cx.theme().background)
+            .bg(cx.theme().sidebar_primary_foreground)
             .text_color(cx.theme().foreground)
             // Header
             .child(
@@ -255,7 +254,6 @@ impl Render for ChatPanel {
                     .py_2()
                     .border_b_1()
                     .border_color(cx.theme().border)
-                    .bg(cx.theme().muted.opacity(0.3))
                     .items_center()
                     .justify_between()
                     .child(

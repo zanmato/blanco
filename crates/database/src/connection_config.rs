@@ -47,6 +47,16 @@ impl fmt::Display for DatabaseType {
     }
 }
 
+impl From<DatabaseType> for blanco_core::DriverType {
+    fn from(db_type: DatabaseType) -> Self {
+        match db_type {
+            DatabaseType::SQLite => blanco_core::DriverType::SQLite,
+            DatabaseType::PostgreSQL => blanco_core::DriverType::PostgreSQL,
+            DatabaseType::MySQL => blanco_core::DriverType::MySQL,
+        }
+    }
+}
+
 /// Connection configuration loaded from app database
 #[derive(Debug, Clone)]
 pub struct ConnectionConfig {

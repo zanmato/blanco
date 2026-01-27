@@ -1,3 +1,7 @@
+mod view;
+
+pub use view::SettingsView;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

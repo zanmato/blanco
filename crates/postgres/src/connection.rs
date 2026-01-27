@@ -2,7 +2,7 @@ use crate::sql_parser::PostgresTableExtractor;
 use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
-    connection_trait::ForeignKeyInfo, ColumnInfo, Connection, ConnectionUIMetadata, QueryResult,
+    connection_trait::ForeignKeyInfo, ColumnInfo, Connection, QueryResult,
 };
 use futures::{Stream, StreamExt};
 use smol::lock::RwLock;
@@ -1367,14 +1367,6 @@ impl PostgresConnection {
 
 #[async_trait]
 impl Connection for PostgresConnection {
-    fn get_connection_key_str(&self) -> String {
-        // Server-level connection key (no database)
-        format!(
-            "postgres:{}@{}:{}",
-            self.server_key.username, self.server_key.host, self.server_key.port
-        )
-    }
-
     fn get_connection_type(&self) -> &'static str {
         "PostgreSQL"
     }
@@ -1515,33 +1507,6 @@ impl Connection for PostgresConnection {
         true // PostgreSQL fully supports schemas
     }
 
-    async fn get_primary_key_for_table(&self, table_name: &str) -> Result<Option<String>> {
-        let query = "
-            SELECT column_name
-            FROM information_schema.table_constraints tc
-            JOIN information_schema.key_column_usage kcu
-                ON tc.constraint_name = kcu.constraint_name
-                AND tc.table_schema = kcu.table_schema
-            WHERE tc.constraint_type = 'PRIMARY KEY'
-                AND tc.table_name = $1
-                AND tc.table_schema = 'public'
-        ";
-
-        let result = self
-            .execute_query(
-                query,
-                self.initial_database.as_deref(),
-                Some(&[table_name.to_string()]),
-            )
-            .await?;
-
-        if !result.rows.is_empty() {
-            Ok(result.rows[0].first().cloned())
-        } else {
-            Ok(None)
-        }
-    }
-
     async fn get_columns_for_table(
         &self,
         table_name: &str,
@@ -1658,19 +1623,6 @@ impl Connection for PostgresConnection {
         Ok(columns)
     }
 
-    fn get_file_safe_name(&self) -> String {
-        // Create a file-safe name from PostgreSQL server details
-        let name = format!(
-            "pg_{}_{}_{}",
-            self.server_key.username, self.server_key.host, self.server_key.port
-        );
-
-        // Make it file-safe
-        name.chars()
-            .map(|c| if c.is_alphanumeric() { c } else { '_' })
-            .collect()
-    }
-
     async fn execute_query_stream_rows(
         &self,
         query: &str,
@@ -1752,14 +1704,6 @@ impl Connection for PostgresConnection {
         Ok((columns, column_types, Box::new(all_rows_stream)))
     }
 
-    fn get_ui_metadata(&self) -> ConnectionUIMetadata {
-        ConnectionUIMetadata {
-            display_name: self.display_name.clone(),
-            file_safe_name: self.get_file_safe_name(),
-            supports_schemas: self.supports_schemas(),
-        }
-    }
-
     fn extract_table_name_from_query(&self, query: &str, alias: bool) -> Result<Option<String>> {
         tracing::debug!("Extracting table name from PostgreSQL query: {}", query);
 
@@ -1771,36 +1715,6 @@ impl Connection for PostgresConnection {
             }
             Err(e) => {
                 tracing::debug!("Could not extract table name from query: {}", e);
-                Ok(None)
-            }
-        }
-    }
-
-    fn resolve_table_alias(&self, query: &str, alias: &str) -> Result<Option<String>> {
-        tracing::debug!(
-            "Resolving table alias '{}' from PostgreSQL query: {}",
-            alias,
-            query
-        );
-
-        let extractor = PostgresTableExtractor::new();
-        match extractor.extract_table_aliases_with_names(query) {
-            Ok(aliases) => {
-                for (table_name, alias_name) in aliases {
-                    if alias_name == alias {
-                        tracing::debug!(
-                            "Successfully resolved alias '{}' to table '{}'",
-                            alias,
-                            table_name
-                        );
-                        return Ok(Some(table_name));
-                    }
-                }
-                tracing::debug!("Alias '{}' not found in query", alias);
-                Ok(None)
-            }
-            Err(e) => {
-                tracing::debug!("Could not resolve table alias from query: {}", e);
                 Ok(None)
             }
         }
