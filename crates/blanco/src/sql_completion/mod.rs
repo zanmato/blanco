@@ -3,7 +3,7 @@ mod context;
 mod fetch;
 
 pub use cache::{CacheEntry, MetadataCache};
-pub use context::{SqlContext, SqlContextParser};
+pub use context::{ParsedSqlContext, SqlContext, SqlContextParser};
 pub use fetch::{fetch_columns, fetch_tables};
 
 use anyhow::Result;
@@ -18,6 +18,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 const CACHE_TTL_SECONDS: u64 = 300; // 5 minutes cache TTL
+
+/// SQL keywords for completion and keyword detection
+const SQL_KEYWORDS: &[&str] = &[
+    "SELECT", "FROM", "WHERE", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP",
+    "TABLE", "INDEX", "VIEW", "JOIN", "INNER", "LEFT", "RIGHT", "OUTER", "ON", "GROUP",
+    "BY", "ORDER", "HAVING", "LIMIT", "OFFSET", "AND", "OR", "NOT", "IN", "EXISTS",
+    "BETWEEN", "LIKE", "IS", "NULL", "TRUE", "FALSE", "ASC", "DESC", "DISTINCT", "COUNT",
+    "SUM", "AVG", "MIN", "MAX", "UNION", "ALL", "AS", "CASE", "WHEN", "THEN", "ELSE",
+    "END",
+];
 
 /// SQL Completion Provider that implements gpui-component's CompletionProvider trait
 #[derive(Clone)]
@@ -110,20 +120,20 @@ impl SqlCompletionProvider {
 
     /// Parse SQL context from text before cursor
     fn parse_sql_context(&self, text_before_cursor: &str) -> SqlContext {
-        let parser = SqlContextParser;
-
-        // Check for dot notation using proper lookbehind logic
-        // Look for pattern: [identifier].[partial_word] where cursor is at the end
-        let (is_dot_notation, dot_table_name, current_word) =
-            parser.parse_dot_notation_context(text_before_cursor);
+        let parsed = SqlContextParser::parse(text_before_cursor);
 
         SqlContext {
-            current_word,
-            last_keyword: parser.find_last_keyword(text_before_cursor),
-            table_aliases: parser.extract_table_aliases(text_before_cursor),
-            is_dot_notation,
-            dot_table_name,
+            current_word: parsed.current_word,
+            last_keyword: parsed.last_keyword,
+            table_aliases: parsed.table_aliases,
+            is_dot_notation: parsed.is_dot_notation,
+            dot_table_name: parsed.dot_table_name,
         }
+    }
+
+    /// Parse SQL context once and return the full parsed result
+    fn parse_sql_context_full(&self, text_before_cursor: &str) -> ParsedSqlContext {
+        SqlContextParser::parse(text_before_cursor)
     }
 
     /// Determine if we should show table completions based on context
@@ -168,16 +178,12 @@ impl SqlCompletionProvider {
     /// Extract table name from context for column completion using full text for better alias resolution
     async fn extract_table_for_columns_with_full_text(
         &self,
-        text_before_cursor: &str,
+        cursor_context: &ParsedSqlContext,
+        full_context: &ParsedSqlContext,
         full_text: &str,
     ) -> Option<String> {
-        let parser = SqlContextParser;
-
-        // Parse context using full text for alias extraction
-        let mut context = self.parse_sql_context(text_before_cursor);
-
-        // Extract aliases from the full text instead of just text before cursor
-        context.table_aliases = parser.extract_table_aliases(full_text);
+        // Use aliases from full text for better resolution
+        let table_aliases = &full_context.table_aliases;
 
         tracing::debug!(
             "SQL Completion: Using full text for alias extraction: '{}'",
@@ -185,12 +191,12 @@ impl SqlCompletionProvider {
         );
         tracing::debug!(
             "SQL Completion: Extracted aliases from full text: {:?}",
-            context.table_aliases
+            table_aliases
         );
 
         // Handle dot notation: "table.column" or "alias.column"
-        if context.is_dot_notation
-            && let Some(table_name) = &context.dot_table_name
+        if cursor_context.is_dot_notation
+            && let Some(table_name) = &cursor_context.dot_table_name
         {
             tracing::debug!(
                 "SQL Completion: Dot notation detected, table_name='{}'",
@@ -198,12 +204,12 @@ impl SqlCompletionProvider {
             );
             tracing::debug!(
                 "SQL Completion: Parsed aliases from full text: {:?}",
-                context.table_aliases
+                table_aliases
             );
 
             // First try to resolve as alias
             if let Some(resolved_table) =
-                parser.resolve_table_alias(&context.table_aliases, table_name)
+                SqlContextParser::resolve_table_alias(table_aliases, table_name)
             {
                 tracing::debug!(
                     "SQL Completion: Resolved alias '{}' to table '{}'",
@@ -227,17 +233,17 @@ impl SqlCompletionProvider {
         }
 
         // For non-dot notation, find table from context
-        match context.last_keyword.as_deref() {
+        match cursor_context.last_keyword.as_deref() {
             Some("FROM") | Some("JOIN") | Some("INNER JOIN") | Some("LEFT JOIN")
             | Some("RIGHT JOIN") | Some("OUTER JOIN") | Some("UPDATE") | Some("INTO") => {
                 // Look for table name after the keyword
-                if let Some(table_name) = parser.find_table_after_keyword(
-                    text_before_cursor,
-                    context.last_keyword.as_ref().unwrap(),
+                if let Some(table_name) = SqlContextParser::find_table_after_keyword(
+                    &cursor_context.text,
+                    cursor_context.last_keyword.as_ref().unwrap(),
                 ) {
                     // Try to resolve through aliases
                     if let Some(resolved_table) =
-                        parser.resolve_table_alias(&context.table_aliases, &table_name)
+                        SqlContextParser::resolve_table_alias(table_aliases, &table_name)
                     {
                         return Some(resolved_table);
                     }
@@ -248,7 +254,7 @@ impl SqlCompletionProvider {
             | Some("HAVING") => {
                 // For these contexts, find the last table mentioned in the query
                 if let Some(table_name) =
-                    parser.find_last_table_mentioned(full_text, &context.table_aliases)
+                    SqlContextParser::find_last_table_mentioned(full_text, table_aliases)
                 {
                     return Some(table_name);
                 }
@@ -268,14 +274,7 @@ fn is_valid_identifier(word: &str) -> bool {
 }
 
 fn is_sql_keyword(word: &str) -> bool {
-    let sql_keywords = [
-        "SELECT", "FROM", "WHERE", "AND", "OR", "ORDER", "GROUP", "HAVING", "BY", "SET", "VALUES",
-        "INSERT", "DELETE", "UPDATE", "INTO", "JOIN", "INNER", "LEFT", "RIGHT", "OUTER", "ON",
-        "AS", "DISTINCT", "COUNT", "SUM", "AVG", "MAX", "MIN", "NOT", "NULL", "IS", "IN", "EXISTS",
-        "BETWEEN", "LIKE",
-    ];
-
-    sql_keywords.contains(&word.to_uppercase().as_str())
+    SQL_KEYWORDS.contains(&word.to_uppercase().as_str())
 }
 
 impl CompletionProvider for SqlCompletionProvider {
@@ -316,32 +315,52 @@ impl CompletionProvider for SqlCompletionProvider {
                 .slice(text_before_cursor_start..offset.min(rope_clone.len()))
                 .to_string();
 
-            // Extract current word for filtering
-            let current_word = SqlContextParser::extract_current_word(&text_before_cursor);
+            // Parse SQL context once for all completion decisions
+            let context = SqlContextParser::parse(&text_before_cursor);
 
-            // Check if we should show column or table completions
-            let should_show_columns = provider_clone.should_show_columns(&text_before_cursor);
-            let should_show_tables = provider_clone.should_show_tables(&text_before_cursor);
+            // Determine what to show based on parsed context
+            let should_show_columns = context.is_dot_notation || matches!(
+                context.last_keyword.as_deref(),
+                Some("SELECT")
+                    | Some("WHERE")
+                    | Some("SET")
+                    | Some("ORDER BY")
+                    | Some("GROUP BY")
+                    | Some("HAVING")
+            );
+            let should_show_tables = matches!(
+                context.last_keyword.as_deref(),
+                Some("FROM")
+                    | Some("JOIN")
+                    | Some("INNER JOIN")
+                    | Some("LEFT JOIN")
+                    | Some("RIGHT JOIN")
+                    | Some("OUTER JOIN")
+                    | Some("INTO")
+                    | Some("UPDATE")
+            );
 
             // Calculate positions for text replacement
-            let start_pos = rope_clone.offset_to_position(offset.saturating_sub(current_word.len()));
+            let start_pos = rope_clone
+                .offset_to_position(offset.saturating_sub(context.current_word.len()));
             let end_pos = rope_clone.offset_to_position(offset);
 
             // Priority: Column completion > Table completion > Keywords
             if should_show_columns {
                 // Only convert full rope to string when we need it (for alias resolution)
                 let full_text = rope_clone.to_string();
+                let full_context = SqlContextParser::parse(&full_text);
 
                 // Extract table name and fetch columns using cache with current query context
                 // This ensures we only parse the current query, not previous ones
                 if let Some(table_name) = provider_clone
-                    .extract_table_for_columns_with_full_text(&text_before_cursor, &full_text)
+                    .extract_table_for_columns_with_full_text(&context, &full_context, &full_text)
                     .await
                 {
                     match provider_clone.get_cached_columns(&table_name).await {
                         Ok(columns) => {
                             // Filter columns based on current input
-                            let filtered_columns: Vec<String> = if current_word.is_empty() {
+                            let filtered_columns: Vec<String> = if context.current_word.is_empty() {
                                 columns
                             } else {
                                 columns
@@ -349,7 +368,7 @@ impl CompletionProvider for SqlCompletionProvider {
                                     .filter(|column| {
                                         column
                                             .to_lowercase()
-                                            .starts_with(&current_word.to_lowercase())
+                                            .starts_with(&context.current_word.to_lowercase())
                                     })
                                     .collect()
                             };
@@ -398,7 +417,7 @@ impl CompletionProvider for SqlCompletionProvider {
                             tables
                         );
                         // Filter tables based on current input
-                        let mut filtered_tables: Vec<String> = if current_word.is_empty() {
+                        let mut filtered_tables: Vec<String> = if context.current_word.is_empty() {
                             tables.clone()
                         } else {
                             tables
@@ -406,7 +425,7 @@ impl CompletionProvider for SqlCompletionProvider {
                                 .filter(|table| {
                                     table
                                         .to_lowercase()
-                                        .starts_with(&current_word.to_lowercase())
+                                        .starts_with(&context.current_word.to_lowercase())
                                 })
                                 .collect()
                         };
@@ -415,12 +434,10 @@ impl CompletionProvider for SqlCompletionProvider {
                         filtered_tables.sort_by_key(|a| a.len());
 
                         tracing::debug!(
-                            "SQL Completion: Filter logic - current_word_is_empty: {}, filtered_tables: {:?}",
-                            current_word.is_empty(),
+                            "SQL Completion: Filter logic - context.current_word_is_empty: {}, filtered_tables: {:?}",
+                            context.current_word.is_empty(),
                             filtered_tables
                         );
-
-                        let parser = SqlContextParser;
 
                         // Convert to LSP completion items
                         let completion_items = filtered_tables
@@ -428,7 +445,7 @@ impl CompletionProvider for SqlCompletionProvider {
                             .take(20)
                             .map(|table_name| {
                                 let insert_text_with_alias =
-                                    parser.generate_table_abbreviation(&table_name);
+                                    SqlContextParser::generate_table_abbreviation(&table_name);
                                 CompletionItem {
                                     label: table_name.clone(),
                                     kind: Some(CompletionItemKind::CLASS),
@@ -457,25 +474,16 @@ impl CompletionProvider for SqlCompletionProvider {
             }
 
             // Show SQL keywords when not in table context
-            let sql_keywords = vec![
-                "SELECT", "FROM", "WHERE", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP",
-                "TABLE", "INDEX", "VIEW", "JOIN", "INNER", "LEFT", "RIGHT", "OUTER", "ON", "GROUP",
-                "BY", "ORDER", "HAVING", "LIMIT", "OFFSET", "AND", "OR", "NOT", "IN", "EXISTS",
-                "BETWEEN", "LIKE", "IS", "NULL", "TRUE", "FALSE", "ASC", "DESC", "DISTINCT", "COUNT",
-                "SUM", "AVG", "MIN", "MAX", "UNION", "ALL", "AS", "CASE", "WHEN", "THEN", "ELSE",
-                "END",
-            ];
-
             // Filter keywords based on current input
-            let filtered_keywords: Vec<&str> = if current_word.is_empty() {
-                sql_keywords
+            let filtered_keywords: Vec<&str> = if context.current_word.is_empty() {
+                SQL_KEYWORDS.to_vec()
             } else {
-                sql_keywords
+                SQL_KEYWORDS
                     .iter()
                     .filter(|keyword| {
                         keyword
                             .to_lowercase()
-                            .starts_with(&current_word.to_lowercase())
+                            .starts_with(&context.current_word.to_lowercase())
                     })
                     .copied()
                     .collect()
@@ -483,7 +491,7 @@ impl CompletionProvider for SqlCompletionProvider {
 
             // Convert keywords to LSP completion items
             let lsp_items: Vec<CompletionItem> = filtered_keywords
-                .into_iter()
+                .iter()
                 .map(|keyword| {
                     let label = keyword.to_string();
                     CompletionItem {
@@ -547,33 +555,31 @@ mod tests {
 
     #[test]
     fn test_find_last_keyword() {
-        let parser = SqlContextParser;
-
         // Test basic keyword detection
         assert_eq!(
-            parser.find_last_keyword("SELECT * FROM users"),
+            SqlContextParser::find_last_keyword("SELECT * FROM users"),
             Some("FROM".to_string())
         );
         assert_eq!(
-            parser.find_last_keyword("SELECT * FROM users WHERE"),
+            SqlContextParser::find_last_keyword("SELECT * FROM users WHERE"),
             Some("WHERE".to_string())
         );
         assert_eq!(
-            parser.find_last_keyword("UPDATE users SET name"),
+            SqlContextParser::find_last_keyword("UPDATE users SET name"),
             Some("SET".to_string())
         );
         assert_eq!(
-            parser.find_last_keyword("INSERT INTO users"),
+            SqlContextParser::find_last_keyword("INSERT INTO users"),
             Some("INTO".to_string())
         );
 
         // Test case-insensitive
         assert_eq!(
-            parser.find_last_keyword("select * from users"),
+            SqlContextParser::find_last_keyword("select * from users"),
             Some("FROM".to_string())
         );
         assert_eq!(
-            parser.find_last_keyword("Select * From Users"),
+            SqlContextParser::find_last_keyword("Select * From Users"),
             Some("FROM".to_string())
         );
 
@@ -582,15 +588,15 @@ mod tests {
         // This is because "JOIN" appears later in the string than "LEFT JOIN"
         // This is actually acceptable behavior for our use case
         assert_eq!(
-            parser.find_last_keyword("LEFT JOIN users"),
+            SqlContextParser::find_last_keyword("LEFT JOIN users"),
             Some("JOIN".to_string())
         );
         assert_eq!(
-            parser.find_last_keyword("ORDER BY name"),
+            SqlContextParser::find_last_keyword("ORDER BY name"),
             Some("ORDER BY".to_string())
         );
         assert_eq!(
-            parser.find_last_keyword("GROUP BY category"),
+            SqlContextParser::find_last_keyword("GROUP BY category"),
             Some("GROUP BY".to_string())
         );
     }
@@ -598,7 +604,6 @@ mod tests {
     #[test]
     fn test_multiple_queries_parsing() {
         let provider = create_test_provider();
-        let parser = SqlContextParser;
 
         // Test multiple queries: "SELECT * FROM users; SELECT * FROM o"
         // When cursor is in second query after "FROM o", it should suggest "orders"
@@ -621,7 +626,7 @@ mod tests {
         let text3 = "SELECT * FROM users; SELECT * FROM o";
         let after_semicolon3 = &text3[text3.rfind(';').map(|i| i + 1).unwrap_or(0)..];
         assert_eq!(
-            parser.find_last_keyword(after_semicolon3),
+            SqlContextParser::find_last_keyword(after_semicolon3),
             Some("FROM".to_string())
         );
     }
