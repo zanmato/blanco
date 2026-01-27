@@ -5,21 +5,6 @@ pub struct TableAlias {
     pub alias: String,
 }
 
-/// SQL parsing context
-#[derive(Debug, Clone)]
-pub struct SqlContext {
-    /// Current word being typed
-    pub current_word: String,
-    /// Last SQL keyword found
-    pub last_keyword: Option<String>,
-    /// Table aliases found in query
-    pub table_aliases: Vec<TableAlias>,
-    /// Whether we're in dot notation context (table.column)
-    pub is_dot_notation: bool,
-    /// Table name for dot notation (if found)
-    pub dot_table_name: Option<String>,
-}
-
 /// Complete parsed SQL metadata from a single parse operation
 #[derive(Debug, Clone)]
 pub struct ParsedSqlContext {

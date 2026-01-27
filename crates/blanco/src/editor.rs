@@ -1,8 +1,7 @@
 use gpui::{
     App, AppContext, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, KeybindingKeystroke, Keystroke, ParentElement, Render,
-    WeakEntity,
-    SharedString, Styled, Task, Window, div, prelude::FluentBuilder, px, rems,
+    SharedString, Styled, Task, WeakEntity, Window, div, prelude::FluentBuilder, px, rems,
 };
 use gpui_component::{
     ActiveTheme, Sizable, WindowExt as _,
@@ -22,6 +21,7 @@ use tracing::{debug, error, info};
 // Use reqwest
 
 use crate::app::ExecuteSubstitutedQuery;
+use crate::app::RenameTab;
 use crate::app_database::{EnvironmentType, QueryTabData};
 use crate::app_events::AppEvent;
 use crate::parameter_form::ParameterForm;
@@ -35,15 +35,9 @@ use crate::{
     agent::{ChatPanel, ChatSessionContext},
     app_database::AppDatabase,
 };
-use crate::app::RenameTab;
 use blanco_ui::{IconName, SqlLog};
 use database::{DatabaseService, DatabaseServiceTrait};
 use gpui_component::Icon;
-
-#[derive(Clone)]
-pub enum EditorPanelEvent {
-    // No longer needed - tabs handle their own views
-}
 
 pub enum TabType {
     Query(QueryTab),
@@ -433,11 +427,7 @@ impl EditorPanel {
                 );
 
                 match db_service
-                    .execute_query(
-                        connection_id,
-                        Some(&database_name),
-                        &query_clone,
-                    )
+                    .execute_query(connection_id, Some(&database_name), &query_clone)
                     .await
                 {
                     Ok(mut result) => {
@@ -468,8 +458,7 @@ impl EditorPanel {
                             result.table_name = table_name.clone();
 
                             // Load full table metadata (including primary keys and foreign keys)
-                            if let (Some(table_name), false) =
-                                (&table_name, result.rows.is_empty())
+                            if let (Some(table_name), false) = (&table_name, result.rows.is_empty())
                             {
                                 if let Ok(columns) =
                                     connection.get_columns_for_table(table_name, None).await
@@ -486,12 +475,7 @@ impl EditorPanel {
                         let _ = window.update(move |window, cx| {
                             // Update results panel
                             results_panel_clone.update(cx, |panel, cx| {
-                                panel.set_query_result(
-                                    result,
-                                    Some(connection_id),
-                                    window,
-                                    cx,
-                                );
+                                panel.set_query_result(result, Some(connection_id), window, cx);
                             });
 
                             // Log execution result to SQL log
@@ -569,10 +553,7 @@ impl EditorPanel {
                                 .ok();
 
                             window.push_notification(
-                                (
-                                    NotificationType::Error,
-                                    SharedString::from(e.to_string()),
-                                ),
+                                (NotificationType::Error, SharedString::from(e.to_string())),
                                 cx,
                             );
                         });
@@ -919,7 +900,9 @@ impl EditorPanel {
     }
 
     /// Create a tab bar click handler closure
-    fn tab_bar_click_handler(view: WeakEntity<Self>) -> impl Fn(&usize, &ClickEvent, &mut Window, &mut App) + 'static {
+    fn tab_bar_click_handler(
+        view: WeakEntity<Self>,
+    ) -> impl Fn(&usize, &ClickEvent, &mut Window, &mut App) + 'static {
         move |ix: &usize, event: &ClickEvent, window: &mut Window, cx: &mut App| {
             let _ = view.update(cx, |this: &mut EditorPanel, cx| {
                 if event.click_count() == 1 {
@@ -931,7 +914,7 @@ impl EditorPanel {
                 if let Some(TabType::Query(query_tab)) = tab {
                     let tab_title = query_tab.title.clone();
 
-                     // Open rename modal on double click
+                    // Open rename modal on double click
                     let form = RenameTabForm::new(tab_title, window, cx);
                     let form_for_modal = form.clone();
                     let tab_index = *ix;
@@ -957,10 +940,13 @@ impl EditorPanel {
 
                                     // Use the app's global action system instead of local context
                                     // Create a new RenameTab action and dispatch it through the app
-                                    window.dispatch_action(Box::new(RenameTab {
-                                        tab_index,
-                                        new_name,
-                                    }), cx);
+                                    window.dispatch_action(
+                                        Box::new(RenameTab {
+                                            tab_index,
+                                            new_name,
+                                        }),
+                                        cx,
+                                    );
                                     true
                                 }
                             })
@@ -977,7 +963,6 @@ impl Focusable for EditorPanel {
     }
 }
 
-impl EventEmitter<EditorPanelEvent> for EditorPanel {}
 impl EventEmitter<AppEvent> for EditorPanel {}
 
 impl Render for EditorPanel {

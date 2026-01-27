@@ -3,7 +3,7 @@ mod context;
 mod fetch;
 
 pub use cache::{CacheEntry, MetadataCache};
-pub use context::{ParsedSqlContext, SqlContext, SqlContextParser};
+pub use context::{ParsedSqlContext, SqlContextParser};
 pub use fetch::{fetch_columns, fetch_tables};
 
 use anyhow::Result;
@@ -21,12 +21,11 @@ const CACHE_TTL_SECONDS: u64 = 300; // 5 minutes cache TTL
 
 /// SQL keywords for completion and keyword detection
 const SQL_KEYWORDS: &[&str] = &[
-    "SELECT", "FROM", "WHERE", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP",
-    "TABLE", "INDEX", "VIEW", "JOIN", "INNER", "LEFT", "RIGHT", "OUTER", "ON", "GROUP",
-    "BY", "ORDER", "HAVING", "LIMIT", "OFFSET", "AND", "OR", "NOT", "IN", "EXISTS",
-    "BETWEEN", "LIKE", "IS", "NULL", "TRUE", "FALSE", "ASC", "DESC", "DISTINCT", "COUNT",
-    "SUM", "AVG", "MIN", "MAX", "UNION", "ALL", "AS", "CASE", "WHEN", "THEN", "ELSE",
-    "END",
+    "SELECT", "FROM", "WHERE", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP", "TABLE",
+    "INDEX", "VIEW", "JOIN", "INNER", "LEFT", "RIGHT", "OUTER", "ON", "GROUP", "BY", "ORDER",
+    "HAVING", "LIMIT", "OFFSET", "AND", "OR", "NOT", "IN", "EXISTS", "BETWEEN", "LIKE", "IS",
+    "NULL", "TRUE", "FALSE", "ASC", "DESC", "DISTINCT", "COUNT", "SUM", "AVG", "MIN", "MAX",
+    "UNION", "ALL", "AS", "CASE", "WHEN", "THEN", "ELSE", "END",
 ];
 
 /// SQL Completion Provider that implements gpui-component's CompletionProvider trait
@@ -116,63 +115,6 @@ impl SqlCompletionProvider {
         }
 
         Ok(columns)
-    }
-
-    /// Parse SQL context from text before cursor
-    fn parse_sql_context(&self, text_before_cursor: &str) -> SqlContext {
-        let parsed = SqlContextParser::parse(text_before_cursor);
-
-        SqlContext {
-            current_word: parsed.current_word,
-            last_keyword: parsed.last_keyword,
-            table_aliases: parsed.table_aliases,
-            is_dot_notation: parsed.is_dot_notation,
-            dot_table_name: parsed.dot_table_name,
-        }
-    }
-
-    /// Parse SQL context once and return the full parsed result
-    fn parse_sql_context_full(&self, text_before_cursor: &str) -> ParsedSqlContext {
-        SqlContextParser::parse(text_before_cursor)
-    }
-
-    /// Determine if we should show table completions based on context
-    fn should_show_tables(&self, text_before_cursor: &str) -> bool {
-        let context = self.parse_sql_context(text_before_cursor);
-
-        // Show tables after FROM, JOIN, INTO, UPDATE keywords
-        matches!(
-            context.last_keyword.as_deref(),
-            Some("FROM")
-                | Some("JOIN")
-                | Some("INNER JOIN")
-                | Some("LEFT JOIN")
-                | Some("RIGHT JOIN")
-                | Some("OUTER JOIN")
-                | Some("INTO")
-                | Some("UPDATE")
-        )
-    }
-
-    /// Determine if we should show column completions based on context
-    fn should_show_columns(&self, text_before_cursor: &str) -> bool {
-        let context = self.parse_sql_context(text_before_cursor);
-
-        // Always show columns for dot notation (table.column or alias.column)
-        if context.is_dot_notation {
-            return true;
-        }
-
-        // Show columns after SELECT, WHERE, SET, ORDER BY, GROUP BY, HAVING
-        matches!(
-            context.last_keyword.as_deref(),
-            Some("SELECT")
-                | Some("WHERE")
-                | Some("SET")
-                | Some("ORDER BY")
-                | Some("GROUP BY")
-                | Some("HAVING")
-        )
     }
 
     /// Extract table name from context for column completion using full text for better alias resolution
@@ -598,36 +540,6 @@ mod tests {
         assert_eq!(
             SqlContextParser::find_last_keyword("GROUP BY category"),
             Some("GROUP BY".to_string())
-        );
-    }
-
-    #[test]
-    fn test_multiple_queries_parsing() {
-        let provider = create_test_provider();
-
-        // Test multiple queries: "SELECT * FROM users; SELECT * FROM o"
-        // When cursor is in second query after "FROM o", it should suggest "orders"
-
-        // Test that should_show_tables works correctly in second query
-        assert!(provider.should_show_tables("SELECT * FROM o"));
-
-        // Test should_show_tables with multiple queries
-        let text = "SELECT * FROM users; SELECT * FROM o";
-        // Extract the part after semicolon for table completion
-        let after_semicolon = &text[text.rfind(';').map(|i| i + 1).unwrap_or(0)..];
-        assert!(provider.should_show_tables(after_semicolon));
-
-        // Test should_show_columns with multiple queries
-        let text2 = "SELECT * FROM users; SELECT o.id FROM orders o WHERE o.";
-        let after_semicolon2 = &text2[text2.rfind(';').map(|i| i + 1).unwrap_or(0)..];
-        assert!(provider.should_show_columns(after_semicolon2));
-
-        // Test find_last_keyword works correctly in second query context
-        let text3 = "SELECT * FROM users; SELECT * FROM o";
-        let after_semicolon3 = &text3[text3.rfind(';').map(|i| i + 1).unwrap_or(0)..];
-        assert_eq!(
-            SqlContextParser::find_last_keyword(after_semicolon3),
-            Some("FROM".to_string())
         );
     }
 }

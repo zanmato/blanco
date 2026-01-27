@@ -21,25 +21,26 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    async fn test_sqlite_data_type_serialization() -> Result<(), Box<dyn std::error::Error>> {
-        // Use environment variable for connection string or fallback to temporary file
-        let connection_string = env::var("SQLITE_CONNECTION_STRING").unwrap_or_else(|_| {
-            // Create a temporary file for SQLite database
-            let temp_file = NamedTempFile::new().expect("Failed to create temporary file");
-            let path = temp_file.path().to_string_lossy().to_string();
-            // Keep the temporary file alive by not dropping it
-            std::mem::forget(temp_file);
-            format!("sqlite:{}", path)
-        });
+    fn test_sqlite_data_type_serialization() -> Result<(), Box<dyn std::error::Error>> {
+        smol::block_on(async {
+            // Use environment variable for connection string or fallback to temporary file
+            let connection_string = env::var("SQLITE_CONNECTION_STRING").unwrap_or_else(|_| {
+                // Create a temporary file for SQLite database
+                let temp_file = NamedTempFile::new().expect("Failed to create temporary file");
+                let path = temp_file.path().to_string_lossy().to_string();
+                // Keep the temporary file alive by not dropping it
+                std::mem::forget(temp_file);
+                format!("sqlite:{}", path)
+            });
 
-        // Connect to SQLite
-        let pool = SqlitePoolOptions::new()
-            .max_connections(5)
-            .connect(&connection_string)
-            .await?;
+            // Connect to SQLite
+            let pool = SqlitePoolOptions::new()
+                .max_connections(5)
+                .connect(&connection_string)
+                .await?;
 
-        // Create comprehensive test table with SQLite-specific data types
-        let create_table_sql = r#"
+            // Create comprehensive test table with SQLite-specific data types
+            let create_table_sql = r#"
             CREATE TABLE IF NOT EXISTS comprehensive_test (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
 
@@ -85,10 +86,10 @@ mod tests {
             )
         "#;
 
-        sqlx::query(create_table_sql).execute(&pool).await?;
+            sqlx::query(create_table_sql).execute(&pool).await?;
 
-        // Insert test data with various SQLite types
-        let insert_sql = r#"
+            // Insert test data with various SQLite types
+            let insert_sql = r#"
             INSERT INTO comprehensive_test (
                 integer_col, real_col, numeric_col, bigint_col, int_col, smallint_col, tinyint_col,
                 text_col, varchar_col, char_col, blob_col, bool_col,
@@ -108,127 +109,119 @@ mod tests {
             )
         "#;
 
-        let result = sqlx::query(insert_sql).execute(&pool).await?;
+            let result = sqlx::query(insert_sql).execute(&pool).await?;
 
-        // For SQLite, let's create a new table using the Blanco connection to test it properly
-        let mut sqlite_connection = crate::SqliteConnection::new(connection_string.clone())?;
+            // For SQLite, let's create a new table using the Blanco connection to test it properly
+            let mut sqlite_connection = crate::SqliteConnection::new(connection_string.clone())?;
 
-        // Establish the actual database connection
-        sqlite_connection.connect(&connection_string).await?;
+            // Establish the actual database connection
+            sqlite_connection.connect(&connection_string).await?;
 
-        // Create the test table using Blanco connection
-        sqlite_connection
-            .execute_query(create_table_sql, None, None)
-            .await?;
+            // Create the test table using Blanco connection
+            sqlite_connection
+                .execute_query(create_table_sql, None, None)
+                .await?;
 
-        // Insert test data using Blanco connection
-        sqlite_connection
-            .execute_query(insert_sql, None, None)
-            .await?;
+            // Insert test data using Blanco connection
+            sqlite_connection
+                .execute_query(insert_sql, None, None)
+                .await?;
 
-        // Test a simple query to make sure Blanco can handle the data
-        let query_result = sqlite_connection.execute_query("SELECT * FROM comprehensive_test WHERE id = (SELECT MAX(id) FROM comprehensive_test)", None, None).await?;
+            // Test a simple query to make sure Blanco can handle the data
+            let query_result = sqlite_connection.execute_query("SELECT * FROM comprehensive_test WHERE id = (SELECT MAX(id) FROM comprehensive_test)", None, None).await?;
 
-        assert!(
-            !query_result.rows.is_empty(),
-            "Query should return at least one row"
-        );
-        let first_row = query_result.rows.first().unwrap();
+            assert!(
+                !query_result.rows.is_empty(),
+                "Query should return at least one row"
+            );
+            let first_row = query_result.rows.first().unwrap();
 
-        // Create a map for easy lookup of values by column name
-        let value_map: std::collections::HashMap<String, String> = query_result
-            .columns
-            .iter()
-            .enumerate()
-            .map(|(i, col)| (col.clone(), first_row[i].clone()))
-            .collect();
+            // Create a map for easy lookup of values by column name
+            let value_map: std::collections::HashMap<String, String> = query_result
+                .columns
+                .iter()
+                .enumerate()
+                .map(|(i, col)| (col.clone(), first_row[i].clone()))
+                .collect();
 
-        // Test integer affinity types
-        assert!(
-            value_map.get("id").unwrap().parse::<i64>().unwrap() > 0,
-            "id should be positive"
-        );
-        assert_eq!(
-            value_map.get("integer_col"),
-            Some(&"2147483647".to_string())
-        );
-        assert_eq!(
-            value_map.get("bigint_col"),
-            Some(&"9223372036854775807".to_string())
-        );
-        assert_eq!(value_map.get("int_col"), Some(&"123456".to_string()));
-        assert_eq!(value_map.get("smallint_col"), Some(&"32767".to_string()));
-        assert_eq!(value_map.get("tinyint_col"), Some(&"255".to_string()));
+            // Test integer affinity types
+            assert!(
+                value_map.get("id").unwrap().parse::<i64>().unwrap() > 0,
+                "id should be positive"
+            );
+            assert_eq!(
+                value_map.get("integer_col"),
+                Some(&"2147483647".to_string())
+            );
+            assert_eq!(
+                value_map.get("bigint_col"),
+                Some(&"9223372036854775807".to_string())
+            );
+            assert_eq!(value_map.get("int_col"), Some(&"123456".to_string()));
+            assert_eq!(value_map.get("smallint_col"), Some(&"32767".to_string()));
+            assert_eq!(value_map.get("tinyint_col"), Some(&"255".to_string()));
 
-        // Test numeric affinity types
-        assert!(value_map.get("real_col").unwrap().contains("12345"));
-        assert!(value_map.get("numeric_col").unwrap().contains("98765"));
-        assert!(value_map
-            .get("numeric_affinity_col")
-            .unwrap()
-            .contains("123"));
-        assert!(value_map
-            .get("real_affinity_col")
-            .unwrap()
-            .contains("3.14159"));
+            // Test numeric affinity types
+            assert!(value_map.get("real_col").unwrap().contains("12345"));
+            assert!(value_map.get("numeric_col").unwrap().contains("98765"));
+            assert!(value_map
+                .get("numeric_affinity_col")
+                .unwrap()
+                .contains("123"));
+            assert!(value_map
+                .get("real_affinity_col")
+                .unwrap()
+                .contains("3.14159"));
 
-        // Test text affinity types
-        assert_eq!(
-            value_map.get("text_col"),
-            Some(&"This is a test text with unicode: ñiño 你好 🚀".to_string())
-        );
-        assert_eq!(
-            value_map.get("varchar_col"),
-            Some(&"variable_string".to_string())
-        );
-        assert_eq!(
-            value_map.get("text_affinity_col"),
-            Some(&"text affinity".to_string())
-        );
+            // Test text affinity types
+            assert_eq!(
+                value_map.get("text_col"),
+                Some(&"This is a test text with unicode: ñiño 你好 🚀".to_string())
+            );
+            assert_eq!(
+                value_map.get("varchar_col"),
+                Some(&"variable_string".to_string())
+            );
+            assert_eq!(
+                value_map.get("text_affinity_col"),
+                Some(&"text affinity".to_string())
+            );
 
-        // Test CHAR type (may be padded)
-        assert!(value_map.get("char_col").unwrap().starts_with("fixed_len"));
+            // Test CHAR type (may be padded)
+            assert!(value_map.get("char_col").unwrap().starts_with("fixed_len"));
 
-        // Test boolean (stored as integer in SQLite)
-        assert!(
-            value_map.get("bool_col") == Some(&"1".to_string())
-                || value_map.get("bool_col") == Some(&"true".to_string()),
-            "Boolean should be stored as 1 or true in SQLite"
-        );
+            // Test boolean (stored as integer in SQLite)
+            assert!(
+                value_map.get("bool_col") == Some(&"1".to_string())
+                    || value_map.get("bool_col") == Some(&"true".to_string()),
+                "Boolean should be stored as 1 or true in SQLite"
+            );
 
-        // Test date/time types
-        assert!(value_map.get("date_col").unwrap().contains("2025"));
-        assert!(value_map.get("time_col").unwrap().contains("20:41"));
-        assert!(value_map.get("datetime_col").unwrap().contains("2025"));
-        assert!(value_map.get("timestamp_col").unwrap().contains("2025"));
+            // Test date/time types
+            assert!(value_map.get("date_col").unwrap().contains("2025"));
+            assert!(value_map.get("time_col").unwrap().contains("20:41"));
+            assert!(value_map.get("datetime_col").unwrap().contains("2025"));
+            assert!(value_map.get("timestamp_col").unwrap().contains("2025"));
 
-        // Test JSON types
-        assert!(value_map.get("json_col").unwrap().contains("\"name\""));
-        assert!(value_map.get("json_col").unwrap().contains("test"));
-        assert!(value_map.get("jsonb_col").unwrap().contains("nested"));
+            // Test JSON types
+            assert!(value_map.get("json_col").unwrap().contains("\"name\""));
+            assert!(value_map.get("json_col").unwrap().contains("test"));
+            assert!(value_map.get("jsonb_col").unwrap().contains("nested"));
 
-        // Test blob affinity types (SQLite converts binary data to text when possible)
-        assert!(value_map.get("blob_col").unwrap().contains("48656c6c6f")); // "Hello World"
-        assert!(value_map
-            .get("blob_affinity_col")
-            .unwrap()
-            .contains("48656c6c6f")); // "Hello"
+            // Test blob affinity types (SQLite converts binary data to text when possible)
+            assert!(value_map.get("blob_col").unwrap().contains("48656c6c6f")); // "Hello World"
+            assert!(value_map
+                .get("blob_affinity_col")
+                .unwrap()
+                .contains("48656c6c6f")); // "Hello"
 
-        // Test custom types (should fall back to string conversion)
-        assert_eq!(
-            value_map.get("custom_type_col"),
-            Some(&"custom value".to_string())
-        );
+            // Test custom types (should fall back to string conversion)
+            assert_eq!(
+                value_map.get("custom_type_col"),
+                Some(&"custom value".to_string())
+            );
 
-        println!("✅ All SQLite type conversion tests passed!");
-        println!("✅ Integer affinity types working correctly!");
-        println!("✅ Text affinity types working correctly!");
-        println!("✅ Numeric affinity types working correctly!");
-        println!("✅ BLOB affinity types working correctly!");
-        println!("✅ Date/time types working correctly!");
-        println!("✅ JSON types working correctly!");
-        println!("✅ Custom types working correctly!");
-
-        Ok(())
+            Ok(())
+        })
     }
 }
