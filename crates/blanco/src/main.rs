@@ -21,7 +21,6 @@ mod settings;
 mod settings_view;
 mod snippet_editor;
 mod snippets_panel;
-mod snippets_panel_delegate;
 mod sql_completion;
 mod sql_selection_range_provider;
 mod sql_statement_parser;

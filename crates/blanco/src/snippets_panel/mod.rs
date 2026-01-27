@@ -1,7 +1,10 @@
+mod delegate;
+
+pub use delegate::{SnippetItemMetadata, SnippetsTreeDelegate};
+
 use crate::app::{NewSnippet, OpenSnippetEditor};
 use crate::app_database::{AppDatabase, SnippetData};
 use crate::app_events::AppEvent;
-use crate::snippets_panel_delegate::{SnippetItemMetadata, SnippetsTreeDelegate};
 use blanco_ui::draggable_tree::{DraggableTreeState, TreeItem};
 use gpui::{
     AppContext, ClipboardItem, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
