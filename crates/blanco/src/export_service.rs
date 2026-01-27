@@ -1,5 +1,4 @@
 use futures::io::{AsyncWriteExt, BufWriter};
-use smol;
 use smol::fs::File;
 use futures::channel::mpsc;
 use futures::{SinkExt, StreamExt};

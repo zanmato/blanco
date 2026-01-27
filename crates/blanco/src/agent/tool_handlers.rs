@@ -348,16 +348,13 @@ impl AgentToolHandler for WriteTabHandler {
 
 /// Tool mode for read/write operations
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Default)]
 pub enum ToolMode {
+    #[default]
     Read,
     Write,
 }
 
-impl Default for ToolMode {
-    fn default() -> Self {
-        Self::Read
-    }
-}
 
 /// Tool registry for agent
 pub struct AgentToolRegistry {

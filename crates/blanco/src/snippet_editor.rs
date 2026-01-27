@@ -110,7 +110,7 @@ impl SnippetEditor {
                 editor.snippet_id = Some(id);
                 editor.name = saved_name.clone();
             });
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 cx.dispatch_action(&RefreshSnippets);
             });
         })

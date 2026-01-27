@@ -3,18 +3,18 @@ mod context;
 mod fetch;
 
 pub use cache::{CacheEntry, MetadataCache};
-pub use context::{SqlContext, SqlContextParser, TableAlias};
+pub use context::{SqlContext, SqlContextParser};
 pub use fetch::{fetch_columns, fetch_tables};
 
-use std::sync::Arc;
 use anyhow::Result;
 use database::DatabaseServiceTrait;
-use gpui::{App, AppContext, Context, Task, Window};
-use gpui_component::input::{CompletionProvider, HoverProvider, InputState, Rope, RopeExt};
+use gpui::{AppContext, Context, Task, Window};
+use gpui_component::input::{CompletionProvider, InputState, Rope, RopeExt};
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
-    Hover, HoverContents, MarkupContent, MarkupKind, Range, TextEdit,
+    TextEdit,
 };
+use std::sync::Arc;
 use std::time::Duration;
 
 const CACHE_TTL_SECONDS: u64 = 300; // 5 minutes cache TTL
@@ -29,16 +29,7 @@ pub struct SqlCompletionProvider {
 }
 
 impl SqlCompletionProvider {
-    pub fn new(connection_id: i64, db_service: Arc<dyn DatabaseServiceTrait>) -> Self {
-        Self {
-            connection_id,
-            database_name: "default".to_string(), // Fallback to default database
-            db_service,
-            cache: Arc::new(std::sync::Mutex::new(MetadataCache::new())),
-        }
-    }
-
-    pub fn new_with_database(
+    pub fn new(
         connection_id: i64,
         database_name: String,
         db_service: Arc<dyn DatabaseServiceTrait>,
@@ -49,50 +40,6 @@ impl SqlCompletionProvider {
             db_service,
             cache: Arc::new(std::sync::Mutex::new(MetadataCache::new())),
         }
-    }
-
-    /// Extract the current query context from full text based on cursor position
-    /// This handles multiple queries separated by semicolons
-    pub fn extract_current_query_context(&self, full_text: &str, cursor_offset: usize) -> String {
-        // Ensure cursor_offset is within bounds
-        let cursor_offset = cursor_offset.min(full_text.len());
-
-        // Find the start of the current query by looking for the last semicolon before cursor
-        let query_start = if let Some(last_semicolon) = full_text[..cursor_offset].rfind(';') {
-            last_semicolon + 1
-        } else {
-            0
-        };
-
-        // Special case: if we're right after a semicolon, return empty
-        if query_start == cursor_offset {
-            return String::new();
-        }
-
-        // Extract from query_start to cursor_offset + 1 (to include current character in some contexts)
-        let cursor_offset = (cursor_offset + 1).min(full_text.len());
-        let current_context = &full_text[query_start..cursor_offset];
-        current_context.trim().to_string()
-    }
-
-    fn invalidate_cache(&self) {
-        if let Ok(mut cache) = self.cache.lock() {
-            cache.clear();
-        }
-    }
-
-    /// Pre-populate the cache with all tables and columns
-    /// This should be called when the provider is created or when database schema changes
-    pub async fn warm_cache(&self) -> Result<()> {
-        // Pre-fetch all tables
-        let tables = self.get_cached_tables().await?;
-
-        // Pre-fetch columns for each table
-        for table in tables {
-            let _ = self.get_cached_columns(&table).await;
-        }
-
-        Ok(())
     }
 
     /// Get cached tables or fetch them if not cached/expired
@@ -111,7 +58,8 @@ impl SqlCompletionProvider {
             "Fetching fresh tables for database '{}'",
             self.database_name
         );
-        let tables = fetch_tables(&*self.db_service, self.connection_id, &self.database_name).await?;
+        let tables =
+            fetch_tables(&*self.db_service, self.connection_id, &self.database_name).await?;
 
         // Update cache
         if let Ok(mut cache) = self.cache.lock() {
@@ -158,140 +106,6 @@ impl SqlCompletionProvider {
         }
 
         Ok(columns)
-    }
-
-    /// Get cached table info or fetch it if not cached/expired
-    pub async fn get_cached_table_info(&self, table_name: &str) -> Result<String> {
-        let cache_key = format!("{}:{}", self.database_name, table_name);
-
-        // First, check if we have valid cached data
-        if let Ok(cache) = self.cache.lock()
-            && let Some(cached_info) = cache.table_info.get(&cache_key)
-            && !cached_info.is_expired(CACHE_TTL_SECONDS)
-        {
-            tracing::debug!(
-                "Using cached table info for '{}' in database '{}'",
-                table_name,
-                self.database_name
-            );
-            return Ok(cached_info.data.clone());
-        } // Lock released here
-
-        // No valid cache, fetch fresh data using connection trait
-        tracing::debug!(
-            "Fetching fresh table info for '{}' in database '{}'",
-            table_name,
-            self.database_name
-        );
-        let info = self.get_table_info(table_name).await?;
-
-        // Update cache
-        if let Ok(mut cache) = self.cache.lock() {
-            cache
-                .table_info
-                .insert(cache_key, CacheEntry::new(info.clone()));
-        }
-
-        Ok(info)
-    }
-
-    /// Get cached column info or fetch it if not cached/expired
-    pub async fn get_cached_column_info(&self, table_name: &str, column_name: &str) -> Result<String> {
-        let cache_key = format!("{}:{}.{}", self.database_name, table_name, column_name);
-
-        // First, check if we have valid cached data
-        if let Ok(cache) = self.cache.lock()
-            && let Some(cached_info) = cache.column_info.get(&cache_key)
-            && !cached_info.is_expired(CACHE_TTL_SECONDS)
-        {
-            tracing::debug!(
-                "Using cached column info for '{}.{}' in database '{}'",
-                table_name,
-                column_name,
-                self.database_name
-            );
-            return Ok(cached_info.data.clone());
-        } // Lock released here
-
-        // No valid cache, fetch fresh data using connection trait
-        tracing::debug!(
-            "Fetching fresh column info for '{}.{}' in database '{}'",
-            table_name,
-            column_name,
-            self.database_name
-        );
-        let info = self.get_column_info(table_name, column_name).await?;
-
-        // Update cache
-        if let Ok(mut cache) = self.cache.lock() {
-            cache
-                .column_info
-                .insert(cache_key, CacheEntry::new(info.clone()));
-        }
-
-        Ok(info)
-    }
-
-    /// Get table information using the DbService
-    async fn get_table_info(&self, table_name: &str) -> Result<String> {
-        let columns = if let Ok(connection) = self
-            .db_service
-            .get_or_create_connection_by_id(self.connection_id, Some(&self.database_name))
-            .await
-        {
-            connection.get_columns_for_table(table_name, None).await?
-        } else {
-            Vec::new()
-        };
-        let mut info = format!("**Table**: `{}`\n\n**Columns**:\n", table_name);
-
-        for column in columns {
-            info.push_str(&format!(
-                "- **`{}`**: {}{}{}\n",
-                column.name,
-                column.data_type,
-                if !column.is_nullable { " NOT NULL" } else { "" },
-                if column.is_primary_key {
-                    " **PRIMARY KEY**"
-                } else {
-                    ""
-                }
-            ));
-        }
-
-        Ok(info)
-    }
-
-    /// Get column information using the DbService
-    async fn get_column_info(&self, table_name: &str, column_name: &str) -> Result<String> {
-        let columns = if let Ok(connection) = self
-            .db_service
-            .get_or_create_connection_by_id(self.connection_id, Some(&self.database_name))
-            .await
-        {
-            connection.get_columns_for_table(table_name, None).await?
-        } else {
-            Vec::new()
-        };
-
-        if let Some(column) = columns
-            .iter()
-            .find(|c| c.name.eq_ignore_ascii_case(column_name))
-        {
-            Ok(format!(
-                "**Column**: `{}` in table `{}`\n\n- **Type**: {}\n- **Nullable**: {}\n- **Primary Key**: {}",
-                column.name,
-                table_name,
-                column.data_type,
-                if column.is_nullable { "Yes" } else { "No" },
-                if column.is_primary_key { "Yes" } else { "No" }
-            ))
-        } else {
-            Ok(format!(
-                "Column `{}` not found in table `{}`.",
-                column_name, table_name
-            ))
-        }
     }
 
     /// Parse SQL context from text before cursor
@@ -444,73 +258,6 @@ impl SqlCompletionProvider {
 
         None
     }
-
-    /// Extract table name from context for column completion
-    async fn extract_table_for_columns(&self, text_before_cursor: &str) -> Option<String> {
-        let parser = SqlContextParser;
-        let context = self.parse_sql_context(text_before_cursor);
-
-        // Handle dot notation: "table.column" or "alias.column"
-        if context.is_dot_notation
-            && let Some(table_name) = &context.dot_table_name
-        {
-            // First try to resolve as alias
-            if let Some(resolved_table) =
-                parser.resolve_table_alias(&context.table_aliases, table_name)
-            {
-                return Some(resolved_table);
-            }
-            // Otherwise treat as table name if it's valid
-            if is_valid_identifier(table_name) && !is_sql_keyword(table_name) {
-                return Some(table_name.clone());
-            }
-        }
-
-        // For non-dot notation, find table from context
-        match context.last_keyword.as_deref() {
-            Some("FROM") | Some("JOIN") | Some("INNER JOIN") | Some("LEFT JOIN")
-            | Some("RIGHT JOIN") | Some("OUTER JOIN") | Some("UPDATE") | Some("INTO") => {
-                // Look for table name after the keyword
-                if let Some(table_name) = parser.find_table_after_keyword(
-                    text_before_cursor,
-                    context.last_keyword.as_ref().unwrap(),
-                ) {
-                    // Try to resolve through aliases
-                    if let Some(resolved_table) =
-                        parser.resolve_table_alias(&context.table_aliases, &table_name)
-                    {
-                        return Some(resolved_table);
-                    }
-                    return Some(table_name);
-                }
-            }
-            Some("SELECT") | Some("WHERE") | Some("ORDER BY") | Some("GROUP BY")
-            | Some("HAVING") => {
-                // For these contexts, find the last table mentioned in the query
-                if let Some(table_name) =
-                    parser.find_last_table_mentioned(text_before_cursor, &context.table_aliases)
-                {
-                    return Some(table_name);
-                }
-            }
-            Some("SET") => {
-                // For SET context, look for UPDATE keyword before SET
-                if let Some(table_name) =
-                    parser.find_table_after_keyword(text_before_cursor, "UPDATE")
-                {
-                    if let Some(resolved_table) =
-                        parser.resolve_table_alias(&context.table_aliases, &table_name)
-                    {
-                        return Some(resolved_table);
-                    }
-                    return Some(table_name);
-                }
-            }
-            _ => {}
-        }
-
-        None
-    }
 }
 
 // Helper functions moved to module level
@@ -522,10 +269,10 @@ fn is_valid_identifier(word: &str) -> bool {
 
 fn is_sql_keyword(word: &str) -> bool {
     let sql_keywords = [
-        "SELECT", "FROM", "WHERE", "AND", "OR", "ORDER", "GROUP", "HAVING", "BY", "SET",
-        "VALUES", "INSERT", "DELETE", "UPDATE", "INTO", "JOIN", "INNER", "LEFT", "RIGHT",
-        "OUTER", "ON", "AS", "DISTINCT", "COUNT", "SUM", "AVG", "MAX", "MIN", "NOT", "NULL",
-        "IS", "IN", "EXISTS", "BETWEEN", "LIKE",
+        "SELECT", "FROM", "WHERE", "AND", "OR", "ORDER", "GROUP", "HAVING", "BY", "SET", "VALUES",
+        "INSERT", "DELETE", "UPDATE", "INTO", "JOIN", "INNER", "LEFT", "RIGHT", "OUTER", "ON",
+        "AS", "DISTINCT", "COUNT", "SUM", "AVG", "MAX", "MIN", "NOT", "NULL", "IS", "IN", "EXISTS",
+        "BETWEEN", "LIKE",
     ];
 
     sql_keywords.contains(&word.to_uppercase().as_str())
@@ -770,92 +517,6 @@ impl CompletionProvider for SqlCompletionProvider {
     }
 }
 
-impl HoverProvider for SqlCompletionProvider {
-    fn hover(
-        &self,
-        rope: &Rope,
-        offset: usize,
-        _window: &mut Window,
-        cx: &mut gpui::App,
-    ) -> Task<Result<Option<Hover>>> {
-        // Get the current text before cursor to determine context
-        let full_text = rope.to_string();
-        let text_before_cursor = full_text[..offset].to_string();
-
-        // Extract current word to check for hover
-        let current_word = SqlContextParser::extract_current_word(&text_before_cursor);
-
-        if current_word.is_empty() {
-            return Task::ready(Ok(None));
-        }
-
-        // Calculate position for hover range
-        let start_pos = rope.offset_to_position(offset.saturating_sub(current_word.len()));
-        let end_pos = rope.offset_to_position(offset);
-
-        // Clone values for the background task
-        let provider_clone = self.clone();
-        let current_word_clone = current_word.clone();
-        let start_pos_clone = start_pos;
-        let end_pos_clone = end_pos;
-
-        // Spawn background task to fetch hover information using cache
-        cx.background_spawn(async move {
-            // Try to determine if this is a table or column and get appropriate info using cache
-            if let Some(hover_info) =
-                get_cached_hover_info(&provider_clone, &current_word_clone, &text_before_cursor)
-                    .await
-            {
-                let range = Range::new(start_pos_clone, end_pos_clone);
-                let hover = Hover {
-                    contents: HoverContents::Markup(MarkupContent {
-                        kind: MarkupKind::Markdown,
-                        value: hover_info,
-                    }),
-                    range: Some(range),
-                };
-                Ok(Some(hover))
-            } else {
-                Ok(None)
-            }
-        })
-    }
-}
-
-/// Get hover information for a table or column using cache
-async fn get_cached_hover_info(
-    provider: &SqlCompletionProvider,
-    word: &str,
-    text_before_cursor: &str,
-) -> Option<String> {
-    // First, try to determine if this is a column name by checking table context
-    let provider_clone = provider.clone();
-    let text_before_cursor_clone = text_before_cursor.to_string();
-    if let Some(table_name) = provider_clone
-        .extract_table_for_columns(&text_before_cursor_clone)
-        .await
-        && let Ok(column_info) = provider.get_cached_column_info(&table_name, word).await
-    {
-        return Some(column_info);
-    }
-
-    // If no column context found, try table lookup
-    if let Ok(table_info) = provider.get_cached_table_info(word).await {
-        return Some(table_info);
-    }
-
-    // Try to find this column in any table using cached tables
-    if let Ok(tables) = provider.get_cached_tables().await {
-        for table in tables {
-            if let Ok(column_info) = provider.get_cached_column_info(&table, word).await {
-                return Some(column_info);
-            }
-        }
-    }
-
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -881,7 +542,7 @@ mod tests {
 
     // Test-only constructor that uses a mock service
     pub fn create_test_provider() -> SqlCompletionProvider {
-        SqlCompletionProvider::new(1, create_test_db_service())
+        SqlCompletionProvider::new(1, "default".to_string(), create_test_db_service())
     }
 
     #[test]
@@ -955,6 +616,7 @@ mod tests {
     #[test]
     fn test_multiple_queries_parsing() {
         let provider = create_test_provider();
+        let parser = SqlContextParser;
 
         // Test multiple queries: "SELECT * FROM users; SELECT * FROM o"
         // When cursor is in second query after "FROM o", it should suggest "orders"
@@ -977,7 +639,7 @@ mod tests {
         let text3 = "SELECT * FROM users; SELECT * FROM o";
         let after_semicolon3 = &text3[text3.rfind(';').map(|i| i + 1).unwrap_or(0)..];
         assert_eq!(
-            SqlContextParser::find_last_keyword(after_semicolon3),
+            parser.find_last_keyword(after_semicolon3),
             Some("FROM".to_string())
         );
     }

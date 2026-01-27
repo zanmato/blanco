@@ -731,7 +731,7 @@ impl NewConnectionModal {
                 let path_str = path.to_str()?.to_string();
                 window
                     .update(|window, cx| {
-                        _ = private_key_input.update(cx, |input, cx| {
+                        private_key_input.update(cx, |input, cx| {
                             input.set_value(path_str, window, cx);
                         });
                     })
@@ -759,7 +759,7 @@ impl NewConnectionModal {
                 let path_str = path.to_str()?.to_string();
                 window
                     .update(|window, cx| {
-                        _ = private_key_input.update(cx, |input, cx| {
+                        private_key_input.update(cx, |input, cx| {
                             input.set_value(path_str, window, cx);
                         });
                     })
@@ -787,7 +787,7 @@ impl NewConnectionModal {
                 let path_str = path.to_str()?.to_string();
                 window
                     .update(|window, cx| {
-                        _ = file_path_input.update(cx, |input, cx| {
+                        file_path_input.update(cx, |input, cx| {
                             input.set_value(path_str, window, cx);
                         });
                     })

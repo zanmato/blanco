@@ -144,19 +144,16 @@ impl ChatPanel {
         subscriptions.push(
             cx.subscribe(
                 &tool_mode_select,
-                move |_panel, _select, event, cx| match event {
-                    SelectEvent::Confirm(selected) => {
-                        let mode = if selected.as_ref().map(|s| s.as_str()) == Some("Write") {
-                            ToolMode::Write
-                        } else {
-                            ToolMode::Read
-                        };
+                move |_panel, _select, event, cx| if let SelectEvent::Confirm(selected) = event {
+                    let mode = if selected.as_ref().map(|s| s.as_str()) == Some("Write") {
+                        ToolMode::Write
+                    } else {
+                        ToolMode::Read
+                    };
 
-                        _ = session_clone.update(cx, |session, cx| {
-                            session.set_tool_mode(mode, cx);
-                        });
-                    }
-                    _ => {}
+                    session_clone.update(cx, |session, cx| {
+                        session.set_tool_mode(mode, cx);
+                    });
                 },
             ),
         );

@@ -8,5 +8,3 @@ mod tool_handlers;
 // Re-export main types for the editor panel
 pub use agent_chat::ChatPanel;
 pub use chat_session::ChatSessionContext;
-pub use chat_types::SqlContext;
-pub use tool_handlers::ToolMode;

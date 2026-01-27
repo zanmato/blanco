@@ -12,7 +12,6 @@ use gpui_component::{ActiveTheme, v_flex};
 pub struct ForeignKeyPopover {
     table_name: String,
     column_name: String,
-    reference_value: String,
     result: Option<QueryResult>,
     is_loading: bool,
     error: Option<String>,
@@ -77,7 +76,6 @@ impl ForeignKeyPopover {
         Self {
             table_name: table_name.to_owned(),
             column_name: column_name.to_owned(),
-            reference_value: reference_value.to_owned(),
             result: None,
             is_loading: true,
             error: None,

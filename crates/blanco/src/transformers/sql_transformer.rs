@@ -78,7 +78,7 @@ impl DataTransformer for SqlTransformer {
             for row_idx in row_indices {
                 if let Some(row) = data.selected_rows.iter().find(|r| r.row == row_idx) {
                     // Add values with proper escaping
-                    output.push_str("(");
+                    output.push('(');
                     let values: Vec<String> = row
                         .cells
                         .iter()

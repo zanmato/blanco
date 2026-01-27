@@ -5,12 +5,8 @@ mod snippets;
 mod types;
 mod query_tabs;
 
-pub use connections::*;
-pub use query_tabs::*;
 pub use schema::{app_db_path, init_schema};
-pub use settings::*;
-pub use snippets::*;
-pub use types::{ConnectionData, EnvironmentType, QueryHistoryData, QueryTabData, SnippetData};
+pub use types::{ConnectionData, EnvironmentType, QueryTabData, SnippetData};
 
 use gpui::{App, Global};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
@@ -46,7 +42,7 @@ impl AppDatabase {
 
         let pool = SqlitePool::connect_with(options).await?;
 
-        let mut db = Self { pool };
+        let db = Self { pool };
         crate::app_database::init_schema(&db.pool).await?;
 
         Ok(db)

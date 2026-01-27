@@ -1,7 +1,7 @@
 use gpui::{
     App, AppContext, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, KeybindingKeystroke, Keystroke, MouseButton, ParentElement,
-    Render, SharedString, Styled, Task, Window, div, prelude::FluentBuilder, px, rems,
+    InteractiveElement, IntoElement, KeybindingKeystroke, Keystroke, ParentElement, Render,
+    SharedString, Styled, Task, Window, div, prelude::FluentBuilder, px, rems,
 };
 use gpui_component::{
     ActiveTheme, Sizable, WindowExt as _,
@@ -33,12 +33,11 @@ use crate::sql_completion::SqlCompletionProvider;
 use crate::sql_selection_range_provider::SqlSelectionRangeProvider;
 use crate::sql_statement_parser::extract_statement_info;
 use crate::{
-    agent::{ChatPanel, ChatSessionContext, SqlContext},
+    agent::{ChatPanel, ChatSessionContext},
     app_database::AppDatabase,
 };
 use crate::{app::RenameTab, app_settings::AppSettings};
 use blanco_ui::{IconName, SqlLog};
-use llm::LLMProvider;
 use database::{DatabaseService, DatabaseServiceTrait};
 use gpui_component::Icon;
 
@@ -471,12 +470,10 @@ impl EditorPanel {
                                 // Load full table metadata (including primary keys and foreign keys)
                                 if let (Some(table_name), false) =
                                     (&table_name, result.rows.is_empty())
-                                {
-                                    if let Ok(columns) =
+                                    && let Ok(columns) =
                                         connection.get_columns_for_table(table_name, None).await
-                                    {
-                                        result.table_columns = Some(columns);
-                                    }
+                                {
+                                    result.table_columns = Some(columns);
                                 }
 
                                 // Store rows_affected before moving result
@@ -759,7 +756,7 @@ impl EditorPanel {
             // Set up completion provider using connection_id, database_name, and DbService
             let db_service: Arc<dyn DatabaseServiceTrait> =
                 Arc::new(DatabaseService::global(cx).clone());
-            let completion_provider = SqlCompletionProvider::new_with_database(
+            let completion_provider = SqlCompletionProvider::new(
                 params.connection_id,
                 params.database_name.clone(),
                 db_service,
@@ -968,46 +965,43 @@ impl Render for EditorPanel {
                                 }
 
                                 let tab = this.tabs.get(*ix);
-                                match tab {
-                                    Some(TabType::Query(query_tab)) => {
-                                        let tab_title = query_tab.title.clone();
+                                if let Some(TabType::Query(query_tab)) = tab {
+                                    let tab_title = query_tab.title.clone();
 
-                                         // Open rename modal on double click
-                                        let form = RenameTabForm::new(tab_title, window, cx);
-                                        let form_for_modal = form.clone();
-                                        let tab_index = *ix;
+                                     // Open rename modal on double click
+                                    let form = RenameTabForm::new(tab_title, window, cx);
+                                    let form_for_modal = form.clone();
+                                    let tab_index = *ix;
 
-                                        window.open_dialog(cx, move |modal, _window, _cx| {
-                                            let form_clone = form_for_modal.clone();
-                                            let tab_index = tab_index.clone();
-                                            modal
-                                                .title("Rename Tab")
-                                                .w(px(300.))
-                                                .child(form_for_modal.clone())
-                                                .footer({
-                                                    let _form = form_clone.clone();
-                                                    move |ok, cancel, window, cx| {
-                                                        vec![cancel(window, cx), ok(window, cx)]
-                                                    }
-                                                })
-                                                .on_ok({
-                                                    let form = form_clone.clone();
-                                                    move |_modal, window, cx| {
-                                                        // Get the current value from the form
-                                                        let new_name = form.read(cx).get_value(cx);
+                                    window.open_dialog(cx, move |modal, _window, _cx| {
+                                        let form_clone = form_for_modal.clone();
+                                        let tab_index = tab_index;
+                                        modal
+                                            .title("Rename Tab")
+                                            .w(px(300.))
+                                            .child(form_for_modal.clone())
+                                            .footer({
+                                                let _form = form_clone.clone();
+                                                move |ok, cancel, window, cx| {
+                                                    vec![cancel(window, cx), ok(window, cx)]
+                                                }
+                                            })
+                                            .on_ok({
+                                                let form = form_clone.clone();
+                                                move |_modal, window, cx| {
+                                                    // Get the current value from the form
+                                                    let new_name = form.read(cx).get_value(cx);
 
-                                                        // Use the app's global action system instead of local context
-                                                        // Create a new RenameTab action and dispatch it through the app
-                                                        window.dispatch_action(Box::new(RenameTab {
-                                                            tab_index,
-                                                            new_name,
-                                                        }), cx);
-                                                        true
-                                                    }
-                                                })
-                                        });
-                                    }
-                                    _ => {}
+                                                    // Use the app's global action system instead of local context
+                                                    // Create a new RenameTab action and dispatch it through the app
+                                                    window.dispatch_action(Box::new(RenameTab {
+                                                        tab_index,
+                                                        new_name,
+                                                    }), cx);
+                                                    true
+                                                }
+                                            })
+                                    });
                                 };
                             }).ok();
                         }

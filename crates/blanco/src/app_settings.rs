@@ -41,7 +41,7 @@ impl AppSettings {
             }
 
             // Update loaded settings
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 Self::global_mut(cx).settings = loaded_settings;
             });
         })

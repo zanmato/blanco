@@ -1,4 +1,3 @@
-use gpui::{App, Global};
 use gpui_component::ActiveTheme;
 
 /// Environment type for database connections

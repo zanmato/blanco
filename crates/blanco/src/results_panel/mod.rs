@@ -8,11 +8,8 @@ use gpui::{
     Subscription, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, Sizable,
-    button::Button,
-    clipboard::Clipboard,
-    h_flex,
-    input::{Input, InputEvent, InputState},
+    ActiveTheme,
+    input::{InputEvent, InputState},
     table::{Table, TableDelegate, TableState},
     v_flex,
 };
@@ -20,7 +17,7 @@ use gpui_component::{
 use crate::app::{AddRow, DuplicateRow};
 use crate::app_events::AppEvent;
 use crate::transformers::CopyHandler;
-use blanco_core::{QueryResult, DatabaseService as DatabaseServiceTrait};
+use blanco_core::QueryResult;
 use database::DatabaseService;
 
 // Response structure for table operations
@@ -36,13 +33,11 @@ pub struct TableOperationResponse {
 }
 mod table_operations;
 mod results_table_delegate;
-use blanco_ui::IconName;
 
 // Re-exports from results_table_delegate
 pub use results_table_delegate::{
-    ResultsTableDelegate, CellEditState, TableChange, ChangeType, TableChangeBuilder,
+    ResultsTableDelegate, TableChange, ChangeType,
 };
-use table_operations::{ColumnChange, OperationType, RowIdentifier, TableChangeOperation};
 
 // Data structures for copy functionality
 #[derive(Clone, Debug)]
@@ -742,7 +737,7 @@ impl ResultsPanel {
                         // Handle failed operations - show error but keep edits for retry
                         if let Some(sql_log) = sql_log_response_entity {
                             let error_message_clone = response.error_message.clone();
-                            let _ = sql_log.update(cx, |log, cx| {
+                            sql_log.update(cx, |log, cx| {
                                 let error_msg = format!(
                                     "✗ Table operations failed: {}",
                                     error_message_clone
@@ -770,7 +765,7 @@ impl ResultsPanel {
 
                     // Update SQL log with error
                     if let Some(sql_log) = sql_log_response_entity {
-                        let _ = sql_log.update(cx, |log, cx| {
+                        sql_log.update(cx, |log, cx| {
                             let error_msg = format!("✗ Failed to get operation response: {}", e);
                             log.append_text(&blanco_ui::SqlLogMessage::Comment(error_msg), cx);
                         });

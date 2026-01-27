@@ -1,12 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
-use std::time::Duration;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
-    InteractiveElement, IntoElement, MouseButton, ParentElement, Render, SharedString, Styled,
-    Subscription, TextRun, Window, div, px,
+    App, AppContext, Context, Entity, Focusable, FontWeight,
+    InteractiveElement, IntoElement, MouseButton, ParentElement, SharedString, Styled, TextRun, Window, div, px,
 };
 use gpui_component::popover::{Popover, PopoverState};
 use gpui_component::{
@@ -14,25 +12,21 @@ use gpui_component::{
     button::{Button, ButtonVariants},
     clipboard::Clipboard,
     h_flex,
-    input::{Input, InputEvent, InputState},
+    input::{Input, InputState},
     menu::PopupMenu,
-    table::{Column, ColumnSort, Table, TableDelegate, TableState},
-    v_flex,
+    table::{Column, ColumnSort, TableDelegate, TableState},
 };
 use serde_json::Value;
 
 use blanco_core::{
-    DatabaseService as DatabaseServiceTrait, QueryResult, connection_trait::ForeignKeyInfo,
+    QueryResult, connection_trait::ForeignKeyInfo,
 };
-use database::DatabaseService;
 
 use crate::app::{AddRow, DuplicateRow};
-use crate::app_events::AppEvent;
 use crate::foreign_key_popover::ForeignKeyPopover;
 use crate::results_panel::table_operations::{
     ColumnChange, OperationType, RowIdentifier, TableChangeOperation,
 };
-use crate::transformers::CopyHandler;
 use blanco_ui::IconName;
 
 /// Format a value for display in table cells, replacing whitespace with visual indicators
@@ -1210,7 +1204,7 @@ impl TableDelegate for ResultsTableDelegate {
                         let fk_info = fk_info.clone();
                         let cell_value = display_text.clone();
                         let popover_id = format!("fk-popover-{}-{}", row_ix, col_ix);
-                        let connection_id = self.connection_id.clone();
+                        let connection_id = self.connection_id;
                         let database_name = if self.database_name.is_empty() {
                             None
                         } else {
