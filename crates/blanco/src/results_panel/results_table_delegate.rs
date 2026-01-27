@@ -18,7 +18,7 @@ use gpui_component::{
 };
 use serde_json::Value;
 
-use blanco_core::{QueryResult, connection_trait::ForeignKeyInfo};
+use blanco_core::{QueryResult, connection_trait::ColumnType, connection_trait::ForeignKeyInfo};
 
 use crate::app::{AddRow, DuplicateRow};
 use crate::foreign_key_popover::ForeignKeyPopover;
@@ -264,7 +264,7 @@ impl TableChange {
 #[derive(Default)]
 pub struct ResultsTableDelegate {
     pub columns: Vec<Column>,
-    pub column_types: Vec<String>,
+    pub column_types: Vec<ColumnType>,
     pub rows: Vec<Vec<String>>,
     pub edit_state: CellEditState,
     pub table_name: Option<String>,
@@ -807,78 +807,6 @@ impl ResultsTableDelegate {
         self.table_name.as_deref()
     }
 
-    pub fn is_numeric_column(&self, col_index: usize) -> bool {
-        if let Some(column_type) = self.column_types.get(col_index) {
-            let type_lower = column_type.to_lowercase();
-
-            // SQL standard names
-            type_lower.contains("int")
-                || type_lower.contains("float")
-                || type_lower.contains("double")
-                || type_lower.contains("numeric")
-                || type_lower.contains("decimal")
-                || type_lower.contains("real")
-                || type_lower.contains("smallint")
-                || type_lower.contains("bigint")
-                || type_lower.contains("serial")
-                || type_lower.contains("money")
-                // PostgreSQL internal type names
-                || type_lower == "int2"    // smallint
-                || type_lower == "int4"    // integer
-                || type_lower == "int8"    // bigint
-                || type_lower == "float4"  // real
-                || type_lower == "float8"  // double precision
-                || type_lower == "numeric" // numeric
-                || type_lower == "money" // money
-        } else {
-            false
-        }
-    }
-
-    /// Check if a column contains UUID data
-    pub fn is_uuid_column(&self, col_index: usize) -> bool {
-        if let Some(column_type) = self.column_types.get(col_index) {
-            let type_lower = column_type.to_lowercase();
-            type_lower.contains("uuid")
-        } else {
-            false
-        }
-    }
-
-    /// Check if a column contains timestamp data (timestamp or timestamptz)
-    pub fn is_timestamp_column(&self, col_index: usize) -> bool {
-        if let Some(column_type) = self.column_types.get(col_index) {
-            let type_lower = column_type.to_lowercase();
-            type_lower.contains("timestamp")
-                || type_lower.contains("timestamptz")
-                || type_lower.contains("datetime")
-        } else {
-            false
-        }
-    }
-
-    /// Check if a column contains JSON or JSONB data
-    pub fn is_json_column(&self, col_index: usize) -> bool {
-        if let Some(column_type) = self.column_types.get(col_index) {
-            let type_lower = column_type.to_lowercase();
-            type_lower.contains("json")
-        } else {
-            false
-        }
-    }
-
-    /// Check if a column contains array data (PostgreSQL returns "ARRAY" or "type[]")
-    pub fn is_array_column(&self, col_index: usize) -> bool {
-        if let Some(column_type) = self.column_types.get(col_index) {
-            let type_lower = column_type.to_lowercase();
-
-            type_lower == "array" || type_lower.ends_with("[]")
-        } else {
-            tracing::debug!("Array detection: No column type for index {}", col_index);
-            false
-        }
-    }
-
     pub fn is_editable(&self) -> bool {
         self.table_name.is_some() && self.primary_key_column.is_some()
     }
@@ -989,7 +917,7 @@ impl TableDelegate for ResultsTableDelegate {
             // Embed Input directly in the cell (not for row number column)
             if let Some(input) = self.edit_state.get_editing_input() {
                 let is_expanded = self.edit_state.is_expanded(row_ix, col_ix);
-                let is_json = self.is_json_column(col_ix - 1);
+                let is_json = self.column_types.get(col_ix - 1) == Some(&ColumnType::Json);
                 let input = input.clone();
 
                 if is_expanded {
@@ -1077,21 +1005,26 @@ impl TableDelegate for ResultsTableDelegate {
                         .flex()
                         .items_center()
                         .p_0()
-                        .when(self.is_numeric_column(col_ix - 1), |this| {
-                            this.justify_end()
-                        })
-                        .when(self.is_uuid_column(col_ix - 1), |this| {
-                            this.text_color(cx.theme().blue)
-                        })
-                        .when(self.is_timestamp_column(col_ix - 1), |this| {
-                            this.text_color(cx.theme().green)
-                        })
-                        .when(self.is_json_column(col_ix - 1), |this| {
-                            this.text_color(cx.theme().yellow)
-                        })
-                        .when(self.is_array_column(col_ix - 1), |this| {
-                            this.text_color(cx.theme().blue)
-                        })
+                        .when(
+                            self.column_types.get(col_ix - 1).map_or(false, |ct| ct.is_numeric()),
+                            |this| this.justify_end()
+                        )
+                        .when(
+                            self.column_types.get(col_ix - 1) == Some(&ColumnType::Uuid),
+                            |this| this.text_color(cx.theme().blue)
+                        )
+                        .when(
+                            self.column_types.get(col_ix - 1) == Some(&ColumnType::DateTime),
+                            |this| this.text_color(cx.theme().green)
+                        )
+                        .when(
+                            self.column_types.get(col_ix - 1) == Some(&ColumnType::Json),
+                            |this| this.text_color(cx.theme().yellow)
+                        )
+                        .when(
+                            self.column_types.get(col_ix - 1) == Some(&ColumnType::Array),
+                            |this| this.text_color(cx.theme().blue)
+                        )
                         .child(
                             Input::new(&input)
                                 .disabled(!self.is_editable())
@@ -1169,7 +1102,8 @@ impl TableDelegate for ResultsTableDelegate {
             }
         } else {
             // Check if this is a numeric column for right-alignment (adjust for row number column)
-            let is_numeric = !is_row_number_col && self.is_numeric_column(col_ix - 1);
+            let is_numeric = !is_row_number_col
+                && self.column_types.get(col_ix - 1).map_or(false, |ct| ct.is_numeric());
 
             // Render static cell with appropriate handlers
             let cell_content = h_flex()
@@ -1274,19 +1208,19 @@ impl TableDelegate for ResultsTableDelegate {
                         .text_color(cx.theme().foreground) // Ensure numeric text is visible
                 })
                 .when(
-                    !is_row_number_col && self.is_uuid_column(col_ix - 1),
+                    !is_row_number_col && self.column_types.get(col_ix - 1) == Some(&ColumnType::Uuid),
                     |this| {
                         this.text_color(cx.theme().blue) // Blue color for UUIDs
                     },
                 )
                 .when(
-                    !is_row_number_col && self.is_timestamp_column(col_ix - 1),
+                    !is_row_number_col && self.column_types.get(col_ix - 1) == Some(&ColumnType::DateTime),
                     |this| {
                         this.text_color(cx.theme().green) // Green color for timestamps
                     },
                 )
                 .when(
-                    !is_row_number_col && self.is_json_column(col_ix - 1),
+                    !is_row_number_col && self.column_types.get(col_ix - 1) == Some(&ColumnType::Json),
                     |this| {
                         this.text_color(cx.theme().yellow) // Yellow color for JSON
                     },

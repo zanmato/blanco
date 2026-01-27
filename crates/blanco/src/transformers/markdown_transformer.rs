@@ -1,4 +1,5 @@
 use crate::transformers::{DataTransformer, SelectedTableData, TransformError};
+use blanco_core::connection_trait::ColumnType;
 
 pub struct MarkdownTransformer;
 
@@ -116,7 +117,7 @@ impl DataTransformer for MarkdownTransformer {
     fn transform_single_cell(
         &self,
         value: &str,
-        _column_type: &str,
+        _column_type: &ColumnType,
     ) -> Result<String, TransformError> {
         // For markdown, we just return the value as-is
         Ok(value.to_string())
@@ -126,7 +127,7 @@ impl DataTransformer for MarkdownTransformer {
         &self,
         row_data: &[String],
         _columns: &[String],
-        _column_types: &[String],
+        _column_types: &[ColumnType],
     ) -> Result<String, TransformError> {
         // Markdown streaming is not well-supported due to column width calculation,
         // but we provide a basic implementation for completeness
@@ -174,7 +175,7 @@ mod tests {
         assert_eq!(transformer.format_name(), "Markdown");
         assert_eq!(transformer.file_extension(), "md");
         assert_eq!(
-            transformer.transform_single_cell("test", "").unwrap(),
+            transformer.transform_single_cell("test", &ColumnType::Text).unwrap(),
             "test"
         );
     }

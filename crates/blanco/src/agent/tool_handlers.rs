@@ -142,7 +142,7 @@ impl AgentToolHandler for ListTablesHandler {
             "table_names".to_string(),
             ParameterProperty {
                 property_type: "string".to_string(),
-                description: "Optional comma-separated list of table names to filter. If not provided, lists all tables in user schemas. Wildcard (%) is not supported.".to_string(),
+                description: "Optional comma-separated list of table name patterns to filter. Supports SQL LIKE wildcards: % matches any characters, _ matches a single character. Example: '%user%' finds tables containing 'user', 'order%' finds tables starting with 'order'. If not provided, lists all tables in user schemas.".to_string(),
                 items: None,
                 enum_list: None,
             },

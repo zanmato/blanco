@@ -1,10 +1,14 @@
 use blanco_ui::IconName;
 use gpui::{
-    Context, ElementId, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
-    Window, div, px,
+    Context, ElementId, IntoElement, ParentElement, Render, SharedString, StyleRefinement, Styled,
+    Subscription, Window, div, px, rems,
 };
 use gpui_component::{
-    ActiveTheme, Icon, StyledExt as _, clipboard::Clipboard, h_flex, text::TextView, v_flex,
+    ActiveTheme, Icon, StyledExt as _,
+    clipboard::Clipboard,
+    h_flex,
+    text::{TextView, TextViewStyle},
+    v_flex,
 };
 
 use super::chat_types::MessageRole;
@@ -41,6 +45,18 @@ impl Render for ChatMessageState {
                             .text_sm()
                             .scrollable(false)
                             .selectable(true)
+                            .style(
+                                TextViewStyle::default()
+                                    .paragraph_gap(rems(0.5))
+                                    .heading_font_size(|level, rem_size| match level {
+                                        1..=3 => rem_size * 1,
+                                        4 => rem_size * 0.9,
+                                        _ => rem_size * 0.8,
+                                    })
+                                    .code_block(
+                                        StyleRefinement::default().my_3().text_size(px(11.)),
+                                    ),
+                            )
                             .code_block_actions(move |code_block, _window, _cx| {
                                 let code = code_block.code();
                                 let id = id.clone();

@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use crate::transformers::{DataTransformer, SelectedTableData, TransformError};
+use blanco_core::connection_trait::ColumnType;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -46,9 +47,10 @@ impl DataTransformer for JsonTransformer {
                     let mut obj = HashMap::new();
                     for cell in &row.cells {
                         if let Some(col_name) = &cell.column_name {
+                            let column_type = cell.column_type.unwrap_or(ColumnType::Text);
                             let json_value = convert_to_json_value(
                                 &cell.value,
-                                cell.column_type.as_deref().unwrap_or("text"),
+                                &column_type,
                             );
                             obj.insert(col_name.clone(), json_value);
                         }
@@ -66,7 +68,7 @@ impl DataTransformer for JsonTransformer {
     fn transform_single_cell(
         &self,
         value: &str,
-        column_type: &str,
+        column_type: &ColumnType,
     ) -> Result<String, TransformError> {
         let json_value = convert_to_json_value(value, column_type);
         serde_json::to_string(&json_value).map_err(|e| TransformError::FormatError(e.to_string()))
@@ -77,7 +79,7 @@ impl DataTransformer for JsonTransformer {
     fn initialize_stream(
         &self,
         _columns: &[String],
-        _column_types: &[String],
+        _column_types: &[ColumnType],
     ) -> Result<String, TransformError> {
         // Start JSON array
         Ok("[\n".to_string())
@@ -87,14 +89,14 @@ impl DataTransformer for JsonTransformer {
         &self,
         row_data: &[String],
         columns: &[String],
-        column_types: &[String],
+        column_types: &[ColumnType],
     ) -> Result<String, TransformError> {
         let mut obj = std::collections::HashMap::new();
 
         for (i, value) in row_data.iter().enumerate() {
             if let Some(col_name) = columns.get(i) {
-                let column_type = column_types.get(i).map(|s| s.as_str()).unwrap_or("text");
-                let json_value = convert_to_json_value(value, column_type);
+                let column_type = column_types.get(i).copied().unwrap_or(ColumnType::Text);
+                let json_value = convert_to_json_value(value, &column_type);
                 obj.insert(col_name.clone(), json_value);
             }
         }
@@ -136,58 +138,26 @@ impl DataTransformer for JsonTransformer {
 }
 
 /// Convert a database value to appropriate JSON Value based on column type
-fn convert_to_json_value(value: &str, column_type: &str) -> serde_json::Value {
-    let normalized_type = column_type.to_lowercase();
-
+fn convert_to_json_value(value: &str, column_type: &ColumnType) -> serde_json::Value {
     // Check for NULL values
     if is_null_value(value) {
         return serde_json::Value::Null;
     }
 
-    // Try to parse based on column type hints
-    if let Some(json_value) = try_parse_typed_value(value, &normalized_type) {
-        return json_value;
+    // Try to parse based on column type enum
+    match column_type {
+        ColumnType::Boolean => parse_boolean(value),
+        ColumnType::Integer | ColumnType::Numeric => {
+            parse_numeric(value).unwrap_or_else(|| infer_json_type(value))
+        }
+        ColumnType::Json => parse_json(value).unwrap_or_else(|| infer_json_type(value)),
+        _ => infer_json_type(value),
     }
-
-    // Fallback: try to infer the type from the value itself
-    infer_json_type(value)
 }
 
 /// Check if a value should be treated as NULL
 fn is_null_value(value: &str) -> bool {
     value.is_empty() || value.eq_ignore_ascii_case("null") || value == "--"
-}
-
-/// Try to parse a value based on column type hints
-fn try_parse_typed_value(value: &str, column_type: &str) -> Option<serde_json::Value> {
-    // Boolean type
-    if column_type.contains("bool") {
-        return Some(parse_boolean(value));
-    }
-
-    // Numeric types
-    if is_numeric_type(column_type) {
-        return parse_numeric(value);
-    }
-
-    // JSON type
-    if column_type.contains("json") {
-        return parse_json(value);
-    }
-
-    None
-}
-
-/// Check if column type indicates numeric data
-fn is_numeric_type(column_type: &str) -> bool {
-    column_type.contains("int")
-        || column_type.contains("float")
-        || column_type.contains("double")
-        || column_type.contains("numeric")
-        || column_type.contains("decimal")
-        || column_type.contains("real")
-        || column_type.contains("serial")
-        || column_type.contains("bigserial")
 }
 
 /// Parse string as boolean value
@@ -262,23 +232,6 @@ mod tests {
     }
 
     #[test]
-    fn test_is_numeric_type() {
-        assert!(is_numeric_type("integer"));
-        assert!(is_numeric_type("int"));
-        assert!(is_numeric_type("bigint"));
-        assert!(is_numeric_type("float"));
-        assert!(is_numeric_type("double"));
-        assert!(is_numeric_type("numeric"));
-        assert!(is_numeric_type("decimal"));
-        assert!(is_numeric_type("real"));
-        assert!(is_numeric_type("serial"));
-        assert!(is_numeric_type("bigserial"));
-        assert!(!is_numeric_type("text"));
-        assert!(!is_numeric_type("varchar"));
-        assert!(!is_numeric_type("boolean"));
-    }
-
-    #[test]
     fn test_parse_boolean() {
         assert_eq!(parse_boolean("true"), json!(true));
         assert_eq!(parse_boolean("false"), json!(false));
@@ -337,36 +290,39 @@ mod tests {
     #[test]
     fn test_convert_to_json_value_with_column_types() {
         // NULL values
-        assert_eq!(convert_to_json_value("", "text"), serde_json::Value::Null);
         assert_eq!(
-            convert_to_json_value("NULL", "varchar"),
+            convert_to_json_value("", &ColumnType::Text),
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            convert_to_json_value("NULL", &ColumnType::Text),
             serde_json::Value::Null
         );
 
         // Typed numeric values
-        assert_eq!(convert_to_json_value("123", "integer"), json!(123));
+        assert_eq!(convert_to_json_value("123", &ColumnType::Integer), json!(123));
         assert_eq!(
-            convert_to_json_value("45.67", "decimal(10,2)"),
+            convert_to_json_value("45.67", &ColumnType::Numeric),
             json!(45.67)
         );
 
         // Typed boolean values
-        assert_eq!(convert_to_json_value("true", "boolean"), json!(true));
-        assert_eq!(convert_to_json_value("0", "bool"), json!(false));
+        assert_eq!(convert_to_json_value("true", &ColumnType::Boolean), json!(true));
+        assert_eq!(convert_to_json_value("0", &ColumnType::Boolean), json!(false));
 
         // JSON columns
         assert_eq!(
-            convert_to_json_value(r#"{"a": 1}"#, "json"),
+            convert_to_json_value(r#"{"a": 1}"#, &ColumnType::Json),
             json!({"a": 1})
         );
         assert_eq!(
-            convert_to_json_value(r#"[1,2,3]"#, "jsonb"),
+            convert_to_json_value(r#"[1,2,3]"#, &ColumnType::Json),
             json!([1, 2, 3])
         );
 
         // Text columns with type inference
-        assert_eq!(convert_to_json_value("123", "text"), json!(123)); // Inferred as number
-        assert_eq!(convert_to_json_value("hello", "varchar"), json!("hello"));
+        assert_eq!(convert_to_json_value("123", &ColumnType::Text), json!(123)); // Inferred as number
+        assert_eq!(convert_to_json_value("hello", &ColumnType::Text), json!("hello"));
     }
 
     #[test]
@@ -377,28 +333,28 @@ mod tests {
 
         // Test single cell transformation
         assert_eq!(
-            transformer.transform_single_cell("123", "integer").unwrap(),
+            transformer.transform_single_cell("123", &ColumnType::Integer).unwrap(),
             "123"
         );
         assert_eq!(
-            transformer.transform_single_cell("", "text").unwrap(),
+            transformer.transform_single_cell("", &ColumnType::Text).unwrap(),
             "null"
         );
         assert_eq!(
-            transformer.transform_single_cell("hello", "text").unwrap(),
+            transformer.transform_single_cell("hello", &ColumnType::Text).unwrap(),
             "\"hello\""
         );
 
         // Test complex types
         assert_eq!(
             transformer
-                .transform_single_cell(r#"{"key": "value"}"#, "json")
+                .transform_single_cell(r#"{"key": "value"}"#, &ColumnType::Json)
                 .unwrap(),
             r#"{"key":"value"}"#
         );
         assert_eq!(
             transformer
-                .transform_single_cell("true", "boolean")
+                .transform_single_cell("true", &ColumnType::Boolean)
                 .unwrap(),
             "true"
         );

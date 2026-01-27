@@ -27,6 +27,7 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 tracing = { workspace = true }
 futures = { workspace = true }
+hex = { workspace = true }
 
 # Rope handling for completion/hover
 ropey = { workspace = true }

@@ -6,6 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use blanco_core::connection_trait::ColumnType;
 use crate::{export_modal::ExportOptions, transformers::DataTransformer};
 
 /// Progress information for export operations
@@ -35,7 +36,7 @@ pub enum ExportResult {
 #[derive(Clone, Debug)]
 pub struct StreamRowData {
     pub columns: Vec<String>,
-    pub column_types: Vec<String>,
+    pub column_types: Vec<ColumnType>,
     pub row_data: Vec<String>,
 }
 

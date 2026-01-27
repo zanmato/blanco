@@ -13,37 +13,9 @@ impl SqliteConnection {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<TableSchemaInfo>> {
-        // Build WHERE clause for table name filtering if provided
-        let where_clause = if let Some(names) = table_names {
-            let name_list: Vec<&str> = names.split(',').map(|s| s.trim()).collect();
-            format!(
-                " AND name IN ({})",
-                name_list
-                    .iter()
-                    .map(|s| format!("'{}'", s))
-                    .collect::<Vec<_>>()
-                    .join(",")
-            )
-        } else {
-            String::new()
-        };
+        let (tables_query, params) = self.build_tables_query_and_params(table_names, limit, offset);
 
-        // Get paginated tables first
-        let tables_query = format!(
-            r#"
-            SELECT name, 'main' as schema, 'TABLE' as object_type
-            FROM sqlite_master
-            WHERE type = 'table'
-                AND name NOT LIKE 'sqlite_%'
-                AND name NOT LIKE 'pg_%'
-                {}
-            ORDER BY name
-            LIMIT {} OFFSET {}
-        "#,
-            where_clause, limit, offset
-        );
-
-        let tables_result = self.execute_query(&tables_query, None, None).await?;
+        let tables_result = self.execute_query(&tables_query, None, Some(&params)).await?;
         let mut tables = Vec::new();
 
         for table_row in &tables_result.rows {
@@ -144,5 +116,61 @@ impl SqliteConnection {
             tables.len()
         );
         Ok(tables)
+    }
+
+    /// Build the tables query string and parameters for SQLite
+    fn build_tables_query_and_params(
+        &self,
+        table_names: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> (String, Vec<String>) {
+        let mut params = Vec::new();
+        let mut where_conditions = vec![
+            "type = 'table'".to_string(),
+            "name NOT LIKE 'sqlite_%'".to_string(),
+            "name NOT LIKE 'pg_%'".to_string(),
+        ];
+
+        // Add table name filter with LIKE wildcard support if specified
+        if let Some(names_str) = table_names {
+            if !names_str.trim().is_empty() {
+                let patterns: Vec<String> = names_str
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+
+                if !patterns.is_empty() {
+                    let like_conditions = patterns
+                        .iter()
+                        .map(|_| "name LIKE ?")
+                        .collect::<Vec<_>>()
+                        .join(" OR ");
+                    where_conditions.push(format!("({})", like_conditions));
+                    for pattern in &patterns {
+                        params.push(pattern.clone());
+                    }
+                }
+            }
+        }
+
+        let where_clause = where_conditions.join(" AND ");
+
+        let query = format!(
+            r#"
+            SELECT name, 'main' as schema, 'TABLE' as object_type
+            FROM sqlite_master
+            WHERE {}
+            ORDER BY name
+            LIMIT ? OFFSET ?
+        "#,
+            where_clause
+        );
+
+        params.push(limit.to_string());
+        params.push(offset.to_string());
+
+        (query, params)
     }
 }

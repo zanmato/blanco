@@ -9,8 +9,8 @@ pub mod database_service;
 
 // Re-export main types for convenience
 pub use connection_trait::{
-    ColumnInfo, Connection, ConnectionFactory, DatabaseSchemaResult, DriverType, PaginationInfo,
-    QueryResult, TableMetadata, TableSchemaInfo,
+    ColumnInfo, ColumnType, Connection, ConnectionFactory, DatabaseSchemaResult, DriverType,
+    PaginationInfo, QueryResult, TableMetadata, TableSchemaInfo,
 };
 
 pub use database_service::{ConnectionStatus, DatabaseService};

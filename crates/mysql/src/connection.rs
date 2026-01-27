@@ -1,12 +1,13 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
-    connection_trait::ForeignKeyInfo, ColumnInfo, Connection, QueryResult,
+    connection_trait::ColumnType, connection_trait::ForeignKeyInfo, ColumnInfo, Connection,
+    QueryResult,
 };
 use futures::StreamExt;
 use smol::lock::RwLock;
 use sqlx::mysql::MySqlPoolOptions;
-use sqlx::{Column, Row};
+use sqlx::{Column, Row, ValueRef};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -207,6 +208,19 @@ impl MysqlConnectionKey {
 }
 
 impl MysqlConnection {
+    /// Map MySQL type name to ColumnType enum
+    fn map_mysql_type(type_name: &str) -> ColumnType {
+        match type_name.to_lowercase().as_str() {
+            "tinyint" | "smallint" | "mediumint" | "int" | "bigint" => ColumnType::Integer,
+            "float" | "double" | "decimal" | "numeric" => ColumnType::Numeric,
+            "char" | "varchar" | "text" => ColumnType::Text,
+            "date" | "datetime" | "timestamp" | "time" => ColumnType::DateTime,
+            "json" => ColumnType::Json,
+            "binary" | "varbinary" | "blob" => ColumnType::Binary,
+            _ => ColumnType::Unknown,
+        }
+    }
+
     /// Create a new MySQL connection from a connection string
     pub fn from_connection_string(connection_string: &str) -> Result<Self> {
         tracing::info!("🔗 Creating MySQL connection from: {}", connection_string);
@@ -355,67 +369,69 @@ impl MysqlConnection {
         &self,
         row: &sqlx::mysql::MySqlRow,
         column_index: usize,
-        column_type: &str,
+        column_types: &[ColumnType],
     ) -> String {
-        // Use column type to determine the best conversion approach
-        match column_type.to_uppercase().as_str() {
+        // Use column type enum for type-based routing
+        let column_type = column_types.get(column_index).copied().unwrap_or(ColumnType::Unknown);
+
+        // Get the raw type name for detailed matching
+        let type_name = if let Ok(col) = row.try_get_raw(column_index) {
+            col.type_info().to_string()
+        } else {
+            "unknown".to_string()
+        };
+
+        // Route based on column type enum
+        match column_type {
             // Integer types
-            "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INT" | "INTEGER" | "BIGINT"
-            | "TINYINT SIGNED" | "SMALLINT SIGNED" | "MEDIUMINT SIGNED" | "INT SIGNED"
-            | "BIGINT SIGNED" => {
+            ColumnType::Integer => {
+                // Try signed first, then unsigned
                 if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(column_index) {
                     // Special handling for TINYINT(1) which is often used for booleans
-                    if column_type.to_uppercase().contains("TINYINT") && (v == 0 || v == 1) {
+                    if type_name.to_uppercase().contains("TINYINT") && (v == 0 || v == 1) {
                         return if v == 1 { "true" } else { "false" }.to_string();
                     }
                     return v.to_string();
                 }
-            }
-
-            "INT UNSIGNED" => {
                 if let Ok(Some(v)) = row.try_get::<Option<u64>, _>(column_index) {
                     return v.to_string();
                 }
             }
 
-            // Floating point types
-            "FLOAT" | "DOUBLE" | "REAL" => {
+            // Numeric types
+            ColumnType::Numeric => {
+                // Try decimal first
+                if let Ok(Some(v)) = row.try_get::<Option<rust_decimal::Decimal>, _>(column_index) {
+                    return v.to_string();
+                }
+                // Try float
                 if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(column_index) {
                     return v.to_string();
                 }
             }
 
-            // Decimal types - try rust_decimal conversion, will fall back to string
-            "DECIMAL" | "NUMERIC" => {
-                if let Ok(Some(v)) = row.try_get::<Option<rust_decimal::Decimal>, _>(column_index) {
-                    return v.to_string();
-                }
-            }
-
             // Boolean type
-            "BOOLEAN" | "BOOL" | "TINYINT(1)" => {
+            ColumnType::Boolean => {
                 if let Ok(Some(v)) = row.try_get::<Option<bool>, _>(column_index) {
                     return if v { "true" } else { "false" }.to_string();
                 }
             }
 
             // Date and time types
-            "DATE" => {
-                if let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveDate>, _>(column_index) {
-                    return v.to_string();
-                }
-            }
-
-            "DATETIME" | "TIMESTAMP" => {
+            ColumnType::DateTime => {
                 // Try string conversion first for better compatibility
                 if let Ok(Some(v)) = row.try_get::<Option<String>, _>(column_index) {
                     return v;
                 }
-                // Try NaiveDateTime
+                if let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveDate>, _>(column_index) {
+                    return v.to_string();
+                }
                 if let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveDateTime>, _>(column_index) {
                     return v.to_string();
                 }
-                // Try DateTime<Utc> for TIMESTAMP
+                if let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveTime>, _>(column_index) {
+                    return v.to_string();
+                }
                 if let Ok(Some(v)) =
                     row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>(column_index)
                 {
@@ -423,31 +439,30 @@ impl MysqlConnection {
                 }
             }
 
-            "TIME" => {
-                if let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveTime>, _>(column_index) {
-                    return v.to_string();
-                }
-            }
-
-            // String and binary types
-            "CHAR" | "VARCHAR" | "TEXT" | "TINYTEXT" | "MEDIUMTEXT" | "LONGTEXT" | "ENUM"
-            | "SET" | "JSON" => {
+            // Text type
+            ColumnType::Text => {
                 if let Ok(v) = row.try_get::<Option<String>, _>(column_index) {
                     return v.unwrap_or_else(|| "NULL".to_string());
                 }
             }
 
-            // Binary types (these might be represented as strings in hex format)
-            "BINARY" | "VARBINARY" | "BLOB" | "TINYBLOB" | "MEDIUMBLOB" | "LONGBLOB" => {
+            // JSON type
+            ColumnType::Json => {
+                if let Ok(v) = row.try_get::<Option<String>, _>(column_index) {
+                    return v.unwrap_or_else(|| "NULL".to_string());
+                }
+            }
+
+            // Binary type
+            ColumnType::Binary => {
                 if let Ok(Some(v)) = row.try_get::<Option<Vec<u8>>, _>(column_index) {
                     return format!("0x{}", hex::encode(v));
                 }
             }
 
-            // Unknown type - try common numeric types first
-            unknown => {
-                tracing::debug!("unknown type: {}", unknown);
-
+            // Unknown type - try common types
+            ColumnType::Unknown => {
+                tracing::debug!("unknown type: {}", type_name);
                 // Try boolean first (for SELECT TRUE/FALSE literals)
                 if let Ok(Some(v)) = row.try_get::<Option<bool>, _>(column_index) {
                     return if v { "true" } else { "false" }.to_string();
@@ -465,6 +480,9 @@ impl MysqlConnection {
                     return v.to_string();
                 }
             }
+
+            // Array, Uuid - not typically used in MySQL but handle gracefully
+            _ => {}
         }
 
         // Universal fallback: try string conversion
@@ -565,7 +583,7 @@ impl Connection for MysqlConnection {
         let mut results = sql_query;
 
         let mut columns: Vec<String> = Vec::new();
-        let mut column_types: Vec<String> = Vec::new();
+        let mut column_types: Vec<ColumnType> = Vec::new();
         let mut rows: Vec<Vec<String>> = Vec::new();
         let mut rows_affected: u64 = 0;
         let mut collected_rows: Vec<sqlx::mysql::MySqlRow> = Vec::new();
@@ -587,7 +605,7 @@ impl Connection for MysqlConnection {
                         column_types = row
                             .columns()
                             .iter()
-                            .map(|col| col.type_info().to_string())
+                            .map(|col| Self::map_mysql_type(col.type_info().to_string().as_str()))
                             .collect();
 
                         tracing::info!("columns {:?}, {:?}", columns, column_types);
@@ -607,7 +625,7 @@ impl Connection for MysqlConnection {
                     columns
                         .iter()
                         .enumerate()
-                        .map(|(i, _)| self.convert_row_value_to_string(row, i, &column_types[i]))
+                        .map(|(i, _)| self.convert_row_value_to_string(row, i, column_types.as_slice()))
                         .collect()
                 })
                 .collect();

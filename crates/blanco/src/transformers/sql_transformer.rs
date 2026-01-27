@@ -1,4 +1,5 @@
 use crate::transformers::{DataTransformer, SelectedTableData, TransformError};
+use blanco_core::connection_trait::ColumnType;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -112,7 +113,7 @@ impl DataTransformer for SqlTransformer {
     fn transform_single_cell(
         &self,
         value: &str,
-        _column_type: &str,
+        _column_type: &ColumnType,
     ) -> Result<String, TransformError> {
         if value.is_empty() || value.eq_ignore_ascii_case("null") {
             Ok("NULL".to_string())
@@ -126,7 +127,7 @@ impl DataTransformer for SqlTransformer {
     fn initialize_stream(
         &self,
         columns: &[String],
-        _column_types: &[String],
+        _column_types: &[ColumnType],
     ) -> Result<String, TransformError> {
         // Generate and store column list once
         let column_list = columns
@@ -150,7 +151,7 @@ impl DataTransformer for SqlTransformer {
         &self,
         row_data: &[String],
         _columns: &[String],
-        _column_types: &[String],
+        _column_types: &[ColumnType],
     ) -> Result<String, TransformError> {
         // Add values with proper escaping
         let values: Vec<String> = row_data
@@ -227,16 +228,16 @@ mod tests {
         assert_eq!(transformer.format_name(), "SQL");
         assert_eq!(transformer.file_extension(), "sql");
         assert_eq!(
-            transformer.transform_single_cell("test", "").unwrap(),
+            transformer.transform_single_cell("test", &ColumnType::Text).unwrap(),
             "'test'"
         );
-        assert_eq!(transformer.transform_single_cell("", "").unwrap(), "NULL");
+        assert_eq!(transformer.transform_single_cell("", &ColumnType::Text).unwrap(), "NULL");
         assert_eq!(
-            transformer.transform_single_cell("NULL", "").unwrap(),
+            transformer.transform_single_cell("NULL", &ColumnType::Text).unwrap(),
             "NULL"
         );
         assert_eq!(
-            transformer.transform_single_cell("it's", "").unwrap(),
+            transformer.transform_single_cell("it's", &ColumnType::Text).unwrap(),
             "'it''s'"
         );
     }

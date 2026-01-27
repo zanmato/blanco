@@ -124,7 +124,7 @@ impl PostgresConnection {
     ) -> (String, Vec<QueryParam>) {
         let (where_clause, mut params) = if let Some(names) = table_names {
             (
-                " AND t.table_name = ANY($1)".to_string(),
+                " AND t.table_name LIKE ANY($1)".to_string(),
                 vec![QueryParam::StringArray(names)],
             )
         } else {

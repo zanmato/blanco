@@ -12,11 +12,13 @@ use gpui_component::{
     v_flex,
 };
 
+use blanco_core::connection_trait::ColumnType;
+use blanco_core::QueryResult;
+use database::DatabaseService;
+
 use crate::app::{AddRow, DuplicateRow};
 use crate::app_events::AppEvent;
 use crate::transformers::CopyHandler;
-use blanco_core::QueryResult;
-use database::DatabaseService;
 
 // Response structure for table operations
 #[derive(Debug, Clone)]
@@ -43,7 +45,7 @@ pub struct SelectedCell {
     pub col: usize,
     pub value: String,
     pub column_name: Option<String>,
-    pub column_type: Option<String>,
+    pub column_type: Option<ColumnType>,
 }
 
 #[derive(Clone, Debug)]
@@ -58,7 +60,7 @@ pub struct SelectedRow {
 pub struct SelectedTableData {
     pub table_name: Option<String>,
     pub columns: Vec<String>,
-    pub column_types: Vec<String>,
+    pub column_types: Vec<ColumnType>,
     pub selected_rows: Vec<SelectedRow>,
 }
 

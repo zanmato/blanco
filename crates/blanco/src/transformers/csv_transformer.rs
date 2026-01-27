@@ -1,4 +1,5 @@
 use crate::transformers::{DataTransformer, SelectedTableData, TransformError};
+use blanco_core::connection_trait::ColumnType;
 
 pub struct CsvTransformer;
 
@@ -58,7 +59,7 @@ impl DataTransformer for CsvTransformer {
     fn transform_single_cell(
         &self,
         value: &str,
-        _column_type: &str,
+        _column_type: &ColumnType,
     ) -> Result<String, TransformError> {
         Ok(csv_escape(value))
     }
@@ -68,7 +69,7 @@ impl DataTransformer for CsvTransformer {
     fn initialize_stream(
         &self,
         columns: &[String],
-        _column_types: &[String],
+        _column_types: &[ColumnType],
     ) -> Result<String, TransformError> {
         let mut output = String::new();
 
@@ -90,7 +91,7 @@ impl DataTransformer for CsvTransformer {
         &self,
         row_data: &[String],
         _columns: &[String],
-        _column_types: &[String],
+        _column_types: &[ColumnType],
     ) -> Result<String, TransformError> {
         let mut output = String::new();
 

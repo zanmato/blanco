@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use blanco_core::Position;
-use sql_parse::{parse_statement, ParseOptions, Statement, TableReference};
+use sql_parse::{parse_statement, Issues, ParseOptions, Statement, TableReference};
 
 /// Completion context types for SQLite
 #[derive(Debug, Clone, PartialEq)]
@@ -62,7 +62,7 @@ impl SqliteTableExtractor {
     /// Extract the table name from a SELECT query
     pub fn extract_table(&self, sql: &str, alias: bool) -> Result<String> {
         let options = ParseOptions::new();
-        let mut issues = Vec::new();
+        let mut issues = Issues::new(sql);
 
         if let Some(statement) = parse_statement(sql, &mut issues, &options) {
             if let Some(table_name) = self.extract_from_statement(&statement, alias) {
@@ -77,7 +77,7 @@ impl SqliteTableExtractor {
     /// Returns Vec<(table_name, alias)> for easy lookup
     pub fn extract_table_aliases_with_names(&self, sql: &str) -> Result<Vec<(String, String)>> {
         let options = ParseOptions::new();
-        let mut issues = Vec::new();
+        let mut issues = Issues::new(sql);
 
         if let Some(statement) = parse_statement(sql, &mut issues, &options) {
             let aliases = self.extract_aliases_with_names_from_statement(&statement);
@@ -119,7 +119,7 @@ impl SqliteTableExtractor {
             Statement::Select(select) => self.extract_from_select(select, alias),
             Statement::InsertReplace(insert) => {
                 // Handle SQLite-specific INSERT syntax
-                insert.table.last().map(|last_id| last_id.value.to_string())
+                Some(insert.table.identifier.to_string())
             }
             Statement::Update(update) => {
                 // Handle SQLite-specific UPDATE syntax
@@ -131,13 +131,7 @@ impl SqliteTableExtractor {
             }
             Statement::Delete(delete) => {
                 // Handle SQLite-specific DELETE syntax
-                if let Some(first_table_vec) = delete.tables.first() {
-                    first_table_vec
-                        .last()
-                        .map(|last_id| last_id.value.to_string())
-                } else {
-                    None
-                }
+                delete.tables.first().map(|first_table| first_table.identifier.to_string())
             }
             _ => None,
         }
@@ -165,15 +159,15 @@ impl SqliteTableExtractor {
             } => {
                 if alias {
                     if let Some(alias) = as_ {
-                        return Some(alias.value.to_string());
+                        return Some(alias.to_string());
                     }
                 }
 
-                identifier.last().map(|last_id| last_id.value.to_string())
+                Some(identifier.identifier.to_string())
             }
             TableReference::Query { query, as_, .. } => {
                 if let Some(alias) = as_ {
-                    Some(alias.value.to_string())
+                    Some(alias.to_string())
                 } else {
                     self.extract_from_statement(query, true)
                 }
@@ -211,10 +205,7 @@ impl SqliteTableExtractor {
             TableReference::Table {
                 identifier, as_, ..
             } => {
-                let table_name = identifier
-                    .last()
-                    .map(|id| id.value.to_string())
-                    .unwrap_or_else(|| "unknown".to_string());
+                let table_name = identifier.identifier.to_string();
 
                 if let Some(alias) = as_ {
                     aliases.push((table_name, alias.value.to_string()));
@@ -222,7 +213,7 @@ impl SqliteTableExtractor {
             }
             TableReference::Query { as_, .. } => {
                 if let Some(alias) = as_ {
-                    aliases.push(("subquery".to_string(), alias.value.to_string()));
+                    aliases.push(("subquery".to_string(), alias.to_string()));
                 }
             }
             TableReference::Join { left, right, .. } => {

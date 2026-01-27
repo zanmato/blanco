@@ -1,6 +1,38 @@
 use async_trait::async_trait;
 use futures::Stream;
 
+/// Represents the semantic type of a database column
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum ColumnType {
+    /// Integer types: smallint, int, bigint, serial, etc.
+    Integer,
+    /// Numeric types: float, double, real, numeric, decimal, money
+    Numeric,
+    /// Text types: text, varchar, char, etc.
+    Text,
+    /// Boolean types: bool, boolean
+    Boolean,
+    /// DateTime types: timestamp, timestamptz, datetime, date
+    DateTime,
+    /// UUID type
+    Uuid,
+    /// JSON types: json, jsonb
+    Json,
+    /// Array types (PostgreSQL)
+    Array,
+    /// Binary types: bytea, blob, binary
+    Binary,
+    /// Unknown/fallback type
+    Unknown,
+}
+
+impl ColumnType {
+    /// Returns true if this column type is numeric (Integer or Numeric)
+    pub fn is_numeric(&self) -> bool {
+        matches!(self, Self::Integer | Self::Numeric)
+    }
+}
+
 /// Database driver types supported by the application
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DriverType {
@@ -33,7 +65,7 @@ impl DriverType {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct QueryResult {
     pub columns: Vec<String>,
-    pub column_types: Vec<String>,
+    pub column_types: Vec<ColumnType>,
     pub rows: Vec<Vec<String>>,
     pub rows_affected: u64,
     pub query_text: Option<String>,
@@ -187,7 +219,7 @@ pub trait Connection: Send + Sync {
     ) -> Result<
         (
             Vec<String>,
-            Vec<String>,
+            Vec<ColumnType>,
             Box<dyn std::marker::Send + std::marker::Sync>,
         ),
         anyhow::Error,
@@ -206,7 +238,7 @@ pub trait Connection: Send + Sync {
     ) -> Result<
         (
             Vec<String>,
-            Vec<String>,
+            Vec<ColumnType>,
             Box<dyn Stream<Item = Result<Vec<String>, anyhow::Error>> + Send + Unpin>,
         ),
         anyhow::Error,

@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use blanco_core::Position;
-use sql_parse::{parse_statement, ParseOptions, Statement, TableReference};
+use sql_parse::{parse_statement, Issues, ParseOptions, Statement, TableReference};
 
 /// Completion context types for MySQL
 #[derive(Debug, Clone, PartialEq)]
@@ -62,7 +62,7 @@ impl MysqlTableExtractor {
     /// Extract the table name from a SELECT query
     pub fn extract_table(&self, sql: &str, alias: bool) -> Result<String> {
         let options = ParseOptions::new();
-        let mut issues = Vec::new();
+        let mut issues = Issues::new(sql);
 
         if let Some(statement) = parse_statement(sql, &mut issues, &options) {
             if let Some(table_name) = self.extract_from_statement(&statement, alias) {
@@ -77,7 +77,7 @@ impl MysqlTableExtractor {
     /// Returns Vec<(table_name, alias)> for easy lookup
     pub fn extract_table_aliases_with_names(&self, sql: &str) -> Result<Vec<(String, String)>> {
         let options = ParseOptions::new();
-        let mut issues = Vec::new();
+        let mut issues = Issues::new(sql);
 
         if let Some(statement) = parse_statement(sql, &mut issues, &options) {
             let aliases = self.extract_aliases_with_names_from_statement(&statement);
@@ -103,7 +103,7 @@ impl MysqlTableExtractor {
 
         // Parse the main statement
         let options = ParseOptions::new();
-        let mut issues = Vec::new();
+        let mut issues = Issues::new(&text_up_to_position);
 
         let (statement_type, tables, aliases) =
             if let Some(statement) = parse_statement(&text_up_to_position, &mut issues, &options) {
@@ -192,7 +192,7 @@ impl MysqlTableExtractor {
             Statement::Select(select) => self.extract_from_select(select, alias),
             Statement::InsertReplace(insert) => {
                 // Handle MySQL-specific INSERT syntax
-                insert.table.last().map(|last_id| last_id.value.to_string())
+                Some(insert.table.identifier.to_string())
             }
             Statement::Update(update) => {
                 // Handle MySQL-specific UPDATE syntax
@@ -204,13 +204,7 @@ impl MysqlTableExtractor {
             }
             Statement::Delete(delete) => {
                 // Handle MySQL-specific DELETE syntax
-                if let Some(first_table_vec) = delete.tables.first() {
-                    first_table_vec
-                        .last()
-                        .map(|last_id| last_id.value.to_string())
-                } else {
-                    None
-                }
+                delete.tables.first().map(|first_table| first_table.identifier.to_string())
             }
             _ => None,
         }
@@ -242,11 +236,11 @@ impl MysqlTableExtractor {
                     }
                 }
 
-                identifier.last().map(|last_id| last_id.value.to_string())
+                Some(identifier.identifier.to_string())
             }
             TableReference::Query { query, as_, .. } => {
                 if let Some(alias) = as_ {
-                    Some(alias.value.to_string())
+                    Some(alias.to_string())
                 } else {
                     self.extract_from_statement(query, alias)
                 }
@@ -284,10 +278,7 @@ impl MysqlTableExtractor {
             TableReference::Table {
                 identifier, as_, ..
             } => {
-                let table_name = identifier
-                    .last()
-                    .map(|id| id.value.to_string())
-                    .unwrap_or_else(|| "unknown".to_string());
+                let table_name = identifier.identifier.to_string();
 
                 if let Some(alias) = as_ {
                     aliases.push((table_name, alias.value.to_string()));
@@ -295,7 +286,7 @@ impl MysqlTableExtractor {
             }
             TableReference::Query { as_, .. } => {
                 if let Some(alias) = as_ {
-                    aliases.push(("subquery".to_string(), alias.value.to_string()));
+                    aliases.push(("subquery".to_string(), alias.to_string()));
                 }
             }
             TableReference::Join { left, right, .. } => {
@@ -318,9 +309,7 @@ impl MysqlTableExtractor {
                 }
             }
             Statement::InsertReplace(insert) => {
-                if let Some(table_name) = insert.table.last() {
-                    tables.push(table_name.value.to_string());
-                }
+                tables.push(insert.table.identifier.to_string());
             }
             Statement::Update(_update) => {
                 // Skip UPDATE for now - table extraction is complex
@@ -338,9 +327,7 @@ impl MysqlTableExtractor {
     fn extract_tables_from_reference(&self, table_ref: &TableReference, tables: &mut Vec<String>) {
         match table_ref {
             TableReference::Table { identifier, .. } => {
-                if let Some(table_name) = identifier.last() {
-                    tables.push(table_name.value.to_string());
-                }
+                tables.push(identifier.identifier.to_string());
             }
             TableReference::Query { query, .. } => {
                 // Extract tables from subquery
@@ -381,10 +368,7 @@ impl MysqlTableExtractor {
                 identifier, as_, ..
             } => {
                 if let Some(alias) = as_ {
-                    let table_name = identifier
-                        .last()
-                        .map(|id| id.value.to_string())
-                        .unwrap_or_else(|| "unknown".to_string());
+                    let table_name = identifier.identifier.to_string();
 
                     aliases.push(TableAlias {
                         alias: alias.value.to_string(),

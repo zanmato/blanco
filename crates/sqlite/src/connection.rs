@@ -2,9 +2,11 @@ use crate::sql_parser::SqliteTableExtractor;
 use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
-    connection_trait::ForeignKeyInfo, ColumnInfo, Connection, QueryResult,
+    connection_trait::ColumnType, connection_trait::ForeignKeyInfo, ColumnInfo, Connection,
+    QueryResult,
 };
 use futures::{Stream, StreamExt};
+use hex;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use sqlx::{Column, ConnectOptions, Row, TypeInfo, ValueRef};
 use std::collections::HashMap;
@@ -73,6 +75,19 @@ impl SqliteConnectionKey {
 }
 
 impl SqliteConnection {
+    /// Map SQLite type name to ColumnType enum
+    fn map_sqlite_type(type_name: &str) -> ColumnType {
+        match type_name.to_lowercase().as_str() {
+            "integer" | "int" => ColumnType::Integer,
+            "real" | "float" | "double" | "numeric" | "decimal" => ColumnType::Numeric,
+            "text" | "varchar" => ColumnType::Text,
+            "boolean" => ColumnType::Boolean,
+            "date" | "datetime" => ColumnType::DateTime,
+            "blob" => ColumnType::Binary,
+            _ => ColumnType::Unknown,
+        }
+    }
+
     /// Create a new SQLite connection
     pub fn new(database_path: String) -> Result<Self> {
         let connection_key = SqliteConnectionKey::from_connection_string(&database_path)?;
@@ -125,7 +140,7 @@ impl SqliteConnection {
         let mut results = sql_query;
 
         let mut columns: Vec<String> = Vec::new();
-        let mut column_types: Vec<String> = Vec::new();
+        let mut column_types: Vec<ColumnType> = Vec::new();
         let mut rows: Vec<Vec<String>> = Vec::new();
         let mut rows_affected: u64 = 0;
         let mut collected_rows: Vec<sqlx::sqlite::SqliteRow> = Vec::new();
@@ -147,7 +162,7 @@ impl SqliteConnection {
                         column_types = row
                             .columns()
                             .iter()
-                            .map(|col| col.type_info().name().to_string())
+                            .map(|col| Self::map_sqlite_type(col.type_info().name()))
                             .collect();
                     }
 
@@ -460,7 +475,7 @@ impl Connection for SqliteConnection {
     ) -> Result<
         (
             Vec<String>,
-            Vec<String>,
+            Vec<ColumnType>,
             Box<dyn Stream<Item = Result<Vec<String>, anyhow::Error>> + Send + Unpin>,
         ),
         anyhow::Error,
@@ -497,7 +512,7 @@ impl Connection for SqliteConnection {
                 column_types = row
                     .columns()
                     .iter()
-                    .map(|col| col.type_info().name().to_string())
+                    .map(|col| Self::map_sqlite_type(col.type_info().name()))
                     .collect();
 
                 let row_data: Vec<String> = (0..columns.len())
@@ -774,13 +789,10 @@ fn handle_json_type(
 fn convert_sqlite_row_value_to_string(
     row: &sqlx::sqlite::SqliteRow,
     column_index: usize,
-    column_types: &[String],
+    column_types: &[ColumnType],
 ) -> String {
     // Get column type first for type-based routing
-    let column_type = column_types
-        .get(column_index)
-        .map(|s| s.as_str())
-        .unwrap_or("unknown");
+    let column_type = column_types.get(column_index).copied().unwrap_or(ColumnType::Unknown);
 
     // 1. Handle NULL values immediately
     if is_null_value(row, column_index) {
@@ -788,33 +800,74 @@ fn convert_sqlite_row_value_to_string(
     }
 
     // 2. Route based on SQLite type affinity (column-type-first approach)
-    match column_type.to_lowercase().as_str() {
+    match column_type {
         // Integer affinity types
-        ct if is_integer_affinity_type(ct) => handle_integer_affinity(row, column_index, ct),
-
-        // Text affinity types
-        ct if is_text_affinity_type(ct) => handle_text_affinity(row, column_index, ct),
+        ColumnType::Integer => {
+            // Try different integer sizes
+            if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(column_index) {
+                return v.to_string();
+            }
+            "NULL".to_string()
+        }
 
         // Numeric affinity types
-        ct if is_numeric_affinity_type(ct) => handle_numeric_affinity(row, column_index, ct),
+        ColumnType::Numeric => {
+            if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(column_index) {
+                return v.to_string();
+            }
+            "NULL".to_string()
+        }
 
-        // Blob affinity types
-        ct if is_blob_affinity_type(ct) => handle_blob_affinity(row, column_index, ct),
+        // Text affinity types
+        ColumnType::Text => {
+            if let Ok(val) = row.try_get::<Option<String>, _>(column_index) {
+                return val.unwrap_or_else(|| "NULL".to_string());
+            }
+            "NULL".to_string()
+        }
+
+        // Boolean type
+        ColumnType::Boolean => {
+            if let Ok(Some(v)) = row.try_get::<Option<bool>, _>(column_index) {
+                return if v { "true" } else { "false" }.to_string();
+            }
+            "NULL".to_string()
+        }
 
         // Date/Time types
-        ct if is_datetime_type(ct) => handle_datetime_type(row, column_index, ct),
+        ColumnType::DateTime => {
+            if let Ok(val) = row.try_get::<Option<String>, _>(column_index) {
+                return val.unwrap_or_else(|| "NULL".to_string());
+            }
+            "NULL".to_string()
+        }
 
         // JSON types
-        "json" | "jsonb" => handle_json_type(row, column_index, column_type),
+        ColumnType::Json => {
+            if let Ok(val) = row.try_get::<Option<String>, _>(column_index) {
+                return val.unwrap_or_else(|| "NULL".to_string());
+            }
+            "NULL".to_string()
+        }
+
+        // Blob affinity types
+        ColumnType::Binary => {
+            if let Ok(Some(v)) = row.try_get::<Option<Vec<u8>>, _>(column_index) {
+                return format!("0x{}", hex::encode(v));
+            }
+            "NULL".to_string()
+        }
 
         // Unknown/custom types - use string conversion
-        _ => {
+        ColumnType::Unknown => {
             // For unknown types, try basic string conversion
             if let Ok(val) = row.try_get::<Option<String>, _>(column_index) {
-                val.unwrap_or_else(|| "NULL".to_string())
-            } else {
-                "NULL".to_string()
+                return val.unwrap_or_else(|| "NULL".to_string());
             }
+            "NULL".to_string()
         }
+
+        // Array and Uuid are not typical SQLite types
+        _ => "NULL".to_string(),
     }
 }

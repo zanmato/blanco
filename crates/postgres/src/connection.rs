@@ -2,7 +2,8 @@ use crate::sql_parser::PostgresTableExtractor;
 use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
-    connection_trait::ForeignKeyInfo, ColumnInfo, Connection, QueryResult,
+    connection_trait::ColumnType, connection_trait::ForeignKeyInfo, ColumnInfo, Connection,
+    QueryResult,
 };
 use futures::{Stream, StreamExt};
 use smol::lock::RwLock;
@@ -1060,13 +1061,10 @@ impl PostgresConnection {
         &self,
         row: &sqlx::postgres::PgRow,
         column_index: usize,
-        column_types: &[String],
+        column_types: &[ColumnType],
     ) -> String {
         // Get column type first for type-based routing
-        let column_type = column_types
-            .get(column_index)
-            .map(|s| s.as_str())
-            .unwrap_or("unknown");
+        let column_type = column_types.get(column_index).copied().unwrap_or(ColumnType::Unknown);
 
         // 1. Handle NULL values immediately
         if Self::is_null_value(row, column_index) {
@@ -1076,68 +1074,72 @@ impl PostgresConnection {
         // 2. Route based on PostgreSQL type (column-type-first approach)
         match column_type {
             // Array types - priority handling
-            ct if Self::is_array_type(ct) => self.handle_array_type(row, column_index, ct),
-
-            // System catalog types
-            "regclass" | "regproc" | "regtype" | "regnamespace" | "regrole" | "reglanguage"
-            | "regconfig" | "regdictionary" | "oid" | "xid" | "cid" | "tid" => {
-                self.handle_system_catalog_type(row, column_index, column_type)
+            ColumnType::Array => {
+                // For arrays, we need the original type name from sqlx
+                // Get the raw type info to determine the array element type
+                let type_name = if let Ok(col) = row.try_get_raw(column_index) {
+                    col.type_info().name().to_string()
+                } else {
+                    "array".to_string()
+                };
+                self.handle_array_type(row, column_index, &type_name)
             }
 
-            // Numeric types with precision
-            ct if Self::get_numeric_precision_type(ct).is_some() => {
-                let base_type = Self::get_numeric_precision_type(ct).unwrap();
-                self.handle_money_numeric_type(row, column_index, base_type)
-            }
-
-            // Standard PostgreSQL types - include both SQL names and internal type names
-            "uuid" | "UUID" => self.handle_uuid_type(row, column_index, column_type),
-            "money" => self.handle_money_numeric_type(row, column_index, column_type),
-            "numeric" | "decimal" | "NUMERIC" => {
-                if let Ok(val) = row.try_get::<Option<rust_decimal::Decimal>, _>(column_index) {
+            // Integer types
+            ColumnType::Integer => {
+                // Try different integer sizes
+                if let Ok(val) = row.try_get::<Option<i16>, _>(column_index) {
+                    val.map(|v| v.to_string())
+                        .unwrap_or_else(|| "NULL".to_string())
+                } else if let Ok(val) = row.try_get::<Option<i32>, _>(column_index) {
+                    val.map(|v| v.to_string())
+                        .unwrap_or_else(|| "NULL".to_string())
+                } else if let Ok(val) = row.try_get::<Option<i64>, _>(column_index) {
                     val.map(|v| v.to_string())
                         .unwrap_or_else(|| "NULL".to_string())
                 } else {
                     "NULL".to_string()
                 }
             }
-            "text" | "varchar" | "char" | "VARCHAR" | "BPCHAR" | "CHAR" | "TEXT" | "NAME" => {
-                self.handle_string_type(row, column_index, column_type)
-            }
-            "smallint" | "int2" | "INT2" => self.handle_i16_type(row, column_index, column_type),
-            "integer" | "int" | "int4" | "INT4" => {
-                self.handle_i32_type(row, column_index, column_type)
-            }
-            "bigint" | "int8" | "INT8" => self.handle_i64_type(row, column_index, column_type),
-            "real" | "float4" | "FLOAT4" => self.handle_f32_type(row, column_index, column_type),
-            "double precision" | "float8" | "FLOAT8" => {
-                self.handle_f64_type(row, column_index, column_type)
-            }
-            "boolean" | "bool" | "BOOL" => self.handle_bool_type(row, column_index, column_type),
 
-            // Timestamp types - include both SQL names and internal type names
-            ct if ct.starts_with("timestamp") || ct == "TIMESTAMPTZ" || ct == "TIMESTAMP" => {
-                self.handle_timestamp_type(row, column_index, ct)
+            // Numeric types
+            ColumnType::Numeric => {
+                if let Ok(val) = row.try_get::<Option<rust_decimal::Decimal>, _>(column_index) {
+                    val.map(|v| v.to_string())
+                        .unwrap_or_else(|| "NULL".to_string())
+                } else if let Ok(val) = row.try_get::<Option<f32>, _>(column_index) {
+                    val.map(|v| v.to_string())
+                        .unwrap_or_else(|| "NULL".to_string())
+                } else if let Ok(val) = row.try_get::<Option<f64>, _>(column_index) {
+                    val.map(|v| v.to_string())
+                        .unwrap_or_else(|| "NULL".to_string())
+                } else {
+                    "NULL".to_string()
+                }
             }
-            ct if ct.starts_with("date") || ct == "DATE" => {
-                self.handle_date_type(row, column_index, ct)
-            }
-            ct if ct.starts_with("time") || ct == "TIME" => {
-                self.handle_time_type(row, column_index, ct)
-            }
+
+            // Boolean type
+            ColumnType::Boolean => self.handle_bool_type(row, column_index, ""),
+
+            // Text type
+            ColumnType::Text => self.handle_string_type(row, column_index, ""),
+
+            // DateTime types
+            ColumnType::DateTime => self.handle_timestamp_type(row, column_index, ""),
+
+            // UUID type
+            ColumnType::Uuid => self.handle_uuid_type(row, column_index, ""),
 
             // JSON types
-            "json" | "jsonb" | "JSON" | "JSONB" => {
-                self.handle_json_type(row, column_index, column_type)
-            }
+            ColumnType::Json => self.handle_json_type(row, column_index, ""),
+
+            // Binary type
+            ColumnType::Binary => self.handle_unknown_type(row, column_index, "bytea"),
 
             // Unknown/custom types - use optimized raw value access
-            _ => {
-                tracing::warn!(
-                    "Unknown column type '{}' falling back to raw value access",
-                    column_type
-                );
-                self.handle_unknown_type(row, column_index, column_type)
+            ColumnType::Unknown => {
+                tracing::warn!("Unknown column type falling back to raw value access");
+                self.handle_unknown_type(row, column_index, "unknown")
             }
         }
     }
@@ -1209,6 +1211,28 @@ impl PostgresConnection {
 }
 
 impl PostgresConnection {
+    /// Map PostgreSQL type name to ColumnType enum
+    fn map_postgres_type(type_name: &str) -> ColumnType {
+        match type_name.to_lowercase().as_str() {
+            "smallint" | "int2" | "int" | "int4" | "integer" | "bigint" | "int8"
+            | "serial" | "bigserial" => ColumnType::Integer,
+            "real" | "float4" | "double precision" | "float8" | "numeric" | "decimal"
+            | "money" => ColumnType::Numeric,
+            "boolean" | "bool" => ColumnType::Boolean,
+            "text" | "varchar" | "character varying" | "char" | "bpchar" | "name" => {
+                ColumnType::Text
+            }
+            "timestamp" | "timestamptz" | "date" | "time" | "timetz" | "interval" => {
+                ColumnType::DateTime
+            }
+            "uuid" => ColumnType::Uuid,
+            "json" | "jsonb" => ColumnType::Json,
+            "array" | _ if type_name.to_lowercase().ends_with("[]") => ColumnType::Array,
+            "bytea" => ColumnType::Binary,
+            _ => ColumnType::Unknown,
+        }
+    }
+
     /// Helper method to execute a query with parameters
     pub(crate) async fn execute_query_with_params(
         &self,
@@ -1243,7 +1267,7 @@ impl PostgresConnection {
         };
 
         let mut columns: Vec<String> = Vec::new();
-        let mut column_types: Vec<String> = Vec::new();
+        let mut column_types: Vec<ColumnType> = Vec::new();
         let mut rows: Vec<Vec<String>> = Vec::new();
         let mut rows_affected: u64 = 0;
         let mut collected_rows: Vec<sqlx::postgres::PgRow> = Vec::new();
@@ -1265,7 +1289,7 @@ impl PostgresConnection {
                         column_types = row
                             .columns()
                             .iter()
-                            .map(|col| col.type_info().name().to_string())
+                            .map(|col| Self::map_postgres_type(col.type_info().name()))
                             .collect();
                     }
 
@@ -1292,7 +1316,7 @@ impl PostgresConnection {
                 .iter()
                 .enumerate()
                 .filter_map(|(i, col_type)| {
-                    if col_type == "regclass" {
+                    if *col_type == ColumnType::Unknown {
                         Some(i)
                     } else {
                         None
@@ -1630,7 +1654,7 @@ impl Connection for PostgresConnection {
     ) -> Result<
         (
             Vec<String>,
-            Vec<String>,
+            Vec<ColumnType>,
             Box<dyn Stream<Item = Result<Vec<String>, anyhow::Error>> + Send + Unpin>,
         ),
         anyhow::Error,
@@ -1676,7 +1700,7 @@ impl Connection for PostgresConnection {
                 column_types = row
                     .columns()
                     .iter()
-                    .map(|col| col.type_info().name().to_string())
+                    .map(|col| Self::map_postgres_type(col.type_info().name()))
                     .collect();
 
                 let row_data: Vec<String> = (0..columns.len())

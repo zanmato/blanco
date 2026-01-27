@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use blanco_core::connection_trait::ColumnType;
 use std::collections::HashMap;
 use std::fmt;
 
@@ -41,7 +42,7 @@ pub trait DataTransformer: Send + Sync {
     fn transform_single_cell(
         &self,
         value: &str,
-        _column_type: &str,
+        _column_type: &ColumnType,
     ) -> Result<String, TransformError> {
         Ok(value.to_string())
     }
@@ -56,7 +57,7 @@ pub trait DataTransformer: Send + Sync {
     fn initialize_stream(
         &self,
         columns: &[String],
-        _column_types: &[String],
+        _column_types: &[ColumnType],
     ) -> Result<String, TransformError> {
         // Default implementation - transformers can override this
         self.transform_header_row(columns)
@@ -68,7 +69,7 @@ pub trait DataTransformer: Send + Sync {
         &self,
         row_data: &[String],
         columns: &[String],
-        column_types: &[String],
+        column_types: &[ColumnType],
     ) -> Result<String, TransformError>;
 
     /// Finalize streaming transformation and return any trailing output
@@ -190,7 +191,7 @@ impl SelectedTableData {
     }
 
     /// Get the effective column types (excluding row number column)
-    pub fn get_effective_column_types(&self) -> &[String] {
+    pub fn get_effective_column_types(&self) -> &[ColumnType] {
         &self.column_types
     }
 }

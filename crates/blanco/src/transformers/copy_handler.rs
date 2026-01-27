@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use blanco_core::connection_trait::ColumnType;
 use std::sync::Arc;
 
 use gpui::{App, ClipboardItem};
@@ -116,7 +117,7 @@ impl CopyHandler {
     pub fn copy_single_cell(
         &self,
         value: &str,
-        column_type: &str,
+        column_type: &ColumnType,
         format: &str,
         cx: &mut App,
     ) -> Result<(), CopyError> {
