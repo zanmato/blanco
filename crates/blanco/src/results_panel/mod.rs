@@ -67,7 +67,6 @@ pub struct SelectedTableData {
 pub struct ResultsPanel {
     focus_handle: FocusHandle,
     table_state: Entity<TableState<ResultsTableDelegate>>,
-    current_result: Option<QueryResult>,
     editing_input: Option<Entity<InputState>>,
     editing_cell: Option<(usize, usize)>,
     copy_handler: CopyHandler,
@@ -94,7 +93,6 @@ impl ResultsPanel {
         Self {
             table_state,
             focus_handle: cx.focus_handle(),
-            current_result: None,
             editing_input: None,
             editing_cell: None,
             copy_handler: CopyHandler::new(),
@@ -109,17 +107,20 @@ impl ResultsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Extract query_text before consuming the result
+        let query_text = result.query_text.clone();
+
         self.table_state.update(cx, |state, cx| {
             // Set the original query for alias resolution
-            if let Some(ref query) = result.query_text {
+            if let Some(ref query) = query_text {
                 state.delegate_mut().set_original_query(query.clone());
             }
+            // Move the result into the delegate instead of cloning
             state
                 .delegate_mut()
-                .set_query_result(result.clone(), window, cx);
+                .set_query_result(result, window, cx);
             state.refresh(cx);
         });
-        self.current_result = Some(result.clone());
 
         // Clear any panel-level editing state
         self.editing_input = None;

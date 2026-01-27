@@ -210,13 +210,25 @@ impl MysqlConnectionKey {
 impl MysqlConnection {
     /// Map MySQL type name to ColumnType enum
     fn map_mysql_type(type_name: &str) -> ColumnType {
-        match type_name.to_lowercase().as_str() {
+        let type_lower = type_name.to_lowercase();
+
+        // Check for unsigned integer types first
+        if type_lower.ends_with("unsigned") {
+            let base_type = type_lower.trim_end_matches("unsigned").trim();
+            return match base_type {
+                "tinyint" | "smallint" | "mediumint" | "int" | "bigint" => ColumnType::UnsignedInteger,
+                _ => ColumnType::Unknown,
+            };
+        }
+
+        match type_lower.as_str() {
             "tinyint" | "smallint" | "mediumint" | "int" | "bigint" => ColumnType::Integer,
             "float" | "double" | "decimal" | "numeric" => ColumnType::Numeric,
             "char" | "varchar" | "text" => ColumnType::Text,
             "date" | "datetime" | "timestamp" | "time" => ColumnType::DateTime,
             "json" => ColumnType::Json,
             "binary" | "varbinary" | "blob" => ColumnType::Binary,
+            "boolean" => ColumnType::Boolean,
             _ => ColumnType::Unknown,
         }
     }
@@ -372,7 +384,10 @@ impl MysqlConnection {
         column_types: &[ColumnType],
     ) -> String {
         // Use column type enum for type-based routing
-        let column_type = column_types.get(column_index).copied().unwrap_or(ColumnType::Unknown);
+        let column_type = column_types
+            .get(column_index)
+            .copied()
+            .unwrap_or(ColumnType::Unknown);
 
         // Get the raw type name for detailed matching
         let type_name = if let Ok(col) = row.try_get_raw(column_index) {
@@ -385,7 +400,6 @@ impl MysqlConnection {
         match column_type {
             // Integer types
             ColumnType::Integer => {
-                // Try signed first, then unsigned
                 if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(column_index) {
                     // Special handling for TINYINT(1) which is often used for booleans
                     if type_name.to_uppercase().contains("TINYINT") && (v == 0 || v == 1) {
@@ -393,6 +407,10 @@ impl MysqlConnection {
                     }
                     return v.to_string();
                 }
+            }
+
+            // Unsigned integer types
+            ColumnType::UnsignedInteger => {
                 if let Ok(Some(v)) = row.try_get::<Option<u64>, _>(column_index) {
                     return v.to_string();
                 }
@@ -586,7 +604,6 @@ impl Connection for MysqlConnection {
         let mut column_types: Vec<ColumnType> = Vec::new();
         let mut rows: Vec<Vec<String>> = Vec::new();
         let mut rows_affected: u64 = 0;
-        let mut collected_rows: Vec<sqlx::mysql::MySqlRow> = Vec::new();
 
         while let Some(result) = results.next().await {
             match result? {
@@ -611,24 +628,18 @@ impl Connection for MysqlConnection {
                         tracing::info!("columns {:?}, {:?}", columns, column_types);
                     }
 
-                    // Collect rows for processing later
-                    collected_rows.push(row);
-                }
-            }
-        }
-
-        // Process collected rows into string format
-        if !collected_rows.is_empty() {
-            rows = collected_rows
-                .iter()
-                .map(|row| {
-                    columns
+                    // Convert row to strings immediately instead of collecting raw rows
+                    // This prevents memory doubling by not holding both raw and converted data
+                    let row_data: Vec<String> = columns
                         .iter()
                         .enumerate()
-                        .map(|(i, _)| self.convert_row_value_to_string(row, i, column_types.as_slice()))
-                        .collect()
-                })
-                .collect();
+                        .map(|(i, _)| {
+                            self.convert_row_value_to_string(&row, i, column_types.as_slice())
+                        })
+                        .collect();
+                    rows.push(row_data);
+                }
+            }
         }
 
         let execution_time = start_time.elapsed().as_millis() as i64;

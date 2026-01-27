@@ -504,8 +504,14 @@ impl ResultsTableDelegate {
         self.edit_state.clear_all();
         self.pending_edit_cell = None;
 
-        // Store column types
-        self.column_types = result.column_types.clone();
+        // Explicitly clear and shrink the rows Vec to release memory back to the allocator
+        // This is necessary because replacing the Vec directly might not immediately free
+        // the underlying memory due to how Rust's allocator works
+        self.rows.clear();
+        self.rows.shrink_to_fit();
+
+        // Store column types (move instead of clone to avoid memory leak)
+        self.column_types = result.column_types;
 
         // Use the theme's font family for measurement (typically the mono font for tables)
         let text_size = px(12.);

@@ -143,7 +143,6 @@ impl SqliteConnection {
         let mut column_types: Vec<ColumnType> = Vec::new();
         let mut rows: Vec<Vec<String>> = Vec::new();
         let mut rows_affected: u64 = 0;
-        let mut collected_rows: Vec<sqlx::sqlite::SqliteRow> = Vec::new();
 
         while let Some(result) = results.next().await {
             match result? {
@@ -166,18 +165,8 @@ impl SqliteConnection {
                             .collect();
                     }
 
-                    // Collect rows for processing later
-                    collected_rows.push(row);
-                }
-            }
-        }
-
-        // Process collected rows into string format
-        if !collected_rows.is_empty() {
-            rows = collected_rows
-                .iter()
-                .map(|row| {
-                    columns
+                    // Convert row to strings immediately to avoid memory doubling
+                    let row_data: Vec<String> = columns
                         .iter()
                         .enumerate()
                         .map(|(i, _)| {
@@ -206,9 +195,10 @@ impl SqliteConnection {
                                 "NULL".to_string()
                             }
                         })
-                        .collect()
-                })
-                .collect();
+                        .collect();
+                    rows.push(row_data);
+                }
+            }
         }
 
         Ok(QueryResult {

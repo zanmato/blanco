@@ -6,6 +6,8 @@ use futures::Stream;
 pub enum ColumnType {
     /// Integer types: smallint, int, bigint, serial, etc.
     Integer,
+    /// Unsigned integer types: INT UNSIGNED, BIGINT UNSIGNED, etc.
+    UnsignedInteger,
     /// Numeric types: float, double, real, numeric, decimal, money
     Numeric,
     /// Text types: text, varchar, char, etc.
@@ -27,9 +29,9 @@ pub enum ColumnType {
 }
 
 impl ColumnType {
-    /// Returns true if this column type is numeric (Integer or Numeric)
+    /// Returns true if this column type is numeric (Integer, UnsignedInteger, or Numeric)
     pub fn is_numeric(&self) -> bool {
-        matches!(self, Self::Integer | Self::Numeric)
+        matches!(self, Self::Integer | Self::UnsignedInteger | Self::Numeric)
     }
 }
 
