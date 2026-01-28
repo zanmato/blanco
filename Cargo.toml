@@ -49,6 +49,7 @@ thiserror = "1.0"
 regex = "1.10"
 async-trait = "0.1"
 reqwest = { version = "0.12", features = ["json", "stream"] }
+hex = "0.4"
 
 # Database dependencies
 sqlx = { version = "0.8", features = [
@@ -65,7 +66,7 @@ sqlx = { version = "0.8", features = [
 rust_decimal = "1.32"
 
 # SQL parsing
-sql-parse = "0.2"
+sql-parse = "0.28"
 
 # HTTP client
 http = "1.0"

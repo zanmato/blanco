@@ -7860,9 +7860,9 @@ dependencies = [
 
 [[package]]
 name = "sql-parse"
-version = "0.2.1"
+version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9fd064413d2e101401157d4470496e29b9a808ea0dbd6f9e167293e6386bfab2"
+checksum = "b6f4dd54e1ba968a9dc77d3d04bc343185c400f1c1917b2347e9f93a95fc4396"
 
 [[package]]
 name = "sqlite"
@@ -7876,6 +7876,7 @@ dependencies = [
  "futures",
  "gpui",
  "gpui-component",
+ "hex",
  "lsp-types",
  "ropey",
  "serde",
