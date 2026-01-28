@@ -193,13 +193,6 @@ pub trait Connection: Send + Sync {
     /// Connect to the database using the provided connection string
     async fn connect(&mut self, connection_string: &str) -> Result<(), anyhow::Error>;
 
-    /// Disconnect from the database and clean up resources
-    #[allow(dead_code)]
-    async fn disconnect(&mut self);
-
-    /// Check if the connection is currently active and healthy
-    fn is_connected(&self) -> bool;
-
     // === Query Execution ===
 
     /// Execute a SQL query and return the results

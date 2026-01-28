@@ -296,17 +296,6 @@ impl Connection for SqliteConnection {
         Ok(())
     }
 
-    async fn disconnect(&mut self) {
-        tracing::info!("Disconnecting from SQLite database: {}", self.display_name);
-        if let Some(pool) = self.pool.take() {
-            pool.close().await;
-        }
-    }
-
-    fn is_connected(&self) -> bool {
-        self.pool.is_some()
-    }
-
     async fn get_databases(&self) -> Result<Vec<String>> {
         // SQLite has a single database, so we return the current database name
         let db_name = std::path::Path::new(&self.database_path)

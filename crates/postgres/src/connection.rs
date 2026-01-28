@@ -1405,25 +1405,6 @@ impl Connection for PostgresConnection {
         Ok(())
     }
 
-    async fn disconnect(&mut self) {
-        tracing::info!(
-            "Disconnecting from PostgreSQL server: {}",
-            self.display_name
-        );
-
-        // Close all database connection pools
-        let mut pools = self.pools.write().await;
-        for (_, pool) in pools.drain() {
-            pool.close().await;
-        }
-    }
-
-    fn is_connected(&self) -> bool {
-        // Since we can't use async in sync methods, use a simple heuristic
-        // Assume connected if we have a display name
-        !self.display_name.is_empty()
-    }
-
     async fn execute_query(
         &self,
         query: &str,

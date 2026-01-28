@@ -15,7 +15,10 @@ use std::sync::Arc;
 /// This uses SQLX directly to provide a unified interface with database-specific connection pools
 pub struct MysqlConnection {
     pools: Arc<RwLock<HashMap<String, sqlx::MySqlPool>>>, // database_name -> connection pool
-    server_key: MysqlServerKey, // Server-level connection key (no database)
+    host: String,
+    port: u16,
+    username: String,
+    password: Option<String>,
     display_name: String,
     server_connection_string: String, // Connection string without database
     initial_database: Option<String>, // Original database from connection string
@@ -32,84 +35,6 @@ pub struct MysqlSshConfig {
     pub ssh_password: Option<String>,
     pub ssh_private_key_path: Option<String>,
     pub ssh_private_key_password: Option<String>,
-}
-
-/// Server-level connection key for MySQL connections (no database)
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct MysqlServerKey {
-    pub host: String,
-    pub port: u16,
-    pub username: String,
-    pub password: Option<String>,
-}
-
-impl MysqlServerKey {
-    pub fn new(host: String, port: u16, username: String, password: Option<String>) -> Self {
-        Self {
-            host,
-            port,
-            username,
-            password,
-        }
-    }
-
-    /// Generate a server-level connection string (without database)
-    pub fn to_server_connection_string(&self) -> String {
-        if let Some(password) = &self.password {
-            format!(
-                "mysql://{}:{}@{}:{}",
-                self.username, password, self.host, self.port
-            )
-        } else {
-            format!("mysql://{}@{}:{}", self.username, self.host, self.port)
-        }
-    }
-
-    /// Generate connection string for a specific database
-    pub fn to_database_connection_string(&self, database: &str) -> String {
-        if let Some(password) = &self.password {
-            format!(
-                "mysql://{}:{}@{}:{}/{}",
-                self.username, password, self.host, self.port, database
-            )
-        } else {
-            format!(
-                "mysql://{}@{}:{}/{}",
-                self.username, self.host, self.port, database
-            )
-        }
-    }
-
-    /// Generate a server-level connection string with SSH tunnel support
-    pub fn to_server_connection_string_with_tunnel(&self, local_tunnel_port: u16) -> String {
-        if let Some(password) = &self.password {
-            format!(
-                "mysql://{}:{}@localhost:{}",
-                self.username, password, local_tunnel_port
-            )
-        } else {
-            format!("mysql://{}@localhost:{}", self.username, local_tunnel_port)
-        }
-    }
-
-    /// Generate connection string for a specific database using SSH tunnel
-    pub fn to_database_connection_string_with_tunnel(
-        &self,
-        database: &str,
-        local_tunnel_port: u16,
-    ) -> String {
-        if let Some(password) = &self.password {
-            format!(
-                "mysql://{}:{}@localhost:{}/{}",
-                self.username, password, local_tunnel_port, database
-            )
-        } else {
-            format!(
-                "mysql://{}@localhost:{}/{}",
-                self.username, local_tunnel_port, database
-            )
-        }
-    }
 }
 
 /// Connection key for MySQL connections (legacy - kept for compatibility)
@@ -196,14 +121,31 @@ impl MysqlConnectionKey {
         }
     }
 
-    /// Convert to server key
-    pub fn to_server_key(&self) -> MysqlServerKey {
-        MysqlServerKey::new(
-            self.host.clone(),
-            self.port,
-            self.username.clone(),
-            self.password.clone(),
-        )
+    /// Generate server connection string (without database)
+    pub fn to_server_connection_string(&self) -> String {
+        if let Some(password) = &self.password {
+            format!(
+                "mysql://{}:{}@{}:{}",
+                self.username, password, self.host, self.port
+            )
+        } else {
+            format!("mysql://{}@{}:{}", self.username, self.host, self.port)
+        }
+    }
+
+    /// Generate connection string for a specific database
+    pub fn to_database_connection_string(&self, database: &str) -> String {
+        if let Some(password) = &self.password {
+            format!(
+                "mysql://{}:{}@{}:{}/{}",
+                self.username, password, self.host, self.port, database
+            )
+        } else {
+            format!(
+                "mysql://{}@{}:{}/{}",
+                self.username, self.host, self.port, database
+            )
+        }
     }
 }
 
@@ -252,16 +194,22 @@ impl MysqlConnection {
             }
         );
 
-        let server_key = connection_key.to_server_key();
-        let display_name = Self::generate_server_display_name(&server_key);
-        let server_connection_string = server_key.to_server_connection_string();
+        let display_name = Self::generate_server_display_name(
+            &connection_key.username,
+            &connection_key.host,
+            connection_key.port,
+        );
+        let server_connection_string = connection_key.to_server_connection_string();
 
         Ok(Self {
             pools: Arc::new(RwLock::new(HashMap::new())),
-            server_key,
+            host: connection_key.host,
+            port: connection_key.port,
+            username: connection_key.username.clone(),
+            password: connection_key.password.clone(),
             display_name,
             server_connection_string,
-            initial_database: Some(connection_key.database.clone()),
+            initial_database: Some(connection_key.database),
             ssh_config: None,
             local_tunnel_port: None,
         })
@@ -272,39 +220,52 @@ impl MysqlConnection {
         connection_key: MysqlConnectionKey,
         ssh_config: MysqlSshConfig,
     ) -> Self {
-        let server_key = connection_key.to_server_key();
-        let display_name = Self::generate_server_display_name_with_ssh(&server_key, &ssh_config);
+        let display_name = Self::generate_server_display_name_with_ssh(
+            &connection_key.username,
+            &connection_key.host,
+            connection_key.port,
+            &ssh_config,
+        );
 
         Self {
             pools: Arc::new(RwLock::new(HashMap::new())),
-            server_key,
+            host: connection_key.host.clone(),
+            port: connection_key.port,
+            username: connection_key.username.clone(),
+            password: connection_key.password.clone(),
             display_name,
             server_connection_string: connection_key.to_connection_string(),
-            initial_database: Some(connection_key.database.clone()),
+            initial_database: Some(connection_key.database),
             ssh_config: Some(ssh_config),
             local_tunnel_port: Some(13306), // Default port for MySQL, will be auto-assigned
         }
     }
 
-    fn generate_server_display_name(server_key: &MysqlServerKey) -> String {
-        format!(
-            "MySQL: {}@{}:{}",
-            server_key.username, server_key.host, server_key.port
-        )
+    fn generate_server_display_name(username: &str, host: &str, port: u16) -> String {
+        format!("MySQL: {}@{}:{}", username, host, port)
+    }
+
+    /// Generate connection string for a specific database
+    fn generate_database_connection_string(&self, database: &str) -> String {
+        if let Some(password) = &self.password {
+            format!(
+                "mysql://{}:{}@{}:{}/{}",
+                self.username, password, self.host, self.port, database
+            )
+        } else {
+            format!("mysql://{}@{}:{}/{}", self.username, self.host, self.port, database)
+        }
     }
 
     fn generate_server_display_name_with_ssh(
-        server_key: &MysqlServerKey,
+        username: &str,
+        host: &str,
+        port: u16,
         ssh_config: &MysqlSshConfig,
     ) -> String {
         format!(
             "MySQL via SSH: {}@{}:{} (via {}@{}:{})",
-            server_key.username,
-            server_key.host,
-            server_key.port,
-            ssh_config.ssh_user,
-            ssh_config.ssh_host,
-            ssh_config.ssh_port
+            username, host, port, ssh_config.ssh_user, ssh_config.ssh_host, ssh_config.ssh_port
         )
     }
 
@@ -329,10 +290,16 @@ impl MysqlConnection {
         }
 
         let connection_string = if let Some(local_port) = self.local_tunnel_port {
-            self.server_key
-                .to_database_connection_string_with_tunnel(database_name, local_port)
+            if let Some(password) = &self.password {
+                format!(
+                    "mysql://{}:{}@localhost:{}/{}",
+                    self.username, password, local_port, database_name
+                )
+            } else {
+                format!("mysql://{}@localhost:{}/{}", self.username, local_port, database_name)
+            }
         } else {
-            self.server_key.to_database_connection_string(database_name)
+            self.generate_database_connection_string(database_name)
         };
         tracing::debug!(
             "📡 Connection string for {}: {}",
@@ -528,14 +495,17 @@ impl Connection for MysqlConnection {
 
         // Parse and validate the connection string to extract server details
         let key = MysqlConnectionKey::from_connection_string(connection_string)?;
-        self.server_key = key.to_server_key();
+        self.host = key.host;
+        self.port = key.port;
+        self.username = key.username.clone();
+        self.password = key.password.clone();
 
         // SSH tunnel setup is now handled by DbService
         // The connection string received here already includes the tunnel port if SSH is used
         self.server_connection_string = connection_string.to_string();
 
         // Update display name
-        self.display_name = Self::generate_server_display_name(&self.server_key);
+        self.display_name = Self::generate_server_display_name(&self.username, &self.host, self.port);
 
         // Test connection by creating a pool for the initial database
         if !key.database.is_empty() {
@@ -544,22 +514,6 @@ impl Connection for MysqlConnection {
 
         tracing::info!("✅ MySQL connection established successfully");
         Ok(())
-    }
-
-    async fn disconnect(&mut self) {
-        tracing::info!("🔌 Disconnecting from MySQL: {}", self.display_name);
-
-        let pools = self.pools.read().await;
-        for (database, pool) in pools.iter() {
-            tracing::debug!("🔄 Closing pool for database: {}", database);
-            pool.close().await;
-        }
-    }
-
-    fn is_connected(&self) -> bool {
-        // In a real implementation, we'd check the connection status
-        // For now, return true if we have pools configured
-        true // Simplified for now
     }
 
     async fn execute_query(

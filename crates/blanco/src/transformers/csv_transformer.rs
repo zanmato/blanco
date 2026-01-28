@@ -151,7 +151,7 @@ mod tests {
         assert_eq!(transformer.file_extension(), "csv");
         assert_eq!(
             transformer
-                .transform_single_cell("test; value", "")
+                .transform_single_cell("test; value", &ColumnType::Text)
                 .unwrap(),
             "\"test; value\""
         );
