@@ -178,4 +178,13 @@ impl AppDatabase {
             Ok(None)
         }
     }
+
+    /// Delete a connection by ID
+    pub async fn delete_connection(&self, connection_id: i64) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM connections WHERE id = ?")
+            .bind(connection_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }

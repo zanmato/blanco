@@ -8,7 +8,6 @@ use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputState, TabSize},
-    kbd::Kbd,
     notification::NotificationType,
     resizable::{ResizableState, h_resizable, resizable_panel, v_resizable},
     tab::{Tab, TabBar},
@@ -1164,7 +1163,7 @@ impl Render for EditorPanel {
                                                                 .gap_2()
                                                                 .border_t_1()
                                                                 .border_color(cx.theme().border)
-                                                                .bg(cx.theme().muted.opacity(0.5))
+                                                                .bg(cx.theme().title_bar)
                                                                 .justify_end()
                                                                 // Run button (always visible)
                                                                 .child(
@@ -1174,7 +1173,7 @@ impl Render for EditorPanel {
                                                                             .label("Run Current")
                                                                             .loading(self.loading)
                                                                             .loading_icon(IconName::LoaderCircle)
-                                                                            .children(vec![Kbd::new(self.run_query_keystroke.inner().clone()).into_any_element()])
+                                                                            .tooltip(format!("Run Current ({})", self.run_query_keystroke))
                                                                             .on_click(cx.listener(|panel, _, window, cx| panel.on_run_query(window, cx))),
                                                                     )
                                                         )
@@ -1244,7 +1243,6 @@ impl Render for EditorPanel {
                                                                         .small()
                                                                         .icon(IconName::Check)
                                                                         .label("Commit")
-                                                                        .children(vec![Kbd::new(Keystroke::parse("cmd-shift-c").unwrap()).into_any_element()])
                                                                         .on_click(cx.listener(|this, _, window, cx| {
                                                                             if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
                                                                                 // Execute the actual commit in the results panel with SQL logging
@@ -1260,7 +1258,6 @@ impl Render for EditorPanel {
                                                                         .small()
                                                                         .icon(IconName::CircleX)
                                                                         .label("Rollback")
-                                                                        .children(vec![Kbd::new(Keystroke::parse("cmd-shift-r").unwrap()).into_any_element()])
                                                                         .on_click(cx.listener(|this, _, _window, cx| {
                                                                             if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
                                                                                 query_tab.results_panel.update(cx, |panel, cx| {
@@ -1293,7 +1290,7 @@ impl Render for EditorPanel {
                                     query_tab.chat_enabled && query_tab.chat_panel.is_some(),
                                     |this| {
                                         this.child(
-                                            resizable_panel().size_range(px(300.)..gpui::Pixels::MAX).child(
+                                            resizable_panel().size_range(px(500.)..gpui::Pixels::MAX).child(
                                                 div()
                                                     .border_l_1()
                                                     .border_color(cx.theme().border)

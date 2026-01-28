@@ -7,7 +7,6 @@ use blanco_core::{
 };
 use futures::{Stream, StreamExt};
 use smol::lock::RwLock;
-use sqlx::postgres::types::PgMoney;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Column, Row, TypeInfo, ValueRef};
 use std::collections::HashMap;
@@ -473,24 +472,9 @@ impl PostgresConnection {
         &self.server_key
     }
 
-    /// Check if a column type is an array type
-    fn is_array_type(column_type: &str) -> bool {
-        column_type == "ARRAY" || column_type.ends_with("[]")
-    }
-
     /// Extract the base type from an array type (e.g., "TEXT[]" -> Some("TEXT"))
     fn extract_base_array_type(array_type: &str) -> Option<&str> {
         array_type.strip_suffix("[]")
-    }
-
-    /// Extract precision information from numeric types (e.g., "numeric(10,2)" -> Some("numeric"))
-    fn get_numeric_precision_type(column_type: &str) -> Option<&str> {
-        if column_type.starts_with("numeric(") || column_type.starts_with("decimal(") {
-            if let Some(paren_pos) = column_type.find('(') {
-                return Some(&column_type[..paren_pos]);
-            }
-        }
-        None
     }
 
     /// Check if a value is NULL without attempting type conversion
@@ -682,35 +666,6 @@ impl PostgresConnection {
         "NULL".to_string()
     }
 
-    /// Handle system catalog types like regclass, oid, etc.
-    fn handle_system_catalog_type(
-        &self,
-        row: &sqlx::postgres::PgRow,
-        column_index: usize,
-        column_type: &str,
-    ) -> String {
-        match column_type {
-            "regclass" => {
-                // regclass will be resolved to actual table names via OID extraction
-                // Return placeholder that will be replaced with resolved table name
-                "RESOLVING_REGCLASS".to_string()
-            }
-            "oid" | "xid" | "cid" => {
-                // Handle OID types directly as integers
-                if let Ok(val) = row.try_get::<Option<i32>, _>(column_index) {
-                    return val
-                        .map(|v| v.to_string())
-                        .unwrap_or_else(|| "NULL".to_string());
-                }
-                self.try_string_conversion(row, column_index, column_type)
-            }
-            _ => {
-                // For other system catalog types, try string conversion first
-                self.try_string_conversion(row, column_index, column_type)
-            }
-        }
-    }
-
     /// Handle UUID types
     fn handle_uuid_type(
         &self,
@@ -726,36 +681,6 @@ impl PostgresConnection {
         }
     }
 
-    /// Handle money and numeric types
-    fn handle_money_numeric_type(
-        &self,
-        row: &sqlx::postgres::PgRow,
-        column_index: usize,
-        column_type: &str,
-    ) -> String {
-        match column_type {
-            "money" => {
-                if let Ok(val) = row.try_get::<Option<PgMoney>, _>(column_index) {
-                    return val
-                        .map(|v| {
-                            let decimal_val = v.to_decimal(2); // Use 2 decimal places for currency
-                            format!("${}", decimal_val)
-                        })
-                        .unwrap_or_else(|| "NULL".to_string());
-                }
-            }
-            "numeric" | "decimal" => {
-                if let Ok(val) = row.try_get::<Option<rust_decimal::Decimal>, _>(column_index) {
-                    return val
-                        .map(|v| v.to_string())
-                        .unwrap_or_else(|| "NULL".to_string());
-                }
-            }
-            _ => {}
-        }
-        "NULL".to_string()
-    }
-
     /// Handle string types (text, varchar, char)
     fn handle_string_type(
         &self,
@@ -765,78 +690,6 @@ impl PostgresConnection {
     ) -> String {
         if let Ok(val) = row.try_get::<Option<String>, _>(column_index) {
             val.unwrap_or_else(|| "NULL".to_string())
-        } else {
-            "NULL".to_string()
-        }
-    }
-
-    /// Handle integer types (smallint, integer, bigint)
-    fn handle_i16_type(
-        &self,
-        row: &sqlx::postgres::PgRow,
-        column_index: usize,
-        _column_type: &str,
-    ) -> String {
-        if let Ok(val) = row.try_get::<Option<i16>, _>(column_index) {
-            val.map(|v| v.to_string())
-                .unwrap_or_else(|| "NULL".to_string())
-        } else {
-            "NULL".to_string()
-        }
-    }
-
-    fn handle_i32_type(
-        &self,
-        row: &sqlx::postgres::PgRow,
-        column_index: usize,
-        _column_type: &str,
-    ) -> String {
-        if let Ok(val) = row.try_get::<Option<i32>, _>(column_index) {
-            val.map(|v| v.to_string())
-                .unwrap_or_else(|| "NULL".to_string())
-        } else {
-            "NULL".to_string()
-        }
-    }
-
-    fn handle_i64_type(
-        &self,
-        row: &sqlx::postgres::PgRow,
-        column_index: usize,
-        _column_type: &str,
-    ) -> String {
-        if let Ok(val) = row.try_get::<Option<i64>, _>(column_index) {
-            val.map(|v| v.to_string())
-                .unwrap_or_else(|| "NULL".to_string())
-        } else {
-            "NULL".to_string()
-        }
-    }
-
-    /// Handle float types (real, double precision)
-    fn handle_f32_type(
-        &self,
-        row: &sqlx::postgres::PgRow,
-        column_index: usize,
-        _column_type: &str,
-    ) -> String {
-        if let Ok(val) = row.try_get::<Option<f32>, _>(column_index) {
-            val.map(|v| v.to_string())
-                .unwrap_or_else(|| "NULL".to_string())
-        } else {
-            "NULL".to_string()
-        }
-    }
-
-    fn handle_f64_type(
-        &self,
-        row: &sqlx::postgres::PgRow,
-        column_index: usize,
-        _column_type: &str,
-    ) -> String {
-        if let Ok(val) = row.try_get::<Option<f64>, _>(column_index) {
-            val.map(|v| v.to_string())
-                .unwrap_or_else(|| "NULL".to_string())
         } else {
             "NULL".to_string()
         }
@@ -896,36 +749,6 @@ impl PostgresConnection {
                 .unwrap_or_else(|| "NULL".to_string());
         }
         "NULL".to_string()
-    }
-
-    /// Handle date types
-    fn handle_date_type(
-        &self,
-        row: &sqlx::postgres::PgRow,
-        column_index: usize,
-        _column_type: &str,
-    ) -> String {
-        if let Ok(val) = row.try_get::<Option<chrono::NaiveDate>, _>(column_index) {
-            val.map(|v| v.to_string())
-                .unwrap_or_else(|| "NULL".to_string())
-        } else {
-            "NULL".to_string()
-        }
-    }
-
-    /// Handle time types
-    fn handle_time_type(
-        &self,
-        row: &sqlx::postgres::PgRow,
-        column_index: usize,
-        _column_type: &str,
-    ) -> String {
-        if let Ok(val) = row.try_get::<Option<chrono::NaiveTime>, _>(column_index) {
-            val.map(|v| v.to_string())
-                .unwrap_or_else(|| "NULL".to_string())
-        } else {
-            "NULL".to_string()
-        }
     }
 
     /// Handle JSON types
@@ -1064,7 +887,10 @@ impl PostgresConnection {
         column_types: &[ColumnType],
     ) -> String {
         // Get column type first for type-based routing
-        let column_type = column_types.get(column_index).copied().unwrap_or(ColumnType::Unknown);
+        let column_type = column_types
+            .get(column_index)
+            .copied()
+            .unwrap_or(ColumnType::Unknown);
 
         // 1. Handle NULL values immediately
         if Self::is_null_value(row, column_index) {
@@ -1214,10 +1040,11 @@ impl PostgresConnection {
     /// Map PostgreSQL type name to ColumnType enum
     fn map_postgres_type(type_name: &str) -> ColumnType {
         match type_name.to_lowercase().as_str() {
-            "smallint" | "int2" | "int" | "int4" | "integer" | "bigint" | "int8"
-            | "serial" | "bigserial" => ColumnType::Integer,
-            "real" | "float4" | "double precision" | "float8" | "numeric" | "decimal"
-            | "money" => ColumnType::Numeric,
+            "smallint" | "int2" | "int" | "int4" | "integer" | "bigint" | "int8" | "serial"
+            | "bigserial" => ColumnType::Integer,
+            "real" | "float4" | "double precision" | "float8" | "numeric" | "decimal" | "money" => {
+                ColumnType::Numeric
+            }
             "boolean" | "bool" => ColumnType::Boolean,
             "text" | "varchar" | "character varying" | "char" | "bpchar" | "name" => {
                 ColumnType::Text

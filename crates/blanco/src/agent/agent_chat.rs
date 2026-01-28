@@ -265,7 +265,8 @@ impl Render for ChatPanel {
                             Button::new("clear-chat")
                                 .ghost()
                                 .xsmall()
-                                .icon(IconName::Close)
+                                .tooltip("Clear Chat")
+                                .icon(IconName::ClearChat)
                                 .on_click(cx.listener(|this, _event, window, cx| {
                                     this.on_clear_chat(&ClearChat, window, cx)
                                 })),

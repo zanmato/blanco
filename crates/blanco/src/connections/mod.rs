@@ -1,6 +1,8 @@
 mod delegate;
 
 pub use delegate::ConnectionsTreeDelegate;
+use gpui_component::button::ButtonVariant;
+use gpui_component::dialog::DialogButtonProps;
 
 use crate::app_database::{AppDatabase, ConnectionData, EnvironmentType};
 use crate::app_events::{AppEvent, TreeItemType};
@@ -1129,6 +1131,58 @@ impl ConnectionsPanel {
             if let Some(entry) = tree_state.find_mut(item_id, cx) {
                 entry.item.metadata.loading = loading;
             }
+        });
+    }
+
+    /// Show a confirmation dialog and remove the connection if confirmed
+    pub fn confirm_remove_connection(
+        &mut self,
+        connection_id: i64,
+        connection_name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let this_handle = cx.entity().downgrade();
+
+        window.open_dialog(cx, move |dialog, _, _| {
+            dialog
+                .confirm()
+                .child(format!(
+                    "Are you sure you want to remove the connection \"{}\"?",
+                    connection_name
+                ))
+                .button_props(
+                    DialogButtonProps::default()
+                        .cancel_text("No")
+                        .cancel_variant(ButtonVariant::Secondary)
+                        .ok_text("Yes")
+                        .ok_variant(ButtonVariant::Danger),
+                )
+                .on_ok({
+                    let this_handle = this_handle.clone();
+                    move |_, _, cx| {
+                        let this_handle = this_handle.clone();
+                        let app_database = AppDatabase::global(cx).clone();
+                        cx.spawn(async move |cx| {
+                            if let Err(e) = app_database.delete_connection(connection_id).await {
+                                tracing::error!("Failed to delete connection: {}", e);
+                                return;
+                            }
+
+                            let _ = this_handle.update(cx, |this, cx| {
+                                this.connections.retain(|c| c.id != Some(connection_id));
+                                this.loaded_connections.remove(&connection_id);
+                                this.expanded_connections.remove(&connection_id);
+                                this.database_metadata.remove(&connection_id);
+                                this.update_tree_items(cx);
+                                cx.notify();
+                            });
+                        })
+                        .detach();
+                        true
+                    }
+                })
+                .on_cancel(|_, _, _| true)
         });
     }
 }

@@ -6,9 +6,7 @@ edition = "2021"
 [dependencies]
 # Core dependencies
 blanco-core = { path = "../blanco-core" }
-gpui_tokio = { path = "../gpui_tokio" }
 gpui = { workspace = true }
-sqlx = { workspace = true }
 russh = "0.45"
 async-trait = { workspace = true }
 
@@ -27,10 +25,6 @@ tracing = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
-serde_json = { workspace = true }
-
-# URL parsing
-url = { workspace = true }
 
 # UUID for generating unique IDs
 uuid = { workspace = true }

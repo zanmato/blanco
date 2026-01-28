@@ -11,10 +11,6 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 smol = { workspace = true }
 
-# GPUI dependencies
-gpui = { workspace = true }
-gpui-component = { workspace = true }
-
 # Database dependencies
 sqlx = { workspace = true, features = [
   "mysql",
@@ -29,21 +25,13 @@ sqlx = { workspace = true, features = [
 sql-parse = { workspace = true }
 
 # Common dependencies
-serde = { workspace = true }
 serde_json = { workspace = true }
-uuid = { workspace = true }
 chrono = { workspace = true }
 tracing = { workspace = true }
 futures = { workspace = true }
 
-# Rope handling for completion/hover
-ropey = { workspace = true }
-
 # URL parsing for connection strings
 url = { workspace = true }
-
-# LSP types for completion/hover
-lsp-types = { workspace = true }
 
 # Additional dependencies
 rust_decimal = { workspace = true }

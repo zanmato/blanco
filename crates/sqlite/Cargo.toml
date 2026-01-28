@@ -10,10 +10,6 @@ blanco-core = { path = "../blanco-core" }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 
-# GPUI dependencies
-gpui = { workspace = true }
-gpui-component = { workspace = true }
-
 # Database dependencies
 sqlx = { workspace = true, features = ["sqlite", "chrono", "uuid"] }
 
@@ -21,19 +17,11 @@ sqlx = { workspace = true, features = ["sqlite", "chrono", "uuid"] }
 sql-parse = { workspace = true }
 
 # Common dependencies
-serde = { workspace = true }
 serde_json = { workspace = true }
-uuid = { workspace = true }
 chrono = { workspace = true }
 tracing = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
-
-# Rope handling for completion/hover
-ropey = { workspace = true }
-
-# LSP types for completion/hover
-lsp-types = { workspace = true }
 
 # Temporary file handling
 tempfile = "3.8"

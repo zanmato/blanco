@@ -5,10 +5,6 @@ edition = "2024"
 description = "Shared traits and types for Blanco SQL editor"
 
 [dependencies]
-# GPUI dependencies
-gpui = { workspace = true }
-gpui-component = { workspace = true }
-
 # LSP dependencies
 lsp-types = { workspace = true }
 
@@ -17,13 +13,5 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-uuid = { workspace = true }
-chrono = { workspace = true }
 futures = { workspace = true }
 tracing = { workspace = true }
-
-# For position and range handling
-ropey = { workspace = true }
-
-# SSH tunnel support
-tokio-util = "0.7"

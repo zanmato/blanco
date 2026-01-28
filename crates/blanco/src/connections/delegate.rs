@@ -155,14 +155,26 @@ impl TreeDelegate for ConnectionsTreeDelegate {
         match metadata.kind {
             TreeItemKind::Connection => {
                 let connection_id = metadata.connection_id;
-                menu.item(PopupMenuItem::new("Refresh")).item(
-                    PopupMenuItem::new("Disconnect").on_click(window.listener_for(
+                let connection_name = metadata.connection_name.clone();
+                menu.item(PopupMenuItem::new("Refresh"))
+                    .item(PopupMenuItem::new("Disconnect").on_click(window.listener_for(
                         &self.parent,
                         move |this, _event, _window, cx| {
                             this.disconnect_connection(connection_id, cx);
                         },
-                    )),
-                )
+                    )))
+                    .separator()
+                    .item(PopupMenuItem::new("Remove").on_click(window.listener_for(
+                        &self.parent,
+                        move |this, _event, window, cx| {
+                            this.confirm_remove_connection(
+                                connection_id,
+                                connection_name.clone(),
+                                window,
+                                cx,
+                            );
+                        },
+                    )))
             }
             TreeItemKind::Database | TreeItemKind::Schema | TreeItemKind::Table => {
                 // Use the trait to create the query tab event

@@ -7,8 +7,6 @@ edition = "2024"
 # Workspace dependencies
 gpui = { workspace = true }
 gpui-component = { workspace = true }
-anyhow = { workspace = true }
-log = { workspace = true }
 serde = { workspace = true }
 
 # Text handling
