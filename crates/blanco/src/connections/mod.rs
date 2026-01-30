@@ -1049,7 +1049,8 @@ impl ConnectionsPanel {
         div()
             .gap_2()
             .px_3()
-            .py(px(6.))
+            .pt(px(6.))
+            .pb(px(5.))
             .border_b_1()
             .border_color(cx.theme().border)
             .child(

@@ -31,14 +31,6 @@ impl ConnectorType {
             _ => ConnectorType::SQLite,
         }
     }
-
-    fn to_string(&self) -> &'static str {
-        match self {
-            ConnectorType::SQLite => "SQLite",
-            ConnectorType::PostgreSQL => "PostgreSQL",
-            ConnectorType::MySQL => "MySQL",
-        }
-    }
 }
 
 impl From<DriverType> for ConnectorType {

@@ -158,7 +158,9 @@ impl MysqlConnection {
         if type_lower.ends_with("unsigned") {
             let base_type = type_lower.trim_end_matches("unsigned").trim();
             return match base_type {
-                "tinyint" | "smallint" | "mediumint" | "int" | "bigint" => ColumnType::UnsignedInteger,
+                "tinyint" | "smallint" | "mediumint" | "int" | "bigint" => {
+                    ColumnType::UnsignedInteger
+                }
                 _ => ColumnType::Unknown,
             };
         }
@@ -253,7 +255,10 @@ impl MysqlConnection {
                 self.username, password, self.host, self.port, database
             )
         } else {
-            format!("mysql://{}@{}:{}/{}", self.username, self.host, self.port, database)
+            format!(
+                "mysql://{}@{}:{}/{}",
+                self.username, self.host, self.port, database
+            )
         }
     }
 
@@ -274,14 +279,12 @@ impl MysqlConnection {
         let pools = self.pools.read().await;
 
         if let Some(pool) = pools.get(database_name) {
-            tracing::debug!("🔄 Using existing pool for database: {}", database_name);
             return Ok(pool.clone());
         }
 
         // Release the read lock before acquiring write lock
         drop(pools);
 
-        tracing::info!("🚀 Creating new pool for database: {}", database_name);
         let mut pools = self.pools.write().await;
 
         // Check again in case another thread created it while we were waiting
@@ -296,17 +299,14 @@ impl MysqlConnection {
                     self.username, password, local_port, database_name
                 )
             } else {
-                format!("mysql://{}@localhost:{}/{}", self.username, local_port, database_name)
+                format!(
+                    "mysql://{}@localhost:{}/{}",
+                    self.username, local_port, database_name
+                )
             }
         } else {
             self.generate_database_connection_string(database_name)
         };
-        tracing::debug!(
-            "📡 Connection string for {}: {}",
-            database_name,
-            connection_string
-        );
-
         let pool = MySqlPoolOptions::new()
             .max_connections(5)
             .connect(&connection_string)
@@ -314,10 +314,6 @@ impl MysqlConnection {
 
         pools.insert(database_name.to_string(), pool.clone());
 
-        tracing::info!(
-            "✅ Successfully created pool for database: {}",
-            database_name
-        );
         Ok(pool)
     }
 
@@ -505,7 +501,8 @@ impl Connection for MysqlConnection {
         self.server_connection_string = connection_string.to_string();
 
         // Update display name
-        self.display_name = Self::generate_server_display_name(&self.username, &self.host, self.port);
+        self.display_name =
+            Self::generate_server_display_name(&self.username, &self.host, self.port);
 
         // Test connection by creating a pool for the initial database
         if !key.database.is_empty() {
@@ -529,13 +526,6 @@ impl Connection for MysqlConnection {
         let pool = self.get_or_create_pool(database).await?;
 
         let start_time = std::time::Instant::now();
-
-        tracing::debug!(
-            "🎯 Executing MySQL query on database '{}': {} (parameters: {})",
-            database,
-            query,
-            parameters.map(|p| p.len()).unwrap_or(0)
-        );
 
         // Build query: use raw_sql for no parameters, otherwise bind parameters
         let sql_query = match parameters {

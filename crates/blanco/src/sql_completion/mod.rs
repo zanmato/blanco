@@ -350,14 +350,8 @@ impl CompletionProvider for SqlCompletionProvider {
 
             if should_show_tables {
                 // Fetch tables using cache
-                tracing::debug!("SQL Completion: Fetching tables...");
                 match provider_clone.get_cached_tables().await {
                     Ok(tables) => {
-                        tracing::debug!(
-                            "SQL Completion: Fetched {} tables: {:?}",
-                            tables.len(),
-                            tables
-                        );
                         // Filter tables based on current input
                         let mut filtered_tables: Vec<String> = if context.current_word.is_empty() {
                             tables.clone()
