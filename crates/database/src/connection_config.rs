@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Database type enumeration
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DatabaseType {
     SQLite,
     PostgreSQL,
@@ -37,6 +37,25 @@ impl DatabaseType {
             DatabaseType::SQLite => false,
             DatabaseType::PostgreSQL => true,
             DatabaseType::MySQL => true,
+        }
+    }
+
+    /// Get the Sqruff dialect string for this database type
+    pub fn to_sqruff_dialect(&self) -> &'static str {
+        match self {
+            DatabaseType::SQLite => "sqlite",
+            DatabaseType::PostgreSQL => "postgres",
+            DatabaseType::MySQL => "mysql",
+        }
+    }
+
+    /// Parse from the string representation stored in app_database
+    pub fn from_db_type_str(s: &str) -> Option<Self> {
+        match s {
+            "SQLite" => Some(DatabaseType::SQLite),
+            "PostgreSQL" => Some(DatabaseType::PostgreSQL),
+            "MySQL" => Some(DatabaseType::MySQL),
+            _ => None,
         }
     }
 }

@@ -93,6 +93,7 @@ pub struct TreeItemMetadata {
     pub connection_id: i64,
     pub connection_name: String,
     pub kind: TreeItemKind,
+    pub db_type: database::DatabaseType,
     pub database_name: Option<String>,
     pub schema_name: Option<String>,
     pub table_name: Option<String>,
@@ -115,6 +116,7 @@ impl CreateNewQueryTabParams for TreeItemMetadata {
                 Some(crate::app_events::AppEvent::CreateNewQueryTab {
                     connection_id: self.connection_id,
                     connection_name: self.connection_name.clone(),
+                    db_type: self.db_type.clone(),
                     database_name: self.database_name.clone().unwrap_or_default(),
                     schema_name: self.schema_name.clone(),
                     table_name: self.table_name.clone(),
@@ -278,11 +280,16 @@ impl ConnectionsPanel {
     ) -> TreeItem<TreeItemMetadata> {
         let connection_id = connection.id.unwrap_or(0);
 
+        // Convert db_type string to DatabaseType enum
+        let db_type = database::DatabaseType::from_db_type_str(&connection.db_type)
+            .unwrap_or(database::DatabaseType::PostgreSQL);
+
         // Create metadata for the connection
         let connection_metadata = TreeItemMetadata {
             connection_id,
             connection_name: connection.display_name(),
             kind: TreeItemKind::Connection,
+            db_type,
             database_name: None,
             schema_name: None,
             table_name: None,
@@ -314,6 +321,7 @@ impl ConnectionsPanel {
                             connection_id,
                             connection_name: connection.display_name(),
                             kind: TreeItemKind::Database,
+                            db_type,
                             database_name: Some(database.name.clone()),
                             schema_name: None,
                             table_name: None,
@@ -339,6 +347,7 @@ impl ConnectionsPanel {
                                     connection_id,
                                     connection_name: connection.display_name(),
                                     kind: TreeItemKind::Schema,
+                                    db_type,
                                     database_name: Some(database.name.clone()),
                                     schema_name: Some(schema.name.clone()),
                                     table_name: None,
@@ -370,6 +379,7 @@ impl ConnectionsPanel {
                                                 connection_id,
                                                 connection_name: connection.display_name(),
                                                 kind: TreeItemKind::Table,
+                                                db_type,
                                                 database_name: Some(database.name.clone()),
                                                 schema_name: Some(schema.name.clone()),
                                                 table_name: Some(table.name.clone()),
@@ -425,6 +435,7 @@ impl ConnectionsPanel {
                                     connection_id,
                                     connection_name: connection.display_name(),
                                     kind: TreeItemKind::Table,
+                                    db_type,
                                     database_name: Some(schema.name.clone()), // Use schema.name as database_name for MySQL/SQLite
                                     schema_name: None, // MySQL/SQLite don't have schemas in the traditional sense
                                     table_name: Some(table.name.clone()),

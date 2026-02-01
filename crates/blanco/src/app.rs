@@ -126,6 +126,11 @@ pub struct DatabaseConnected {
     pub database_name: String,
 }
 
+// Action for formatting the current SQL query
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct FormatQuery;
+
 impl From<database::DatabaseConnectedMessage> for DatabaseConnected {
     fn from(msg: database::DatabaseConnectedMessage) -> Self {
         Self {
@@ -240,6 +245,7 @@ impl BlancoApp {
                 if let AppEvent::CreateNewQueryTab {
                     connection_id,
                     connection_name,
+                    db_type,
                     database_name,
                     schema_name,
                     table_name,
@@ -279,7 +285,7 @@ impl BlancoApp {
                                 content,
                                 db_id: None,
                                 connection_id: *connection_id,
-                                connection_type: "".to_owned(),
+                                db_type: db_type.clone(),
                                 connection_name: Some(connection_name.clone()),
                                 database_name: database_name.clone(),
                                 schema_name: schema_name.clone(),
@@ -695,6 +701,8 @@ fn init_menus(cx: &mut App) {
         // Register keyboard shortcuts for commit operations
         gpui::KeyBinding::new("super-shift-c", CommitChanges, None),
         gpui::KeyBinding::new("super-shift-r", RollbackChanges, None),
+        // Register keyboard shortcut for formatting SQL
+        gpui::KeyBinding::new("shift-alt-f", FormatQuery, None),
         #[cfg(target_os = "macos")]
         gpui::KeyBinding::new("cmd-q", Quit, None),
         #[cfg(not(target_os = "macos"))]

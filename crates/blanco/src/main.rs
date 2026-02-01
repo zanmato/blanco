@@ -21,6 +21,7 @@ mod snippets_panel;
 mod sql_completion;
 mod sql_selection_range_provider;
 mod sql_statement_parser;
+mod sqruff_service;
 mod time_format;
 mod transformers;
 

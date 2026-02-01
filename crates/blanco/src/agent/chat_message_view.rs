@@ -53,9 +53,7 @@ impl Render for ChatMessageState {
                                         4 => rem_size * 0.9,
                                         _ => rem_size * 0.8,
                                     })
-                                    .code_block(
-                                        StyleRefinement::default().my_3().text_size(px(11.)),
-                                    ),
+                                    .code_block(StyleRefinement::default().text_size(px(11.))),
                             )
                             .code_block_actions(move |code_block, _window, _cx| {
                                 let code = code_block.code();
@@ -97,7 +95,17 @@ impl Render for ChatMessageState {
                             TextView::markdown(self.id.clone(), self.message.clone())
                                 .text_sm()
                                 .scrollable(false)
-                                .selectable(true),
+                                .selectable(true)
+                                .style(
+                                    TextViewStyle::default()
+                                        .paragraph_gap(rems(0.5))
+                                        .heading_font_size(|level, rem_size| match level {
+                                            1..=3 => rem_size * 1,
+                                            4 => rem_size * 0.9,
+                                            _ => rem_size * 0.8,
+                                        })
+                                        .code_block(StyleRefinement::default().text_size(px(11.))),
+                                ),
                         )
                 }
                 MessageRole::System => {

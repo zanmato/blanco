@@ -7,6 +7,7 @@ use gpui_component::{
     ActiveTheme, Sizable, WindowExt as _,
     button::{Button, ButtonVariants},
     h_flex,
+    highlighter::Diagnostic,
     input::{Input, InputState, TabSize},
     notification::NotificationType,
     resizable::{ResizableState, h_resizable, resizable_panel, v_resizable},
@@ -14,13 +15,14 @@ use gpui_component::{
     v_flex,
 };
 use ropey::Rope;
-use std::{rc::Rc, sync::Arc};
+use smol::Timer;
+use std::{rc::Rc, sync::Arc, time::Duration};
 use tracing::{debug, error, info};
 
-// Use reqwest
-
-use crate::app::ExecuteSubstitutedQuery;
+use crate::agent::{ChatPanel, ChatSessionContext};
 use crate::app::RenameTab;
+use crate::app::{ExecuteSubstitutedQuery, FormatQuery};
+use crate::app_database::AppDatabase;
 use crate::app_database::{EnvironmentType, QueryTabData};
 use crate::app_events::AppEvent;
 use crate::parameter_form::ParameterForm;
@@ -30,13 +32,10 @@ use crate::snippet_editor::SnippetEditor;
 use crate::sql_completion::SqlCompletionProvider;
 use crate::sql_selection_range_provider::SqlSelectionRangeProvider;
 use crate::sql_statement_parser::extract_statement_info;
-use crate::{
-    agent::{ChatPanel, ChatSessionContext},
-    app_database::AppDatabase,
-};
+use crate::sqruff_service::SqruffService;
 use blanco_ui::{IconName, SqlLog};
 use database::{DatabaseService, DatabaseServiceTrait};
-use gpui_component::Icon;
+use gpui_component::{Icon, RopeExt};
 
 pub enum TabType {
     Query(QueryTab),
@@ -49,6 +48,7 @@ pub struct QueryTab {
     pub id: usize,
     pub title: String,
     pub connection_id: i64,              // Connection ID from app database
+    pub db_type: database::DatabaseType, // Database type for this connection
     pub connection_name: Option<String>, // Connection name from database
     pub database_name: String,           // Database name this tab is connected to
     pub schema_name: Option<String>,     // Optional schema name for context
@@ -60,6 +60,7 @@ pub struct QueryTab {
     // Chat functionality
     pub chat_enabled: bool,
     pub chat_panel: Option<Entity<ChatPanel>>,
+    pub sqruff_service: Option<Arc<SqruffService>>,
 }
 
 impl EventEmitter<AppEvent> for QueryTab {}
@@ -84,7 +85,11 @@ pub struct EditorPanel {
     editor_results_resize_state: Entity<ResizableState>,
     loading: bool,
     _run_query_task: Task<()>,
+    _lint_debounce_task: Task<()>,
 }
+
+/// Debounce duration for linting (500ms)
+const LINT_DEBOUNCE_MS: u64 = 500;
 
 /// Parameters for creating a new tab with connection
 #[derive(Clone)]
@@ -93,8 +98,7 @@ pub struct TabCreationParams {
     pub content: Option<String>,
     pub db_id: Option<i64>,
     pub connection_id: i64,
-    #[allow(dead_code)]
-    pub connection_type: String,
+    pub db_type: database::DatabaseType,
     pub connection_name: Option<String>,
     pub database_name: String,
     pub schema_name: Option<String>,
@@ -632,6 +636,7 @@ impl EditorPanel {
             editor_results_resize_state,
             loading: false,
             _run_query_task: Task::ready(()),
+            _lint_debounce_task: Task::ready(()),
         };
 
         panel.restore_saved_tabs_with_connections_sync(saved_tabs, window, cx);
@@ -678,15 +683,18 @@ impl EditorPanel {
                     tab_title, tab_data.connection_id,
                 );
 
+                // Convert connection_type string to DatabaseType enum
+                let tab_db_type = tab_connection_type
+                    .as_ref()
+                    .and_then(|t| database::DatabaseType::from_db_type_str(t))
+                    .unwrap_or(database::DatabaseType::PostgreSQL);
+
                 let params = TabCreationParams {
                     title: tab_title,
                     content: Some(tab_content),
                     db_id: tab_db_id,
                     connection_id: _connection_id,
-                    connection_type: tab_connection_type
-                        .as_deref()
-                        .unwrap_or("Unknown")
-                        .to_string(),
+                    db_type: tab_db_type,
                     connection_name: tab_data.connection_name.clone(),
                     database_name: tab_data
                         .database_name
@@ -764,11 +772,34 @@ impl EditorPanel {
             });
         }
 
+        // Subscribe to editor text changes for auto-linting
+        let subscription = cx.subscribe(&editor, |this, _editor, event, cx| {
+            // Only lint if the event is a text change
+            if let gpui_component::input::InputEvent::SelectionRangeChange { range } = event {
+                tracing::debug!("Selection range changed, linting current query");
+                this.lint_current_query_debounced(*range, cx);
+            }
+        });
+        self._subscriptions.push(subscription);
+
+        // Create SqruffService for this tab
+        let sqruff_service = match SqruffService::new(&params.db_type.to_sqruff_dialect()) {
+            Ok(service) => Some(Arc::new(service)),
+            Err(e) => {
+                error!(
+                    "Failed to create SqruffService for tab '{}': {}",
+                    params.title, e
+                );
+                None
+            }
+        };
+
         // Create query tab with the connection string
         let query_tab = QueryTab {
             id: tab_id,
             title: params.title.clone(),
             connection_id: params.connection_id,
+            db_type: params.db_type.clone(),
             connection_name: params.connection_name.clone(),
             database_name: params.database_name.clone(),
             schema_name: params.schema_name.clone(),
@@ -779,6 +810,7 @@ impl EditorPanel {
                 ResultsPanel::new(params.connection_id, &params.database_name, window, cx)
             }),
             sql_log: cx.new(|cx| SqlLog::new(1000, cx.theme().highlight_theme.clone())),
+            sqruff_service,
             // Chat functionality
             chat_enabled: false,
             chat_panel: None,
@@ -898,6 +930,193 @@ impl EditorPanel {
         }
     }
 
+    /// Trigger a debounced lint of the current query.
+    ///
+    /// This cancels any pending lint task and schedules a new one after the debounce delay.
+    fn lint_current_query_debounced(&mut self, range: lsp_types::Range, cx: &mut Context<Self>) {
+        // Cancel any pending lint task by dropping it
+        self._lint_debounce_task = Task::ready(());
+
+        self._lint_debounce_task = cx.spawn(async move |entity_handle, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(LINT_DEBOUNCE_MS))
+                .await;
+
+            let _ = entity_handle.update(cx, |this, cx| {
+                this.lint_current_query(range, cx);
+            });
+        });
+    }
+
+    /// Lint the current query/statement and update editor diagnostics.
+    fn lint_current_query(&mut self, range: lsp_types::Range, cx: &mut Context<Self>) {
+        let tab_index = self.active_tab_ix;
+
+        let Some(TabType::Query(query_tab)) = self.tabs.get(tab_index) else {
+            return;
+        };
+
+        let editor = query_tab.editor.clone();
+
+        // Get the text for the given range
+        let (statement_text, byte_range) = {
+            let editor_ref = editor.read(cx);
+            let text = editor_ref.text();
+
+            // Convert LSP range to byte offsets
+            let start_byte = text.position_to_offset(&range.start);
+            let end_byte = text.position_to_offset(&range.end);
+
+            // Extract text from the range
+            let extracted = text.slice(start_byte..end_byte.min(text.len())).to_string();
+
+            (extracted, start_byte..end_byte)
+        };
+
+        // Spawn background lint task
+        let sqruff_service = if let Some(sqruff_service) = &query_tab.sqruff_service {
+            sqruff_service.clone()
+        } else {
+            tracing::warn!("Sqruff service not available for linting");
+            return;
+        };
+
+        cx.spawn(async move |entity_handle, async_cx| {
+            // Create sqruff service and lint
+            let diagnostics = match sqruff_service.lint(&statement_text, Some(byte_range.start)) {
+                Ok(diags) => diags,
+                Err(e) => {
+                    tracing::error!("Linting failed: {}", e);
+                    return Ok::<(), anyhow::Error>(());
+                }
+            };
+
+            // Update editor diagnostics
+            // The diagnostics from sqruff are relative to the statement text,
+            // so we need to adjust them to the full file position
+            let _ = entity_handle.update(async_cx, |editor_panel, cx| {
+                if let Some(TabType::Query(query_tab)) = editor_panel.tabs.get_mut(tab_index) {
+                    query_tab.editor.update(cx, |state, cx| {
+                        // Calculate the statement start position
+                        let start_char = state.text().byte_to_char_idx(byte_range.start);
+                        let start_pos = state.text().offset_to_position(start_char);
+
+                        // Adjust diagnostics by adding the statement start position
+                        let adjusted_diagnostics: Vec<Diagnostic> = diagnostics
+                            .into_iter()
+                            .map(|diag| {
+                                let start = lsp_types::Position::new(
+                                    diag.range.start.line + start_pos.line,
+                                    if diag.range.start.line == 0 {
+                                        diag.range.start.character + start_pos.character
+                                    } else {
+                                        diag.range.start.character
+                                    },
+                                );
+                                let end = lsp_types::Position::new(
+                                    diag.range.end.line + start_pos.line,
+                                    if diag.range.end.line == 0 {
+                                        diag.range.end.character + start_pos.character
+                                    } else {
+                                        diag.range.end.character
+                                    },
+                                );
+                                Diagnostic::new(start..end, diag.message)
+                                    .with_severity(diag.severity)
+                            })
+                            .collect();
+
+                        state.diagnostics_mut().map(|set| {
+                            set.clear();
+                            set.extend(adjusted_diagnostics);
+                        });
+                        cx.notify();
+                    });
+                }
+            });
+
+            Ok(())
+        })
+        .detach();
+    }
+
+    /// Format the current query/statement.
+    fn format_current_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tab_index = self.active_tab_ix;
+
+        let Some(TabType::Query(query_tab)) = self.tabs.get(tab_index) else {
+            window.push_notification((NotificationType::Error, "No query tab active"), cx);
+            return;
+        };
+
+        let editor = query_tab.editor.clone();
+
+        // Get current text and cursor position
+        let (text, cursor_pos) = {
+            let editor_ref = editor.read(cx);
+            (editor_ref.text().clone(), editor_ref.cursor())
+        };
+
+        // Extract current statement using existing function
+        let Some(statement_info) = extract_statement_info(&text, cursor_pos) else {
+            window.push_notification((NotificationType::Info, "No query found at cursor"), cx);
+            return;
+        };
+
+        let statement_text = statement_info.text.clone();
+        let byte_range = statement_info.byte_range.clone();
+
+        // Format in background
+        let sqruff_service = if let Some(sqruff_service) = &query_tab.sqruff_service {
+            sqruff_service.clone()
+        } else {
+            tracing::warn!("Sqruff service not available for linting");
+            return;
+        };
+
+        cx.spawn_in(window, async move |entity_handle, window| {
+            let formatted_result = sqruff_service.format(&statement_text);
+            let formatted = match formatted_result {
+                Ok(f) => f,
+                Err(e) => {
+                    let _ = window.update(|_window, cx| {
+                        _window.push_notification(format!("Format failed: {}", e), cx);
+                    });
+                    return Ok::<(), anyhow::Error>(());
+                }
+            };
+
+            let _ = entity_handle.update_in(window, |editor_panel, window, cx| {
+                if let Some(TabType::Query(query_tab)) =
+                    editor_panel.tabs.get_mut(editor_panel.active_tab_ix)
+                {
+                    query_tab.editor.update(cx, |state, cx| {
+                        // Replace the statement range with formatted text
+                        // Create an LSP TextEdit for the replacement
+                        let start = state.text().byte_to_char_idx(byte_range.start);
+                        let end = state.text().byte_to_char_idx(byte_range.end);
+                        let start_pos = state.text().offset_to_position(start);
+                        let end_pos = state.text().offset_to_position(end);
+                        let text_edit = lsp_types::TextEdit {
+                            range: lsp_types::Range {
+                                start: start_pos,
+                                end: end_pos,
+                            },
+                            new_text: formatted,
+                            ..Default::default()
+                        };
+                        state.apply_lsp_edits(&vec![text_edit], window, cx);
+                    });
+
+                    window.push_notification("Query formatted", cx);
+                }
+            });
+
+            Ok(())
+        })
+        .detach();
+    }
+
     /// Create a tab bar click handler closure
     fn tab_bar_click_handler(
         view: WeakEntity<Self>,
@@ -982,6 +1201,9 @@ impl Render for EditorPanel {
                     window,
                     cx,
                 );
+            }))
+            .on_action(cx.listener(|this, _: &FormatQuery, window, cx| {
+                this.format_current_query(window, cx);
             }))
             .child(
                 // Tab bar
@@ -1164,18 +1386,27 @@ impl Render for EditorPanel {
                                                                 .border_t_1()
                                                                 .border_color(cx.theme().border)
                                                                 .bg(cx.theme().title_bar)
-                                                                .justify_end()
-                                                                // Run button (always visible)
+                                                                .justify_between()
+                                                                // Format button (left side)
                                                                 .child(
-                                                                        Button::new("run-query")
-                                                                            .outline()
-                                                                            .small()
-                                                                            .label("Run Current")
-                                                                            .loading(self.loading)
-                                                                            .loading_icon(IconName::LoaderCircle)
-                                                                            .tooltip(format!("Run Current ({})", self.run_query_keystroke))
-                                                                            .on_click(cx.listener(|panel, _, window, cx| panel.on_run_query(window, cx))),
-                                                                    )
+                                                                    Button::new("format-query")
+                                                                        .outline()
+                                                                        .small()
+                                                                        .label("Format")
+                                                                        .tooltip("Format SQL (Shift+Alt+F)")
+                                                                        .on_click(cx.listener(|panel, _, window, cx| panel.format_current_query(window, cx)))
+                                                                )
+                                                                // Run button (right side)
+                                                                .child(
+                                                                    Button::new("run-query")
+                                                                        .outline()
+                                                                        .small()
+                                                                        .label("Run Current")
+                                                                        .loading(self.loading)
+                                                                        .loading_icon(IconName::LoaderCircle)
+                                                                        .tooltip(format!("Run Current ({})", self.run_query_keystroke))
+                                                                        .on_click(cx.listener(|panel, _, window, cx| panel.on_run_query(window, cx))),
+                                                                )
                                                         )
                                                         // Results section: Results on top, SQL Log on bottom
                                                         .child(

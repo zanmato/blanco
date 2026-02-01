@@ -53,6 +53,7 @@ pub enum AppEvent {
     CreateNewQueryTab {
         connection_id: i64,
         connection_name: String,
+        db_type: database::DatabaseType,
         database_name: String,
         schema_name: Option<String>,
         table_name: Option<String>,

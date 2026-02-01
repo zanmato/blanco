@@ -30,6 +30,7 @@ pub struct TableOperationResponse {
     pub error_message: Option<String>,
     pub operations_executed: usize,
     pub duration: Duration,
+    pub sql_queries: Vec<String>,
 }
 mod results_table_delegate;
 mod table_operations;
@@ -615,11 +616,13 @@ impl ResultsPanel {
                     let mut operations_executed = 0;
                     let mut error_message = None;
                     let mut success = true;
+                    let mut sql_queries = Vec::new();
 
                     for operation in &change_operations_for_pipeline {
                         tracing::debug!("Got operation {:?}", operation);
                         let sql_query =
                             (operation as &table_operations::TableChangeOperation).to_sql_query();
+                        sql_queries.push(sql_query.clone());
                         match connection
                             .execute_query(&sql_query, Some(&database_name), None)
                             .await
@@ -650,6 +653,7 @@ impl ResultsPanel {
                         error_message,
                         operations_executed,
                         duration: start_time.elapsed(),
+                        sql_queries,
                     }
                 }
                 Err(e) => {
@@ -662,6 +666,7 @@ impl ResultsPanel {
                         error_message: Some(format!("Connection error: {}", e)),
                         operations_executed: 0,
                         duration: start_time.elapsed(),
+                        sql_queries: Vec::new(),
                     }
                 }
             };
@@ -701,9 +706,17 @@ impl ResultsPanel {
                                 state.refresh(cx);
                             });
 
-                            // Update SQL log with success message
+                            // Update SQL log with queries and success message
                             if let Some(sql_log) = sql_log_response_entity {
                                 sql_log.update(cx, |log, cx| {
+                                    // Log each SQL query
+                                    for sql_query in &response.sql_queries {
+                                        log.append_text(
+                                            &blanco_ui::SqlLogMessage::SqlStatement(sql_query.clone()),
+                                            cx,
+                                        );
+                                    }
+                                    // Log summary comment
                                     let log_message = format!(
                                         "{}, {} operations, {} rows affected in {}",
                                         crate::time_format::format_current_timestamp(),
@@ -736,7 +749,15 @@ impl ResultsPanel {
                         // Handle failed operations - show error but keep edits for retry
                         if let Some(sql_log) = sql_log_response_entity {
                             let error_message_clone = response.error_message.clone();
+                            let sql_queries_clone = response.sql_queries.clone();
                             sql_log.update(cx, |log, cx| {
+                                // Log each SQL query that was attempted
+                                for sql_query in &sql_queries_clone {
+                                    log.append_text(
+                                        &blanco_ui::SqlLogMessage::SqlStatement(sql_query.clone()),
+                                        cx,
+                                    );
+                                }
                                 let error_msg = format!(
                                     "✗ Table operations failed: {}",
                                     error_message_clone
