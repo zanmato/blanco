@@ -1109,7 +1109,10 @@ impl TableDelegate for ResultsTableDelegate {
         } else {
             // Check if this is a numeric column for right-alignment (adjust for row number column)
             let is_numeric = !is_row_number_col
-                && self.column_types.get(col_ix - 1).map_or(false, |ct| ct.is_numeric());
+                && self
+                    .column_types
+                    .get(col_ix - 1)
+                    .map_or(false, |ct| ct.is_numeric());
 
             // Render static cell with appropriate handlers
             let cell_content = h_flex()
@@ -1210,23 +1213,27 @@ impl TableDelegate for ResultsTableDelegate {
                         })
                 })
                 .when(is_numeric && !is_row_number_col, |this| {
-                    this.justify_end() // Right-align numeric columns
+                    this.text_align(gpui::TextAlign::Right)
+                        .justify_end() // Right-align numeric columns
                         .text_color(cx.theme().foreground) // Ensure numeric text is visible
                 })
                 .when(
-                    !is_row_number_col && self.column_types.get(col_ix - 1) == Some(&ColumnType::Uuid),
+                    !is_row_number_col
+                        && self.column_types.get(col_ix - 1) == Some(&ColumnType::Uuid),
                     |this| {
                         this.text_color(cx.theme().blue) // Blue color for UUIDs
                     },
                 )
                 .when(
-                    !is_row_number_col && self.column_types.get(col_ix - 1) == Some(&ColumnType::DateTime),
+                    !is_row_number_col
+                        && self.column_types.get(col_ix - 1) == Some(&ColumnType::DateTime),
                     |this| {
                         this.text_color(cx.theme().green) // Green color for timestamps
                     },
                 )
                 .when(
-                    !is_row_number_col && self.column_types.get(col_ix - 1) == Some(&ColumnType::Json),
+                    !is_row_number_col
+                        && self.column_types.get(col_ix - 1) == Some(&ColumnType::Json),
                     |this| {
                         this.text_color(cx.theme().yellow) // Yellow color for JSON
                     },
