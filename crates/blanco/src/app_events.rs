@@ -59,6 +59,10 @@ pub enum AppEvent {
         table_name: Option<String>,
         environment_type: Option<crate::app_database::EnvironmentType>,
     },
+    EditorSettingChanged {
+        setting: String,
+        value: String,
+    },
 
     /// Database, Schema and Table events
     SchemasLoaded {

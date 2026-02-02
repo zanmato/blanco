@@ -29,6 +29,9 @@ impl Settings {
                 "editor.word_wrap" => {
                     settings.editor.word_wrap = value.parse().unwrap_or_default();
                 }
+                "editor.show_whitespace" => {
+                    settings.editor.show_whitespace = value.parse().unwrap_or_default();
+                }
                 "database.default_connection_timeout_seconds" => {
                     settings.database.default_connection_timeout_seconds =
                         value.parse().unwrap_or_default();
@@ -87,6 +90,7 @@ pub struct GeneralSettings {
 pub struct EditorSettings {
     pub font_family: String,
     pub word_wrap: bool,
+    pub show_whitespace: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,6 +132,7 @@ impl Default for EditorSettings {
         Self {
             font_family: "Fira Code".to_string(),
             word_wrap: false,
+            show_whitespace: false,
         }
     }
 }

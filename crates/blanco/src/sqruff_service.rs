@@ -8,7 +8,7 @@ use gpui_component::highlighter::{Diagnostic, DiagnosticSeverity};
 use gpui_component::input::Position;
 use sqruff_lib::core::config::{FluffConfig, Value};
 use sqruff_lib::core::linter::core::Linter;
-use tracing::{debug, warn};
+use std::sync::Mutex;
 
 /// Sqruff service for SQL linting and formatting.
 ///
@@ -17,7 +17,7 @@ use tracing::{debug, warn};
 /// - Formatting of SQL statements
 /// - Conversion of sqruff violations to gpui-component diagnostics
 pub struct SqruffService {
-    config: FluffConfig,
+    linter: Mutex<Linter>,
 }
 
 impl SqruffService {
@@ -29,13 +29,13 @@ impl SqruffService {
     /// # Returns
     /// Result with the service or an error message
     pub fn new(dialect: &str) -> Result<Self, String> {
-        // Exclude LT12 (files must end with trailing newline) as it's not relevant for editor queries
         let mut configs = ahash::AHashMap::new();
 
         let mut core_config = ahash::AHashMap::new();
         core_config.insert("dialect".to_string(), Value::String(dialect.into()));
+        // Exclude LT12 (files must end with trailing newline) as it's not relevant for editor queries
+        core_config.insert("exclude_rules".to_string(), Value::String("LT12".into()));
         configs.insert("core".to_string(), Value::Map(core_config));
-        configs.insert("exclude_rules".to_string(), Value::String("LT12".into()));
 
         let mut indentation_config = ahash::AHashMap::new();
         indentation_config.insert("tab_space_size".to_string(), Value::Int(2));
@@ -44,8 +44,11 @@ impl SqruffService {
         configs.insert("indentation".to_string(), Value::Map(indentation_config));
 
         let config = FluffConfig::new(configs, None, None);
+        let linter = Linter::new(config, None, None, false);
 
-        Ok(Self { config })
+        Ok(Self {
+            linter: Mutex::new(linter),
+        })
     }
 
     /// Lint SQL text and return diagnostics.
@@ -66,26 +69,20 @@ impl SqruffService {
             return Ok(Vec::new());
         }
 
-        debug!("Linting SQL: {} chars", sql.len());
-
-        let mut linter = Linter::new(self.config.clone(), None, None, false);
+        let mut linter = self
+            .linter
+            .lock()
+            .map_err(|e| format!("Linter lock poisoned: {}", e))?;
         let linted_file = linter.lint_string_wrapped(sql, false);
+        drop(linter);
 
         let violations = linted_file.violations();
-
-        debug!("Sqruff found {} violations", violations.len());
 
         // Sqruff provides positions relative to the SQL text we passed in (the statement)
         // We return diagnostics relative to the statement text
         // The caller is responsible for adjusting positions to the full file if needed
-
         let diagnostics: Vec<Diagnostic> = violations
             .iter()
-            .filter(|violation| {
-                // Filter out LT12 (files must end with trailing newline) as it's not relevant for editor queries
-                // Also filter out any other rules that don't make sense in an editor context
-                !violation.rule_code().starts_with("LT12")
-            })
             .filter_map(|violation| {
                 // Convert sqruff violation to gpui_component Diagnostic
                 let severity = Self::severity_for_rule(violation.rule_code());
@@ -125,18 +122,18 @@ impl SqruffService {
             return Ok(sql.to_string());
         }
 
-        debug!("Formatting SQL: {} chars", sql.len());
-
-        let config = self.config.clone();
-
-        let mut linter = Linter::new(config, None, None, false);
+        let mut linter = self
+            .linter
+            .lock()
+            .map_err(|e| format!("Linter lock poisoned: {}", e))?;
         let linted_file = linter.lint_string_wrapped(sql, true);
+        drop(linter);
 
         // Apply fixes to get formatted SQL
         let formatted = linted_file.fix_string();
 
         if formatted.is_empty() {
-            warn!("Sqruff formatter produced empty output, using original");
+            tracing::warn!("Sqruff formatter produced empty output, using original");
             Ok(sql.to_string())
         } else {
             Ok(formatted)

@@ -15,7 +15,6 @@ use gpui_component::{
     v_flex,
 };
 use ropey::Rope;
-use smol::Timer;
 use std::{rc::Rc, sync::Arc, time::Duration};
 use tracing::{debug, error, info};
 
@@ -25,6 +24,7 @@ use crate::app::{ExecuteSubstitutedQuery, FormatQuery};
 use crate::app_database::AppDatabase;
 use crate::app_database::{EnvironmentType, QueryTabData};
 use crate::app_events::AppEvent;
+use crate::app_settings::AppSettings;
 use crate::parameter_form::ParameterForm;
 use crate::rename_form::RenameTabForm;
 use crate::results_panel::ResultsPanel;
@@ -81,6 +81,7 @@ pub struct EditorPanel {
     tabbar_scroll_handle: gpui::ScrollHandle,
     _subscriptions: Vec<gpui::Subscription>,
     run_query_keystroke: KeybindingKeystroke,
+    format_query_keystroke: KeybindingKeystroke,
     editor_chat_resize_state: Entity<ResizableState>,
     editor_results_resize_state: Entity<ResizableState>,
     loading: bool,
@@ -109,6 +110,36 @@ impl EditorPanel {
     pub fn set_sidebar_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
         self.sidebar_collapsed = collapsed;
         cx.notify();
+    }
+
+    pub fn set_all_editors_show_whitespace(
+        &mut self,
+        show: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for tab in &mut self.tabs {
+            if let TabType::Query(query_tab) = tab {
+                query_tab
+                    .editor
+                    .update(cx, |state, cx| state.set_show_whitespace(show, window, cx));
+            }
+        }
+    }
+
+    pub fn set_all_editors_soft_wrap(
+        &mut self,
+        wrap: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for tab in &mut self.tabs {
+            if let TabType::Query(query_tab) = tab {
+                query_tab
+                    .editor
+                    .update(cx, |state, cx| state.set_soft_wrap(wrap, window, cx));
+            }
+        }
     }
 
     fn close_tab(&mut self, tab_index: usize, cx: &mut Context<Self>) {
@@ -205,6 +236,38 @@ impl EditorPanel {
 
         // Settings are now stored in the global AppDatabase
         let settings_view = cx.new(crate::settings::SettingsView::new);
+
+        // Subscribe to settings view events to forward them to the app and update editors
+        cx.subscribe_in(
+            &settings_view,
+            window,
+            |editor_panel, _settings_view, event, window, cx| {
+                match event {
+                    AppEvent::EditorSettingChanged { setting, value } => {
+                        // Forward the event to the BlancoApp
+                        cx.emit(AppEvent::EditorSettingChanged {
+                            setting: setting.clone(),
+                            value: value.clone(),
+                        });
+
+                        // Also update all editors directly for immediate feedback
+                        let value_bool = value.parse::<bool>().unwrap_or(false);
+                        match setting.as_str() {
+                            "word_wrap" => {
+                                editor_panel.set_all_editors_soft_wrap(value_bool, window, cx);
+                            }
+                            "show_whitespace" => {
+                                editor_panel
+                                    .set_all_editors_show_whitespace(value_bool, window, cx);
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+            },
+        )
+        .detach();
 
         let settings_tab = SettingsTab {
             id: tab_id,
@@ -632,6 +695,9 @@ impl EditorPanel {
             run_query_keystroke: KeybindingKeystroke::from_keystroke(
                 Keystroke::parse("shift-enter").unwrap(),
             ),
+            format_query_keystroke: KeybindingKeystroke::from_keystroke(
+                Keystroke::parse("shift-alt-f").unwrap(),
+            ),
             editor_chat_resize_state,
             editor_results_resize_state,
             loading: false,
@@ -730,6 +796,10 @@ impl EditorPanel {
         self.next_tab_id += 1;
 
         let editor = cx.new(|cx| {
+            // Read settings
+            let word_wrap = AppSettings::global(cx).settings.editor.word_wrap;
+            let show_whitespace = AppSettings::global(cx).settings.editor.show_whitespace;
+
             let mut editor = InputState::new(window, cx)
                 .code_editor("sql".to_string())
                 .line_number(true)
@@ -737,7 +807,8 @@ impl EditorPanel {
                     tab_size: 2,
                     hard_tabs: false,
                 })
-                .soft_wrap(true);
+                .soft_wrap(word_wrap)
+                .show_whitespace(show_whitespace);
 
             // Set up completion provider using connection_id, database_name, and DbService
             let db_service: Arc<dyn DatabaseServiceTrait> =
@@ -1080,7 +1151,8 @@ impl EditorPanel {
                 Ok(f) => f,
                 Err(e) => {
                     let _ = window.update(|_window, cx| {
-                        _window.push_notification(format!("Format failed: {}", e), cx);
+                        let error_message = SharedString::from(format!("Format failed: {}", e));
+                        _window.push_notification((NotificationType::Error, error_message), cx);
                     });
                     return Ok::<(), anyhow::Error>(());
                 }
@@ -1108,7 +1180,7 @@ impl EditorPanel {
                         state.apply_lsp_edits(&vec![text_edit], window, cx);
                     });
 
-                    window.push_notification("Query formatted", cx);
+                    window.push_notification((NotificationType::Success, "Query formatted"), cx);
                 }
             });
 
@@ -1386,14 +1458,15 @@ impl Render for EditorPanel {
                                                                 .border_t_1()
                                                                 .border_color(cx.theme().border)
                                                                 .bg(cx.theme().title_bar)
-                                                                .justify_between()
+                                                                .justify_end()
                                                                 // Format button (left side)
                                                                 .child(
                                                                     Button::new("format-query")
                                                                         .outline()
                                                                         .small()
+                                                                        .icon(IconName::WandSparkles)
                                                                         .label("Format")
-                                                                        .tooltip("Format SQL (Shift+Alt+F)")
+                                                                        .tooltip(format!("Format ({})", self.format_query_keystroke))
                                                                         .on_click(cx.listener(|panel, _, window, cx| panel.format_current_query(window, cx)))
                                                                 )
                                                                 // Run button (right side)
@@ -1401,6 +1474,7 @@ impl Render for EditorPanel {
                                                                     Button::new("run-query")
                                                                         .outline()
                                                                         .small()
+                                                                        .icon(IconName::Play)
                                                                         .label("Run Current")
                                                                         .loading(self.loading)
                                                                         .loading_icon(IconName::LoaderCircle)

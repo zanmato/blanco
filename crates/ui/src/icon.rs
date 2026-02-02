@@ -72,6 +72,7 @@ pub enum IconName {
     PanelRight,
     PanelRightClose,
     PanelRightOpen,
+    Play,
     Plus,
     Replace,
     ResizeCorner,
@@ -99,6 +100,7 @@ pub enum IconName {
     WindowRestore,
     Postgresql,
     Sqlite,
+    WandSparkles,
     Wrench,
 }
 
@@ -175,6 +177,7 @@ impl IconName {
             Self::PanelRight => "icons/panel-right.svg",
             Self::PanelRightClose => "icons/panel-right-close.svg",
             Self::PanelRightOpen => "icons/panel-right-open.svg",
+            Self::Play => "icons/play.svg",
             Self::Plus => "icons/plus.svg",
             Self::Replace => "icons/replace.svg",
             Self::ResizeCorner => "icons/resize-corner.svg",
@@ -202,6 +205,7 @@ impl IconName {
             Self::WindowRestore => "icons/window-restore.svg",
             Self::Postgresql => "icons/postgres.svg",
             Self::Sqlite => "icons/sqlite.svg",
+            Self::WandSparkles => "icons/wand-sparkles.svg",
             Self::Wrench => "icons/wrench.svg",
         }
         .into()

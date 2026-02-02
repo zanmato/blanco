@@ -14,6 +14,7 @@ use tracing::{debug, error, info};
 use crate::{
     app_database::AppDatabase,
     app_events::AppEvent,
+    app_settings::AppSettings,
     connection_modal::NewConnectionModal,
     connections::ConnectionsPanel,
     editor::{EditorPanel, TabCreationParams},
@@ -36,7 +37,9 @@ actions!(
         CopyAsSQL,
         CopyAsMarkdown,
         ExportData,
-        ClearSelection
+        ClearSelection,
+        ToggleRenderWhitespace,
+        ToggleWordWrap,
     ]
 );
 
@@ -303,7 +306,7 @@ impl BlancoApp {
         let sidebar_clone = sidebar.clone();
         let editor_panel_for_subscription = editor_panel.clone();
 
-        let subscription = cx.subscribe(&editor_panel, move |app, _editor_panel, event, cx| {
+        let subscription = cx.subscribe_in(&editor_panel, window, move |app, _editor_panel, event, window, cx| {
             let editor_panel_for_events = editor_panel_for_subscription.clone();
             match event {
                 AppEvent::QueryExecutionStarted { .. } => {
@@ -350,6 +353,23 @@ impl BlancoApp {
                             tab_index: *tab_index,
                             new_name: new_name.clone(),
                         });
+                }
+                AppEvent::EditorSettingChanged { setting, value } => {
+                    tracing::info!("📝 EditorSettingChanged event received: setting={}, value={}", setting, value);
+                    let value_bool = value.parse::<bool>().unwrap_or(false);
+                    match setting.as_str() {
+                        "word_wrap" => {
+                            editor_panel_for_events.update(cx, |panel, cx| {
+                                panel.set_all_editors_soft_wrap(value_bool, window, cx);
+                            });
+                        }
+                        "show_whitespace" => {
+                            editor_panel_for_events.update(cx, |panel, cx| {
+                                panel.set_all_editors_show_whitespace(value_bool, window, cx);
+                            });
+                        }
+                        _ => {}
+                    }
                 }
                 _ => {}
             }
@@ -593,6 +613,60 @@ impl BlancoApp {
         });
         cx.notify();
     }
+
+    fn on_toggle_render_whitespace(
+        &mut self,
+        _: &ToggleRenderWhitespace,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let new_value = !AppSettings::global(cx).settings.editor.show_whitespace;
+        AppSettings::global_mut(cx).settings.editor.show_whitespace = new_value;
+
+        // Save to database
+        let db = AppDatabase::global(cx).clone();
+        let new_value_str = new_value.to_string();
+        cx.spawn(async move |_, _| async move {
+            let _ = db
+                .save_setting("editor.show_whitespace", &new_value_str, false)
+                .await;
+        })
+        .detach();
+
+        // Update all query tab editors
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.set_all_editors_show_whitespace(new_value, window, cx);
+        });
+
+        cx.notify();
+    }
+
+    fn on_toggle_word_wrap(
+        &mut self,
+        _: &ToggleWordWrap,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let new_value = !AppSettings::global(cx).settings.editor.word_wrap;
+        AppSettings::global_mut(cx).settings.editor.word_wrap = new_value;
+
+        // Save to database
+        let db = AppDatabase::global(cx).clone();
+        let new_value_str = new_value.to_string();
+        cx.spawn(async move |_, _| async move {
+            let _ = db
+                .save_setting("editor.word_wrap", &new_value_str, false)
+                .await;
+        })
+        .detach();
+
+        // Update all query tab editors
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.set_all_editors_soft_wrap(new_value, window, cx);
+        });
+
+        cx.notify();
+    }
 }
 
 impl EventEmitter<AppEvent> for BlancoApp {}
@@ -625,6 +699,8 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_rename_tab))
             .on_action(cx.listener(Self::on_database_connected))
             .on_action(cx.listener(Self::on_refresh_snippets))
+            .on_action(cx.listener(Self::on_toggle_render_whitespace))
+            .on_action(cx.listener(Self::on_toggle_word_wrap))
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
@@ -730,6 +806,13 @@ fn init_menus(cx: &mut App) {
                 MenuItem::action("Paste", gpui_component::input::Paste),
                 MenuItem::separator(),
                 MenuItem::action("Select All", gpui_component::input::SelectAll),
+            ],
+        },
+        Menu {
+            name: "View".into(),
+            items: vec![
+                MenuItem::action("Render Whitespace", ToggleRenderWhitespace),
+                MenuItem::action("Word Wrap", ToggleWordWrap),
             ],
         },
     ]);
