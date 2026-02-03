@@ -21,34 +21,34 @@ impl DataTransformer for MarkdownTransformer {
             return Err(TransformError::EmptySelection);
         }
 
-        let mut output = String::new();
+        // Estimate capacity: ~80 bytes per cell on average (including formatting)
+        let cell_count = data.selected_rows.iter().map(|r| r.cells.len()).sum::<usize>();
+        let estimated_capacity = (cell_count * 80) + (data.columns.len() * 30) + 200;
+        let mut output = String::with_capacity(estimated_capacity);
 
         // Add table name as a header if available
         if let Some(table_name) = &data.table_name {
-            output.push_str(&format!("# Table: {}\n\n", table_name));
+            output.push_str("# Table: ");
+            output.push_str(table_name);
+            output.push_str("\n\n");
         }
 
         // Determine which columns to include based on selection
-        let mut included_columns = std::collections::HashSet::new();
         let mut min_col = usize::MAX;
         let mut max_col = 0;
 
         // Check selected rows
         for row in &data.selected_rows {
             for cell in &row.cells {
-                included_columns.insert(cell.col);
                 min_col = min_col.min(cell.col);
                 max_col = max_col.max(cell.col);
             }
         }
 
         // If no columns were found, include all columns
-        if included_columns.is_empty() {
+        if min_col == usize::MAX {
             min_col = 0;
             max_col = data.columns.len().saturating_sub(1);
-            for i in 0..=max_col {
-                included_columns.insert(i);
-            }
         }
 
         // Build column list and widths for formatting
@@ -60,10 +60,13 @@ impl DataTransformer for MarkdownTransformer {
                 columns.push((col_idx, col_name.clone()));
                 let mut max_width = col_name.len();
 
-                // Consider selected rows for this column
+                // Consider selected rows for this column - direct iteration
                 for row in &data.selected_rows {
-                    if let Some(cell) = row.cells.iter().find(|c| c.col == col_idx) {
-                        max_width = max_width.max(cell.value.len());
+                    for cell in &row.cells {
+                        if cell.col == col_idx {
+                            max_width = max_width.max(cell.value.len());
+                            break; // Found the cell for this column, move to next row
+                        }
                     }
                 }
 
@@ -75,7 +78,7 @@ impl DataTransformer for MarkdownTransformer {
         output.push('|');
         for (i, (_, col_name)) in columns.iter().enumerate() {
             output.push(' ');
-            output.push_str(&format_cell(col_name, column_widths[i]));
+            format_cell_to(col_name, column_widths[i], &mut output);
             output.push_str(" |");
         }
         output.push('\n');
@@ -84,30 +87,34 @@ impl DataTransformer for MarkdownTransformer {
         output.push('|');
         for width in &column_widths {
             output.push(' ');
-            output.push_str(&"-".repeat(*width));
+            for _ in 0..*width {
+                output.push('-');
+            }
             output.push_str(" |");
         }
         output.push('\n');
 
         // If we have selected rows, output complete rows
         if !data.selected_rows.is_empty() {
-            let mut row_indices: Vec<usize> = data.selected_rows.iter().map(|r| r.row).collect();
-            row_indices.sort();
-
-            for row_idx in row_indices {
-                if let Some(row) = data.selected_rows.iter().find(|r| r.row == row_idx) {
-                    output.push('|');
-                    for (i, &(col_idx, _)) in columns.iter().enumerate() {
-                        output.push(' ');
-                        if let Some(cell) = row.cells.iter().find(|c| c.col == col_idx) {
-                            output.push_str(&format_cell(&cell.value, column_widths[i]));
-                        } else {
-                            output.push_str(&format_cell("", column_widths[i]));
+            for row in &data.selected_rows {
+                output.push('|');
+                for (i, &(col_idx, _)) in columns.iter().enumerate() {
+                    output.push(' ');
+                    // Find cell by column index - direct iteration
+                    let mut cell_found = false;
+                    for cell in &row.cells {
+                        if cell.col == col_idx {
+                            format_cell_to(&cell.value, column_widths[i], &mut output);
+                            cell_found = true;
+                            break;
                         }
-                        output.push_str(" |");
                     }
-                    output.push('\n');
+                    if !cell_found {
+                        format_cell_to("", column_widths[i], &mut output);
+                    }
+                    output.push_str(" |");
                 }
+                output.push('\n');
             }
         }
 
@@ -148,12 +155,22 @@ impl DataTransformer for MarkdownTransformer {
     }
 }
 
-/// Format a cell value with proper padding for markdown table
+/// Format a cell value with proper padding for markdown table - returns a new String
 fn format_cell(value: &str, width: usize) -> String {
     if value.len() >= width {
         value.to_string()
     } else {
         format!("{}{}", value, " ".repeat(width - value.len()))
+    }
+}
+
+/// Format a cell value with proper padding - writes directly to buffer
+/// This avoids allocating a new String for each cell
+fn format_cell_to(value: &str, width: usize, output: &mut String) {
+    output.push_str(value);
+    let padding = width.saturating_sub(value.len());
+    for _ in 0..padding {
+        output.push(' ');
     }
 }
 

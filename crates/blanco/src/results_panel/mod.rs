@@ -1,19 +1,20 @@
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, Styled, Subscription, Window, div, px,
+    IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme,
+    ActiveTheme, WindowExt as _,
     input::{InputEvent, InputState},
     table::{Table, TableDelegate, TableState},
     v_flex,
 };
 
-use blanco_core::connection_trait::ColumnType;
 use blanco_core::QueryResult;
+use blanco_core::connection_trait::ColumnType;
 use database::DatabaseService;
 
 use crate::app::{AddRow, DuplicateRow};
@@ -117,9 +118,7 @@ impl ResultsPanel {
                 state.delegate_mut().set_original_query(query.clone());
             }
             // Move the result into the delegate instead of cloning
-            state
-                .delegate_mut()
-                .set_query_result(result, window, cx);
+            state.delegate_mut().set_query_result(result, window, cx);
             state.refresh(cx);
         });
 
@@ -583,16 +582,6 @@ impl ResultsPanel {
         // Create response channel for table operations
         let (response_tx, response_rx) = smol::channel::bounded(1);
 
-        // Emit a query execution started event
-        cx.emit(AppEvent::QueryExecutionStarted {
-            connection_id: Some(connection_id_for_event),
-            query: format!(
-                "Table operations on {} ({} operations)",
-                table_name_for_logging,
-                change_operations_for_logging.len()
-            ),
-        });
-
         tracing::info!("Commit Changes: Starting table operations execution");
 
         // Spawn background task to execute table operations
@@ -712,7 +701,9 @@ impl ResultsPanel {
                                     // Log each SQL query
                                     for sql_query in &response.sql_queries {
                                         log.append_text(
-                                            &blanco_ui::SqlLogMessage::SqlStatement(sql_query.clone()),
+                                            &blanco_ui::SqlLogMessage::SqlStatement(
+                                                sql_query.clone(),
+                                            ),
                                             cx,
                                         );
                                     }
@@ -1013,9 +1004,7 @@ impl ResultsPanel {
 
         let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
 
-        if let Err(e) = self.copy_handler.copy_as_format(&selected_data, "csv", cx) {
-            tracing::error!("Failed to copy as CSV: {}", e);
-        }
+        self.copy_handler.copy_as_format(&selected_data, "csv", cx);
     }
 
     fn on_copy_as_json(
@@ -1035,9 +1024,7 @@ impl ResultsPanel {
 
         let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
 
-        if let Err(e) = self.copy_handler.copy_as_format(&selected_data, "json", cx) {
-            tracing::error!("Failed to copy as JSON: {}", e);
-        }
+        self.copy_handler.copy_as_format(&selected_data, "json", cx);
     }
 
     fn on_copy_as_sql(
@@ -1057,9 +1044,7 @@ impl ResultsPanel {
 
         let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
 
-        if let Err(e) = self.copy_handler.copy_as_format(&selected_data, "sql", cx) {
-            tracing::error!("Failed to copy as SQL: {}", e);
-        }
+        self.copy_handler.copy_as_format(&selected_data, "sql", cx);
     }
 
     fn on_copy_as_markdown(
@@ -1079,12 +1064,7 @@ impl ResultsPanel {
 
         let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
 
-        if let Err(e) = self
-            .copy_handler
-            .copy_as_format(&selected_data, "markdown", cx)
-        {
-            tracing::error!("Failed to copy as Markdown: {}", e);
-        }
+        self.copy_handler.copy_as_format(&selected_data, "markdown", cx);
     }
 
     fn on_add_row(&mut self, _action: &AddRow, _window: &mut Window, cx: &mut Context<Self>) {
@@ -1098,6 +1078,161 @@ impl ResultsPanel {
         cx: &mut Context<Self>,
     ) {
         self.duplicate_row(cx);
+    }
+
+    fn on_export_as_csv(
+        &mut self,
+        _action: &crate::app::ExportAsCSV,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.export_selected_as("csv", window, cx);
+    }
+
+    fn on_export_as_json(
+        &mut self,
+        _action: &crate::app::ExportAsJSON,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.export_selected_as("json", window, cx);
+    }
+
+    fn on_export_as_sql(
+        &mut self,
+        _action: &crate::app::ExportAsSQL,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.export_selected_as("sql", window, cx);
+    }
+
+    fn on_export_as_markdown(
+        &mut self,
+        _action: &crate::app::ExportAsMarkdown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.export_selected_as("markdown", window, cx);
+    }
+
+    /// Export selected data in the specified format
+    fn export_selected_as(&mut self, format: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let table_state = self.table_state.read(cx);
+        let selected_rows = table_state.selected_rows().clone();
+        let delegate = table_state.delegate();
+
+        if selected_rows.is_empty() {
+            tracing::error!("Failed to export as {}: No rows selected for exporting", format);
+            return;
+        }
+
+        let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
+        let table_name = selected_data
+            .table_name
+            .clone()
+            .unwrap_or_else(|| "export".to_string());
+
+        // Get file extension
+        let extension = match format {
+            "csv" => "csv",
+            "json" => "json",
+            "sql" => "sql",
+            "markdown" => "md",
+            _ => "txt",
+        };
+
+        // Suggest default filename
+        let timestamp = chrono::Utc::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+        let default_filename = format!("{}_{}.{}", table_name, timestamp, extension);
+
+        // Get home directory as default directory
+        let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+
+        // Prompt for file save location using prompt_for_new_path
+        let path = cx.prompt_for_new_path(&home_dir, Some(&default_filename));
+
+        let format_owned = format.to_string();
+        let table_name_for_sql = table_name.clone();
+
+        cx.spawn_in(window, async move |entity, cx| {
+            // Await the path result - it's Result<Result<Option<PathBuf>>, Canceled>
+            let outer_result = path.await;
+
+            // Handle the outer Result (Canceled or inner Result)
+            let inner_result = match outer_result {
+                Ok(inner) => inner,
+                Err(_) => return, // Canceled
+            };
+
+            // Extract the path from Result<Option<PathBuf>>
+            let file_path = match inner_result {
+                Ok(Some(path_buf)) => path_buf,
+                _ => return, // User cancelled or error
+            };
+
+            // Get transformer
+            let transformer: Box<dyn crate::transformers::DataTransformer> = match format_owned.as_str() {
+                "csv" => Box::new(crate::transformers::CsvTransformer),
+                "json" => Box::new(crate::transformers::JsonTransformer::new()),
+                "sql" => Box::new(crate::transformers::SqlTransformer::with_table_name(table_name_for_sql.clone())),
+                "markdown" => Box::new(crate::transformers::MarkdownTransformer),
+                _ => {
+                    tracing::error!("Unknown format: {}", format_owned);
+                    return;
+                }
+            };
+
+            // Create export service
+            let export_service = crate::export_service::ExportService::new();
+
+            // Execute export
+            match export_service.export_selected_data(&selected_data, transformer.as_ref(), &file_path).await {
+                Ok(result) => {
+                    match result {
+                        crate::export_service::ExportResult::Success { file_path, rows_exported, .. } => {
+                            tracing::info!(
+                                "Export completed successfully: {} -> {} ({} rows)",
+                                format_owned,
+                                file_path,
+                                rows_exported
+                            );
+                            // Show success notification via entity update
+                            let _ = entity.update_in(cx, |_panel, window, cx| {
+                                window.push_notification(
+                                    (gpui_component::notification::NotificationType::Success,
+                                     SharedString::from(format!("Exported {} rows to {}", rows_exported, file_path))),
+                                    cx,
+                                );
+                            });
+                        }
+                        crate::export_service::ExportResult::Error { message } => {
+                            tracing::error!("Export failed: {}", message);
+                            let _ = entity.update_in(cx, |_panel, window, cx| {
+                                window.push_notification(
+                                    (gpui_component::notification::NotificationType::Error,
+                                     SharedString::from(format!("Export failed: {}", message))),
+                                    cx,
+                                );
+                            });
+                        }
+                        crate::export_service::ExportResult::Cancelled => {
+                            tracing::info!("Export cancelled by user");
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Export failed: {}", e);
+                    let _ = entity.update_in(cx, |_panel, window, cx| {
+                        window.push_notification(
+                            (gpui_component::notification::NotificationType::Error,
+                             SharedString::from(format!("Export failed: {}", e))),
+                            cx,
+                        );
+                    });
+                }
+            }
+        }).detach();
     }
 
     pub fn get_selected_data_for_rows(
@@ -1178,6 +1313,10 @@ impl Render for ResultsPanel {
             .on_action(cx.listener(Self::on_copy_as_json))
             .on_action(cx.listener(Self::on_copy_as_sql))
             .on_action(cx.listener(Self::on_copy_as_markdown))
+            .on_action(cx.listener(Self::on_export_as_csv))
+            .on_action(cx.listener(Self::on_export_as_json))
+            .on_action(cx.listener(Self::on_export_as_sql))
+            .on_action(cx.listener(Self::on_export_as_markdown))
             .on_action(cx.listener(Self::on_add_row))
             .on_action(cx.listener(Self::on_duplicate_row))
             // The table component (table should have built-in scrolling)

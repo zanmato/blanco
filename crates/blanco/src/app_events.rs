@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use crate::app_database::ConnectionData;
+
 /// Core application events that can be emitted and subscribed to
 #[derive(Clone, Debug, PartialEq)]
 pub enum AppEvent {
@@ -12,6 +14,10 @@ pub enum AppEvent {
     ConnectionLost {
         connection_id: Option<i64>,
         error: String,
+    },
+    EditConnection {
+        connection_id: i64,
+        connection_data: ConnectionData,
     },
 
     /// UI events

@@ -52,57 +52,55 @@ impl DataTransformer for SqlTransformer {
             .cloned()
             .unwrap_or_else(|| "unknown".to_string());
 
-        let mut output = String::new();
+        // Estimate capacity: ~150 bytes per row on average plus header
+        let estimated_capacity = (data.selected_rows.len() * 150) + 200;
+        let mut output = String::with_capacity(estimated_capacity);
 
         // Handle selected rows first
         if !data.selected_rows.is_empty() {
-            // Generate column list once
-            let column_list = data
-                .columns
-                .iter()
-                .map(|col| sql_identifier(col))
-                .collect::<Vec<_>>()
-                .join(", ");
+            // Generate column list once - write directly to avoid intermediate Vec
+            let mut column_list = String::with_capacity(data.columns.len() * 20);
+            for (i, col) in data.columns.iter().enumerate() {
+                if i > 0 {
+                    column_list.push_str(", ");
+                }
+                column_list.push_str(&sql_identifier(col));
+            }
 
-            let mut row_indices: Vec<usize> = data.selected_rows.iter().map(|r| r.row).collect();
-            row_indices.sort();
+            // Create the INSERT statement header
+            output.push_str("INSERT INTO ");
+            output.push_str(&sql_identifier(&table_name));
+            output.push_str(" (");
+            output.push_str(&column_list);
+            output.push_str(")\nVALUES\n");
 
-            // Create the INSERT statement
-            output.push_str(&format!(
-                "INSERT INTO {} ({})\nVALUES\n",
-                sql_identifier(&table_name),
-                column_list
-            ));
+            let row_count = data.selected_rows.len();
+            for (i, row) in data.selected_rows.iter().enumerate() {
+                output.push('(');
 
-            let row_count = row_indices.len();
-            let mut i = 0;
-            for row_idx in row_indices {
-                if let Some(row) = data.selected_rows.iter().find(|r| r.row == row_idx) {
-                    // Add values with proper escaping
-                    output.push('(');
-                    let values: Vec<String> = row
-                        .cells
-                        .iter()
-                        .map(|cell| {
-                            if cell.value.is_empty() {
-                                "''".to_string()
-                            } else if cell.value.eq_ignore_ascii_case("null") {
-                                "NULL".to_string()
-                            } else {
-                                format!("'{}'", sql_escape_string(&cell.value))
-                            }
-                        })
-                        .collect();
-
-                    output.push_str(&values.join(", "));
-
-                    i += 1;
-
-                    if i < row_count {
-                        output.push_str("),\n");
+                // Write values directly without intermediate Vec<String>
+                let mut cell_iter = row.cells.iter().peekable();
+                while let Some(cell) = cell_iter.next() {
+                    if cell.value.is_empty() {
+                        output.push_str("''");
+                    } else if cell.value.eq_ignore_ascii_case("null") {
+                        output.push_str("NULL");
                     } else {
-                        output.push_str(");\n");
+                        output.push('\'');
+                        sql_escape_string_to(&cell.value, &mut output);
+                        output.push('\'');
                     }
+
+                    // Add comma separator if not last cell
+                    if cell_iter.peek().is_some() {
+                        output.push_str(", ");
+                    }
+                }
+
+                if i < row_count - 1 {
+                    output.push_str("),\n");
+                } else {
+                    output.push_str(");\n");
                 }
             }
         }
@@ -153,33 +151,40 @@ impl DataTransformer for SqlTransformer {
         _columns: &[String],
         _column_types: &[ColumnType],
     ) -> Result<String, TransformError> {
-        // Add values with proper escaping
-        let values: Vec<String> = row_data
-            .iter()
-            .map(|value| {
-                if value.is_empty() || value.eq_ignore_ascii_case("null") {
-                    "NULL".to_string()
-                } else {
-                    format!("'{}'", sql_escape_string(value))
-                }
-            })
-            .collect();
-
-        // Format as a single VALUES row with proper indentation
-        let row_str = format!("  ({})", values.join(", "));
+        // Estimate capacity: ~50 bytes per cell plus indentation
+        let estimated_capacity = (row_data.len() * 50) + 20;
+        let mut output = String::with_capacity(estimated_capacity);
 
         // Add comma separator if this is not the first row
         if self
             .first_row
             .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed)
-            .is_ok()
+            .is_err()
         {
-            // This was the first row and we successfully set it to false
-            Ok(row_str)
-        } else {
-            // This is not the first row
-            Ok(format!(",\n{}", row_str))
+            // This is not the first row - add separator
+            output.push_str(",\n");
         }
+
+        output.push_str("  (");
+
+        // Write values directly without intermediate Vec<String>
+        for (i, value) in row_data.iter().enumerate() {
+            if i > 0 {
+                output.push_str(", ");
+            }
+
+            if value.is_empty() || value.eq_ignore_ascii_case("null") {
+                output.push_str("NULL");
+            } else {
+                output.push('\'');
+                sql_escape_string_to(value, &mut output);
+                output.push('\'');
+            }
+        }
+
+        output.push(')');
+
+        Ok(output)
     }
 
     fn finalize_stream(&self) -> Result<String, TransformError> {
@@ -193,9 +198,28 @@ impl DataTransformer for SqlTransformer {
     }
 }
 
-/// Escape a string for SQL (single quotes)
+/// Escape a string for SQL (single quotes) - returns a new String
 fn sql_escape_string(value: &str) -> String {
     value.replace('\'', "''")
+}
+
+/// Escape a string for SQL (single quotes) - writes directly to buffer
+/// This avoids allocating a new String for each cell value
+fn sql_escape_string_to(value: &str, output: &mut String) {
+    // Check if we need to escape at all - fast path for common case
+    if !value.contains('\'') {
+        output.push_str(value);
+        return;
+    }
+
+    // Slow path - escape quotes
+    for c in value.chars() {
+        if c == '\'' {
+            output.push_str("''");
+        } else {
+            output.push(c);
+        }
+    }
 }
 
 /// Quote a SQL identifier safely

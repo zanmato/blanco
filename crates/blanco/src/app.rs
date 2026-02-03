@@ -12,7 +12,7 @@ use smol::channel;
 use tracing::{debug, error, info};
 
 use crate::{
-    app_database::AppDatabase,
+    app_database::{AppDatabase, ConnectionData},
     app_events::AppEvent,
     app_settings::AppSettings,
     connection_modal::NewConnectionModal,
@@ -37,6 +37,10 @@ actions!(
         CopyAsSQL,
         CopyAsMarkdown,
         ExportData,
+        ExportAsCSV,
+        ExportAsJSON,
+        ExportAsSQL,
+        ExportAsMarkdown,
         ClearSelection,
         ToggleRenderWhitespace,
         ToggleWordWrap,
@@ -119,6 +123,13 @@ pub struct ExecuteSubstitutedQuery {
     pub query: String,
     pub connection_id: i64,
     pub database_name: String,
+}
+
+// Action for editing an existing connection
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct EditConnection {
+    pub connection_id: i64,
 }
 
 // Action for database connection state
@@ -245,7 +256,13 @@ impl BlancoApp {
         let _editor_panel_clone = editor_panel.clone();
         let subscription =
             cx.subscribe_in(&sidebar, window, move |app, _sidebar, event, window, cx| {
-                if let AppEvent::CreateNewQueryTab {
+                if let AppEvent::EditConnection {
+                    connection_id: _,
+                    connection_data,
+                } = event
+                {
+                    app.open_edit_connection_modal(connection_data.clone(), window, cx);
+                } else if let AppEvent::CreateNewQueryTab {
                     connection_id,
                     connection_name,
                     db_type,
@@ -309,10 +326,6 @@ impl BlancoApp {
         let subscription = cx.subscribe_in(&editor_panel, window, move |app, _editor_panel, event, window, cx| {
             let editor_panel_for_events = editor_panel_for_subscription.clone();
             match event {
-                AppEvent::QueryExecutionStarted { .. } => {
-                    // Could show loading indicator or update status
-                    tracing::info!("Query execution started");
-                }
                 AppEvent::TableOperationCompleted { table_name, success, rows_affected, operations_executed, .. } => {
                     if *success {
                         tracing::info!(
@@ -553,6 +566,116 @@ impl BlancoApp {
 
                             window.push_notification(
                                 (NotificationType::Success, "Connection saved successfully"),
+                                cx,
+                            );
+                            true
+                        } else {
+                            window.push_notification(
+                                (
+                                    NotificationType::Error,
+                                    "Please fill in all required fields",
+                                ),
+                                cx,
+                            );
+                            false
+                        }
+                    }
+                })
+        });
+
+        // Focus the first input field after the modal opens
+        content_for_focus
+            .read(cx)
+            .focus_handle(cx)
+            .focus(window, cx);
+    }
+
+    fn open_edit_connection_modal(
+        &mut self,
+        connection_data: ConnectionData,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Create the modal content with existing connection data
+        let modal_content = cx.new(|cx| {
+            NewConnectionModal::with_connection_data(window, cx, Some(connection_data.clone()))
+        });
+        let content_for_focus = modal_content.clone();
+
+        // Capture a weak reference to the app entity for event emission
+        let app_entity = cx.entity().downgrade();
+        let connection_data_clone = connection_data.clone();
+
+        window.open_dialog(cx, move |modal, _window, _cx| {
+            let content_clone = modal_content.clone();
+
+            modal
+                .title("Edit Connection")
+                .h(gpui::px(700.))
+                .w(gpui::px(650.))
+                .child(modal_content.clone())
+                .footer({
+                    let content = content_clone.clone();
+                    move |ok, cancel, window, cx| {
+                        let test_btn = Button::new("test-connection")
+                            .label("Test Connection")
+                            .on_click({
+                                let content = content.clone();
+                                move |_, window, cx| {
+                                    content.update(cx, |modal, cx| {
+                                        modal.test_connection(window, cx);
+                                    });
+                                }
+                            })
+                            .into_any_element();
+
+                        vec![test_btn, cancel(window, cx), ok(window, cx)]
+                    }
+                })
+                .on_ok({
+                    let content = content_clone.clone();
+                    let app_entity_ref = app_entity.clone();
+                    let conn_data_ref = connection_data_clone.clone();
+                    move |_, window, cx| {
+                        if let Some(mut conn_data) = content.read(cx).get_connection_data(cx) {
+                            // Preserve the original connection ID
+                            let original_id = conn_data_ref.id;
+                            conn_data.id = original_id;
+
+                            // Capture connection data for the event
+                            let conn_type = conn_data.db_type.clone();
+                            let db_name = conn_data.database_name.clone();
+
+                            // Start the async save operation
+                            let app_database = AppDatabase::global(cx).clone();
+                            cx.spawn(async move |_cx| {
+                                match app_database.save_connection(&conn_data.clone()).await {
+                                    Ok(connection_id) => {
+                                        tracing::info!(
+                                            "Connection updated with ID: {}",
+                                            connection_id
+                                        );
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to update connection: {}", e);
+                                    }
+                                }
+                            })
+                            .detach();
+
+                            // Emit the event immediately after starting the save
+                            if let Some(app) = app_entity_ref.upgrade() {
+                                app.update(cx, |_app, cx| {
+                                    cx.emit(AppEvent::ConnectionEstablished {
+                                        connection_id: conn_data_ref.id,
+                                        connection_type: conn_type,
+                                        database_name: db_name,
+                                    });
+                                });
+                            }
+
+                            window.push_notification(
+                                (NotificationType::Success, "Connection updated successfully"),
                                 cx,
                             );
                             true

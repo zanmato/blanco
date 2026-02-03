@@ -574,48 +574,183 @@ pub struct NewConnectionModal {
     postgres_form: PostgresForm,
     mysql_form: MysqlForm,
     test_result: Option<TestResult>,
+    editing_connection_id: Option<i64>,
+    db_type_locked: bool,
 }
 
 impl NewConnectionModal {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::with_connection_data(window, cx, None)
+    }
+
+    pub fn with_connection_data(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        connection_data: Option<ConnectionData>,
+    ) -> Self {
         let db_types = vec![
             "SQLite".to_string(),
             "PostgreSQL".to_string(),
             "MySQL".to_string(),
         ];
-        let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Connection Name"));
-        let db_type_select =
-            cx.new(|cx| SelectState::new(db_types.clone(), Some(IndexPath::new(0)), window, cx));
+
+        // Determine initial values and editing mode
+        let (initial_name, initial_db_type, editing_connection_id, db_type_locked) =
+            if let Some(conn) = &connection_data {
+                let conn_id = conn.id;
+                let db_type_index = match conn.db_type.as_str() {
+                    "PostgreSQL" => 1,
+                    "MySQL" => 2,
+                    _ => 0,
+                };
+                (conn.name.clone(), Some(db_type_index), conn_id, true)
+            } else {
+                (String::new(), Some(0), None, false)
+            };
+
+        let name_input = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("Connection Name");
+            if !initial_name.is_empty() {
+                input.set_value(initial_name, window, cx);
+            }
+            input
+        });
+
+        let db_type_select = cx.new(|cx| {
+            SelectState::new(db_types.clone(), initial_db_type.map(IndexPath::new), window, cx)
+        });
 
         // Environment type selector
         let environment_types = vec!["DEV".to_string(), "TEST".to_string(), "PROD".to_string()];
-        let environment_type_select =
-            cx.new(|cx| SelectState::new(environment_types, Some(IndexPath::new(0)), window, cx));
+        let initial_env_index = connection_data
+            .as_ref()
+            .map(|c| match c.environment_type {
+                crate::app_database::EnvironmentType::Test => 1,
+                crate::app_database::EnvironmentType::Prod => 2,
+                _ => 0,
+            })
+            .or(Some(0));
+        let environment_type_select = cx.new(|cx| {
+            SelectState::new(environment_types, initial_env_index.map(IndexPath::new), window, cx)
+        });
 
         // Create entities for SQLite form
-        let sqlite_file_path =
-            cx.new(|cx| InputState::new(window, cx).placeholder("/path/to/database.db"));
+        let sqlite_file_path = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("/path/to/database.db");
+            if let Some(conn) = &connection_data {
+                if let Some(path) = &conn.database_path {
+                    input.set_value(path.clone(), window, cx);
+                }
+            }
+            input
+        });
         let sqlite_form = SqliteForm::new(sqlite_file_path);
 
         // Create entities for PostgreSQL form
-        let pg_host = cx.new(|cx| InputState::new(window, cx).placeholder("localhost"));
-        let pg_port = cx.new(|cx| InputState::new(window, cx).placeholder("5432"));
-        let pg_database = cx.new(|cx| InputState::new(window, cx).placeholder("Database Name"));
-        let pg_username = cx.new(|cx| InputState::new(window, cx).placeholder("postgres"));
-        let pg_password = cx.new(|cx| InputState::new(window, cx).placeholder("Password"));
+        let pg_host = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("localhost");
+            if let Some(conn) = &connection_data {
+                if let Some(host) = &conn.host {
+                    input.set_value(host.clone(), window, cx);
+                }
+            }
+            input
+        });
+        let pg_port = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("5432");
+            if let Some(conn) = &connection_data {
+                if let Some(port) = conn.port {
+                    input.set_value(port.to_string(), window, cx);
+                }
+            }
+            input
+        });
+        let pg_database = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("Database Name");
+            if let Some(conn) = &connection_data {
+                if let Some(db) = &conn.database_name {
+                    input.set_value(db.clone(), window, cx);
+                }
+            }
+            input
+        });
+        let pg_username = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("postgres");
+            if let Some(conn) = &connection_data {
+                if let Some(user) = &conn.username {
+                    input.set_value(user.clone(), window, cx);
+                }
+            }
+            input
+        });
+        let pg_password = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("Password");
+            if let Some(conn) = &connection_data {
+                if let Some(pass) = &conn.password {
+                    input.set_value(pass.clone(), window, cx);
+                }
+            }
+            input
+        });
 
         // Create SSH tunnel input entities
-        let ssh_host = cx.new(|cx| InputState::new(window, cx).placeholder("SSH Host"));
-        let ssh_port = cx.new(|cx| InputState::new(window, cx).placeholder("22"));
-        let ssh_user = cx.new(|cx| InputState::new(window, cx).placeholder("SSH Username"));
-        let ssh_password =
-            cx.new(|cx| InputState::new(window, cx).placeholder("SSH Password (optional)"));
-        let ssh_private_key =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Private Key Path (optional)"));
-        let ssh_private_key_password =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Private Key Password (optional)"));
+        let ssh_host = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("SSH Host");
+            if let Some(conn) = &connection_data {
+                if let Some(host) = &conn.ssh_host {
+                    input.set_value(host.clone(), window, cx);
+                }
+            }
+            input
+        });
+        let ssh_port = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("22");
+            if let Some(conn) = &connection_data {
+                if let Some(port) = conn.ssh_port {
+                    input.set_value(port.to_string(), window, cx);
+                }
+            }
+            input
+        });
+        let ssh_user = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("SSH Username");
+            if let Some(conn) = &connection_data {
+                if let Some(user) = &conn.ssh_user {
+                    input.set_value(user.clone(), window, cx);
+                }
+            }
+            input
+        });
+        let ssh_password = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("SSH Password (optional)");
+            if let Some(conn) = &connection_data {
+                if let Some(pass) = &conn.ssh_password {
+                    input.set_value(pass.clone(), window, cx);
+                }
+            }
+            input
+        });
+        let ssh_private_key = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("Private Key Path (optional)");
+            if let Some(conn) = &connection_data {
+                if let Some(key) = &conn.ssh_private_key_path {
+                    input.set_value(key.clone(), window, cx);
+                }
+            }
+            input
+        });
+        let ssh_private_key_password = cx.new(|cx| {
+            let mut input =
+                InputState::new(window, cx).placeholder("Private Key Password (optional)");
+            if let Some(conn) = &connection_data {
+                if let Some(pass) = &conn.ssh_private_key_password {
+                    input.set_value(pass.clone(), window, cx);
+                }
+            }
+            input
+        });
 
-        let postgres_form = PostgresForm::new(
+        let mut postgres_form = PostgresForm::new(
             pg_host,
             pg_port,
             pg_database,
@@ -629,25 +764,118 @@ impl NewConnectionModal {
             ssh_private_key_password,
         );
 
+        // Set SSH enabled state if connection has SSH config
+        if let Some(conn) = &connection_data {
+            if conn.uses_ssh_tunnel() {
+                postgres_form.ssh_enabled = true;
+            }
+        }
+
         // Create entities for MySQL form
-        let mysql_host = cx.new(|cx| InputState::new(window, cx).placeholder("localhost"));
-        let mysql_port = cx.new(|cx| InputState::new(window, cx).placeholder("3306"));
-        let mysql_database = cx.new(|cx| InputState::new(window, cx).placeholder("Database Name"));
-        let mysql_username = cx.new(|cx| InputState::new(window, cx).placeholder("root"));
-        let mysql_password = cx.new(|cx| InputState::new(window, cx).placeholder("Password"));
+        let mysql_host = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("localhost");
+            if let Some(conn) = &connection_data {
+                if let Some(host) = &conn.host {
+                    input.set_value(host.clone(), window, cx);
+                }
+            }
+            input
+        });
+        let mysql_port = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("3306");
+            if let Some(conn) = &connection_data {
+                if let Some(port) = conn.port {
+                    input.set_value(port.to_string(), window, cx);
+                }
+            }
+            input
+        });
+        let mysql_database = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("Database Name");
+            if let Some(conn) = &connection_data {
+                if let Some(db) = &conn.database_name {
+                    input.set_value(db.clone(), window, cx);
+                }
+            }
+            input
+        });
+        let mysql_username = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("root");
+            if let Some(conn) = &connection_data {
+                if let Some(user) = &conn.username {
+                    input.set_value(user.clone(), window, cx);
+                }
+            }
+            input
+        });
+        let mysql_password = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("Password");
+            if let Some(conn) = &connection_data {
+                if let Some(pass) = &conn.password {
+                    input.set_value(pass.clone(), window, cx);
+                }
+            }
+            input
+        });
 
         // Create separate SSH tunnel input entities for MySQL
-        let mysql_ssh_host = cx.new(|cx| InputState::new(window, cx).placeholder("SSH Host"));
-        let mysql_ssh_port = cx.new(|cx| InputState::new(window, cx).placeholder("22"));
-        let mysql_ssh_user = cx.new(|cx| InputState::new(window, cx).placeholder("SSH Username"));
-        let mysql_ssh_password =
-            cx.new(|cx| InputState::new(window, cx).placeholder("SSH Password (optional)"));
-        let mysql_ssh_private_key =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Private Key Path (optional)"));
-        let mysql_ssh_private_key_password =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Private Key Password (optional)"));
+        let mysql_ssh_host = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("SSH Host");
+            if let Some(conn) = &connection_data {
+                if let Some(host) = &conn.ssh_host {
+                    input.set_value(host.clone(), window, cx);
+                }
+            }
+            input
+        });
+        let mysql_ssh_port = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("22");
+            if let Some(conn) = &connection_data {
+                if let Some(port) = conn.ssh_port {
+                    input.set_value(port.to_string(), window, cx);
+                }
+            }
+            input
+        });
+        let mysql_ssh_user = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("SSH Username");
+            if let Some(conn) = &connection_data {
+                if let Some(user) = &conn.ssh_user {
+                    input.set_value(user.clone(), window, cx);
+                }
+            }
+            input
+        });
+        let mysql_ssh_password = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("SSH Password (optional)");
+            if let Some(conn) = &connection_data {
+                if let Some(pass) = &conn.ssh_password {
+                    input.set_value(pass.clone(), window, cx);
+                }
+            }
+            input
+        });
+        let mysql_ssh_private_key = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("Private Key Path (optional)");
+            if let Some(conn) = &connection_data {
+                if let Some(key) = &conn.ssh_private_key_path {
+                    input.set_value(key.clone(), window, cx);
+                }
+            }
+            input
+        });
+        let mysql_ssh_private_key_password = cx.new(|cx| {
+            let mut input =
+                InputState::new(window, cx).placeholder("Private Key Password (optional)");
+            if let Some(conn) = &connection_data {
+                if let Some(pass) = &conn.ssh_private_key_password {
+                    input.set_value(pass.clone(), window, cx);
+                }
+            }
+            input
+        });
 
-        let mysql_form = MysqlForm::new(
+        let mut mysql_form = MysqlForm::new(
             mysql_host,
             mysql_port,
             mysql_database,
@@ -661,6 +889,13 @@ impl NewConnectionModal {
             mysql_ssh_private_key_password,
         );
 
+        // Set SSH enabled state if connection has SSH config
+        if let Some(conn) = &connection_data {
+            if conn.uses_ssh_tunnel() {
+                mysql_form.ssh_enabled = true;
+            }
+        }
+
         Self {
             focus_handle: cx.focus_handle(),
             name_input,
@@ -670,6 +905,8 @@ impl NewConnectionModal {
             postgres_form,
             mysql_form,
             test_result: None,
+            editing_connection_id,
+            db_type_locked,
         }
     }
 
@@ -813,21 +1050,28 @@ impl NewConnectionModal {
         let connector_type = self.get_selected_connector_type(cx);
         let environment_type = self.get_selected_environment_type(cx);
 
-        match connector_type {
+        let mut connection = match connector_type {
             ConnectorType::SQLite => {
                 self.sqlite_form
-                    .get_connection_data(name, environment_type, cx)
+                    .get_connection_data(name, environment_type, cx)?
             }
             ConnectorType::PostgreSQL => {
                 self.postgres_form
-                    .get_connection_data(name, environment_type, cx)
+                    .get_connection_data(name, environment_type, cx)?
             }
             ConnectorType::MySQL => {
-                let mut connection = self.mysql_form.build_connection_data(&name, cx)?;
-                connection.environment_type = environment_type;
-                Some(connection)
+                let mut conn = self.mysql_form.build_connection_data(&name, cx)?;
+                conn.environment_type = environment_type;
+                conn
             }
+        };
+
+        // Preserve the connection ID when editing
+        if let Some(editing_id) = self.editing_connection_id {
+            connection.id = Some(editing_id);
         }
+
+        Some(connection)
     }
 }
 
@@ -858,7 +1102,7 @@ impl Render for NewConnectionModal {
                                 .flex_1()
                                 .gap_2()
                                 .child(div().text_sm().child("Type"))
-                                .child(Select::new(&self.db_type_select)),
+                                .child(Select::new(&self.db_type_select).disabled(self.db_type_locked)),
                         )
                         .child(
                             v_flex()

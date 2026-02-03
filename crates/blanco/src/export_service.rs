@@ -1,13 +1,15 @@
-use futures::io::{AsyncWriteExt, BufWriter};
-use smol::fs::File;
 use futures::channel::mpsc;
+use futures::io::{AsyncWriteExt, BufWriter};
 use futures::{SinkExt, StreamExt};
+use smol::fs::File;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::{
+    export_modal::ExportOptions, results_panel::SelectedTableData, transformers::DataTransformer,
+};
 use blanco_core::connection_trait::ColumnType;
-use crate::{export_modal::ExportOptions, transformers::DataTransformer};
 
 /// Progress information for export operations
 #[derive(Clone, Debug)]
@@ -221,6 +223,48 @@ impl ExportService {
         Ok(ExportResult::Success {
             file_path: file_path.to_string_lossy().to_string(),
             rows_exported: rows_written,
+            file_size,
+        })
+    }
+
+    /// Export selected table data to a file
+    /// This is used for exporting selected rows from the results panel
+    pub async fn export_selected_data(
+        &self,
+        data: &SelectedTableData,
+        transformer: &dyn DataTransformer,
+        file_path: &Path,
+    ) -> Result<ExportResult, anyhow::Error> {
+        // Transform the data
+        let transformed = transformer
+            .transform_selected_data(data)
+            .map_err(|e| anyhow::anyhow!("Failed to transform data: {}", e))?;
+
+        // Write to file
+        let file = File::create(file_path)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to create file: {}", e))?;
+
+        let mut writer = BufWriter::new(file);
+
+        writer
+            .write_all(transformed.as_bytes())
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to write to file: {}", e))?;
+
+        writer
+            .flush()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to flush file: {}", e))?;
+
+        // Get file size
+        let file_size = std::fs::metadata(file_path).map(|m| m.len()).unwrap_or(0);
+
+        let rows_exported = data.selected_rows.len();
+
+        Ok(ExportResult::Success {
+            file_path: file_path.to_string_lossy().to_string(),
+            rows_exported,
             file_size,
         })
     }

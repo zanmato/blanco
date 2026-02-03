@@ -1335,8 +1335,6 @@ impl TableDelegate for ResultsTableDelegate {
         _window: &mut Window,
         _cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
-        // Basic copy operations
-
         menu.menu_with_icon(
             "Copy as CSV",
             Icon::new(IconName::Sheet),
@@ -1358,6 +1356,29 @@ impl TableDelegate for ResultsTableDelegate {
             Box::new(crate::app::CopyAsMarkdown),
         )
         .separator()
+        // Export operations
+        .menu_with_icon(
+            "Export as CSV",
+            Icon::new(IconName::File),
+            Box::new(crate::app::ExportAsCSV),
+        )
+        .menu_with_icon(
+            "Export as JSON",
+            Icon::new(IconName::File),
+            Box::new(crate::app::ExportAsJSON),
+        )
+        .menu_with_icon(
+            "Export as SQL",
+            Icon::new(IconName::File),
+            Box::new(crate::app::ExportAsSQL),
+        )
+        .menu_with_icon(
+            "Export as Markdown",
+            Icon::new(IconName::File),
+            Box::new(crate::app::ExportAsMarkdown),
+        )
+        .separator()
+        // Row operations
         .menu_with_icon("Add Row", Icon::new(IconName::Plus), Box::new(AddRow))
         .menu_with_icon(
             "Duplicate Row",

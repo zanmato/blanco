@@ -1,10 +1,10 @@
 #![allow(dead_code)]
 
 use blanco_core::connection_trait::ColumnType;
+use gpui::{App, AppContext, ClipboardItem, Context};
 use std::sync::Arc;
 
-use gpui::{App, ClipboardItem};
-
+use crate::results_panel::ResultsPanel;
 use crate::transformers::{SelectedTableData, TransformError, TransformerRegistry};
 
 #[derive(Debug, Clone)]
@@ -65,55 +65,81 @@ impl CopyHandler {
         descriptions
     }
 
-    /// Copy selected data in the specified format
+    /// Copy selected data in the specified format asynchronously
+    /// This spawns a background task to transform the data, keeping the UI responsive
     pub fn copy_as_format(
         &self,
         data: &SelectedTableData,
         format: &str,
-        cx: &mut App,
-    ) -> Result<(), CopyError> {
+        cx: &mut Context<ResultsPanel>,
+    ) {
         if !data.has_selection() {
-            return Err(CopyError::NoDataSelected);
+            tracing::error!("Failed to copy as {}: No data selected for copying", format);
+            return;
         }
 
-        let transformed = self
-            .registry
-            .transform_data(data, format)
-            .map_err(CopyError::TransformError)?;
+        // Create response channel for the transformed data
+        let (result_tx, result_rx) = smol::channel::bounded(1);
 
-        if transformed.is_empty() {
-            return Err(CopyError::NoDataSelected);
-        }
+        // Clone data for background task
+        let data_clone = data.clone();
+        let format_owned = format.to_string();
 
-        cx.write_to_clipboard(ClipboardItem::new_string(transformed));
-        Ok(())
+        // Clone the Arc for the background task
+        let registry = self.registry.clone();
+
+        // Spawn background task for transformation
+        cx.background_spawn(async move {
+            tracing::debug!("Starting copy transformation");
+            let transform_result = registry.transform_data(&data_clone, &format_owned);
+            tracing::debug!("Copy transformation completed",);
+            let _ = result_tx.send(transform_result).await;
+        })
+        .detach();
+
+        // Spawn async task to handle the result on the main thread
+        cx.spawn(async move |entity, cx| match result_rx.recv().await {
+            Ok(Ok(transformed)) => {
+                if !transformed.is_empty() {
+                    let _ = entity.update(cx, |_, cx| {
+                        tracing::debug!("Writing transformed data to clipboard");
+                        cx.write_to_clipboard(ClipboardItem::new_string(transformed));
+                    });
+                } else {
+                    tracing::error!("Copy transformation produced empty result");
+                }
+            }
+            Ok(Err(e)) => {
+                tracing::error!("Copy transformation failed: {}", e);
+            }
+            Err(e) => {
+                tracing::error!("Failed to receive copy result: {}", e);
+            }
+        })
+        .detach();
     }
 
     /// Copy selected data as CSV (default format)
-    pub fn copy_as_csv(&self, data: &SelectedTableData, cx: &mut App) -> Result<(), CopyError> {
+    pub fn copy_as_csv(&self, data: &SelectedTableData, cx: &mut Context<ResultsPanel>) {
         self.copy_as_format(data, "csv", cx)
     }
 
     /// Copy selected data as SQL
-    pub fn copy_as_sql(&self, data: &SelectedTableData, cx: &mut App) -> Result<(), CopyError> {
+    pub fn copy_as_sql(&self, data: &SelectedTableData, cx: &mut Context<ResultsPanel>) {
         self.copy_as_format(data, "sql", cx)
     }
 
     /// Copy selected data as JSON
-    pub fn copy_as_json(&self, data: &SelectedTableData, cx: &mut App) -> Result<(), CopyError> {
+    pub fn copy_as_json(&self, data: &SelectedTableData, cx: &mut Context<ResultsPanel>) {
         self.copy_as_format(data, "json", cx)
     }
 
     /// Copy selected data as Markdown
-    pub fn copy_as_markdown(
-        &self,
-        data: &SelectedTableData,
-        cx: &mut App,
-    ) -> Result<(), CopyError> {
+    pub fn copy_as_markdown(&self, data: &SelectedTableData, cx: &mut Context<ResultsPanel>) {
         self.copy_as_format(data, "markdown", cx)
     }
 
-    /// Copy a single cell value
+    /// Copy a single cell value (synchronous, for small single-cell operations)
     pub fn copy_single_cell(
         &self,
         value: &str,
@@ -177,11 +203,7 @@ mod tests {
         SelectedTableData {
             table_name: Some("users".to_string()),
             columns: vec!["id".to_string(), "name".to_string(), "email".to_string()],
-            column_types: vec![
-                ColumnType::Integer,
-                ColumnType::Text,
-                ColumnType::Text,
-            ],
+            column_types: vec![ColumnType::Integer, ColumnType::Text, ColumnType::Text],
             selected_rows: vec![SelectedRow {
                 row: 1,
                 cells: vec![

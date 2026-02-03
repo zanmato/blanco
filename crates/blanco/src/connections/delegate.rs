@@ -157,6 +157,12 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                 let connection_id = metadata.connection_id;
                 let connection_name = metadata.connection_name.clone();
                 menu.item(PopupMenuItem::new("Refresh"))
+                    .item(PopupMenuItem::new("Edit").on_click(window.listener_for(
+                        &self.parent,
+                        move |this, _event, _window, cx| {
+                            this.edit_connection(connection_id, cx);
+                        },
+                    )))
                     .item(PopupMenuItem::new("Disconnect").on_click(window.listener_for(
                         &self.parent,
                         move |this, _event, _window, cx| {

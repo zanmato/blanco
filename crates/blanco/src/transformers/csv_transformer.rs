@@ -21,7 +21,10 @@ impl DataTransformer for CsvTransformer {
             return Err(TransformError::EmptySelection);
         }
 
-        let mut output = String::new();
+        // Estimate capacity: ~50 bytes per cell on average
+        let cell_count = data.selected_rows.iter().map(|r| r.cells.len()).sum::<usize>();
+        let estimated_capacity = (cell_count * 50) + (data.columns.len() * 20) + 100;
+        let mut output = String::with_capacity(estimated_capacity);
 
         // If we have selected rows, export complete rows
         if !data.selected_rows.is_empty() {
@@ -31,7 +34,7 @@ impl DataTransformer for CsvTransformer {
                     if i > 0 {
                         output.push(';');
                     }
-                    output.push_str(&csv_escape(col));
+                    csv_escape_to(col, &mut output);
                 }
                 output.push('\n');
             }
@@ -46,7 +49,7 @@ impl DataTransformer for CsvTransformer {
                         if i > 0 {
                             output.push(';');
                         }
-                        output.push_str(&csv_escape(&cell.value));
+                        csv_escape_to(&cell.value, &mut output);
                     }
                     output.push('\n');
                 }
@@ -71,7 +74,9 @@ impl DataTransformer for CsvTransformer {
         columns: &[String],
         _column_types: &[ColumnType],
     ) -> Result<String, TransformError> {
-        let mut output = String::new();
+        // Estimate capacity for header
+        let estimated_capacity = columns.len() * 20 + 10;
+        let mut output = String::with_capacity(estimated_capacity);
 
         // Output CSV header
         if !columns.is_empty() {
@@ -79,7 +84,7 @@ impl DataTransformer for CsvTransformer {
                 if i > 0 {
                     output.push(';');
                 }
-                output.push_str(&csv_escape(col));
+                csv_escape_to(col, &mut output);
             }
             output.push('\n');
         }
@@ -93,13 +98,15 @@ impl DataTransformer for CsvTransformer {
         _columns: &[String],
         _column_types: &[ColumnType],
     ) -> Result<String, TransformError> {
-        let mut output = String::new();
+        // Estimate capacity for row
+        let estimated_capacity = row_data.len() * 50 + 10;
+        let mut output = String::with_capacity(estimated_capacity);
 
         for (i, value) in row_data.iter().enumerate() {
             if i > 0 {
                 output.push(';');
             }
-            output.push_str(&csv_escape(value));
+            csv_escape_to(value, &mut output);
         }
         output.push('\n');
 
@@ -112,7 +119,7 @@ impl DataTransformer for CsvTransformer {
     }
 }
 
-/// Escape a value for CSV format
+/// Escape a value for CSV format - returns a new String
 fn csv_escape(value: &str) -> String {
     if value.is_empty() {
         return String::new();
@@ -124,10 +131,45 @@ fn csv_escape(value: &str) -> String {
 
     if needs_quoting {
         // Double up any quotes and wrap in quotes
-        let escaped = value.replace('"', "\"\"");
-        format!("\"{}\"", escaped)
+        let mut result = String::with_capacity(value.len() + 10);
+        result.push('"');
+        for c in value.chars() {
+            if c == '"' {
+                result.push_str("\"\"");
+            } else {
+                result.push(c);
+            }
+        }
+        result.push('"');
+        result
     } else {
         value.to_string()
+    }
+}
+
+/// Escape a value for CSV format - writes directly to buffer
+/// This avoids allocating a new String for each cell value
+fn csv_escape_to(value: &str, output: &mut String) {
+    if value.is_empty() {
+        return;
+    }
+
+    // Check if we need to quote the value
+    let needs_quoting =
+        value.contains(';') || value.contains('"') || value.contains('\n') || value.contains('\r');
+
+    if needs_quoting {
+        output.push('"');
+        for c in value.chars() {
+            if c == '"' {
+                output.push_str("\"\"");
+            } else {
+                output.push(c);
+            }
+        }
+        output.push('"');
+    } else {
+        output.push_str(value);
     }
 }
 

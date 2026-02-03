@@ -1238,13 +1238,6 @@ impl Connection for PostgresConnection {
         database_name: Option<&str>,
         parameters: Option<&[String]>,
     ) -> Result<QueryResult> {
-        tracing::debug!(
-            "Executing PostgreSQL query: {} (database: {:?}) (parameters: {})",
-            query,
-            database_name,
-            parameters.map(|p| p.len()).unwrap_or(0)
-        );
-
         let database_name = database_name.ok_or(anyhow::anyhow!("missing database"))?;
 
         // Get or create connection pool for the specific database
@@ -1267,11 +1260,6 @@ impl Connection for PostgresConnection {
             .execute_query_with_params(&pool, query, &params)
             .await
             .map_err(|e| anyhow::anyhow!("PostgreSQL query execution failed: {}", e))?;
-
-        tracing::debug!(
-            "Query executed successfully, {} rows returned",
-            result.row_count()
-        );
 
         Ok(result)
     }
@@ -1445,11 +1433,6 @@ impl Connection for PostgresConnection {
         anyhow::Error,
     > {
         let database_name = database_name.ok_or(anyhow::anyhow!("missing database"))?;
-        tracing::debug!(
-            "Executing PostgreSQL streaming query: {} (database: {:?})",
-            query,
-            database_name
-        );
 
         // Get connection pool
         let pool = self.get_or_create_pool(database_name).await.map_err(|e| {

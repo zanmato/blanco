@@ -91,7 +91,7 @@ pub struct SnippetData {
 }
 
 /// Data for a database connection
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ConnectionData {
     pub id: Option<i64>,
     pub name: String,

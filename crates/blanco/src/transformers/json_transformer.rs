@@ -35,28 +35,23 @@ impl DataTransformer for JsonTransformer {
             return Err(TransformError::EmptySelection);
         }
 
-        let mut json_objects = Vec::new();
+        let mut json_objects = Vec::with_capacity(data.selected_rows.len());
 
         // If we have selected rows, export complete rows
         if !data.selected_rows.is_empty() {
-            let mut row_indices: Vec<usize> = data.selected_rows.iter().map(|r| r.row).collect();
-            row_indices.sort();
-
-            for row_idx in row_indices {
-                if let Some(row) = data.selected_rows.iter().find(|r| r.row == row_idx) {
-                    let mut obj = HashMap::new();
-                    for cell in &row.cells {
-                        if let Some(col_name) = &cell.column_name {
-                            let column_type = cell.column_type.unwrap_or(ColumnType::Text);
-                            let json_value = convert_to_json_value(
-                                &cell.value,
-                                &column_type,
-                            );
-                            obj.insert(col_name.clone(), json_value);
-                        }
+            for row in &data.selected_rows {
+                let mut obj = HashMap::new();
+                for cell in &row.cells {
+                    if let Some(col_name) = &cell.column_name {
+                        let column_type = cell.column_type.unwrap_or(ColumnType::Text);
+                        let json_value = convert_to_json_value(
+                            &cell.value,
+                            &column_type,
+                        );
+                        obj.insert(col_name.clone(), json_value);
                     }
-                    json_objects.push(obj);
                 }
+                json_objects.push(obj);
             }
         }
 
@@ -105,25 +100,30 @@ impl DataTransformer for JsonTransformer {
         let json_str = serde_json::to_string_pretty(&obj)
             .map_err(|e| TransformError::FormatError(e.to_string()))?;
 
-        // Add indentation to match array structure
-        let indented = json_str
-            .lines()
-            .map(|line| format!("  {}", line))
-            .collect::<Vec<_>>()
-            .join("\n");
+        // Estimate capacity with indentation
+        let estimated_capacity = json_str.len() + (json_str.lines().count() * 2) + 10;
+        let mut output = String::with_capacity(estimated_capacity);
 
         // Add comma separator if this is not the first row
         if self
             .first_row
             .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed)
-            .is_ok()
+            .is_err()
         {
-            // This was the first row and we successfully set it to false
-            Ok(indented)
-        } else {
-            // This is not the first row
-            Ok(format!(",\n{}", indented))
+            // This is not the first row - add separator
+            output.push_str(",\n");
         }
+
+        // Add indentation to each line - write directly to buffer
+        for (i, line) in json_str.lines().enumerate() {
+            if i > 0 {
+                output.push('\n');
+            }
+            output.push_str("  ");
+            output.push_str(line);
+        }
+
+        Ok(output)
     }
 
     fn finalize_stream(&self) -> Result<String, TransformError> {

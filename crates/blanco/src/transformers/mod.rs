@@ -3,6 +3,7 @@
 use blanco_core::connection_trait::ColumnType;
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::Arc;
 
 use crate::results_panel::SelectedTableData;
 
@@ -93,8 +94,9 @@ pub trait DataTransformer: Send + Sync {
 }
 
 /// Registry for managing available data transformers
+#[derive(Clone)]
 pub struct TransformerRegistry {
-    transformers: HashMap<String, Box<dyn DataTransformer>>,
+    transformers: HashMap<String, Arc<dyn DataTransformer>>,
 }
 
 impl TransformerRegistry {
@@ -107,14 +109,14 @@ impl TransformerRegistry {
     pub fn register<T: DataTransformer + 'static>(&mut self, transformer: T) {
         self.transformers.insert(
             transformer.format_name().to_lowercase(),
-            Box::new(transformer),
+            Arc::new(transformer),
         );
     }
 
-    pub fn get_transformer(&self, format_name: &str) -> Option<&dyn DataTransformer> {
+    pub fn get_transformer(&self, format_name: &str) -> Option<Arc<dyn DataTransformer>> {
         self.transformers
             .get(&format_name.to_lowercase())
-            .map(|t| t.as_ref())
+            .cloned()
     }
 
     pub fn get_available_formats(&self) -> Vec<&str> {

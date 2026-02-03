@@ -92,6 +92,10 @@ pub struct EditorPanel {
 /// Debounce duration for linting (500ms)
 const LINT_DEBOUNCE_MS: u64 = 500;
 
+/// Maximum length of SQL query to log in the SQL log panel
+/// Queries longer than this will be truncated to avoid performance issues
+const SQL_QUERY_LOG_MAX_LENGTH: usize = 2000;
+
 /// Parameters for creating a new tab with connection
 #[derive(Clone)]
 pub struct TabCreationParams {
@@ -458,55 +462,53 @@ impl EditorPanel {
             })
             .detach();
 
-            tracing::info!("Executing query via async pipeline: {}", query);
-
             // Set loading state to true
             self.loading = true;
             cx.notify();
 
-            // Log the query to the SQL log
+            // Log the query to the SQL log, truncating if too long
+            let query_for_log = if query.len() > SQL_QUERY_LOG_MAX_LENGTH {
+                format!("{}... (truncated, {} chars total)", &query[..SQL_QUERY_LOG_MAX_LENGTH], query.len())
+            } else {
+                query.clone()
+            };
             query_tab.sql_log.update(cx, |sql_log, cx| {
-                sql_log.append_text(&blanco_ui::SqlLogMessage::SqlStatement(query.clone()), cx);
+                sql_log.append_text(&blanco_ui::SqlLogMessage::SqlStatement(query_for_log), cx);
             });
 
-            // Execute query directly using cx.spawn instead of async pipeline
+            // Create response channel for passing results from background to foreground
+            let (result_tx, result_rx) = smol::channel::bounded(1);
+
+            // Clone values for background task
             let query_clone = query.clone();
+            let db_service = DatabaseService::global(cx).clone();
+            let database_name = database_name.to_string();
+            let database_name_for_background = database_name.clone();
+
+            // Spawn background task for query execution (keeps UI responsive)
+            cx.background_spawn(async move {
+                let start_time = std::time::Instant::now();
+                let execution_result = db_service
+                    .execute_query(connection_id, Some(&database_name_for_background), &query_clone)
+                    .await;
+
+                let _ = result_tx.send((execution_result, start_time)).await;
+            })
+            .detach();
+
+            // Spawn foreground task to handle the result and update UI
             let results_panel_clone = query_tab.results_panel.clone();
             let sql_log_clone = query_tab.sql_log.clone();
             let db_service = DatabaseService::global(cx).clone();
-            let database_name = database_name.to_string();
-
-            // Emit query execution started event
-            cx.emit(AppEvent::QueryExecutionStarted {
-                connection_id: Some(connection_id),
-                query: query.clone(),
-            });
+            let query_for_metadata = query.clone();
 
             self._run_query_task = cx.spawn_in(window, async move |editor_panel_entity, window| {
-                let start_time = std::time::Instant::now();
-
-                // Execute query using db_service with connection_id
-                tracing::debug!(
-                    "Query execution - using connection_id: '{}', database: '{}'",
-                    connection_id,
-                    database_name
-                );
-
-                match db_service
-                    .execute_query(connection_id, Some(&database_name), &query_clone)
-                    .await
-                {
-                    Ok(mut result) => {
+                match result_rx.recv().await {
+                    Ok((Ok(mut result), start_time)) => {
                         let duration_ms = start_time.elapsed().as_millis() as i64;
 
-                        tracing::info!(
-                            "Query executed successfully: {} rows in {}ms",
-                            result.row_count(),
-                            duration_ms
-                        );
-
                         // Add execution metadata
-                        result.query_text = Some(query_clone.clone());
+                        result.query_text = Some(query_for_metadata.clone());
                         result.execution_time_ms = Some(duration_ms);
                         result.is_error = false;
                         result.connection_id = Some(connection_id);
@@ -518,7 +520,7 @@ impl EditorPanel {
                         {
                             // Extract table metadata from the query
                             let table_name = connection
-                                .extract_table_name_from_query(&query_clone, false)
+                                .extract_table_name_from_query(&query_for_metadata, false)
                                 .ok()
                                 .flatten();
                             result.table_name = table_name.clone();
@@ -575,7 +577,7 @@ impl EditorPanel {
                                 .ok();
                         });
                     }
-                    Err(e) => {
+                    Ok((Err(e), start_time)) => {
                         tracing::error!("Query execution failed: {}", e);
 
                         let _ = window.update(|window, cx| {
@@ -620,6 +622,23 @@ impl EditorPanel {
 
                             window.push_notification(
                                 (NotificationType::Error, SharedString::from(e.to_string())),
+                                cx,
+                            );
+                        });
+                    }
+                    Err(recv_err) => {
+                        tracing::error!("Failed to receive query result from background thread: {}", recv_err);
+
+                        let _ = window.update(|window, cx| {
+                            editor_panel_entity
+                                .update(cx, |editor_panel, cx| {
+                                    editor_panel.loading = false;
+                                    cx.notify();
+                                })
+                                .ok();
+
+                            window.push_notification(
+                                (NotificationType::Error, SharedString::from("Query execution failed: channel closed")),
                                 cx,
                             );
                         });

@@ -65,6 +65,10 @@ impl SqruffService {
         sql: &str,
         _statement_offset: Option<usize>,
     ) -> Result<Vec<Diagnostic>, String> {
+        if sql.len() > 300_000 {
+            return Err("SQL text too large to lint".into());
+        }
+
         if sql.trim().is_empty() {
             return Ok(Vec::new());
         }

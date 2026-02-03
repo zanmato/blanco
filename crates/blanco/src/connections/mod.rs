@@ -1197,6 +1197,22 @@ impl ConnectionsPanel {
                 .on_cancel(|_, _, _| true)
         });
     }
+
+    /// Edit an existing connection by opening the modal with pre-populated data
+    pub fn edit_connection(&mut self, connection_id: i64, cx: &mut Context<Self>) {
+        // Find the connection data
+        let connection_data = self.connections.iter().find(|c| c.id == Some(connection_id)).cloned();
+
+        if let Some(conn_data) = connection_data {
+            // Emit an event to open the edit modal
+            cx.emit(AppEvent::EditConnection {
+                connection_id,
+                connection_data: conn_data,
+            });
+        } else {
+            tracing::error!("Connection with ID {} not found", connection_id);
+        }
+    }
 }
 
 impl Render for ConnectionsPanel {

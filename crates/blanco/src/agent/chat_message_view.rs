@@ -47,7 +47,7 @@ impl Render for ChatMessageState {
                             .selectable(true)
                             .style(
                                 TextViewStyle::default()
-                                    .paragraph_gap(rems(0.5))
+                                    .paragraph_gap(rems(1.))
                                     .heading_font_size(|level, rem_size| match level {
                                         1..=3 => rem_size * 1,
                                         4 => rem_size * 0.9,
@@ -98,7 +98,7 @@ impl Render for ChatMessageState {
                                 .selectable(true)
                                 .style(
                                     TextViewStyle::default()
-                                        .paragraph_gap(rems(0.5))
+                                        .paragraph_gap(rems(1.))
                                         .heading_font_size(|level, rem_size| match level {
                                             1..=3 => rem_size * 1,
                                             4 => rem_size * 0.9,
