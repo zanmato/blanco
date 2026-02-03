@@ -468,7 +468,7 @@ impl EditorPanel {
 
             // Log the query to the SQL log, truncating if too long
             let query_for_log = if query.len() > SQL_QUERY_LOG_MAX_LENGTH {
-                format!("{}... (truncated, {} chars total)", &query[..SQL_QUERY_LOG_MAX_LENGTH], query.len())
+                format!("{}... (truncated)", &query[..SQL_QUERY_LOG_MAX_LENGTH])
             } else {
                 query.clone()
             };
@@ -489,7 +489,11 @@ impl EditorPanel {
             cx.background_spawn(async move {
                 let start_time = std::time::Instant::now();
                 let execution_result = db_service
-                    .execute_query(connection_id, Some(&database_name_for_background), &query_clone)
+                    .execute_query(
+                        connection_id,
+                        Some(&database_name_for_background),
+                        &query_clone,
+                    )
                     .await;
 
                 let _ = result_tx.send((execution_result, start_time)).await;
@@ -627,7 +631,10 @@ impl EditorPanel {
                         });
                     }
                     Err(recv_err) => {
-                        tracing::error!("Failed to receive query result from background thread: {}", recv_err);
+                        tracing::error!(
+                            "Failed to receive query result from background thread: {}",
+                            recv_err
+                        );
 
                         let _ = window.update(|window, cx| {
                             editor_panel_entity
@@ -638,7 +645,10 @@ impl EditorPanel {
                                 .ok();
 
                             window.push_notification(
-                                (NotificationType::Error, SharedString::from("Query execution failed: channel closed")),
+                                (
+                                    NotificationType::Error,
+                                    SharedString::from("Query execution failed: channel closed"),
+                                ),
                                 cx,
                             );
                         });

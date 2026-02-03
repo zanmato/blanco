@@ -182,7 +182,7 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                         },
                     )))
             }
-            TreeItemKind::Database | TreeItemKind::Schema | TreeItemKind::Table => {
+            TreeItemKind::Database | TreeItemKind::Schema | TreeItemKind::Table | TreeItemKind::View | TreeItemKind::MaterializedView => {
                 // Use the trait to create the query tab event
                 if let Some(event) = metadata.create_new_query_tab_event() {
                     let connection_id = metadata.connection_id;

@@ -666,6 +666,25 @@ impl Connection for MysqlConnection {
         Ok(tables)
     }
 
+    async fn get_views(&self, _schema: Option<&str>) -> Result<Vec<String>, anyhow::Error> {
+        let database = self
+            .initial_database
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+
+        let pool = self.get_or_create_pool(database).await?;
+
+        let rows = sqlx::query("SHOW FULL TABLES WHERE TABLE_TYPE LIKE 'VIEW'").fetch_all(&pool).await?;
+
+        let views: Vec<String> = rows
+            .iter()
+            .map(|row| row.try_get::<String, _>(0).unwrap_or_default())
+            .filter(|view| !view.is_empty())
+            .collect();
+
+        Ok(views)
+    }
+
     fn supports_schemas(&self) -> bool {
         false // MySQL doesn't support schemas in the PostgreSQL sense
     }

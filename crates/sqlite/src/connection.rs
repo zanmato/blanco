@@ -362,6 +362,23 @@ impl Connection for SqliteConnection {
         Ok(tables)
     }
 
+    async fn get_views(&self, schema: Option<&str>) -> Result<Vec<String>> {
+        let schema_filter = schema.unwrap_or("main");
+        let query = format!(
+            "SELECT name FROM {}.sqlite_master WHERE type='view' ORDER BY name",
+            schema_filter
+        );
+
+        let result = self.execute_query(&query, None, None).await?;
+        let views: Vec<String> = result
+            .rows
+            .into_iter()
+            .filter_map(|row| row.into_iter().next())
+            .collect();
+
+        Ok(views)
+    }
+
     fn supports_schemas(&self) -> bool {
         false // SQLite doesn't support schemas in the traditional sense
     }

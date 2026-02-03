@@ -1300,6 +1300,56 @@ impl Connection for PostgresConnection {
         self.fetch_postgres_tables(schema).await
     }
 
+    async fn get_views(&self, schema: Option<&str>) -> Result<Vec<String>> {
+        let schema_filter = schema.unwrap_or("public");
+        let query = "
+            SELECT table_name
+            FROM information_schema.views
+            WHERE table_schema = $1
+            ORDER BY table_name
+        ";
+
+        let result = self
+            .execute_query(
+                query,
+                self.initial_database.as_deref(),
+                Some(&[schema_filter.to_string()]),
+            )
+            .await?;
+        let views: Vec<String> = result
+            .rows
+            .into_iter()
+            .filter_map(|row| row.into_iter().next())
+            .collect();
+
+        Ok(views)
+    }
+
+    async fn get_materialized_views(&self, schema: Option<&str>) -> Result<Vec<String>> {
+        let schema_filter = schema.unwrap_or("public");
+        let query = "
+            SELECT matviewname
+            FROM pg_matviews
+            WHERE schemaname = $1
+            ORDER BY matviewname
+        ";
+
+        let result = self
+            .execute_query(
+                query,
+                self.initial_database.as_deref(),
+                Some(&[schema_filter.to_string()]),
+            )
+            .await?;
+        let matviews: Vec<String> = result
+            .rows
+            .into_iter()
+            .filter_map(|row| row.into_iter().next())
+            .collect();
+
+        Ok(matviews)
+    }
+
     fn supports_schemas(&self) -> bool {
         true // PostgreSQL fully supports schemas
     }

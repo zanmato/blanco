@@ -50,6 +50,15 @@ pub struct DatabaseSchema {
 pub struct DatabaseTable {
     pub name: String,
     pub schema: Option<String>,
+    pub item_type: DatabaseItemType,
+}
+
+/// Type of database item (table, view, or materialized view)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DatabaseItemType {
+    Table,
+    View,
+    MaterializedView,
 }
 
 /// Represents a database with its schemas
@@ -85,6 +94,8 @@ pub enum TreeItemKind {
     Database,
     Schema,
     Table,
+    View,
+    MaterializedView,
 }
 
 /// Metadata for tree items to enable proper context menu actions
@@ -112,7 +123,11 @@ impl CreateNewQueryTabParams for TreeItemMetadata {
     fn create_new_query_tab_event(&self) -> Option<crate::app_events::AppEvent> {
         match self.kind {
             TreeItemKind::Connection => None, // Connections don't create queries directly
-            TreeItemKind::Database | TreeItemKind::Schema | TreeItemKind::Table => {
+            TreeItemKind::Database
+            | TreeItemKind::Schema
+            | TreeItemKind::Table
+            | TreeItemKind::View
+            | TreeItemKind::MaterializedView => {
                 Some(crate::app_events::AppEvent::CreateNewQueryTab {
                     connection_id: self.connection_id,
                     connection_name: self.connection_name.clone(),
@@ -374,19 +389,34 @@ impl ConnectionsPanel {
                                                 table.name
                                             );
 
-                                            // Create metadata for the table
+                                            // Determine icon and color based on item type
+                                            let (icon, color, kind) = match table.item_type {
+                                                DatabaseItemType::Table => (
+                                                    IconName::Sheet,
+                                                    cx.theme().green.into(),
+                                                    TreeItemKind::Table,
+                                                ),
+                                                DatabaseItemType::View => (
+                                                    IconName::Eye,
+                                                    cx.theme().cyan.into(),
+                                                    TreeItemKind::View,
+                                                ),
+                                                DatabaseItemType::MaterializedView => (
+                                                    IconName::LayoutDashboard,
+                                                    cx.theme().magenta.into(),
+                                                    TreeItemKind::MaterializedView,
+                                                ),
+                                            };
+
                                             let table_metadata = TreeItemMetadata {
                                                 connection_id,
                                                 connection_name: connection.display_name(),
-                                                kind: TreeItemKind::Table,
+                                                kind,
                                                 db_type,
                                                 database_name: Some(database.name.clone()),
                                                 schema_name: Some(schema.name.clone()),
                                                 table_name: Some(table.name.clone()),
-                                                icon: TreeItemIcon {
-                                                    icon: IconName::Sheet,
-                                                    color: cx.theme().green.into(),
-                                                },
+                                                icon: TreeItemIcon { icon, color },
                                                 environment_type: Some(connection.environment_type),
                                                 loading: false,
                                             };
@@ -430,19 +460,32 @@ impl ConnectionsPanel {
                                     connection_id, schema.name, table.name
                                 );
 
-                                // Create metadata for the table
+                                // Determine icon and color based on item type
+                                let (icon, color, kind) = match table.item_type {
+                                    DatabaseItemType::Table => (
+                                        IconName::Sheet,
+                                        cx.theme().green.into(),
+                                        TreeItemKind::Table,
+                                    ),
+                                    DatabaseItemType::View => {
+                                        (IconName::Eye, cx.theme().cyan.into(), TreeItemKind::View)
+                                    }
+                                    DatabaseItemType::MaterializedView => (
+                                        IconName::LayoutDashboard,
+                                        cx.theme().magenta.into(),
+                                        TreeItemKind::MaterializedView,
+                                    ),
+                                };
+
                                 let table_metadata = TreeItemMetadata {
                                     connection_id,
                                     connection_name: connection.display_name(),
-                                    kind: TreeItemKind::Table,
+                                    kind,
                                     db_type,
                                     database_name: Some(schema.name.clone()), // Use schema.name as database_name for MySQL/SQLite
                                     schema_name: None, // MySQL/SQLite don't have schemas in the traditional sense
                                     table_name: Some(table.name.clone()),
-                                    icon: TreeItemIcon {
-                                        icon: IconName::Sheet,
-                                        color: cx.theme().green.into(),
-                                    },
+                                    icon: TreeItemIcon { icon, color },
                                     environment_type: Some(connection.environment_type),
                                     loading: false,
                                 };
@@ -558,27 +601,37 @@ impl ConnectionsPanel {
                             }
                         };
 
-                        // Load tables for all schemas (SQLite needs this for proper tree display)
+                        // Load tables and views for all schemas (SQLite needs this for proper tree display)
                         let mut schema_tables: Vec<(String, Vec<DatabaseTable>)> = Vec::new();
                         for schema_name in &schemas {
-                            let tables = match connection.get_tables(Some(schema_name)).await {
-                                Ok(table_list) => table_list
-                                    .into_iter()
-                                    .map(|table_name| DatabaseTable {
+                            let mut all_items: Vec<DatabaseTable> = Vec::new();
+
+                            // Load tables
+                            if let Ok(table_list) = connection.get_tables(Some(schema_name)).await {
+                                for table_name in table_list {
+                                    all_items.push(DatabaseTable {
                                         name: table_name,
                                         schema: Some(schema_name.clone()),
-                                    })
-                                    .collect(),
-                                Err(e) => {
-                                    tracing::error!(
-                                        "Failed to load tables for schema {}: {}",
-                                        schema_name,
-                                        e
-                                    );
-                                    Vec::new()
+                                        item_type: DatabaseItemType::Table,
+                                    });
                                 }
-                            };
-                            schema_tables.push((schema_name.clone(), tables));
+                            }
+
+                            // Load views
+                            if let Ok(view_list) = connection.get_views(Some(schema_name)).await {
+                                for view_name in view_list {
+                                    all_items.push(DatabaseTable {
+                                        name: view_name,
+                                        schema: Some(schema_name.clone()),
+                                        item_type: DatabaseItemType::View,
+                                    });
+                                }
+                            }
+
+                            // Sort all items alphabetically by name
+                            all_items.sort_by(|a, b| a.name.cmp(&b.name));
+
+                            schema_tables.push((schema_name.clone(), all_items));
                         }
 
                         DatabaseMetadata {
@@ -672,28 +725,40 @@ impl ConnectionsPanel {
                         }
                     };
 
-                    // Load tables for all schemas (without lazy loading for now)
+                    // Load tables and views for all schemas (without lazy loading for now)
                     let mut schema_tables: Vec<(String, Vec<DatabaseTable>)> = Vec::new();
                     for schema_name in &schemas {
-                        let tables = match connection.get_tables(Some(schema_name)).await {
-                            Ok(table_list) => table_list
-                                .into_iter()
-                                .map(|table_name| DatabaseTable {
+                        let mut all_items: Vec<DatabaseTable> = Vec::new();
+
+                        /*
+                        Don't perform any initial loading here - load on schema expand instead
+                        // Load tables
+                        if let Ok(table_list) = connection.get_tables(Some(schema_name)).await {
+                            for table_name in table_list {
+                                all_items.push(DatabaseTable {
                                     name: table_name,
                                     schema: Some(schema_name.clone()),
-                                })
-                                .collect(),
-                            Err(e) => {
-                                tracing::error!(
-                                    "Failed to load tables for schema {} in database {}: {}",
-                                    schema_name,
-                                    database_name,
-                                    e
-                                );
-                                Vec::new()
+                                    item_type: DatabaseItemType::Table,
+                                });
                             }
-                        };
-                        schema_tables.push((schema_name.clone(), tables));
+                        }
+
+                        // Load views
+                        if let Ok(view_list) = connection.get_views(Some(schema_name)).await {
+                            for view_name in view_list {
+                                all_items.push(DatabaseTable {
+                                    name: view_name,
+                                    schema: Some(schema_name.clone()),
+                                    item_type: DatabaseItemType::View,
+                                });
+                            }
+                        }
+
+                        // Sort all items alphabetically by name
+                        all_items.sort_by(|a, b| a.name.cmp(&b.name));
+                        */
+
+                        schema_tables.push((schema_name.clone(), all_items));
                     }
 
                     // Update the panel with loaded schemas
@@ -764,46 +829,82 @@ impl ConnectionsPanel {
         cx.spawn(async move |this_handle, cx| {
             match db_service.get_or_create_connection(connection_id, Some(&database_name)).await {
                 Ok(connection) => {
-                    tracing::debug!("Loading tables for schema: {} in database: {} on connection {}", schema_name, database_name, connection_id);
+                    tracing::debug!("Loading tables, views for schema: {} in database: {} on connection {}", schema_name, database_name, connection_id);
 
-                    // Load tables for this specific schema
-                    let tables = match connection.get_tables(Some(&schema_name)).await {
-                        Ok(table_list) => {
-                            tracing::info!(
-                                "Loaded {} tables for schema {} in database {} on connection {}: {:?}",
-                                table_list.len(),
-                                schema_name,
-                                database_name,
-                                connection_id,
-                                table_list
-                            );
-                            table_list
-                                .into_iter()
-                                .map(|table_name| DatabaseTable {
-                                    name: table_name,
-                                    schema: Some(schema_name.clone()),
-                                })
-                                .collect()
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                "Failed to load tables for schema {} in database {} on connection {}: {}",
-                                schema_name,
-                                database_name,
-                                connection_id,
-                                e
-                            );
-                            Vec::new()
-                        }
-                    };
+                    // Load tables, views, and materialized views
+                    let tables_result = connection.get_tables(Some(&schema_name)).await;
+                    let views_result = connection.get_views(Some(&schema_name)).await;
+                    let matviews_result = connection.get_materialized_views(Some(&schema_name)).await;
 
-                    // Update the panel with loaded tables
+                    let mut all_items: Vec<DatabaseTable> = Vec::new();
+
+                    // Process tables
+                    if let Ok(table_list) = tables_result {
+                        let table_count: usize = table_list.len();
+                        tracing::info!(
+                            "Loaded {} tables for schema {} in database {} on connection {}",
+                            table_count,
+                            schema_name,
+                            database_name,
+                            connection_id
+                        );
+                        for table_name in table_list {
+                            all_items.push(DatabaseTable {
+                                name: table_name,
+                                schema: Some(schema_name.clone()),
+                                item_type: DatabaseItemType::Table,
+                            });
+                        }
+                    }
+
+                    // Process views
+                    if let Ok(view_list) = views_result {
+                        let view_count: usize = view_list.len();
+                        tracing::info!(
+                            "Loaded {} views for schema {} in database {} on connection {}",
+                            view_count,
+                            schema_name,
+                            database_name,
+                            connection_id
+                        );
+                        for view_name in view_list {
+                            all_items.push(DatabaseTable {
+                                name: view_name,
+                                schema: Some(schema_name.clone()),
+                                item_type: DatabaseItemType::View,
+                            });
+                        }
+                    }
+
+                    // Process materialized views
+                    if let Ok(matview_list) = matviews_result {
+                        let matview_count: usize = matview_list.len();
+                        tracing::info!(
+                            "Loaded {} materialized views for schema {} in database {} on connection {}",
+                            matview_count,
+                            schema_name,
+                            database_name,
+                            connection_id
+                        );
+                        for matview_name in matview_list {
+                            all_items.push(DatabaseTable {
+                                name: matview_name,
+                                schema: Some(schema_name.clone()),
+                                item_type: DatabaseItemType::MaterializedView,
+                            });
+                        }
+                    }
+
+                    // Sort all items alphabetically by name
+                    all_items.sort_by(|a, b| a.name.cmp(&b.name));
+
+                    // Update the panel with loaded items
                     let _ = this_handle.update(cx, |this, cx| {
                         if let Some(metadata) = this.database_metadata.get_mut(&connection_id) {
                             // Find the database and schema, then update its tables
                             if let Some(database) = metadata.databases.iter_mut().find(|db| db.name == database_name)
                                 && let Some(schema) = database.schemas.iter_mut().find(|s| s.name == schema_name) {
-                                    schema.tables = tables;
+                                    schema.tables = all_items;
                                     schema.is_expanded = true; // Mark as expanded
                                 }
 
@@ -926,7 +1027,7 @@ impl ConnectionsPanel {
                         connection_id: Some(connection_id),
                     });
                 }
-                TreeItemKind::Table => {
+                TreeItemKind::Table | TreeItemKind::View | TreeItemKind::MaterializedView => {
                     cx.emit(AppEvent::TreeItemSelected {
                         item_id: item_id.to_string(),
                         item_type: TreeItemType::Table,
@@ -1201,7 +1302,11 @@ impl ConnectionsPanel {
     /// Edit an existing connection by opening the modal with pre-populated data
     pub fn edit_connection(&mut self, connection_id: i64, cx: &mut Context<Self>) {
         // Find the connection data
-        let connection_data = self.connections.iter().find(|c| c.id == Some(connection_id)).cloned();
+        let connection_data = self
+            .connections
+            .iter()
+            .find(|c| c.id == Some(connection_id))
+            .cloned();
 
         if let Some(conn_data) = connection_data {
             // Emit an event to open the edit modal

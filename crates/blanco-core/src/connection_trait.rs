@@ -262,6 +262,19 @@ pub trait Connection: Send + Sync {
     /// Get list of tables for a given schema (or all schemas if None)
     async fn get_tables(&self, schema: Option<&str>) -> Result<Vec<String>, anyhow::Error>;
 
+    /// Get list of views for a given schema (or all schemas if None)
+    async fn get_views(&self, _schema: Option<&str>) -> Result<Vec<String>, anyhow::Error> {
+        // Default implementation returns empty (for databases that don't support views)
+        Ok(Vec::new())
+    }
+
+    /// Get list of materialized views for a given schema (or all schemas if None)
+    /// Materialized views are PostgreSQL-specific; other databases return empty
+    async fn get_materialized_views(&self, _schema: Option<&str>) -> Result<Vec<String>, anyhow::Error> {
+        // Default implementation returns empty (most databases don't support materialized views)
+        Ok(Vec::new())
+    }
+
     /// Check if this connection type supports schemas (like PostgreSQL) or uses flat table structure (like SQLite)
     fn supports_schemas(&self) -> bool;
 
