@@ -1054,7 +1054,8 @@ impl PostgresConnection {
             }
             "uuid" => ColumnType::Uuid,
             "json" | "jsonb" => ColumnType::Json,
-            "array" | _ if type_name.to_lowercase().ends_with("[]") => ColumnType::Array,
+            "array" => ColumnType::Array,
+            _ if type_name.to_lowercase().ends_with("[]") => ColumnType::Array,
             "bytea" => ColumnType::Binary,
             _ => ColumnType::Unknown,
         }
@@ -1587,6 +1588,55 @@ impl Connection for PostgresConnection {
                 has_more: table_count == limit as usize,
             },
         })
+    }
+
+    async fn foreign_key_lookup(
+        &self,
+        table_name: &str,
+        column_name: &str,
+        reference_value: &str,
+    ) -> Result<QueryResult, anyhow::Error> {
+        const ROW_ESTIMATE_THRESHOLD: i64 = 20;
+        const LIMIT_THRESHOLD: i64 = 100;
+
+        // Get row estimate from pg_class
+        let estimate_query =
+            "SELECT reltuples::bigint AS estimate FROM pg_class WHERE relname = $1";
+        let estimate_result = self
+            .execute_query(
+                estimate_query,
+                self.initial_database.as_deref(),
+                Some(&[table_name.to_string()]),
+            )
+            .await?;
+
+        let row_count = estimate_result
+            .rows
+            .first()
+            .and_then(|row| row.first())
+            .and_then(|val| val.parse::<i64>().ok())
+            .filter(|n| *n >= 0);
+
+        if let Some(count) = row_count {
+            if count <= ROW_ESTIMATE_THRESHOLD {
+                // Small table: fetch all rows with referenced row first
+                let query = format!(
+                    "SELECT * FROM {} ORDER BY {} = '{}' DESC LIMIT {}",
+                    table_name, column_name, reference_value, LIMIT_THRESHOLD
+                );
+                return self
+                    .execute_query(&query, self.initial_database.as_deref(), None)
+                    .await;
+            }
+        }
+
+        // Large table or estimate unavailable: fetch only referenced row
+        let query = format!(
+            "SELECT * FROM {} WHERE {} = '{}'",
+            table_name, column_name, reference_value
+        );
+        self.execute_query(&query, self.initial_database.as_deref(), None)
+            .await
     }
 }
 

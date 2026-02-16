@@ -1,11 +1,10 @@
 use gpui::{
-    div, px, Context, InteractiveElement, IntoElement, ParentElement, Render, ScrollHandle,
-    SharedString, StatefulInteractiveElement, Styled, StyledText, Window,
+    Context, InteractiveElement, IntoElement, ParentElement, Render, ScrollHandle, SharedString,
+    StatefulInteractiveElement, Styled, StyledText, Window, div, px,
 };
+use gpui_component::ActiveTheme;
 use gpui_component::highlighter::{HighlightTheme, SyntaxHighlighter};
 use gpui_component::scroll::Scrollbar;
-use gpui_component::ActiveTheme;
-use ropey::{LineType, Rope};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,58 +13,71 @@ pub enum SqlLogMessage {
     Comment(String),
 }
 
+struct LogEntry {
+    text: SharedString,
+    highlighter: SyntaxHighlighter,
+}
+
 /// SQL Log entity for displaying SQL queries and logs with proper syntax highlighting
 pub struct SqlLog {
-    text: Rope,
-    max_lines: usize,
-    highlighter: SyntaxHighlighter,
+    entries: Vec<LogEntry>,
+    max_entries: usize,
     theme: Arc<HighlightTheme>,
     scroll_handle: ScrollHandle,
 }
 
 impl SqlLog {
-    /// Create a new SQL log with the specified maximum number of lines
-    pub fn new(max_lines: usize, theme: Arc<HighlightTheme>) -> Self {
-        let highlighter = SyntaxHighlighter::new("sql");
-
+    /// Create a new SQL log with the specified maximum number of entries
+    pub fn new(max_entries: usize, theme: Arc<HighlightTheme>) -> Self {
         Self {
-            text: Rope::from(""),
-            max_lines,
-            highlighter,
+            entries: Vec::new(),
+            max_entries,
             theme,
             scroll_handle: ScrollHandle::default(),
         }
     }
 
-    /// Append text to the log, managing line limits
+    /// Append text to the log, managing entry limits
     pub fn append_text(&mut self, text: &SqlLogMessage, cx: &mut Context<Self>) {
         // Check if this is a comment or a SQL statement, if it doesn't end with a delimiter, add it
         let new_text = match text {
             SqlLogMessage::SqlStatement(statement) => {
                 if !statement.trim_start().ends_with(";") {
-                    format!("{};\n", statement)
+                    format!("{};", statement)
                 } else {
-                    format!("{}\n", statement)
+                    statement.clone()
                 }
             }
-            SqlLogMessage::Comment(comment) => format!("-- {}\n", comment),
+            SqlLogMessage::Comment(comment) => format!("-- {}", comment),
         };
 
-        // Append the new text
-        self.text.insert(self.text.len(), &new_text);
+        // Create a new highlighter for this entry
+        let mut highlighter = SyntaxHighlighter::new("sql");
 
-        // Check if we need to trim old lines
-        self.trim_lines();
+        // Create a Rope for the highlighter to parse
+        let rope = ropey::Rope::from(&new_text[..]);
+        highlighter.update(None, &rope);
 
-        // Update the highlighter with the new text
-        self.highlighter.update(None, &self.text);
+        // Create the log entry
+        let entry = LogEntry {
+            text: SharedString::from(new_text),
+            highlighter,
+        };
+
+        // Append the new entry
+        self.entries.push(entry);
+
+        // Check if we need to trim old entries
+        self.trim_entries();
 
         let scroll_handle = self.scroll_handle.clone();
 
         // Schedule scroll to bottom after render
-        cx.spawn(async move |_, _cx| {
+        cx.spawn(async move |_, cx| {
             // Small delay to ensure content is rendered
-            gpui::Timer::after(Duration::from_millis(50)).await;
+            cx.background_executor()
+                .timer(Duration::from_millis(50))
+                .await;
             scroll_handle.scroll_to_bottom();
         })
         .detach();
@@ -74,67 +86,36 @@ impl SqlLog {
         cx.notify();
     }
 
-    /// Clear all text from the log
+    /// Clear all entries from the log
     pub fn clear(&mut self, cx: &mut Context<Self>) {
-        self.text = Rope::from("");
-        self.highlighter.update(None, &self.text);
+        self.entries.clear();
         cx.notify();
     }
 
-    /// Set the maximum number of lines and trim if necessary
-    pub fn set_max_lines(&mut self, max_lines: usize, cx: &mut Context<Self>) {
-        self.max_lines = max_lines;
-        self.trim_lines();
-        self.highlighter.update(None, &self.text);
+    /// Set the maximum number of entries and trim if necessary
+    pub fn set_max_entries(&mut self, max_entries: usize, cx: &mut Context<Self>) {
+        self.max_entries = max_entries;
+        self.trim_entries();
         cx.notify();
     }
 
-    /// Get the current number of lines in the log
-    pub fn line_count(&self) -> usize {
-        self.text.len_lines(LineType::LF)
+    /// Get the current number of entries in the log
+    pub fn entry_count(&self) -> usize {
+        self.entries.len()
     }
 
-    /// Get the current text content
-    pub fn text(&self) -> &Rope {
-        &self.text
-    }
-
-    /// Trim old lines if we exceed the maximum
-    fn trim_lines(&mut self) {
-        let line_count = self.text.len_lines(LineType::LF);
-        if line_count > self.max_lines {
-            let lines_to_remove = line_count - self.max_lines;
-
-            // Calculate the byte offset to remove
-            let mut total_bytes = 0;
-            for i in 0..lines_to_remove {
-                if i < line_count {
-                    let line = self.text.line(i, LineType::LF);
-                    total_bytes += line.bytes().len() + 1; // +1 for newline
-                }
-            }
-
-            // Remove the old lines
-            self.text.remove(0..total_bytes);
+    /// Trim old entries if we exceed the maximum
+    fn trim_entries(&mut self) {
+        if self.entries.len() > self.max_entries {
+            let entries_to_remove = self.entries.len() - self.max_entries;
+            self.entries.drain(0..entries_to_remove);
         }
     }
 }
 
 impl Render for SqlLog {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Get the full text content as a SharedString
-        let text_content = self.text.to_string();
-        let shared_text = SharedString::from(text_content);
-
-        // Get syntax highlights from the highlighter
-        let text_len = shared_text.len();
-        let range = std::ops::Range::<usize> {
-            start: 0,
-            end: text_len,
-        };
-        let highlights = self.highlighter.styles(&range, &self.theme);
-
-        // Create a container with syntax-highlighted text
+        // Create a container with syntax-highlighted entries
         div()
             .size_full()
             .bg(cx
@@ -154,7 +135,17 @@ impl Render for SqlLog {
                     .font_family(cx.theme().mono_font_family.clone())
                     .text_size(px(12.))
                     .text_color(cx.theme().foreground)
-                    .child(StyledText::new(shared_text).with_highlights(highlights)),
+                    .children(self.entries.iter().map(|entry| {
+                        let text_len = entry.text.len();
+                        let range = std::ops::Range::<usize> {
+                            start: 0,
+                            end: text_len,
+                        };
+                        let highlights = entry.highlighter.styles(&range, &self.theme);
+                        div()
+                            .mb_1()
+                            .child(StyledText::new(entry.text.clone()).with_highlights(highlights))
+                    })),
             )
             .child(
                 div()

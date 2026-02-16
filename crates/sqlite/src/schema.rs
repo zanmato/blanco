@@ -2,7 +2,7 @@
 
 use crate::connection::SqliteConnection;
 use anyhow::Result;
-use blanco_core::connection_trait::{TableSchemaInfo, ColumnInfo};
+use blanco_core::connection_trait::{ColumnInfo, TableSchemaInfo};
 use blanco_core::Connection;
 
 impl SqliteConnection {
@@ -15,7 +15,9 @@ impl SqliteConnection {
     ) -> Result<Vec<TableSchemaInfo>> {
         let (tables_query, params) = self.build_tables_query_and_params(table_names, limit, offset);
 
-        let tables_result = self.execute_query(&tables_query, None, Some(&params)).await?;
+        let tables_result = self
+            .execute_query(&tables_query, None, Some(&params))
+            .await?;
         let mut tables = Vec::new();
 
         for table_row in &tables_result.rows {
@@ -56,44 +58,52 @@ impl SqliteConnection {
                     .unwrap_or(0);
 
                 // Parse the columns JSON into ColumnInfo structs
-                let columns: Vec<ColumnInfo> = if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&columns_json) {
+                let columns: Vec<ColumnInfo> = if let Ok(json_value) =
+                    serde_json::from_str::<serde_json::Value>(&columns_json)
+                {
                     if let Some(array) = json_value.as_array() {
-                        array.iter().filter_map(|col| {
-                            if let Some(name) = col.get("name").and_then(|v| v.as_str()) {
-                                let data_type = col.get("type")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("unknown")
-                                    .to_string();
-                                let nullable = col.get("nullable")
-                                    .and_then(|v| v.as_bool())
-                                    .unwrap_or(true);
-                                let primary_key = col.get("primary_key")
-                                    .and_then(|v| v.as_bool())
-                                    .unwrap_or(false);
-                                let default_value = col.get("default_value")
-                                    .and_then(|v| v.as_str())
-                                    .map(|s| {
-                                        if s == "NULL" || s.is_empty() {
-                                            None
-                                        } else {
-                                            Some(s.to_string())
-                                        }
-                                    })
-                                    .flatten();
+                        array
+                            .iter()
+                            .filter_map(|col| {
+                                if let Some(name) = col.get("name").and_then(|v| v.as_str()) {
+                                    let data_type = col
+                                        .get("type")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("unknown")
+                                        .to_string();
+                                    let nullable = col
+                                        .get("nullable")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(true);
+                                    let primary_key = col
+                                        .get("primary_key")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false);
+                                    let default_value = col
+                                        .get("default_value")
+                                        .and_then(|v| v.as_str())
+                                        .and_then(|s| {
+                                            if s == "NULL" || s.is_empty() {
+                                                None
+                                            } else {
+                                                Some(s.to_string())
+                                            }
+                                        });
 
-                                Some(ColumnInfo {
-                                    name: name.to_string(),
-                                    data_type,
-                                    is_nullable: nullable,
-                                    is_primary_key: primary_key,
-                                    default_value,
-                                    character_maximum_length: None, // SQLite doesn't specify this in pragma_table_info
-                                    foreign_key: None,
-                                })
-                            } else {
-                                None
-                            }
-                        }).collect()
+                                    Some(ColumnInfo {
+                                        name: name.to_string(),
+                                        data_type,
+                                        is_nullable: nullable,
+                                        is_primary_key: primary_key,
+                                        default_value,
+                                        character_maximum_length: None, // SQLite doesn't specify this in pragma_table_info
+                                        foreign_key: None,
+                                    })
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
                     } else {
                         Vec::new()
                     }

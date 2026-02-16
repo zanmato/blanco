@@ -562,6 +562,20 @@ impl Connection for SqliteConnection {
             },
         })
     }
+
+    async fn foreign_key_lookup(
+        &self,
+        table_name: &str,
+        column_name: &str,
+        reference_value: &str,
+    ) -> Result<QueryResult, anyhow::Error> {
+        // SQLite doesn't provide table statistics, so always fetch only the referenced row
+        let query = format!(
+            "SELECT * FROM {} WHERE {} = '{}'",
+            table_name, column_name, reference_value
+        );
+        self.execute_query(&query, None, None).await
+    }
 }
 
 // Helper functions for SQLite type conversion

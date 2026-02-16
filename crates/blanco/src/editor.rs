@@ -476,9 +476,6 @@ impl EditorPanel {
                 sql_log.append_text(&blanco_ui::SqlLogMessage::SqlStatement(query_for_log), cx);
             });
 
-            // Create response channel for passing results from background to foreground
-            let (result_tx, result_rx) = smol::channel::bounded(1);
-
             // Clone values for background task
             let query_clone = query.clone();
             let db_service = DatabaseService::global(cx).clone();
@@ -486,7 +483,7 @@ impl EditorPanel {
             let database_name_for_background = database_name.clone();
 
             // Spawn background task for query execution (keeps UI responsive)
-            cx.background_spawn(async move {
+            let query_task = cx.background_spawn(async move {
                 let start_time = std::time::Instant::now();
                 let execution_result = db_service
                     .execute_query(
@@ -495,10 +492,8 @@ impl EditorPanel {
                         &query_clone,
                     )
                     .await;
-
-                let _ = result_tx.send((execution_result, start_time)).await;
-            })
-            .detach();
+                (execution_result, start_time)
+            });
 
             // Spawn foreground task to handle the result and update UI
             let results_panel_clone = query_tab.results_panel.clone();
@@ -507,8 +502,10 @@ impl EditorPanel {
             let query_for_metadata = query.clone();
 
             self._run_query_task = cx.spawn_in(window, async move |editor_panel_entity, window| {
-                match result_rx.recv().await {
-                    Ok((Ok(mut result), start_time)) => {
+                let (execution_result, start_time) = query_task.await;
+
+                match execution_result {
+                    Ok(mut result) => {
                         let duration_ms = start_time.elapsed().as_millis() as i64;
 
                         // Add execution metadata
@@ -581,7 +578,7 @@ impl EditorPanel {
                                 .ok();
                         });
                     }
-                    Ok((Err(e), start_time)) => {
+                    Err(e) => {
                         tracing::error!("Query execution failed: {}", e);
 
                         let _ = window.update(|window, cx| {
@@ -626,29 +623,6 @@ impl EditorPanel {
 
                             window.push_notification(
                                 (NotificationType::Error, SharedString::from(e.to_string())),
-                                cx,
-                            );
-                        });
-                    }
-                    Err(recv_err) => {
-                        tracing::error!(
-                            "Failed to receive query result from background thread: {}",
-                            recv_err
-                        );
-
-                        let _ = window.update(|window, cx| {
-                            editor_panel_entity
-                                .update(cx, |editor_panel, cx| {
-                                    editor_panel.loading = false;
-                                    cx.notify();
-                                })
-                                .ok();
-
-                            window.push_notification(
-                                (
-                                    NotificationType::Error,
-                                    SharedString::from("Query execution failed: channel closed"),
-                                ),
                                 cx,
                             );
                         });
@@ -1073,7 +1047,6 @@ impl EditorPanel {
             (extracted, start_byte..end_byte)
         };
 
-        // Spawn background lint task
         let sqruff_service = if let Some(sqruff_service) = &query_tab.sqruff_service {
             sqruff_service.clone()
         } else {
@@ -1081,9 +1054,14 @@ impl EditorPanel {
             return;
         };
 
+        // Background task: do the heavy linting work
+        let lint_task = cx.background_spawn(async move {
+            sqruff_service.lint(&statement_text, Some(byte_range.start))
+        });
+
+        // Foreground task: wait for background task to complete and update UI
         cx.spawn(async move |entity_handle, async_cx| {
-            // Create sqruff service and lint
-            let diagnostics = match sqruff_service.lint(&statement_text, Some(byte_range.start)) {
+            let diagnostics = match lint_task.await {
                 Ok(diags) => diags,
                 Err(e) => {
                     tracing::error!("Linting failed: {}", e);

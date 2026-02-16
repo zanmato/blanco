@@ -182,7 +182,35 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                         },
                     )))
             }
-            TreeItemKind::Database | TreeItemKind::Schema | TreeItemKind::Table | TreeItemKind::View | TreeItemKind::MaterializedView => {
+            TreeItemKind::Database => {
+                let connection_id = metadata.connection_id;
+                let database_name = metadata.database_name.clone().unwrap_or_default();
+
+                // Add "New Query" if applicable
+                let mut menu = if let Some(event) = metadata.create_new_query_tab_event() {
+                    menu.item(
+                        PopupMenuItem::new("New Query").on_click(window.listener_for(
+                            &self.parent,
+                            move |_this, _event, _window, cx| {
+                                cx.emit(event.clone());
+                            },
+                        )),
+                    )
+                } else {
+                    menu
+                };
+
+                // Add "Disconnect" option
+                menu = menu.item(PopupMenuItem::new("Disconnect").on_click(window.listener_for(
+                    &self.parent,
+                    move |this, _event, _window, cx| {
+                        this.disconnect_database(connection_id, database_name.clone(), cx);
+                    },
+                )));
+
+                menu
+            }
+            TreeItemKind::Schema | TreeItemKind::Table | TreeItemKind::View | TreeItemKind::MaterializedView => {
                 // Use the trait to create the query tab event
                 if let Some(event) = metadata.create_new_query_tab_event() {
                     let connection_id = metadata.connection_id;

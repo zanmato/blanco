@@ -4,7 +4,8 @@ use std::ops::Range;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Context, Entity, Focusable, FontWeight, InteractiveElement, IntoElement,
-    MouseButton, ParentElement, SharedString, Styled, TextRun, Window, div, px,
+    MouseButton, ParentElement, SharedString, StatefulInteractiveElement, Styled, TextRun, Window,
+    div, px,
 };
 use gpui_component::popover::{Popover, PopoverState};
 use gpui_component::{
@@ -15,10 +16,12 @@ use gpui_component::{
     input::{Input, InputState},
     menu::PopupMenu,
     table::{Column, ColumnSort, TableDelegate, TableState},
+    tooltip::Tooltip,
+    v_flex,
 };
 use serde_json::Value;
 
-use blanco_core::{QueryResult, connection_trait::ColumnType, connection_trait::ForeignKeyInfo};
+use blanco_core::{QueryResult, connection_trait::ColumnType};
 
 use crate::app::{AddRow, DuplicateRow};
 use crate::foreign_key_popover::ForeignKeyPopover;
@@ -273,8 +276,8 @@ pub struct ResultsTableDelegate {
     pub connection_id: i64,
     pub database_name: SharedString,
     pub original_query: Option<String>,
-    /// Foreign key metadata: column_index (excluding row number column) -> FK info
-    pub foreign_keys: HashMap<usize, ForeignKeyInfo>,
+    /// Column metadata for tooltips and rendering
+    table_columns: Vec<blanco_core::connection_trait::ColumnInfo>,
 }
 
 impl ResultsTableDelegate {
@@ -666,26 +669,8 @@ impl ResultsTableDelegate {
                 .map(|c| c.name.clone())
         });
 
-        // Clear previous foreign keys
-        self.foreign_keys.clear();
-
-        // Load foreign key metadata from table_columns if available
-        if let Some(ref columns) = result.table_columns {
-            let foreign_keys: std::collections::HashMap<usize, ForeignKeyInfo> = columns
-                .iter()
-                .enumerate()
-                .filter_map(|(idx, col)| col.foreign_key.as_ref().map(|fk| (idx, fk.clone())))
-                .collect();
-
-            if !foreign_keys.is_empty() {
-                tracing::debug!(
-                    "Loaded {} foreign key(s) for table '{}' from query result metadata",
-                    foreign_keys.len(),
-                    self.table_name.as_deref().unwrap_or("unknown")
-                );
-            }
-            self.foreign_keys = foreign_keys;
-        }
+        // Store table columns metadata for tooltips and rendering
+        self.table_columns = result.table_columns.clone().unwrap_or_default();
     }
 
     pub fn start_editing_cell(&mut self, row: usize, col: usize) {
@@ -843,17 +828,64 @@ impl TableDelegate for ResultsTableDelegate {
     ) -> impl IntoElement {
         let is_row_number_col = col_ix == 0;
         let col = &self.columns[col_ix];
-        let has_fk = !is_row_number_col && self.foreign_keys.contains_key(&(col_ix - 1));
+        let col_info = if !is_row_number_col {
+            self.table_columns.get(col_ix - 1)
+        } else {
+            None
+        };
+        let has_fk = col_info.is_some_and(|c| c.foreign_key.is_some());
         let is_pk = !is_row_number_col
             && self
                 .primary_key_column
                 .as_ref()
                 .is_some_and(|pk| pk == &col.name);
+        let is_nullable = col_info.is_some_and(|c| c.is_nullable);
+
+        let tooltip_id = format!("col-tooltip-{}", col_ix);
 
         div()
             .font_family(cx.theme().mono_font_family.clone())
             .text_size(px(12.))
             .pt(px(1.))
+            .id(tooltip_id.clone())
+            .when_some(col_info, |this, col_info| {
+                // Clone all needed values before the closure
+                let col_name = col.name.to_string();
+                let data_type = col_info.data_type.clone();
+                let is_nullable = col_info.is_nullable;
+                let default_value = col_info.default_value.clone();
+                let max_length = col_info.character_maximum_length;
+                this.tooltip(move |window, cx| {
+                    Tooltip::element({
+                        let col_name = col_name.clone();
+                        let data_type = data_type.clone();
+                        let default_value = default_value.clone();
+                        move |_window, _cx| {
+                            v_flex()
+                                .gap_1()
+                                .child(div().font_weight(FontWeight::BOLD).child(col_name.clone()))
+                                .child(
+                                    h_flex()
+                                        .gap_2()
+                                        .child("Type:")
+                                        .child(data_type.clone())
+                                        .when_some(max_length, |this, len| {
+                                            this.child(format!("({})", len))
+                                        }),
+                                )
+                                .child(h_flex().gap_2().child("Nullable:").child(if is_nullable {
+                                    "Yes"
+                                } else {
+                                    "No"
+                                }))
+                                .when_some(default_value.clone(), |this, default| {
+                                    this.child(h_flex().gap_2().child("Default:").child(default))
+                                })
+                        }
+                    })
+                    .build(window, cx)
+                })
+            })
             .child(
                 h_flex()
                     .items_center()
@@ -871,6 +903,13 @@ impl TableDelegate for ResultsTableDelegate {
                             Icon::new(IconName::Key)
                                 .size(px(10.))
                                 .text_color(cx.theme().blue),
+                        )
+                    })
+                    .when(is_nullable && !is_pk, |this| {
+                        this.child(
+                            Icon::new(IconName::Asterisk)
+                                .size(px(10.))
+                                .text_color(cx.theme().green),
                         )
                     }),
             )
@@ -1139,8 +1178,9 @@ impl TableDelegate for ResultsTableDelegate {
                     )
                 })
                 .when_some(
-                    self.foreign_keys
-                        .get(&(col_ix - 1))
+                    self.table_columns
+                        .get(col_ix - 1)
+                        .and_then(|c| c.foreign_key.as_ref())
                         .filter(|_| !is_row_number_col),
                     |this, fk_info| {
                         let fk_info = fk_info.clone();

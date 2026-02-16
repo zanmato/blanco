@@ -129,4 +129,22 @@ pub trait DatabaseService: Send + Sync {
             "get_active_connection_statuses not implemented - trait default only"
         ))
     }
+
+    /// Perform a foreign key lookup that returns all rows for small tables
+    /// or just the referenced row for large tables
+    async fn foreign_key_lookup(
+        &self,
+        connection_id: i64,
+        database: Option<&str>,
+        table_name: &str,
+        column_name: &str,
+        reference_value: &str,
+    ) -> Result<crate::QueryResult> {
+        let connection = self
+            .get_or_create_connection_by_id(connection_id, database)
+            .await?;
+        connection
+            .foreign_key_lookup(table_name, column_name, reference_value)
+            .await
+    }
 }

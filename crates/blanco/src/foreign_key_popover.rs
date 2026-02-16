@@ -40,17 +40,13 @@ impl ForeignKeyPopover {
 
         cx.spawn(
             async move |weak_this: WeakEntity<Self>, cx: &mut AsyncApp| {
-                let query = format!(
-                    "SELECT * FROM {} WHERE {} = '{}'",
-                    table_name_clone, column_name_clone, reference_value_clone
-                );
-
                 let result = db_service
-                    .execute_query_with_params(
+                    .foreign_key_lookup(
                         connection_id,
                         database_name_clone.as_ref().map(|s| s.as_ref()),
-                        &query,
-                        &[],
+                        &table_name_clone,
+                        &column_name_clone,
+                        &reference_value_clone,
                     )
                     .await;
 

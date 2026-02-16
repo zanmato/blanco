@@ -54,8 +54,11 @@ pub enum TunnelStatus {
     Failed(String),
 }
 
-/// SSH client handler
-struct SshClientHandler;
+/// SSH client handler with access to tunnel state
+struct SshClientHandler {
+    status: Arc<StdMutex<TunnelStatus>>,
+    is_running: Arc<StdMutex<bool>>,
+}
 
 #[async_trait]
 impl russh_client::Handler for SshClientHandler {
@@ -65,9 +68,16 @@ impl russh_client::Handler for SshClientHandler {
         &mut self,
         _server_public_key: &russh::keys::key::PublicKey,
     ) -> Result<bool, Self::Error> {
-        // TODO: verify the server key against a known hosts file
         tracing::debug!("Accepting SSH server key");
         Ok(true)
+    }
+}
+
+impl Drop for SshClientHandler {
+    fn drop(&mut self) {
+        tracing::info!("SSH session ended, marking tunnel as disconnected");
+        *self.is_running.lock().unwrap() = false;
+        *self.status.lock().unwrap() = TunnelStatus::Disconnected;
     }
 }
 
@@ -147,11 +157,22 @@ impl SshTunnel {
             self.config.ssh_port
         );
 
+        // Clean up any existing tunnel before reconnecting
+        *self.is_running.lock().unwrap() = false;
+        if let Some(task) = self.tunnel_task.take() {
+            task.abort();
+        }
+        // Give a moment for the disconnect to complete
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
         *self.status.lock().unwrap() = TunnelStatus::Connecting;
 
-        // Create SSH config
+        // Create SSH config and handler with shared state
         let ssh_config = Arc::new(SshConfig::default());
-        let handler = SshClientHandler {};
+        let handler = SshClientHandler {
+            status: Arc::clone(&self.status),
+            is_running: Arc::clone(&self.is_running),
+        };
 
         // Connect to SSH server
         let mut session = russh_client::connect(
@@ -225,14 +246,22 @@ impl SshTunnel {
         let runtime_handle_inner = runtime_handle.clone();
         let task = runtime_handle.spawn(async move {
             // Handle incoming connections
-            while *is_running.lock().unwrap() {
-                match listener.accept().await {
+            loop {
+                let accept_result = listener.accept().await;
+
+                // Check if tunnel is still running after accept
+                if !*is_running.lock().unwrap() {
+                    break;
+                }
+
+                match accept_result {
                     Ok((mut local_socket, _)) => {
                         let remote_host = remote_host.clone();
                         let remote_port = remote_port;
                         let local_port = local_port;
                         let session = Arc::clone(&session);
                         let active_connections = Arc::clone(&active_connections);
+                        let is_running_check = Arc::clone(&is_running);
                         let runtime_handle = runtime_handle_inner.clone();
 
                         // Generate a unique connection ID
@@ -254,6 +283,12 @@ impl SshTunnel {
                         // Handle connection in background task
                         runtime_handle.spawn(async move {
                             tracing::debug!("Processing connection {}", connection_id.0);
+
+                            // Check if tunnel is still running
+                            if !*is_running_check.lock().unwrap() {
+                                tracing::debug!("Tunnel no longer running, rejecting connection {}", connection_id.0);
+                                return;
+                            }
 
                             // Open SSH channel to remote host:port
                             let ssh_channel = {

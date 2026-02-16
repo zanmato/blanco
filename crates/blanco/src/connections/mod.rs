@@ -1146,6 +1146,51 @@ impl ConnectionsPanel {
         .detach();
     }
 
+    /// Disconnect a specific database within a connection
+    pub fn disconnect_database(
+        &mut self,
+        connection_id: i64,
+        database_name: String,
+        cx: &mut Context<Self>,
+    ) {
+        tracing::info!(
+            "Disconnecting database '{}' on connection {}",
+            database_name,
+            connection_id
+        );
+
+        let db_service = DatabaseService::global(cx).clone();
+
+        cx.spawn(async move |this_handle, cx| {
+            // Disconnect the specific database
+            if let Err(e) = db_service
+                .disconnect(connection_id, Some(&database_name))
+                .await
+            {
+                tracing::error!(
+                    "Failed to disconnect database '{}' on connection {}: {}",
+                    database_name,
+                    connection_id,
+                    e
+                );
+            }
+
+            // Update the UI
+            let _ = this_handle.update(cx, |this, cx| {
+                this.update_tree_items(cx);
+
+                // Emit connection lost event for the specific database
+                cx.emit(AppEvent::ConnectionLost {
+                    connection_id: Some(connection_id),
+                    error: format!("Database '{}' disconnected by user", database_name),
+                });
+
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// Validate and mark a connection as connected after successful query execution
     pub fn validate_connection_as_connected(&mut self, connection_id: i64, cx: &mut Context<Self>) {
         self.load_connection_children(connection_id, false, cx);

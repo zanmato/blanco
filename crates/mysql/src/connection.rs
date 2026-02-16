@@ -674,7 +674,9 @@ impl Connection for MysqlConnection {
 
         let pool = self.get_or_create_pool(database).await?;
 
-        let rows = sqlx::query("SHOW FULL TABLES WHERE TABLE_TYPE LIKE 'VIEW'").fetch_all(&pool).await?;
+        let rows = sqlx::query("SHOW FULL TABLES WHERE TABLE_TYPE LIKE 'VIEW'")
+            .fetch_all(&pool)
+            .await?;
 
         let views: Vec<String> = rows
             .iter()
@@ -828,5 +830,46 @@ impl Connection for MysqlConnection {
                 has_more: table_count == limit as usize,
             },
         })
+    }
+
+    async fn foreign_key_lookup(
+        &self,
+        table_name: &str,
+        column_name: &str,
+        reference_value: &str,
+    ) -> Result<QueryResult, anyhow::Error> {
+        const ROW_ESTIMATE_THRESHOLD: i64 = 20;
+        const LIMIT_THRESHOLD: i64 = 100;
+
+        // Get row estimate from INFORMATION_SCHEMA.TABLES
+        let estimate_query = "SELECT TABLE_ROWS FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = ? AND TABLE_SCHEMA = DATABASE()";
+        let estimate_result = self
+            .execute_query(estimate_query, None, Some(&[table_name.to_string()]))
+            .await?;
+
+        let row_count = estimate_result
+            .rows
+            .first()
+            .and_then(|row| row.first())
+            .and_then(|val| val.parse::<i64>().ok())
+            .filter(|n| *n >= 0);
+
+        if let Some(count) = row_count {
+            if count <= ROW_ESTIMATE_THRESHOLD {
+                // Small table: fetch all rows with referenced row first
+                let query = format!(
+                    "SELECT * FROM {} ORDER BY {} = '{}' DESC LIMIT {}",
+                    table_name, column_name, reference_value, LIMIT_THRESHOLD
+                );
+                return self.execute_query(&query, None, None).await;
+            }
+        }
+
+        // Large table or estimate unavailable: fetch only referenced row
+        let query = format!(
+            "SELECT * FROM {} WHERE {} = '{}'",
+            table_name, column_name, reference_value
+        );
+        self.execute_query(&query, None, None).await
     }
 }

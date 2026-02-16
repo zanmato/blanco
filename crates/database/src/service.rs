@@ -2,7 +2,9 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use blanco_core::{Connection, ConnectionFactory, DatabaseService as DatabaseServiceTrait, DriverType};
+use blanco_core::{
+    Connection, ConnectionFactory, DatabaseService as DatabaseServiceTrait, DriverType,
+};
 use gpui::Global;
 use smol::channel;
 use smol::lock::RwLock;
@@ -123,17 +125,9 @@ impl DatabaseService {
         config_id: DatabaseConfigId,
         database: Option<&str>,
     ) -> Result<Arc<dyn Connection>> {
-        // Check if connection is in active_connections
         let connection_id = (config_id, database.unwrap_or("default").to_string());
 
-        {
-            let connections = self.active_connections.read().await;
-            if let Some(existing_conn) = connections.get(&connection_id) {
-                return Ok(Arc::clone(existing_conn));
-            }
-        }
-
-        // Get connection configuration
+        // Get connection config to check if SSH is required
         let configs = self.connection_configs.read().await;
         let config = configs
             .get(&config_id)
@@ -142,6 +136,46 @@ impl DatabaseService {
             })?
             .clone();
         drop(configs);
+
+        // For SSH connections, check tunnel health before returning cached connection
+        if config.requires_ssh_tunnel() {
+            // Check tunnel health
+            let tunnel_healthy = {
+                let tunnels = self.ssh_tunnels.read().await;
+                if let Some(tunnel_mutex) = tunnels.get(&config_id) {
+                    let tunnel = tunnel_mutex.lock().unwrap();
+                    let healthy = tunnel.is_healthy_sync();
+                    drop(tunnel);
+                    healthy
+                } else {
+                    false
+                }
+                // tunnels guard dropped here
+            };
+
+            if !tunnel_healthy {
+                tracing::info!(
+                    "SSH tunnel for connection {} is unhealthy, will recreate connection",
+                    config_id
+                );
+                // Remove the unhealthy cached connection
+                let mut connections = self.active_connections.write().await;
+                connections.remove(&connection_id);
+                drop(connections);
+            } else {
+                // Tunnel is healthy, check if we have a cached connection
+                let connections = self.active_connections.read().await;
+                if let Some(existing_conn) = connections.get(&connection_id) {
+                    return Ok(Arc::clone(existing_conn));
+                }
+            }
+        } else {
+            // Non-SSH connection, use simple caching
+            let connections = self.active_connections.read().await;
+            if let Some(existing_conn) = connections.get(&connection_id) {
+                return Ok(Arc::clone(existing_conn));
+            }
+        }
 
         // Check if this connection requires an SSH tunnel
         let mut connection_host = None;
@@ -338,16 +372,26 @@ impl DatabaseService {
         remote_host: &str,
         remote_port: u16,
     ) -> Result<TunnelInfo> {
-        // Check if tunnel already exists
+        // Check if tunnel already exists and is healthy
         {
             let tunnels = self.ssh_tunnels.read().await;
             if let Some(tunnel_mutex) = tunnels.get(&config.id) {
-                // Check health using sync version
                 let tunnel = tunnel_mutex.lock().unwrap();
                 if tunnel.is_healthy_sync() {
                     return Ok(tunnel.get_info());
                 }
+                // Tunnel exists but is unhealthy - will be removed and recreated
+                tracing::info!(
+                    "SSH tunnel for connection {} is unhealthy, recreating",
+                    config.id
+                );
             }
+        }
+
+        // Remove unhealthy tunnel if it exists
+        {
+            let mut tunnels = self.ssh_tunnels.write().await;
+            tunnels.remove(&config.id);
         }
 
         // Create new tunnel
@@ -438,7 +482,11 @@ impl DatabaseServiceTrait for DatabaseService {
             let configs = self.connection_configs.read().await;
             configs
                 .get(&connection_id)
-                .map(|config| DriverType::from(config.db_type.clone()).to_string().to_owned())
+                .map(|config| {
+                    DriverType::from(config.db_type.clone())
+                        .to_string()
+                        .to_owned()
+                })
                 .unwrap_or_else(|| "Unknown".to_string())
         };
 
@@ -452,8 +500,9 @@ impl DatabaseServiceTrait for DatabaseService {
 
     async fn get_active_connection_statuses(
         &self,
-    ) -> Result<std::collections::HashMap<(i64, String), blanco_core::database_service::ConnectionStatus>>
-    {
+    ) -> Result<
+        std::collections::HashMap<(i64, String), blanco_core::database_service::ConnectionStatus>,
+    > {
         let connections = self.active_connections.read().await;
         let mut statuses = std::collections::HashMap::new();
 

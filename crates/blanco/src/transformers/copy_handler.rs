@@ -78,9 +78,6 @@ impl CopyHandler {
             return;
         }
 
-        // Create response channel for the transformed data
-        let (result_tx, result_rx) = smol::channel::bounded(1);
-
         // Clone data for background task
         let data_clone = data.clone();
         let format_owned = format.to_string();
@@ -89,31 +86,30 @@ impl CopyHandler {
         let registry = self.registry.clone();
 
         // Spawn background task for transformation
-        cx.background_spawn(async move {
+        let transform_task = cx.background_spawn(async move {
             tracing::debug!("Starting copy transformation");
-            let transform_result = registry.transform_data(&data_clone, &format_owned);
-            tracing::debug!("Copy transformation completed",);
-            let _ = result_tx.send(transform_result).await;
-        })
-        .detach();
+            let result = registry.transform_data(&data_clone, &format_owned);
+            tracing::debug!("Copy transformation completed");
+            result
+        });
 
         // Spawn async task to handle the result on the main thread
-        cx.spawn(async move |entity, cx| match result_rx.recv().await {
-            Ok(Ok(transformed)) => {
-                if !transformed.is_empty() {
-                    let _ = entity.update(cx, |_, cx| {
-                        tracing::debug!("Writing transformed data to clipboard");
-                        cx.write_to_clipboard(ClipboardItem::new_string(transformed));
-                    });
-                } else {
-                    tracing::error!("Copy transformation produced empty result");
+        cx.spawn(async move |entity, cx| {
+            let transformed = match transform_task.await {
+                Ok(transformed) => transformed,
+                Err(e) => {
+                    tracing::error!("Failed to receive copy result: {}", e);
+                    return;
                 }
-            }
-            Ok(Err(e)) => {
-                tracing::error!("Copy transformation failed: {}", e);
-            }
-            Err(e) => {
-                tracing::error!("Failed to receive copy result: {}", e);
+            };
+
+            if !transformed.is_empty() {
+                let _ = entity.update(cx, |_, cx| {
+                    tracing::debug!("Writing transformed data to clipboard");
+                    cx.write_to_clipboard(ClipboardItem::new_string(transformed));
+                });
+            } else {
+                tracing::error!("Copy transformation produced empty result");
             }
         })
         .detach();

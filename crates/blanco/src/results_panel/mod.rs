@@ -9,6 +9,7 @@ use gpui::{
 use gpui_component::{
     ActiveTheme, WindowExt as _,
     input::{InputEvent, InputState},
+    notification::NotificationType,
     table::{Table, TableDelegate, TableState},
     v_flex,
 };
@@ -579,9 +580,6 @@ impl ResultsPanel {
         let connection_id_for_event = delegate.connection_id;
         let database_name = delegate.database_name.clone();
 
-        // Create response channel for table operations
-        let (response_tx, response_rx) = smol::channel::bounded(1);
-
         tracing::info!("Commit Changes: Starting table operations execution");
 
         // Spawn background task to execute table operations
@@ -589,7 +587,7 @@ impl ResultsPanel {
         let _table_entity = self.table_state.clone();
         let _sql_log_entity: Option<Entity<blanco_ui::SqlLog>> = sql_log.cloned();
 
-        cx.background_spawn(async move {
+        let table_operations_task = cx.background_spawn(async move {
             let start_time = std::time::Instant::now();
 
             // Execute table operations using DatabaseService
@@ -619,7 +617,6 @@ impl ResultsPanel {
                             Ok(query_result) => {
                                 total_rows_affected += query_result.rows_affected;
                                 operations_executed += 1;
-                                tracing::debug!("Successfully executed operation: {}", sql_query);
                             }
                             Err(e) => {
                                 tracing::error!(
@@ -666,122 +663,97 @@ impl ResultsPanel {
                 result.success
             );
 
-            // Send response back through the channel
-            if let Err(e) = response_tx.send(result.clone()).await {
-                tracing::error!("Failed to send table operation response: {}", e);
-            }
-
             result
-        })
-        .detach();
+        });
 
         // Spawn async task to handle the response
         let sql_log_response_entity: Option<Entity<blanco_ui::SqlLog>> = sql_log.cloned();
         cx.spawn(async move |entity, cx| {
-            match response_rx.recv().await {
-                Ok(response) => {
-                    tracing::info!(
-                        "Received table operation response: success={}, rows_affected={:?}",
-                        response.success,
-                        response.rows_affected
-                    );
+            let response = table_operations_task.await;
 
-                    // Handle successful operations
-                    if response.success {
-                        // Clear edits and refresh the table
-                        let _ = entity.update(cx, |panel, cx| {
-                            panel.table_state.update(cx, |state, cx| {
-                                state.delegate_mut().edit_state.clear_edits();
-                                state.refresh(cx);
-                            });
+            tracing::info!(
+                "Received table operation response: success={}, rows_affected={:?}",
+                response.success,
+                response.rows_affected
+            );
 
-                            // Update SQL log with queries and success message
-                            if let Some(sql_log) = sql_log_response_entity {
-                                sql_log.update(cx, |log, cx| {
-                                    // Log each SQL query
-                                    for sql_query in &response.sql_queries {
-                                        log.append_text(
-                                            &blanco_ui::SqlLogMessage::SqlStatement(
-                                                sql_query.clone(),
-                                            ),
-                                            cx,
-                                        );
-                                    }
-                                    // Log summary comment
-                                    let log_message = format!(
-                                        "{}, {} operations, {} rows affected in {}",
-                                        crate::time_format::format_current_timestamp(),
-                                        response.operations_executed,
-                                        response.rows_affected.unwrap_or(0),
-                                        crate::time_format::format_duration(
-                                            response.duration.as_millis() as i64
-                                        )
-                                    );
-                                    log.append_text(
-                                        &blanco_ui::SqlLogMessage::Comment(log_message),
-                                        cx,
-                                    );
-                                });
-                            }
-                        });
+            // Handle successful operations
+            if response.success {
+                // Clear edits and refresh the table
+                let _ = entity.update(cx, |panel, cx| {
+                    panel.table_state.update(cx, |state, cx| {
+                        state.delegate_mut().edit_state.clear_edits();
+                        state.refresh(cx);
+                    });
 
-                        // Emit table operation completed event
-                        let _ = entity.update(cx, |_, cx| {
-                            cx.emit(AppEvent::TableOperationCompleted {
-                                table_name: response.table_name,
-                                connection_id: response.connection_id,
-                                success: true,
-                                rows_affected: response.rows_affected,
-                                error_message: None,
-                                operations_executed: response.operations_executed,
-                            });
-                        });
-                    } else {
-                        // Handle failed operations - show error but keep edits for retry
-                        if let Some(sql_log) = sql_log_response_entity {
-                            let error_message_clone = response.error_message.clone();
-                            let sql_queries_clone = response.sql_queries.clone();
-                            sql_log.update(cx, |log, cx| {
-                                // Log each SQL query that was attempted
-                                for sql_query in &sql_queries_clone {
-                                    log.append_text(
-                                        &blanco_ui::SqlLogMessage::SqlStatement(sql_query.clone()),
-                                        cx,
-                                    );
-                                }
-                                let error_msg = format!(
-                                    "✗ Table operations failed: {}",
-                                    error_message_clone
-                                        .unwrap_or_else(|| "Unknown error".to_string())
-                                );
-                                log.append_text(&blanco_ui::SqlLogMessage::Comment(error_msg), cx);
-                            });
-                        }
-
-                        // Emit table operation completed event with failure
-                        let _ = entity.update(cx, |_, cx| {
-                            cx.emit(AppEvent::TableOperationCompleted {
-                                table_name: response.table_name,
-                                connection_id: response.connection_id,
-                                success: false,
-                                rows_affected: None,
-                                error_message: response.error_message,
-                                operations_executed: response.operations_executed,
-                            });
-                        });
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("Failed to receive table operation response: {}", e);
-
-                    // Update SQL log with error
+                    // Update SQL log with queries and success message
                     if let Some(sql_log) = sql_log_response_entity {
                         sql_log.update(cx, |log, cx| {
-                            let error_msg = format!("✗ Failed to get operation response: {}", e);
-                            log.append_text(&blanco_ui::SqlLogMessage::Comment(error_msg), cx);
+                            // Log each SQL query
+                            for sql_query in &response.sql_queries {
+                                log.append_text(
+                                    &blanco_ui::SqlLogMessage::SqlStatement(sql_query.clone()),
+                                    cx,
+                                );
+                            }
+                            // Log summary comment
+                            let log_message = format!(
+                                "{}, {} operations, {} rows affected in {}",
+                                crate::time_format::format_current_timestamp(),
+                                response.operations_executed,
+                                response.rows_affected.unwrap_or(0),
+                                crate::time_format::format_duration(
+                                    response.duration.as_millis() as i64
+                                )
+                            );
+                            log.append_text(&blanco_ui::SqlLogMessage::Comment(log_message), cx);
                         });
                     }
+                });
+
+                // Emit table operation completed event
+                let _ = entity.update(cx, |_, cx| {
+                    cx.emit(AppEvent::TableOperationCompleted {
+                        table_name: response.table_name,
+                        connection_id: response.connection_id,
+                        success: true,
+                        rows_affected: response.rows_affected,
+                        error_message: None,
+                        operations_executed: response.operations_executed,
+                    });
+                });
+            } else {
+                // Handle failed operations - show error but keep edits for retry
+                if let Some(sql_log) = sql_log_response_entity {
+                    let error_message_clone = response.error_message.clone();
+                    let sql_queries_clone = response.sql_queries.clone();
+                    sql_log.update(cx, |log, cx| {
+                        // Log each SQL query that was attempted
+                        for sql_query in &sql_queries_clone {
+                            log.append_text(
+                                &blanco_ui::SqlLogMessage::SqlStatement(sql_query.clone()),
+                                cx,
+                            );
+                        }
+                        let error_msg = format!(
+                            "✗ Table operations failed: {}",
+                            error_message_clone.unwrap_or_else(|| "Unknown error".to_string())
+                        );
+                        log.append_text(&blanco_ui::SqlLogMessage::Comment(error_msg), cx);
+                    });
                 }
+
+                // Emit table operation completed event with failure
+                let _ = entity.update(cx, |_, cx| {
+                    cx.emit(AppEvent::TableOperationCompleted {
+                        table_name: response.table_name,
+                        connection_id: response.connection_id,
+                        success: false,
+                        rows_affected: None,
+                        error_message: response.error_message,
+                        operations_executed: response.operations_executed,
+                    });
+                });
             }
         })
         .detach();
@@ -804,8 +776,6 @@ impl ResultsPanel {
             .clone()
             .unwrap_or_else(|| "unknown".to_string());
         let connection_id = self.table_state.read(cx).delegate().connection_id;
-
-        // TODO: error here instead of fallback to sqlite::memory
 
         tracing::info!(
             "Rollback Changes: Rolling back {} changes on table {}",
@@ -1064,7 +1034,8 @@ impl ResultsPanel {
 
         let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
 
-        self.copy_handler.copy_as_format(&selected_data, "markdown", cx);
+        self.copy_handler
+            .copy_as_format(&selected_data, "markdown", cx);
     }
 
     fn on_add_row(&mut self, _action: &AddRow, _window: &mut Window, cx: &mut Context<Self>) {
@@ -1123,7 +1094,10 @@ impl ResultsPanel {
         let delegate = table_state.delegate();
 
         if selected_rows.is_empty() {
-            tracing::error!("Failed to export as {}: No rows selected for exporting", format);
+            tracing::error!(
+                "Failed to export as {}: No rows selected for exporting",
+                format
+            );
             return;
         }
 
@@ -1172,25 +1146,35 @@ impl ResultsPanel {
             };
 
             // Get transformer
-            let transformer: Box<dyn crate::transformers::DataTransformer> = match format_owned.as_str() {
-                "csv" => Box::new(crate::transformers::CsvTransformer),
-                "json" => Box::new(crate::transformers::JsonTransformer::new()),
-                "sql" => Box::new(crate::transformers::SqlTransformer::with_table_name(table_name_for_sql.clone())),
-                "markdown" => Box::new(crate::transformers::MarkdownTransformer),
-                _ => {
-                    tracing::error!("Unknown format: {}", format_owned);
-                    return;
-                }
-            };
+            let transformer: Box<dyn crate::transformers::DataTransformer> =
+                match format_owned.as_str() {
+                    "csv" => Box::new(crate::transformers::CsvTransformer),
+                    "json" => Box::new(crate::transformers::JsonTransformer::new()),
+                    "sql" => Box::new(crate::transformers::SqlTransformer::with_table_name(
+                        table_name_for_sql.clone(),
+                    )),
+                    "markdown" => Box::new(crate::transformers::MarkdownTransformer),
+                    _ => {
+                        tracing::error!("Unknown format: {}", format_owned);
+                        return;
+                    }
+                };
 
             // Create export service
             let export_service = crate::export_service::ExportService::new();
 
             // Execute export
-            match export_service.export_selected_data(&selected_data, transformer.as_ref(), &file_path).await {
+            match export_service
+                .export_selected_data(&selected_data, transformer.as_ref(), &file_path)
+                .await
+            {
                 Ok(result) => {
                     match result {
-                        crate::export_service::ExportResult::Success { file_path, rows_exported, .. } => {
+                        crate::export_service::ExportResult::Success {
+                            file_path,
+                            rows_exported,
+                            ..
+                        } => {
                             tracing::info!(
                                 "Export completed successfully: {} -> {} ({} rows)",
                                 format_owned,
@@ -1200,8 +1184,13 @@ impl ResultsPanel {
                             // Show success notification via entity update
                             let _ = entity.update_in(cx, |_panel, window, cx| {
                                 window.push_notification(
-                                    (gpui_component::notification::NotificationType::Success,
-                                     SharedString::from(format!("Exported {} rows to {}", rows_exported, file_path))),
+                                    (
+                                        NotificationType::Success,
+                                        SharedString::from(format!(
+                                            "Exported {} rows to {}",
+                                            rows_exported, file_path
+                                        )),
+                                    ),
                                     cx,
                                 );
                             });
@@ -1210,8 +1199,10 @@ impl ResultsPanel {
                             tracing::error!("Export failed: {}", message);
                             let _ = entity.update_in(cx, |_panel, window, cx| {
                                 window.push_notification(
-                                    (gpui_component::notification::NotificationType::Error,
-                                     SharedString::from(format!("Export failed: {}", message))),
+                                    (
+                                        NotificationType::Error,
+                                        SharedString::from(format!("Export failed: {}", message)),
+                                    ),
                                     cx,
                                 );
                             });
@@ -1225,14 +1216,17 @@ impl ResultsPanel {
                     tracing::error!("Export failed: {}", e);
                     let _ = entity.update_in(cx, |_panel, window, cx| {
                         window.push_notification(
-                            (gpui_component::notification::NotificationType::Error,
-                             SharedString::from(format!("Export failed: {}", e))),
+                            (
+                                NotificationType::Error,
+                                SharedString::from(format!("Export failed: {}", e)),
+                            ),
                             cx,
                         );
                     });
                 }
             }
-        }).detach();
+        })
+        .detach();
     }
 
     pub fn get_selected_data_for_rows(

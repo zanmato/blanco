@@ -270,7 +270,10 @@ pub trait Connection: Send + Sync {
 
     /// Get list of materialized views for a given schema (or all schemas if None)
     /// Materialized views are PostgreSQL-specific; other databases return empty
-    async fn get_materialized_views(&self, _schema: Option<&str>) -> Result<Vec<String>, anyhow::Error> {
+    async fn get_materialized_views(
+        &self,
+        _schema: Option<&str>,
+    ) -> Result<Vec<String>, anyhow::Error> {
         // Default implementation returns empty (most databases don't support materialized views)
         Ok(Vec::new())
     }
@@ -303,6 +306,25 @@ pub trait Connection: Send + Sync {
         limit: Option<i64>,
         offset: Option<i64>,
     ) -> Result<DatabaseSchemaResult, anyhow::Error>;
+
+    /// Perform a foreign key lookup that returns all rows for small tables
+    /// or just the referenced row for large tables
+    ///
+    /// Parameters:
+    /// - table_name: The foreign key table to query
+    /// - column_name: The column containing the foreign key value
+    /// - reference_value: The value to look up
+    ///
+    /// Returns rows from the table:
+    /// - For small tables (≤20 rows): All rows, with referenced row first
+    /// - For large tables: Only the referenced row
+    /// - For SQLite (no estimate): Only the referenced row
+    async fn foreign_key_lookup(
+        &self,
+        table_name: &str,
+        column_name: &str,
+        reference_value: &str,
+    ) -> Result<QueryResult, anyhow::Error>;
 }
 
 /// Factory trait for creating connections of different types
