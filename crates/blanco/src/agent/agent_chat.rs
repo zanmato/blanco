@@ -1,14 +1,13 @@
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
-    KeybindingKeystroke, Keystroke, ParentElement, Render, SharedString,
-    StatefulInteractiveElement as _, Styled, Subscription, Window, actions, div,
-    prelude::FluentBuilder, px,
+    ParentElement, Render, SharedString, StatefulInteractiveElement as _, Styled, Subscription,
+    Window, actions, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, Sizable, StyledExt as _,
     button::{Button, ButtonVariants},
     h_flex,
-    input::{Input, InputState},
+    input::{Input, InputEvent, InputState},
     scroll::Scrollbar,
     select::{Select, SelectDelegate, SelectEvent, SelectItem, SelectState},
     spinner::Spinner,
@@ -37,7 +36,6 @@ pub struct ChatPanel {
     pub loading_state: LoadingState,
     #[allow(dead_code)]
     pub tab_id: usize,
-    pub send_message_keystroke: KeybindingKeystroke,
     pub tool_mode_select: Entity<SelectState<ToolModeSelectDelegate>>,
 }
 
@@ -156,6 +154,21 @@ impl ChatPanel {
             }),
         );
 
+        // Subscribe to input events
+        let subscription = cx.subscribe_in(
+            &input_state,
+            window,
+            |this, _input_state, event, window, cx| {
+                // Only lint if the event is a text change
+                if let InputEvent::PressEnter { secondary } = event
+                    && *secondary
+                {
+                    this.send_message(window, cx);
+                }
+            },
+        );
+        subscriptions.push(subscription);
+
         Self {
             focus_handle: cx.focus_handle(),
             scroll_handle: ScrollHandle::new(),
@@ -165,9 +178,6 @@ impl ChatPanel {
             _subscriptions: subscriptions,
             loading_state: LoadingState::Idle,
             tab_id,
-            send_message_keystroke: KeybindingKeystroke::from_keystroke(
-                Keystroke::parse("shift-enter").unwrap(),
-            ),
             tool_mode_select,
         }
     }
@@ -345,11 +355,6 @@ impl Render for ChatPanel {
                     .border_t_1()
                     .border_color(cx.theme().border)
                     .text_size(px(13.0)) // Smaller font size for the input text
-                    .on_key_down(cx.listener(|this, evt: &gpui::KeyDownEvent, window, cx| {
-                        if evt.keystroke.should_match(&this.send_message_keystroke) {
-                            this.send_message(window, cx);
-                        }
-                    }))
                     .child(
                         Input::new(&self.input_state)
                             .disabled(self.loading_state.is_loading())
