@@ -8,7 +8,7 @@ use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
     highlighter::Diagnostic,
-    input::{Input, InputState, TabSize},
+    input::{Input, InputEvent, InputState, TabSize},
     notification::NotificationType,
     resizable::{ResizableState, h_resizable, resizable_panel, v_resizable},
     tab::{Tab, TabBar},
@@ -696,7 +696,7 @@ impl EditorPanel {
             tabbar_scroll_handle: gpui::ScrollHandle::default(),
             _subscriptions: Vec::new(),
             run_query_keystroke: KeybindingKeystroke::from_keystroke(
-                Keystroke::parse("shift-enter").unwrap(),
+                Keystroke::parse("secondary-enter").unwrap(),
             ),
             format_query_keystroke: KeybindingKeystroke::from_keystroke(
                 Keystroke::parse("shift-alt-f").unwrap(),
@@ -847,11 +847,15 @@ impl EditorPanel {
         }
 
         // Subscribe to editor text changes for auto-linting
-        let subscription = cx.subscribe(&editor, |this, _editor, event, cx| {
+        let subscription = cx.subscribe_in(&editor, window, |this, _editor, event, window, cx| {
             // Only lint if the event is a text change
-            if let gpui_component::input::InputEvent::SelectionRangeChange { range } = event {
+            if let InputEvent::SelectionRangeChange { range } = event {
                 tracing::debug!("Selection range changed, linting current query");
                 this.lint_current_query_debounced(*range, cx);
+            } else if let InputEvent::PressEnter { secondary } = event
+                && *secondary
+            {
+                this.on_run_query(window, cx);
             }
         });
         self._subscriptions.push(subscription);
@@ -1433,11 +1437,6 @@ impl Render for EditorPanel {
                                                             div()
                                                                 .flex_1()
                                                                 .min_h_0()
-                                                                .on_key_down(cx.listener(|this, evt: &gpui::KeyDownEvent, window, cx| {
-                                                                    if evt.keystroke.should_match(&this.run_query_keystroke) {
-                                                                        this.on_run_query(window, cx);
-                                                                    }
-                                                                }))
                                                                 .relative() // Make container relative for absolute popup positioning
                                                                 .child(
                                                                     Input::new(&query_tab.editor)

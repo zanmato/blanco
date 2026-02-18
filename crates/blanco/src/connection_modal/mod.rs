@@ -141,6 +141,12 @@ struct PostgresForm {
     ssh_password_input: Entity<InputState>,
     ssh_private_key_input: Entity<InputState>,
     ssh_private_key_password_input: Entity<InputState>,
+    // SSL/TLS configuration
+    ssl_mode_select: Entity<SelectState<Vec<String>>>,
+    ssl_key_input: Entity<InputState>,
+    ssl_cert_input: Entity<InputState>,
+    ssl_ca_cert_input: Entity<InputState>,
+    ssl_advanced_expanded: bool,
 }
 
 impl PostgresForm {
@@ -157,6 +163,10 @@ impl PostgresForm {
         ssh_password_input: Entity<InputState>,
         ssh_private_key_input: Entity<InputState>,
         ssh_private_key_password_input: Entity<InputState>,
+        ssl_mode_select: Entity<SelectState<Vec<String>>>,
+        ssl_key_input: Entity<InputState>,
+        ssl_cert_input: Entity<InputState>,
+        ssl_ca_cert_input: Entity<InputState>,
     ) -> Self {
         Self {
             host_input,
@@ -171,6 +181,11 @@ impl PostgresForm {
             ssh_password_input,
             ssh_private_key_input,
             ssh_private_key_password_input,
+            ssl_mode_select,
+            ssl_key_input,
+            ssl_cert_input,
+            ssl_ca_cert_input,
+            ssl_advanced_expanded: false,
         }
     }
 
@@ -270,6 +285,27 @@ impl PostgresForm {
 
         let port = port_str.parse::<i32>().ok()?;
 
+        // Collect SSL configuration
+        let ssl_mode = self.ssl_mode_select.read(cx).selected_value().cloned();
+        let ssl_key_path = self.ssl_key_input.read(cx).value();
+        let ssl_key_path = if ssl_key_path.is_empty() {
+            None
+        } else {
+            Some(ssl_key_path.to_string())
+        };
+        let ssl_cert_path = self.ssl_cert_input.read(cx).value();
+        let ssl_cert_path = if ssl_cert_path.is_empty() {
+            None
+        } else {
+            Some(ssl_cert_path.to_string())
+        };
+        let ssl_ca_cert_path = self.ssl_ca_cert_input.read(cx).value();
+        let ssl_ca_cert_path = if ssl_ca_cert_path.is_empty() {
+            None
+        } else {
+            Some(ssl_ca_cert_path.to_string())
+        };
+
         if self.ssh_enabled {
             // SSH is enabled, collect SSH configuration
             let ssh_host = self.ssh_host_input.read(cx).value();
@@ -324,6 +360,10 @@ impl PostgresForm {
                     ssh_private_key_password,
                 );
                 connection.environment_type = environment_type;
+                connection.ssl_mode = ssl_mode;
+                connection.ssl_key_path = ssl_key_path;
+                connection.ssl_cert_path = ssl_cert_path;
+                connection.ssl_ca_cert_path = ssl_ca_cert_path;
                 Some(connection)
             }
         } else {
@@ -332,6 +372,10 @@ impl PostgresForm {
                 let mut connection =
                     ConnectionData::new_postgres(name, host, port, database, username, password);
                 connection.environment_type = environment_type;
+                connection.ssl_mode = ssl_mode;
+                connection.ssl_key_path = ssl_key_path;
+                connection.ssl_cert_path = ssl_cert_path;
+                connection.ssl_ca_cert_path = ssl_ca_cert_path;
                 Some(connection)
             }
         }
@@ -393,6 +437,12 @@ struct MysqlForm {
     ssh_password_input: Entity<InputState>,
     ssh_private_key_input: Entity<InputState>,
     ssh_private_key_password_input: Entity<InputState>,
+    // SSL/TLS configuration
+    ssl_mode_select: Entity<SelectState<Vec<String>>>,
+    ssl_key_input: Entity<InputState>,
+    ssl_cert_input: Entity<InputState>,
+    ssl_ca_cert_input: Entity<InputState>,
+    ssl_advanced_expanded: bool,
 }
 
 impl MysqlForm {
@@ -409,6 +459,10 @@ impl MysqlForm {
         ssh_password_input: Entity<InputState>,
         ssh_private_key_input: Entity<InputState>,
         ssh_private_key_password_input: Entity<InputState>,
+        ssl_mode_select: Entity<SelectState<Vec<String>>>,
+        ssl_key_input: Entity<InputState>,
+        ssl_cert_input: Entity<InputState>,
+        ssl_ca_cert_input: Entity<InputState>,
     ) -> Self {
         Self {
             host_input,
@@ -423,6 +477,11 @@ impl MysqlForm {
             ssh_password_input,
             ssh_private_key_input,
             ssh_private_key_password_input,
+            ssl_mode_select,
+            ssl_key_input,
+            ssl_cert_input,
+            ssl_ca_cert_input,
+            ssl_advanced_expanded: false,
         }
     }
 
@@ -750,6 +809,50 @@ impl NewConnectionModal {
             input
         });
 
+        // Create SSL input entities for PostgreSQL
+        let ssl_modes = vec![
+            "preferred".to_string(),
+            "required".to_string(),
+            "disabled".to_string(),
+            "allow".to_string(),
+            "verify-ca".to_string(),
+            "verify-full".to_string(),
+        ];
+        let initial_ssl_index = connection_data
+            .as_ref()
+            .and_then(|c| c.ssl_mode.as_ref())
+            .and_then(|mode| ssl_modes.iter().position(|m| m == mode));
+        let pg_ssl_mode_select = cx.new(|cx| {
+            SelectState::new(ssl_modes.clone(), initial_ssl_index.map(IndexPath::new), window, cx)
+        });
+        let pg_ssl_key = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("SSL Key Path (optional)");
+            if let Some(conn) = &connection_data {
+                if let Some(path) = &conn.ssl_key_path {
+                    input.set_value(path.clone(), window, cx);
+                }
+            }
+            input
+        });
+        let pg_ssl_cert = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("SSL Cert Path (optional)");
+            if let Some(conn) = &connection_data {
+                if let Some(path) = &conn.ssl_cert_path {
+                    input.set_value(path.clone(), window, cx);
+                }
+            }
+            input
+        });
+        let pg_ssl_ca_cert = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("SSL CA Cert Path (optional)");
+            if let Some(conn) = &connection_data {
+                if let Some(path) = &conn.ssl_ca_cert_path {
+                    input.set_value(path.clone(), window, cx);
+                }
+            }
+            input
+        });
+
         let mut postgres_form = PostgresForm::new(
             pg_host,
             pg_port,
@@ -762,6 +865,10 @@ impl NewConnectionModal {
             ssh_password,
             ssh_private_key,
             ssh_private_key_password,
+            pg_ssl_mode_select,
+            pg_ssl_key,
+            pg_ssl_cert,
+            pg_ssl_ca_cert,
         );
 
         // Set SSH enabled state if connection has SSH config
@@ -875,6 +982,49 @@ impl NewConnectionModal {
             input
         });
 
+        // Create SSL input entities for MySQL (reusing same ssl_modes list)
+        let mysql_ssl_mode_select = cx.new(|cx| {
+            SelectState::new(
+                vec![
+                    "preferred".to_string(),
+                    "required".to_string(),
+                    "disabled".to_string(),
+                    "verify-ca".to_string(),
+                    "verify-full".to_string(),
+                ],
+                initial_ssl_index.map(IndexPath::new),
+                window,
+                cx,
+            )
+        });
+        let mysql_ssl_key = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("SSL Key Path (optional)");
+            if let Some(conn) = &connection_data {
+                if let Some(path) = &conn.ssl_key_path {
+                    input.set_value(path.clone(), window, cx);
+                }
+            }
+            input
+        });
+        let mysql_ssl_cert = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("SSL Cert Path (optional)");
+            if let Some(conn) = &connection_data {
+                if let Some(path) = &conn.ssl_cert_path {
+                    input.set_value(path.clone(), window, cx);
+                }
+            }
+            input
+        });
+        let mysql_ssl_ca_cert = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("SSL CA Cert Path (optional)");
+            if let Some(conn) = &connection_data {
+                if let Some(path) = &conn.ssl_ca_cert_path {
+                    input.set_value(path.clone(), window, cx);
+                }
+            }
+            input
+        });
+
         let mut mysql_form = MysqlForm::new(
             mysql_host,
             mysql_port,
@@ -887,6 +1037,10 @@ impl NewConnectionModal {
             mysql_ssh_password,
             mysql_ssh_private_key,
             mysql_ssh_private_key_password,
+            mysql_ssl_mode_select,
+            mysql_ssl_key,
+            mysql_ssl_cert,
+            mysql_ssl_ca_cert,
         );
 
         // Set SSH enabled state if connection has SSH config
@@ -944,6 +1098,16 @@ impl NewConnectionModal {
         cx.notify();
     }
 
+    fn toggle_postgres_ssl_advanced(&mut self, cx: &mut Context<Self>) {
+        self.postgres_form.ssl_advanced_expanded = !self.postgres_form.ssl_advanced_expanded;
+        cx.notify();
+    }
+
+    fn toggle_mysql_ssl_advanced(&mut self, cx: &mut Context<Self>) {
+        self.mysql_form.ssl_advanced_expanded = !self.mysql_form.ssl_advanced_expanded;
+        cx.notify();
+    }
+
     fn pick_postgres_ssh_private_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let private_key_input = self.postgres_form.ssh_private_key_input.clone();
         let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
@@ -989,6 +1153,174 @@ impl NewConnectionModal {
                 window
                     .update(|window, cx| {
                         private_key_input.update(cx, |input, cx| {
+                            input.set_value(path_str, window, cx);
+                        });
+                    })
+                    .ok();
+            }
+
+            Some(())
+        })
+        .detach();
+    }
+
+    fn pick_postgres_ssl_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let ssl_key_input = self.postgres_form.ssl_key_input.clone();
+        let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Select SSL key file".into()),
+        });
+
+        cx.spawn_in(window, async move |_, window| {
+            if let Some(paths) = paths.await.ok()?.ok()?
+                && let Some(path) = paths.first()
+            {
+                let path_str = path.to_str()?.to_string();
+                window
+                    .update(|window, cx| {
+                        ssl_key_input.update(cx, |input, cx| {
+                            input.set_value(path_str, window, cx);
+                        });
+                    })
+                    .ok();
+            }
+
+            Some(())
+        })
+        .detach();
+    }
+
+    fn pick_postgres_ssl_cert(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let ssl_cert_input = self.postgres_form.ssl_cert_input.clone();
+        let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Select SSL certificate file".into()),
+        });
+
+        cx.spawn_in(window, async move |_, window| {
+            if let Some(paths) = paths.await.ok()?.ok()?
+                && let Some(path) = paths.first()
+            {
+                let path_str = path.to_str()?.to_string();
+                window
+                    .update(|window, cx| {
+                        ssl_cert_input.update(cx, |input, cx| {
+                            input.set_value(path_str, window, cx);
+                        });
+                    })
+                    .ok();
+            }
+
+            Some(())
+        })
+        .detach();
+    }
+
+    fn pick_postgres_ssl_ca_cert(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let ssl_ca_cert_input = self.postgres_form.ssl_ca_cert_input.clone();
+        let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Select SSL CA certificate file".into()),
+        });
+
+        cx.spawn_in(window, async move |_, window| {
+            if let Some(paths) = paths.await.ok()?.ok()?
+                && let Some(path) = paths.first()
+            {
+                let path_str = path.to_str()?.to_string();
+                window
+                    .update(|window, cx| {
+                        ssl_ca_cert_input.update(cx, |input, cx| {
+                            input.set_value(path_str, window, cx);
+                        });
+                    })
+                    .ok();
+            }
+
+            Some(())
+        })
+        .detach();
+    }
+
+    fn pick_mysql_ssl_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let ssl_key_input = self.mysql_form.ssl_key_input.clone();
+        let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Select SSL key file".into()),
+        });
+
+        cx.spawn_in(window, async move |_, window| {
+            if let Some(paths) = paths.await.ok()?.ok()?
+                && let Some(path) = paths.first()
+            {
+                let path_str = path.to_str()?.to_string();
+                window
+                    .update(|window, cx| {
+                        ssl_key_input.update(cx, |input, cx| {
+                            input.set_value(path_str, window, cx);
+                        });
+                    })
+                    .ok();
+            }
+
+            Some(())
+        })
+        .detach();
+    }
+
+    fn pick_mysql_ssl_cert(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let ssl_cert_input = self.mysql_form.ssl_cert_input.clone();
+        let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Select SSL certificate file".into()),
+        });
+
+        cx.spawn_in(window, async move |_, window| {
+            if let Some(paths) = paths.await.ok()?.ok()?
+                && let Some(path) = paths.first()
+            {
+                let path_str = path.to_str()?.to_string();
+                window
+                    .update(|window, cx| {
+                        ssl_cert_input.update(cx, |input, cx| {
+                            input.set_value(path_str, window, cx);
+                        });
+                    })
+                    .ok();
+            }
+
+            Some(())
+        })
+        .detach();
+    }
+
+    fn pick_mysql_ssl_ca_cert(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let ssl_ca_cert_input = self.mysql_form.ssl_ca_cert_input.clone();
+        let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Select SSL CA certificate file".into()),
+        });
+
+        cx.spawn_in(window, async move |_, window| {
+            if let Some(paths) = paths.await.ok()?.ok()?
+                && let Some(path) = paths.first()
+            {
+                let path_str = path.to_str()?.to_string();
+                window
+                    .update(|window, cx| {
+                        ssl_ca_cert_input.update(cx, |input, cx| {
                             input.set_value(path_str, window, cx);
                         });
                     })
@@ -1142,6 +1474,96 @@ impl Render for NewConnectionModal {
                         v_flex()
                             .gap_3()
                             .child(base_fields)
+                            // SSL Mode selector
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .gap_2()
+                                    .child(div().text_sm().child("SSL Mode"))
+                                    .child(Select::new(&self.postgres_form.ssl_mode_select)),
+                            )
+                            // Advanced SSL section toggle
+                            .child(
+                                Button::new("postgres-ssl-advanced-toggle")
+                                    .ghost()
+                                    .xsmall()
+                                    .child(if self.postgres_form.ssl_advanced_expanded {
+                                        "Hide Advanced SSL"
+                                    } else {
+                                        "Show Advanced SSL"
+                                    })
+                                    .icon(if self.postgres_form.ssl_advanced_expanded {
+                                        IconName::ChevronUp
+                                    } else {
+                                        IconName::ChevronDown
+                                    })
+                                    .on_click(cx.listener(
+                                        |modal: &mut Self, _event, _window, cx| {
+                                            modal.toggle_postgres_ssl_advanced(cx);
+                                        },
+                                    )),
+                            )
+                            // Advanced SSL fields
+                            .when(self.postgres_form.ssl_advanced_expanded, |this| {
+                                this.child(
+                                    v_flex()
+                                        .gap_3()
+                                        .child(
+                                            v_flex()
+                                                .gap_2()
+                                                .child(div().text_sm().child("SSL Key Path"))
+                                                .child(
+                                                    Input::new(&self.postgres_form.ssl_key_input).suffix(
+                                                        Button::new("postgres-ssl-key-picker")
+                                                            .ghost()
+                                                            .icon(IconName::Folder)
+                                                            .xsmall()
+                                                            .on_click(cx.listener(
+                                                                |modal: &mut Self, _event, window, cx| {
+                                                                    modal.pick_postgres_ssl_key(window, cx);
+                                                                },
+                                                            )),
+                                                    ),
+                                                ),
+                                        )
+                                        .child(
+                                            v_flex()
+                                                .gap_2()
+                                                .child(div().text_sm().child("SSL Cert Path"))
+                                                .child(
+                                                    Input::new(&self.postgres_form.ssl_cert_input).suffix(
+                                                        Button::new("postgres-ssl-cert-picker")
+                                                            .ghost()
+                                                            .icon(IconName::Folder)
+                                                            .xsmall()
+                                                            .on_click(cx.listener(
+                                                                |modal: &mut Self, _event, window, cx| {
+                                                                    modal.pick_postgres_ssl_cert(window, cx);
+                                                                },
+                                                            )),
+                                                    ),
+                                                ),
+                                        )
+                                        .child(
+                                            v_flex()
+                                                .gap_2()
+                                                .child(div().text_sm().child("SSL CA Cert Path"))
+                                                .child(
+                                                    Input::new(&self.postgres_form.ssl_ca_cert_input).suffix(
+                                                        Button::new("postgres-ssl-ca-cert-picker")
+                                                            .ghost()
+                                                            .icon(IconName::Folder)
+                                                            .xsmall()
+                                                            .on_click(cx.listener(
+                                                                |modal: &mut Self, _event, window, cx| {
+                                                                    modal.pick_postgres_ssl_ca_cert(window, cx);
+                                                                },
+                                                            )),
+                                                    ),
+                                                ),
+                                        ),
+                                )
+                            })
                             .child(
                                 div().child(
                                     h_flex().gap_2().items_center().child(
@@ -1235,6 +1657,96 @@ impl Render for NewConnectionModal {
                         v_flex()
                             .gap_3()
                             .child(base_fields)
+                            // SSL Mode selector
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .gap_2()
+                                    .child(div().text_sm().child("SSL Mode"))
+                                    .child(Select::new(&self.mysql_form.ssl_mode_select)),
+                            )
+                            // Advanced SSL section toggle
+                            .child(
+                                Button::new("mysql-ssl-advanced-toggle")
+                                    .ghost()
+                                    .xsmall()
+                                    .child(if self.mysql_form.ssl_advanced_expanded {
+                                        "Hide Advanced SSL"
+                                    } else {
+                                        "Show Advanced SSL"
+                                    })
+                                    .icon(if self.mysql_form.ssl_advanced_expanded {
+                                        IconName::ChevronUp
+                                    } else {
+                                        IconName::ChevronDown
+                                    })
+                                    .on_click(cx.listener(
+                                        |modal: &mut Self, _event, _window, cx| {
+                                            modal.toggle_mysql_ssl_advanced(cx);
+                                        },
+                                    )),
+                            )
+                            // Advanced SSL fields
+                            .when(self.mysql_form.ssl_advanced_expanded, |this| {
+                                this.child(
+                                    v_flex()
+                                        .gap_3()
+                                        .child(
+                                            v_flex()
+                                                .gap_2()
+                                                .child(div().text_sm().child("SSL Key Path"))
+                                                .child(
+                                                    Input::new(&self.mysql_form.ssl_key_input).suffix(
+                                                        Button::new("mysql-ssl-key-picker")
+                                                            .ghost()
+                                                            .icon(IconName::Folder)
+                                                            .xsmall()
+                                                            .on_click(cx.listener(
+                                                                |modal: &mut Self, _event, window, cx| {
+                                                                    modal.pick_mysql_ssl_key(window, cx);
+                                                                },
+                                                            )),
+                                                    ),
+                                                ),
+                                        )
+                                        .child(
+                                            v_flex()
+                                                .gap_2()
+                                                .child(div().text_sm().child("SSL Cert Path"))
+                                                .child(
+                                                    Input::new(&self.mysql_form.ssl_cert_input).suffix(
+                                                        Button::new("mysql-ssl-cert-picker")
+                                                            .ghost()
+                                                            .icon(IconName::Folder)
+                                                            .xsmall()
+                                                            .on_click(cx.listener(
+                                                                |modal: &mut Self, _event, window, cx| {
+                                                                    modal.pick_mysql_ssl_cert(window, cx);
+                                                                },
+                                                            )),
+                                                    ),
+                                                ),
+                                        )
+                                        .child(
+                                            v_flex()
+                                                .gap_2()
+                                                .child(div().text_sm().child("SSL CA Cert Path"))
+                                                .child(
+                                                    Input::new(&self.mysql_form.ssl_ca_cert_input).suffix(
+                                                        Button::new("mysql-ssl-ca-cert-picker")
+                                                            .ghost()
+                                                            .icon(IconName::Folder)
+                                                            .xsmall()
+                                                            .on_click(cx.listener(
+                                                                |modal: &mut Self, _event, window, cx| {
+                                                                    modal.pick_mysql_ssl_ca_cert(window, cx);
+                                                                },
+                                                            )),
+                                                    ),
+                                                ),
+                                        ),
+                                )
+                            })
                             .child(
                                 div().child(
                                     h_flex().gap_2().items_center().child(

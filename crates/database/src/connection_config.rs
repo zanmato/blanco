@@ -98,6 +98,11 @@ pub struct ConnectionConfig {
     pub ssh_private_key_path: Option<String>,
     pub ssh_private_key_password: Option<String>,
     pub is_active: bool,
+    // SSL/TLS configuration
+    pub ssl_mode: Option<String>,
+    pub ssl_key_path: Option<String>,
+    pub ssl_cert_path: Option<String>,
+    pub ssl_ca_cert_path: Option<String>,
 }
 
 impl ConnectionConfig {
@@ -130,6 +135,10 @@ impl ConnectionConfig {
             ssh_private_key_path: None,
             ssh_private_key_password: None,
             is_active: true,
+            ssl_mode: None,
+            ssl_key_path: None,
+            ssl_cert_path: None,
+            ssl_ca_cert_path: None,
         }
     }
 
@@ -152,6 +161,10 @@ impl ConnectionConfig {
             ssh_private_key_path: None,
             ssh_private_key_password: None,
             is_active: true,
+            ssl_mode: None,
+            ssl_key_path: None,
+            ssl_cert_path: None,
+            ssl_ca_cert_path: None,
         }
     }
 
@@ -171,6 +184,21 @@ impl ConnectionConfig {
         self.ssh_private_key_path = ssh_private_key_path;
         self.ssh_private_key_password = ssh_private_key_password;
         self.ssh_port = ssh_port;
+        self
+    }
+
+    /// Set SSL configuration
+    pub fn with_ssl_config(
+        mut self,
+        ssl_mode: Option<String>,
+        ssl_key_path: Option<String>,
+        ssl_cert_path: Option<String>,
+        ssl_ca_cert_path: Option<String>,
+    ) -> Self {
+        self.ssl_mode = ssl_mode;
+        self.ssl_key_path = ssl_key_path;
+        self.ssl_cert_path = ssl_cert_path;
+        self.ssl_ca_cert_path = ssl_ca_cert_path;
         self
     }
 
@@ -196,7 +224,7 @@ impl ConnectionConfig {
                 }
             }
             DatabaseType::PostgreSQL => {
-                let conn_str = if let Some(password) = &self.password {
+                let mut conn_str = if let Some(password) = &self.password {
                     if password.is_empty() {
                         format!(
                             "postgresql://{}@{}:{}/{}",
@@ -214,10 +242,30 @@ impl ConnectionConfig {
                         self.username, conn_host, conn_port, db_name
                     )
                 };
+
+                // Append SSL parameters
+                let mut ssl_params = Vec::new();
+                if let Some(ssl_mode) = &self.ssl_mode {
+                    ssl_params.push(format!("sslmode={}", ssl_mode));
+                }
+                if let Some(ssl_key) = &self.ssl_key_path {
+                    ssl_params.push(format!("sslkey={}", ssl_key));
+                }
+                if let Some(ssl_cert) = &self.ssl_cert_path {
+                    ssl_params.push(format!("sslcert={}", ssl_cert));
+                }
+                if let Some(ssl_ca) = &self.ssl_ca_cert_path {
+                    ssl_params.push(format!("sslrootcert={}", ssl_ca));
+                }
+
+                if !ssl_params.is_empty() {
+                    conn_str = format!("{}?{}", conn_str, ssl_params.join("&"));
+                }
+
                 conn_str
             }
             DatabaseType::MySQL => {
-                let conn_str = if let Some(password) = &self.password {
+                let mut conn_str = if let Some(password) = &self.password {
                     if password.is_empty() {
                         format!(
                             "mysql://{}@{}:{}/{}",
@@ -235,6 +283,35 @@ impl ConnectionConfig {
                         self.username, conn_host, conn_port, db_name
                     )
                 };
+
+                // Append SSL parameters for MySQL
+                let mut ssl_params = Vec::new();
+                if let Some(ssl_mode) = &self.ssl_mode {
+                    // MySQL uses different ssl-mode parameter names
+                    let mysql_mode = match ssl_mode.as_str() {
+                        "disabled" => "DISABLED",
+                        "preferred" => "PREFERRED",
+                        "required" => "REQUIRED",
+                        "verify-ca" => "VERIFY_CA",
+                        "verify-full" => "VERIFY_IDENTITY",
+                        _ => ssl_mode.as_str(),
+                    };
+                    ssl_params.push(format!("ssl-mode={}", mysql_mode));
+                }
+                if let Some(ssl_key) = &self.ssl_key_path {
+                    ssl_params.push(format!("ssl-key={}", ssl_key));
+                }
+                if let Some(ssl_cert) = &self.ssl_cert_path {
+                    ssl_params.push(format!("ssl-cert={}", ssl_cert));
+                }
+                if let Some(ssl_ca) = &self.ssl_ca_cert_path {
+                    ssl_params.push(format!("ssl-ca={}", ssl_ca));
+                }
+
+                if !ssl_params.is_empty() {
+                    conn_str = format!("{}?{}", conn_str, ssl_params.join("&"));
+                }
+
                 conn_str
             }
         }

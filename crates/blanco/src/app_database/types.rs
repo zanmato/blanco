@@ -117,6 +117,11 @@ pub struct ConnectionData {
     pub ssh_private_key_path: Option<String>,
     pub ssh_private_key_password: Option<String>,
     pub local_tunnel_port: Option<i32>, // Auto-assigned local port for the tunnel
+    // SSL/TLS configuration
+    pub ssl_mode: Option<String>,
+    pub ssl_key_path: Option<String>,
+    pub ssl_cert_path: Option<String>,
+    pub ssl_ca_cert_path: Option<String>,
 }
 
 impl ConnectionData {
@@ -146,6 +151,10 @@ impl ConnectionData {
             ssh_private_key_path: None,
             ssh_private_key_password: None,
             local_tunnel_port: None,
+            ssl_mode: None,
+            ssl_key_path: None,
+            ssl_cert_path: None,
+            ssl_ca_cert_path: None,
         }
     }
 
@@ -193,6 +202,10 @@ impl ConnectionData {
             ssh_private_key_path: None,
             ssh_private_key_password: None,
             local_tunnel_port: None,
+            ssl_mode: None,
+            ssl_key_path: None,
+            ssl_cert_path: None,
+            ssl_ca_cert_path: None,
         }
     }
 
@@ -252,6 +265,10 @@ impl ConnectionData {
             ssh_private_key_path,
             ssh_private_key_password,
             local_tunnel_port: Some(15432), // Default port, will be auto-assigned
+            ssl_mode: None,
+            ssl_key_path: None,
+            ssl_cert_path: None,
+            ssl_ca_cert_path: None,
         }
     }
 
@@ -331,6 +348,10 @@ impl ConnectionData {
             ssh_private_key_path: None,
             ssh_private_key_password: None,
             local_tunnel_port: None,
+            ssl_mode: None,
+            ssl_key_path: None,
+            ssl_cert_path: None,
+            ssl_ca_cert_path: None,
         }
     }
 
@@ -386,6 +407,10 @@ impl ConnectionData {
             ssh_private_key_path,
             ssh_private_key_password,
             local_tunnel_port: Some(13306), // Default port for MySQL, will be auto-assigned
+            ssl_mode: None,
+            ssl_key_path: None,
+            ssl_cert_path: None,
+            ssl_ca_cert_path: None,
         }
     }
 }

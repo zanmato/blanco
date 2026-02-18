@@ -95,6 +95,11 @@ pub struct PgServerKey {
     pub port: u16,
     pub username: String,
     pub password: Option<String>,
+    // SSL/TLS configuration
+    pub ssl_mode: Option<String>,
+    pub ssl_key_path: Option<String>,
+    pub ssl_cert_path: Option<String>,
+    pub ssl_ca_cert_path: Option<String>,
 }
 
 /// Connection key for PostgreSQL connections (legacy - kept for compatibility)
@@ -114,7 +119,43 @@ impl PgServerKey {
             port,
             username,
             password,
+            ssl_mode: None,
+            ssl_key_path: None,
+            ssl_cert_path: None,
+            ssl_ca_cert_path: None,
         }
+    }
+
+    pub fn with_ssl_config(
+        mut self,
+        ssl_mode: Option<String>,
+        ssl_key_path: Option<String>,
+        ssl_cert_path: Option<String>,
+        ssl_ca_cert_path: Option<String>,
+    ) -> Self {
+        self.ssl_mode = ssl_mode;
+        self.ssl_key_path = ssl_key_path;
+        self.ssl_cert_path = ssl_cert_path;
+        self.ssl_ca_cert_path = ssl_ca_cert_path;
+        self
+    }
+
+    /// Build SSL query parameters for connection string
+    fn build_ssl_params(&self) -> Vec<String> {
+        let mut params = Vec::new();
+        if let Some(ssl_mode) = &self.ssl_mode {
+            params.push(format!("sslmode={}", ssl_mode));
+        }
+        if let Some(ssl_key) = &self.ssl_key_path {
+            params.push(format!("sslkey={}", ssl_key));
+        }
+        if let Some(ssl_cert) = &self.ssl_cert_path {
+            params.push(format!("sslcert={}", ssl_cert));
+        }
+        if let Some(ssl_ca) = &self.ssl_ca_cert_path {
+            params.push(format!("sslrootcert={}", ssl_ca));
+        }
+        params
     }
 
     /// Generate a server-level connection string (without database)
@@ -132,8 +173,11 @@ impl PgServerKey {
             return format!("postgresql://{}@localhost:{}", self.username, self.port);
         }
 
-        // Add application_name parameter
-        url = format!("{}?application_name=Blanco", url);
+        // Build query parameters
+        let mut params = vec!["application_name=Blanco".to_string()];
+        params.extend(self.build_ssl_params());
+
+        url = format!("{}?{}", url, params.join("&"));
 
         tracing::debug!("Generated server connection string: {}", url);
         url
@@ -154,8 +198,14 @@ impl PgServerKey {
             return format!("postgresql://{}@localhost:{}", self.username, self.port);
         }
 
-        // Add database and application_name parameter
-        url = format!("{}/{}?application_name=Blanco", url, database);
+        // Add database
+        url = format!("{}/{}", url, database);
+
+        // Build query parameters
+        let mut params = vec!["application_name=Blanco".to_string()];
+        params.extend(self.build_ssl_params());
+
+        url = format!("{}?{}", url, params.join("&"));
 
         tracing::debug!("Generated database connection string: {}", url);
         url
@@ -169,8 +219,11 @@ impl PgServerKey {
         // Always use localhost and the tunnel port when SSH tunneling
         url = format!("{}@localhost:{}", url, local_tunnel_port);
 
-        // Add application_name parameter
-        url = format!("{}?application_name=Blanco", url);
+        // Build query parameters
+        let mut params = vec!["application_name=Blanco".to_string()];
+        params.extend(self.build_ssl_params());
+
+        url = format!("{}?{}", url, params.join("&"));
 
         tracing::debug!("Generated SSH tunnel server connection string: {}", url);
         url
@@ -188,8 +241,14 @@ impl PgServerKey {
         // Always use localhost and the tunnel port when SSH tunneling
         url = format!("{}@localhost:{}", url, local_tunnel_port);
 
-        // Add database and application_name parameter
-        url = format!("{}/{}?application_name=Blanco", url, database);
+        // Add database
+        url = format!("{}/{}", url, database);
+
+        // Build query parameters
+        let mut params = vec!["application_name=Blanco".to_string()];
+        params.extend(self.build_ssl_params());
+
+        url = format!("{}?{}", url, params.join("&"));
 
         tracing::debug!("Generated SSH tunnel database connection string: {}", url);
         url

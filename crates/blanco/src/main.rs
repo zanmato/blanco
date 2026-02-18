@@ -117,6 +117,14 @@ fn main() {
                             );
                         }
 
+                        // Add SSL configuration if present
+                        config = config.with_ssl_config(
+                            connection.ssl_mode,
+                            connection.ssl_key_path,
+                            connection.ssl_cert_path,
+                            connection.ssl_ca_cert_path,
+                        );
+
                         config
                     }
                 };

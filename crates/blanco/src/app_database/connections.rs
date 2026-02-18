@@ -15,7 +15,8 @@ impl AppDatabase {
                     username = ?, password = ?, database_path = ?, last_used_at = ?,
                     connection_string = ?, is_active = ?, connection_params = ?, environment_type = ?,
                     ssh_host = ?, ssh_port = ?, ssh_user = ?, ssh_password = ?,
-                    ssh_private_key_path = ?, ssh_private_key_password = ?, local_tunnel_port = ?
+                    ssh_private_key_path = ?, ssh_private_key_password = ?, local_tunnel_port = ?,
+                    ssl_mode = ?, ssl_key_path = ?, ssl_cert_path = ?, ssl_ca_cert_path = ?
                 WHERE id = ?
                 "#,
             )
@@ -39,6 +40,10 @@ impl AppDatabase {
             .bind(&conn.ssh_private_key_path)
             .bind(&conn.ssh_private_key_password)
             .bind(conn.local_tunnel_port)
+            .bind(&conn.ssl_mode)
+            .bind(&conn.ssl_key_path)
+            .bind(&conn.ssl_cert_path)
+            .bind(&conn.ssl_ca_cert_path)
             .bind(id)
             .execute(&self.pool)
             .await?;
@@ -47,8 +52,8 @@ impl AppDatabase {
             // Insert new connection
             let result = sqlx::query(
                 r#"
-                INSERT INTO connections (name, db_type, host, port, database_name, username, password, database_path, last_used_at, created_at, connection_string, is_active, connection_params, environment_type, ssh_host, ssh_port, ssh_user, ssh_password, ssh_private_key_path, ssh_private_key_password, local_tunnel_port)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO connections (name, db_type, host, port, database_name, username, password, database_path, last_used_at, created_at, connection_string, is_active, connection_params, environment_type, ssh_host, ssh_port, ssh_user, ssh_password, ssh_private_key_path, ssh_private_key_password, local_tunnel_port, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(&conn.name)
@@ -72,6 +77,10 @@ impl AppDatabase {
             .bind(&conn.ssh_private_key_path)
             .bind(&conn.ssh_private_key_password)
             .bind(conn.local_tunnel_port)
+            .bind(&conn.ssl_mode)
+            .bind(&conn.ssl_key_path)
+            .bind(&conn.ssl_cert_path)
+            .bind(&conn.ssl_ca_cert_path)
             .execute(&self.pool)
             .await?;
 
@@ -83,7 +92,7 @@ impl AppDatabase {
     pub async fn load_connections(&self) -> Result<Vec<ConnectionData>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
-            SELECT id, name, db_type, host, port, database_name, username, password, database_path, last_used_at, connection_string, is_active, connection_params, environment_type, ssh_host, ssh_port, ssh_user, ssh_password, ssh_private_key_path, ssh_private_key_password, local_tunnel_port
+            SELECT id, name, db_type, host, port, database_name, username, password, database_path, last_used_at, connection_string, is_active, connection_params, environment_type, ssh_host, ssh_port, ssh_user, ssh_password, ssh_private_key_path, ssh_private_key_password, local_tunnel_port, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path
             FROM connections
             ORDER BY name
             "#,
@@ -123,6 +132,10 @@ impl AppDatabase {
                     ssh_private_key_path: row.get("ssh_private_key_path"),
                     ssh_private_key_password: row.get("ssh_private_key_password"),
                     local_tunnel_port: row.get("local_tunnel_port"),
+                    ssl_mode: row.get("ssl_mode"),
+                    ssl_key_path: row.get("ssl_key_path"),
+                    ssl_cert_path: row.get("ssl_cert_path"),
+                    ssl_ca_cert_path: row.get("ssl_ca_cert_path"),
                 }
             })
             .collect();
@@ -140,7 +153,8 @@ impl AppDatabase {
             r#"
             SELECT id, name, db_type, host, port, database_name, username, password, database_path,
                    last_used_at, connection_string, is_active, connection_params, environment_type,
-                   ssh_host, ssh_port, ssh_user, ssh_password, ssh_private_key_path, ssh_private_key_password, local_tunnel_port
+                   ssh_host, ssh_port, ssh_user, ssh_password, ssh_private_key_path, ssh_private_key_password, local_tunnel_port,
+                   ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path
             FROM connections
             WHERE id = ?
             "#,
@@ -172,6 +186,10 @@ impl AppDatabase {
                 ssh_private_key_path: row.get(18),
                 ssh_private_key_password: row.get(19),
                 local_tunnel_port: row.get(20),
+                ssl_mode: row.get(21),
+                ssl_key_path: row.get(22),
+                ssl_cert_path: row.get(23),
+                ssl_ca_cert_path: row.get(24),
             };
             Ok(Some(connection_data))
         } else {

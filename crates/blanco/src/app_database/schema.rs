@@ -289,6 +289,43 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .await
     .ok(); // Ignore error if column already exists
 
+    // Add SSL support columns
+    sqlx::query(
+        r#"
+        ALTER TABLE connections ADD COLUMN ssl_mode TEXT
+        "#,
+    )
+    .execute(pool)
+    .await
+    .ok(); // Ignore error if column already exists
+
+    sqlx::query(
+        r#"
+        ALTER TABLE connections ADD COLUMN ssl_key_path TEXT
+        "#,
+    )
+    .execute(pool)
+    .await
+    .ok(); // Ignore error if column already exists
+
+    sqlx::query(
+        r#"
+        ALTER TABLE connections ADD COLUMN ssl_cert_path TEXT
+        "#,
+    )
+    .execute(pool)
+    .await
+    .ok(); // Ignore error if column already exists
+
+    sqlx::query(
+        r#"
+        ALTER TABLE connections ADD COLUMN ssl_ca_cert_path TEXT
+        "#,
+    )
+    .execute(pool)
+    .await
+    .ok(); // Ignore error if column already exists
+
     // Note: database_path NOT NULL constraint has been manually fixed
     // The database schema now allows NULL database_path for PostgreSQL connections
 
