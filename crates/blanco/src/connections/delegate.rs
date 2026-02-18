@@ -1,18 +1,16 @@
 use gpui::{
-    App, Entity, InteractiveElement, ParentElement, Styled, Window, div,
-    prelude::FluentBuilder, px, rems,
+    App, Entity, InteractiveElement, ParentElement, StatefulInteractiveElement as _, Styled,
+    Window, div, prelude::FluentBuilder, px, rems,
 };
 use gpui_component::{
     ActiveTheme as _, Icon, h_flex,
-    label::Label,
     list::ListItem,
     menu::{PopupMenu, PopupMenuItem},
     spinner::Spinner,
+    tooltip::Tooltip,
 };
 
-use crate::connections::{
-    CreateNewQueryTabParams, TreeItemIcon, TreeItemKind, TreeItemMetadata,
-};
+use crate::connections::{CreateNewQueryTabParams, TreeItemIcon, TreeItemKind, TreeItemMetadata};
 
 use blanco_ui::{
     IconName,
@@ -65,6 +63,7 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                 Some(
                     div()
                         .flex()
+                        .flex_shrink_0()
                         .justify_center()
                         .text_size(rems(0.55))
                         .font_family(cx.theme().mono_font_family.clone())
@@ -91,7 +90,8 @@ impl TreeDelegate for ConnectionsTreeDelegate {
             };
         }
 
-        let item_id = item.id.clone();
+        let item_id: gpui::SharedString = item.id.clone();
+        let tooltip_label = item.label.clone();
 
         ListItem::new(ix)
             .selected(selected)
@@ -103,9 +103,18 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                     .id(("tree-item", ix))
                     .gap_2()
                     .items_center()
+                    .tooltip(move |window, cx| {
+                        Tooltip::new(tooltip_label.clone()).build(window, cx)
+                    })
                     .child(Icon::new(tree_item_icon.icon).text_color(tree_item_icon.color))
-                    .child(Label::new(item.label.clone()).text_sm())
-                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .flex_1()
+                            .overflow_hidden()
+                            .text_sm()
+                            .text_ellipsis()
+                            .child(item.label.clone()),
+                    )
                     .when_some(environment_label, |this, label| this.child(label))
                     .when(
                         (entry.is_folder() || metadata.kind == TreeItemKind::Connection)
@@ -163,12 +172,14 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                             this.edit_connection(connection_id, cx);
                         },
                     )))
-                    .item(PopupMenuItem::new("Disconnect").on_click(window.listener_for(
-                        &self.parent,
-                        move |this, _event, _window, cx| {
-                            this.disconnect_connection(connection_id, cx);
-                        },
-                    )))
+                    .item(
+                        PopupMenuItem::new("Disconnect").on_click(window.listener_for(
+                            &self.parent,
+                            move |this, _event, _window, cx| {
+                                this.disconnect_connection(connection_id, cx);
+                            },
+                        )),
+                    )
                     .separator()
                     .item(PopupMenuItem::new("Remove").on_click(window.listener_for(
                         &self.parent,
@@ -201,16 +212,21 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                 };
 
                 // Add "Disconnect" option
-                menu = menu.item(PopupMenuItem::new("Disconnect").on_click(window.listener_for(
-                    &self.parent,
-                    move |this, _event, _window, cx| {
-                        this.disconnect_database(connection_id, database_name.clone(), cx);
-                    },
-                )));
+                menu = menu.item(
+                    PopupMenuItem::new("Disconnect").on_click(window.listener_for(
+                        &self.parent,
+                        move |this, _event, _window, cx| {
+                            this.disconnect_database(connection_id, database_name.clone(), cx);
+                        },
+                    )),
+                );
 
                 menu
             }
-            TreeItemKind::Schema | TreeItemKind::Table | TreeItemKind::View | TreeItemKind::MaterializedView => {
+            TreeItemKind::Schema
+            | TreeItemKind::Table
+            | TreeItemKind::View
+            | TreeItemKind::MaterializedView => {
                 // Use the trait to create the query tab event
                 if let Some(event) = metadata.create_new_query_tab_event() {
                     let connection_id = metadata.connection_id;

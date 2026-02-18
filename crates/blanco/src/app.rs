@@ -6,6 +6,7 @@ use gpui::{
 use gpui_component::{
     ActiveTheme, Root, TITLE_BAR_HEIGHT, TitleBar, WindowExt as _, button::Button,
     menu::AppMenuBar, notification::NotificationType,
+    resizable::{ResizableState, h_resizable, resizable_panel},
 };
 use serde::Deserialize;
 use smol::channel;
@@ -175,6 +176,7 @@ pub struct BlancoApp {
     editor_panel: Entity<EditorPanel>,
     sidebar_collapsed: bool,
     app_menu_bar: Entity<AppMenuBar>,
+    main_resize_state: Entity<ResizableState>,
     _subscriptions: Vec<Subscription>,
     _action_task: Task<()>,
 }
@@ -223,6 +225,7 @@ impl BlancoApp {
 
         let sidebar = cx.new(|cx| ConnectionsPanel::new(window, cx));
         let snippets_panel = cx.new(|cx| SnippetsPanel::new(window, cx));
+        let main_resize_state = cx.new(|_| ResizableState::default());
 
         // Load saved tabs from database
         info!("Loading saved tabs from database");
@@ -434,6 +437,7 @@ impl BlancoApp {
             editor_panel,
             sidebar_collapsed: false,
             app_menu_bar,
+            main_resize_state,
             _subscriptions: subscriptions,
             _action_task: action_task,
         }
@@ -854,44 +858,48 @@ impl Render for BlancoApp {
             )
             // Main content area
             .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .w_full()
-                    .items_start()
+                h_resizable("main-layout")
+                    .with_state(&self.main_resize_state)
                     // Left side: Connections panel sidebar
                     .when(!self.sidebar_collapsed, |this| {
                         let window_height = window_bounds.size.height;
                         this.child(
-                            div()
-                                .h(window_height - TITLE_BAR_HEIGHT - px(25.))
-                                .w(px(256.))
-                                .pb_6()
-                                .overflow_hidden()
-                                .border_r_1()
-                                .border_color(cx.theme().border)
+                            resizable_panel()
+                                .size(px(256.))
+                                .size_range(px(200.)..px(500.))
                                 .child(
                                     div()
-                                        .size_full()
-                                        .flex()
-                                        .flex_col()
-                                        .child(self.sidebar.clone())
-                                        .child(self.snippets_panel.clone()),
+                                        .h(window_height - TITLE_BAR_HEIGHT - px(25.))
+                                        .w_full()
+                                        .pb_6()
+                                        .overflow_hidden()
+                                        .border_r_1()
+                                        .border_color(cx.theme().border)
+                                        .child(
+                                            div()
+                                                .size_full()
+                                                .flex()
+                                                .flex_col()
+                                                .child(self.sidebar.clone())
+                                                .child(self.snippets_panel.clone()),
+                                        ),
                                 ),
                         )
                     })
                     // Main panel
                     .child({
                         let window_height = window_bounds.size.height;
-                        div()
-                            .flex()
-                            .flex_1()
-                            .h(window_height - TITLE_BAR_HEIGHT - px(25.))
-                            .overflow_hidden()
-                            .child(
-                                // Editor panel (now contains everything - tabs, editor, results)
-                                self.editor_panel.clone(),
-                            )
+                        resizable_panel().child(
+                            div()
+                                .flex()
+                                .flex_1()
+                                .h(window_height - TITLE_BAR_HEIGHT - px(25.))
+                                .overflow_hidden()
+                                .child(
+                                    // Editor panel (now contains everything - tabs, editor, results)
+                                    self.editor_panel.clone(),
+                                ),
+                        )
                     }),
             )
             .children(sheet_layer)
