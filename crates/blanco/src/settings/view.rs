@@ -1,7 +1,10 @@
-use crate::app_settings::AppSettings;
 use crate::app_events::AppEvent;
+use crate::app_settings::AppSettings;
 use crate::settings::Settings;
-use gpui::{App, Context, EventEmitter, FocusHandle, Focusable, IntoElement, Render, SharedString, Task, Window};
+use gpui::{
+    App, Context, EventEmitter, FocusHandle, Focusable, IntoElement, Render, SharedString, Task,
+    Window,
+};
 use gpui_component::ThemeRegistry;
 use gpui_component::{
     Theme,
@@ -51,8 +54,10 @@ impl SettingsView {
 
         let db = crate::app_database::AppDatabase::global(cx).clone();
         let key_clone = key.clone();
-        let task = cx.spawn(async move |_, _| {
-            gpui::Timer::after(Duration::from_millis(500)).await;
+        let task = cx.spawn(async move |_, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(500))
+                .await;
             if let Err(e) = db.save_setting(&key_clone, &value, is_secret).await {
                 tracing::error!("Failed to save setting {}: {}", key_clone, e);
             }
@@ -113,13 +118,12 @@ impl SettingsView {
                     SettingItem::new(
                         "Render Whitespace",
                         SettingField::switch(
-                            move |cx: &App| {
-                                AppSettings::global(cx).settings.editor.show_whitespace
-                            },
+                            move |cx: &App| AppSettings::global(cx).settings.editor.show_whitespace,
                             {
                                 let view_handle = view_handle.clone();
                                 move |val: bool, cx: &mut App| {
-                                    AppSettings::global_mut(cx).settings.editor.show_whitespace = val;
+                                    AppSettings::global_mut(cx).settings.editor.show_whitespace =
+                                        val;
 
                                     // Save with debouncing
                                     let key = "editor.show_whitespace".to_string();

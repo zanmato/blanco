@@ -126,7 +126,7 @@ impl EditorPanel {
             if let TabType::Query(query_tab) = tab {
                 query_tab
                     .editor
-                    .update(cx, |state, cx| state.set_show_whitespace(show, window, cx));
+                    .update(cx, |state, cx| state.set_show_whitespaces(show, window, cx));
             }
         }
     }
@@ -811,7 +811,7 @@ impl EditorPanel {
                     hard_tabs: false,
                 })
                 .soft_wrap(word_wrap)
-                .show_whitespace(show_whitespace);
+                .show_whitespaces(show_whitespace);
 
             // Set up completion provider using connection_id, database_name, and DbService
             let db_service: Arc<dyn DatabaseServiceTrait> =

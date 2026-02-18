@@ -214,9 +214,11 @@ impl ChatPanel {
         let scroll_handle = self.scroll_handle.clone();
 
         // Schedule scroll to bottom after render
-        cx.spawn(async move |_, _cx| {
+        cx.spawn(async move |_, cx| {
             // Small delay to ensure content is rendered
-            gpui::Timer::after(Duration::from_millis(50)).await;
+            cx.background_executor()
+                .timer(Duration::from_millis(50))
+                .await;
             scroll_handle.scroll_to_bottom();
         })
         .detach();

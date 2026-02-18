@@ -86,14 +86,16 @@ impl TableChangeOperation {
                     } else if self.changes.len() == 1 {
                         // Single column change
                         let change = &self.changes[0];
-                        let escaped_new_value =
-                            escape_sql_value(change.new_value.as_ref().unwrap_or(&String::new()));
+                        let set_value = match &change.new_value {
+                            None => "NULL".to_string(),
+                            Some(v) => format!("'{}'", escape_sql_value(v)),
+                        };
                         let escaped_pk_value = escape_sql_value(pk_value);
                         format!(
-                            "UPDATE {} SET {} = '{}' WHERE {} = '{}'",
+                            "UPDATE {} SET {} = {} WHERE {} = '{}'",
                             self.table_name,
                             change.column_name,
-                            escaped_new_value,
+                            set_value,
                             pk_column,
                             escaped_pk_value
                         )
@@ -103,10 +105,11 @@ impl TableChangeOperation {
                             .changes
                             .iter()
                             .map(|change| {
-                                let escaped_value = escape_sql_value(
-                                    change.new_value.as_ref().unwrap_or(&String::new()),
-                                );
-                                format!("{} = '{}'", change.column_name, escaped_value)
+                                let set_value = match &change.new_value {
+                                    None => "NULL".to_string(),
+                                    Some(v) => format!("'{}'", escape_sql_value(v)),
+                                };
+                                format!("{} = {}", change.column_name, set_value)
                             })
                             .collect();
                         let escaped_pk_value = escape_sql_value(pk_value);

@@ -18,7 +18,7 @@ use blanco_core::QueryResult;
 use blanco_core::connection_trait::ColumnType;
 use database::DatabaseService;
 
-use crate::app::{AddRow, DuplicateRow};
+use crate::app::{AddRow, DuplicateRow, SetCellNull};
 use crate::app_events::AppEvent;
 use crate::transformers::CopyHandler;
 
@@ -88,7 +88,12 @@ impl ResultsPanel {
         // Set connection ID on delegate if provided
         delegate.set_connection_id(connection_id, database_name);
 
-        let table_state = cx.new(|cx| TableState::new(delegate, window, cx).col_selectable(false));
+        let table_state = cx.new(|cx| {
+            TableState::new(delegate, window, cx)
+                .row_selectable(true)
+                .cell_selectable(true)
+                .col_selectable(false)
+        });
 
         // Set up event subscriptions
         let subscriptions = Vec::new();
@@ -1051,6 +1056,34 @@ impl ResultsPanel {
         self.duplicate_row(cx);
     }
 
+    fn on_set_cell_null(
+        &mut self,
+        action: &SetCellNull,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.table_state.update(cx, |state, cx| {
+            let delegate = state.delegate_mut();
+
+            // Store original value before editing
+            if let Some(cell_value) = delegate.rows.get(action.row).and_then(|r| r.get(action.col))
+            {
+                delegate
+                    .edit_state
+                    .original_values
+                    .entry((action.row, action.col))
+                    .or_insert_with(|| cell_value.clone());
+            }
+
+            // Set the cell to NULL
+            delegate.update_cell_value(action.row, action.col, "NULL".to_string());
+            delegate.commit_cell_edit(action.row, action.col);
+            state.refresh(cx);
+        });
+
+        cx.notify();
+    }
+
     fn on_export_as_csv(
         &mut self,
         _action: &crate::app::ExportAsCSV,
@@ -1313,6 +1346,7 @@ impl Render for ResultsPanel {
             .on_action(cx.listener(Self::on_export_as_markdown))
             .on_action(cx.listener(Self::on_add_row))
             .on_action(cx.listener(Self::on_duplicate_row))
+            .on_action(cx.listener(Self::on_set_cell_null))
             // The table component (table should have built-in scrolling)
             .child(
                 div()

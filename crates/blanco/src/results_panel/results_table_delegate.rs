@@ -23,7 +23,7 @@ use serde_json::Value;
 
 use blanco_core::{QueryResult, connection_trait::ColumnType};
 
-use crate::app::{AddRow, DuplicateRow};
+use crate::app::{AddRow, DuplicateRow, SetCellNull};
 use crate::foreign_key_popover::ForeignKeyPopover;
 use crate::results_panel::table_operations::{
     ColumnChange, OperationType, RowIdentifier, TableChangeOperation,
@@ -417,7 +417,10 @@ impl ResultsTableDelegate {
                     let column_change = ColumnChange {
                         column_name,
                         old_value: change.old_value.clone(),
-                        new_value: change.new_value.clone(),
+                        // Convert "NULL" string to None for proper NULL handling
+                        new_value: change.new_value.as_ref().and_then(|v| {
+                            if v == "NULL" { None } else { Some(v.clone()) }
+                        }),
                     };
 
                     // Add to the consolidated operation
@@ -1370,11 +1373,18 @@ impl TableDelegate for ResultsTableDelegate {
 
     fn context_menu(
         &mut self,
-        row_ix: usize,
+        cell: (usize, usize),
         menu: PopupMenu,
         _window: &mut Window,
         _cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
+        // Check if the column is nullable (cell.1 is column index, 0 is row number column)
+        let is_nullable = cell.1 > 0
+            && self
+                .table_columns
+                .get(cell.1 - 1)
+                .is_some_and(|c| c.is_nullable);
+
         menu.menu_with_icon(
             "Copy as CSV",
             Icon::new(IconName::Sheet),
@@ -1423,8 +1433,18 @@ impl TableDelegate for ResultsTableDelegate {
         .menu_with_icon(
             "Duplicate Row",
             Icon::new(IconName::Copy),
-            Box::new(DuplicateRow { row: row_ix }),
+            Box::new(DuplicateRow { row: cell.0 }),
         )
+        .when(is_nullable, |this| {
+            this.menu_with_icon(
+                "Set NULL",
+                Icon::new(IconName::CircleX),
+                Box::new(SetCellNull {
+                    row: cell.0,
+                    col: cell.1,
+                }),
+            )
+        })
     }
 }
 

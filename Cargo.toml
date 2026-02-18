@@ -17,7 +17,7 @@ publish = false
 
 [workspace.dependencies]
 # Core GPUI dependencies
-gpui = { git = "https://github.com/zed-industries/zed", rev = "1fa9dd628445623793005c73ce807d4da9f58d21" }
+gpui = { git = "https://github.com/zed-industries/zed", rev = "8b5328cad3d9ca3576296be574a1c7bfbcaf3557" }
 gpui-macros = "0.2.2"
 gpui-component = { path = "vendor/gpui-component/crates/ui", features = [
     "tree-sitter-languages",
