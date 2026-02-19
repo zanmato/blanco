@@ -10,7 +10,7 @@ use gpui_component::{
     ActiveTheme, WindowExt as _,
     input::{InputEvent, InputState},
     notification::NotificationType,
-    table::{Table, TableDelegate, TableState},
+    table::{Table, TableDelegate, TableEvent, TableState},
     v_flex,
 };
 
@@ -95,8 +95,23 @@ impl ResultsPanel {
                 .col_selectable(false)
         });
 
-        // Set up event subscriptions
-        let subscriptions = Vec::new();
+        // Subscribe to table events
+        let table_state_for_sub = table_state.clone();
+        let _table_event_subscription = cx.subscribe_in(
+            &table_state,
+            window,
+            move |_panel, _table_state, event: &TableEvent, _window, cx| {
+                if let TableEvent::DoubleClickedCell(row_ix, col_ix) = event {
+                    // Clear selection and set pending edit cell
+                    table_state_for_sub.update(cx, |state, cx| {
+                        state.delegate_mut().clear_selection();
+                        state.delegate_mut().set_pending_edit_cell(*row_ix, *col_ix);
+                        state.refresh(cx);
+                    });
+                    cx.notify();
+                }
+            },
+        );
 
         Self {
             table_state,
@@ -104,7 +119,7 @@ impl ResultsPanel {
             editing_input: None,
             editing_cell: None,
             copy_handler: CopyHandler::new(),
-            _subscriptions: subscriptions,
+            _subscriptions: vec![_table_event_subscription],
         }
     }
 

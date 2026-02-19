@@ -1294,21 +1294,6 @@ impl TableDelegate for ResultsTableDelegate {
                 .when(!is_row_number_col && !is_null && is_editable, |this| {
                     this.cursor_pointer()
                 })
-                // All data cells (non-row-number) should be selectable for copying
-                .when(!is_row_number_col, |this| {
-                    this.on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |table, event: &gpui::MouseDownEvent, _window, cx| {
-                            if event.click_count == 2 {
-                                let delegate = table.delegate_mut();
-                                delegate.clear_selection();
-                                delegate.set_pending_edit_cell(row_ix, col_ix);
-                                table.refresh(cx);
-                                cx.notify();
-                            }
-                        }),
-                    )
-                })
                 .py_1()
                 .child(cell_content)
         }
