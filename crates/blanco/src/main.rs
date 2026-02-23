@@ -22,6 +22,7 @@ mod sql_completion;
 mod sql_selection_range_provider;
 mod sql_statement_parser;
 mod sqruff_service;
+mod table_structure;
 mod time_format;
 mod transformers;
 

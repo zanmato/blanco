@@ -3,6 +3,35 @@ use blanco_core::connection_trait::ColumnType;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// Determine if a value should be quoted based on its column type
+fn should_quote_value(column_type: &ColumnType) -> bool {
+    matches!(
+        column_type,
+        ColumnType::Text
+            | ColumnType::DateTime
+            | ColumnType::Uuid
+            | ColumnType::Json
+            | ColumnType::Array
+            | ColumnType::Binary
+            | ColumnType::Unknown
+    )
+}
+
+/// Format a single SQL value based on its column type
+fn format_sql_value(value: &str, column_type: Option<&ColumnType>) -> String {
+    if value.is_empty() || value.eq_ignore_ascii_case("null") {
+        return "NULL".to_string();
+    }
+
+    let col_type = column_type.unwrap_or(&ColumnType::Unknown);
+
+    if should_quote_value(col_type) {
+        format!("'{}'", sql_escape_string(value))
+    } else {
+        value.to_string()
+    }
+}
+
 pub struct SqlTransformer {
     table_name: Option<String>,
     first_row: AtomicBool,
@@ -81,14 +110,17 @@ impl DataTransformer for SqlTransformer {
                 // Write values directly without intermediate Vec<String>
                 let mut cell_iter = row.cells.iter().peekable();
                 while let Some(cell) = cell_iter.next() {
-                    if cell.value.is_empty() {
-                        output.push_str("''");
-                    } else if cell.value.eq_ignore_ascii_case("null") {
+                    // Use column type from cell if available, fall back to Unknown (which quotes)
+                    let col_type = cell.column_type.as_ref().unwrap_or(&ColumnType::Unknown);
+
+                    if cell.value.is_empty() || cell.value.eq_ignore_ascii_case("null") {
                         output.push_str("NULL");
-                    } else {
+                    } else if should_quote_value(col_type) {
                         output.push('\'');
                         sql_escape_string_to(&cell.value, &mut output);
                         output.push('\'');
+                    } else {
+                        output.push_str(&cell.value);
                     }
 
                     // Add comma separator if not last cell
@@ -111,13 +143,9 @@ impl DataTransformer for SqlTransformer {
     fn transform_single_cell(
         &self,
         value: &str,
-        _column_type: &ColumnType,
+        column_type: &ColumnType,
     ) -> Result<String, TransformError> {
-        if value.is_empty() || value.eq_ignore_ascii_case("null") {
-            Ok("NULL".to_string())
-        } else {
-            Ok(format!("'{}'", sql_escape_string(value)))
-        }
+        Ok(format_sql_value(value, Some(column_type)))
     }
 
     // === Streaming Methods ===
@@ -149,7 +177,7 @@ impl DataTransformer for SqlTransformer {
         &self,
         row_data: &[String],
         _columns: &[String],
-        _column_types: &[ColumnType],
+        column_types: &[ColumnType],
     ) -> Result<String, TransformError> {
         // Estimate capacity: ~50 bytes per cell plus indentation
         let estimated_capacity = (row_data.len() * 50) + 20;
@@ -173,12 +201,17 @@ impl DataTransformer for SqlTransformer {
                 output.push_str(", ");
             }
 
+            // Get column type for this column, default to Unknown
+            let col_type = column_types.get(i).unwrap_or(&ColumnType::Unknown);
+
             if value.is_empty() || value.eq_ignore_ascii_case("null") {
                 output.push_str("NULL");
-            } else {
+            } else if should_quote_value(col_type) {
                 output.push('\'');
                 sql_escape_string_to(value, &mut output);
                 output.push('\'');
+            } else {
+                output.push_str(value);
             }
         }
 
@@ -247,10 +280,101 @@ mod tests {
     }
 
     #[test]
+    fn test_should_quote_value() {
+        // Types that should NOT be quoted
+        assert!(!should_quote_value(&ColumnType::Integer));
+        assert!(!should_quote_value(&ColumnType::UnsignedInteger));
+        assert!(!should_quote_value(&ColumnType::Numeric));
+        assert!(!should_quote_value(&ColumnType::Boolean));
+
+        // Types that SHOULD be quoted
+        assert!(should_quote_value(&ColumnType::Text));
+        assert!(should_quote_value(&ColumnType::DateTime));
+        assert!(should_quote_value(&ColumnType::Uuid));
+        assert!(should_quote_value(&ColumnType::Json));
+        assert!(should_quote_value(&ColumnType::Array));
+        assert!(should_quote_value(&ColumnType::Binary));
+        assert!(should_quote_value(&ColumnType::Unknown));
+    }
+
+    #[test]
+    fn test_format_sql_value_numeric() {
+        // Integer types - not quoted
+        assert_eq!(format_sql_value("42", Some(&ColumnType::Integer)), "42");
+        assert_eq!(format_sql_value("0", Some(&ColumnType::Integer)), "0");
+        assert_eq!(format_sql_value("-123", Some(&ColumnType::Integer)), "-123");
+
+        // Unsigned integer types - not quoted
+        assert_eq!(format_sql_value("42", Some(&ColumnType::UnsignedInteger)), "42");
+
+        // Numeric types - not quoted
+        assert_eq!(format_sql_value("3.14", Some(&ColumnType::Numeric)), "3.14");
+        assert_eq!(format_sql_value("0.0", Some(&ColumnType::Numeric)), "0.0");
+        assert_eq!(format_sql_value("-99.99", Some(&ColumnType::Numeric)), "-99.99");
+    }
+
+    #[test]
+    fn test_format_sql_value_boolean() {
+        // Boolean types - not quoted
+        assert_eq!(format_sql_value("true", Some(&ColumnType::Boolean)), "true");
+        assert_eq!(format_sql_value("false", Some(&ColumnType::Boolean)), "false");
+        assert_eq!(format_sql_value("TRUE", Some(&ColumnType::Boolean)), "TRUE");
+        assert_eq!(format_sql_value("FALSE", Some(&ColumnType::Boolean)), "FALSE");
+    }
+
+    #[test]
+    fn test_format_sql_value_text() {
+        // Text types - quoted
+        assert_eq!(format_sql_value("hello", Some(&ColumnType::Text)), "'hello'");
+        assert_eq!(format_sql_value("it's", Some(&ColumnType::Text)), "'it''s'");
+        assert_eq!(format_sql_value("", Some(&ColumnType::Text)), "NULL");
+
+        // DateTime types - quoted
+        assert_eq!(
+            format_sql_value("2024-01-15", Some(&ColumnType::DateTime)),
+            "'2024-01-15'"
+        );
+
+        // UUID types - quoted
+        assert_eq!(
+            format_sql_value("550e8400-e29b-41d4-a716-446655440000", Some(&ColumnType::Uuid)),
+            "'550e8400-e29b-41d4-a716-446655440000'"
+        );
+
+        // JSON types - quoted
+        assert_eq!(
+            format_sql_value("{\"key\": \"value\"}", Some(&ColumnType::Json)),
+            "'{\"key\": \"value\"}'"
+        );
+
+        // Unknown type - quoted (safe default)
+        assert_eq!(format_sql_value("value", Some(&ColumnType::Unknown)), "'value'");
+    }
+
+    #[test]
+    fn test_format_sql_value_null() {
+        // NULL handling is consistent across all types
+        assert_eq!(format_sql_value("", Some(&ColumnType::Integer)), "NULL");
+        assert_eq!(format_sql_value("NULL", Some(&ColumnType::Integer)), "NULL");
+        assert_eq!(format_sql_value("null", Some(&ColumnType::Text)), "NULL");
+        assert_eq!(format_sql_value("NULL", Some(&ColumnType::Boolean)), "NULL");
+    }
+
+    #[test]
+    fn test_format_sql_value_none_type() {
+        // None type falls back to Unknown, which quotes
+        assert_eq!(format_sql_value("value", None), "'value'");
+        assert_eq!(format_sql_value("", None), "NULL");
+        assert_eq!(format_sql_value("NULL", None), "NULL");
+    }
+
+    #[test]
     fn test_sql_transformer() {
         let transformer = SqlTransformer::new();
         assert_eq!(transformer.format_name(), "SQL");
         assert_eq!(transformer.file_extension(), "sql");
+
+        // Text columns should be quoted
         assert_eq!(
             transformer.transform_single_cell("test", &ColumnType::Text).unwrap(),
             "'test'"
@@ -263,6 +387,26 @@ mod tests {
         assert_eq!(
             transformer.transform_single_cell("it's", &ColumnType::Text).unwrap(),
             "'it''s'"
+        );
+
+        // Numeric columns should NOT be quoted
+        assert_eq!(
+            transformer.transform_single_cell("42", &ColumnType::Integer).unwrap(),
+            "42"
+        );
+        assert_eq!(
+            transformer.transform_single_cell("3.14", &ColumnType::Numeric).unwrap(),
+            "3.14"
+        );
+
+        // Boolean columns should NOT be quoted
+        assert_eq!(
+            transformer.transform_single_cell("true", &ColumnType::Boolean).unwrap(),
+            "true"
+        );
+        assert_eq!(
+            transformer.transform_single_cell("false", &ColumnType::Boolean).unwrap(),
+            "false"
         );
     }
 }

@@ -2,8 +2,8 @@ use crate::sql_parser::PostgresTableExtractor;
 use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
-    connection_trait::ColumnType, connection_trait::ForeignKeyInfo, ColumnInfo, Connection,
-    QueryResult,
+    connection_trait::ColumnType, connection_trait::ForeignKeyInfo, connection_trait::IndexInfo,
+    ColumnInfo, Connection, QueryResult,
 };
 use futures::{Stream, StreamExt};
 use smol::lock::RwLock;
@@ -1696,6 +1696,91 @@ impl Connection for PostgresConnection {
         );
         self.execute_query(&query, self.initial_database.as_deref(), None)
             .await
+    }
+
+    async fn get_indexes_for_table(
+        &self,
+        table_name: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<IndexInfo>, anyhow::Error> {
+        let schema_name = schema.unwrap_or("public");
+        tracing::debug!(
+            "Getting indexes for PostgreSQL table '{}{}'",
+            schema_name,
+            table_name
+        );
+
+        let query = "
+            SELECT
+                i.relname AS index_name,
+                am.amname AS algorithm,
+                ix.indisunique AS is_unique,
+                array_agg(a.attname ORDER BY array_position(ix.indkey, a.attnum)) AS column_names,
+                pg_get_expr(ix.indpred, ix.indrelid) AS condition,
+                obj_description(i.oid, 'pg_class') AS comment
+            FROM pg_index ix
+            JOIN pg_class t ON t.oid = ix.indrelid
+            JOIN pg_class i ON i.oid = ix.indexrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+            JOIN pg_am am ON am.oid = i.relam
+            JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
+            WHERE t.relname = $1 AND n.nspname = $2
+            GROUP BY i.relname, am.amname, ix.indisunique, ix.indpred, ix.indrelid, i.oid
+            ORDER BY i.relname
+        ";
+
+        let result = self
+            .execute_query(
+                query,
+                self.initial_database.as_deref(),
+                Some(&[table_name.to_string(), schema_name.to_string()]),
+            )
+            .await?;
+
+        let mut indexes = Vec::new();
+        for row in result.rows {
+            if row.len() >= 6 {
+                let index_name = &row[0];
+                let algorithm = &row[1];
+                let is_unique = &row[2] == "true";
+                // PostgreSQL returns arrays as {col1,col2,col3} format
+                let columns_str = &row[3];
+                let column_names: Vec<String> = columns_str
+                    .trim_start_matches('{')
+                    .trim_end_matches('}')
+                    .split(',')
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .collect();
+                let condition = if row[4].is_empty() || row[4] == "NULL" {
+                    None
+                } else {
+                    Some(row[4].clone())
+                };
+                let comment = if row[5].is_empty() || row[5] == "NULL" {
+                    None
+                } else {
+                    Some(row[5].clone())
+                };
+
+                indexes.push(IndexInfo {
+                    name: index_name.clone(),
+                    algorithm: algorithm.clone(),
+                    is_unique,
+                    column_names,
+                    condition,
+                    comment,
+                });
+            }
+        }
+
+        tracing::debug!(
+            "Found {} indexes for table '{}{}'",
+            indexes.len(),
+            schema_name,
+            table_name
+        );
+        Ok(indexes)
     }
 }
 

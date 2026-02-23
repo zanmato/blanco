@@ -65,6 +65,15 @@ pub enum AppEvent {
         table_name: Option<String>,
         environment_type: Option<crate::app_database::EnvironmentType>,
     },
+    OpenTableStructure {
+        connection_id: i64,
+        connection_name: String,
+        db_type: database::DatabaseType,
+        database_name: String,
+        schema_name: Option<String>,
+        table_name: String,
+        environment_type: Option<crate::app_database::EnvironmentType>,
+    },
     EditorSettingChanged {
         setting: String,
         value: String,

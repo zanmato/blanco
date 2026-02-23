@@ -10,6 +10,7 @@ use gpui_component::{
     tooltip::Tooltip,
 };
 
+use crate::app_events::AppEvent;
 use crate::connections::{CreateNewQueryTabParams, TreeItemIcon, TreeItemKind, TreeItemMetadata};
 
 use blanco_ui::{
@@ -234,31 +235,64 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                     let database_name = metadata.database_name.clone().unwrap_or_default();
                     let schema_name = metadata.schema_name.clone();
                     let table_name = metadata.table_name.clone();
+                    let db_type = metadata.db_type;
+                    let environment_type = metadata.environment_type;
 
-                    menu.item(
-                        PopupMenuItem::new("New Query").on_click(window.listener_for(
-                            &self.parent,
-                            move |_this, _event, _window, cx| {
-                                cx.emit(event.clone());
-                            },
-                        )),
-                    )
-                    .item(
-                        PopupMenuItem::new("Export Data").on_click(window.listener_for(
-                            &self.parent,
-                            move |this, _event, window, cx| {
-                                this.export_table_data(
-                                    connection_id,
-                                    connection_name.clone(),
-                                    database_name.clone(),
-                                    schema_name.clone(),
-                                    table_name.clone(),
-                                    window,
-                                    cx,
-                                );
-                            },
-                        )),
-                    )
+                    // Clone values for the "Open Structure" closure
+                    let connection_name_for_structure = connection_name.clone();
+                    let database_name_for_structure = database_name.clone();
+                    let schema_name_for_structure = schema_name.clone();
+                    let table_name_for_structure = table_name.clone().unwrap_or_default();
+
+                    let mut menu = menu
+                        .item(
+                            PopupMenuItem::new("New Query").on_click(window.listener_for(
+                                &self.parent,
+                                move |_this, _event, _window, cx| {
+                                    cx.emit(event.clone());
+                                },
+                            )),
+                        )
+                        .item(
+                            PopupMenuItem::new("Export Data").on_click(window.listener_for(
+                                &self.parent,
+                                move |this, _event, window, cx| {
+                                    this.export_table_data(
+                                        connection_id,
+                                        connection_name.clone(),
+                                        database_name.clone(),
+                                        schema_name.clone(),
+                                        table_name.clone(),
+                                        window,
+                                        cx,
+                                    );
+                                },
+                            )),
+                        );
+
+                    // Add "Open Structure" option for tables, views, and materialized views
+                    if matches!(
+                        metadata.kind,
+                        TreeItemKind::Table | TreeItemKind::View | TreeItemKind::MaterializedView
+                    ) {
+                        menu = menu
+                            .separator()
+                            .item(PopupMenuItem::new("Open Structure").on_click(
+                                window.listener_for(&self.parent, move |_this, _event, _window, cx| {
+                                    cx.emit(AppEvent::OpenTableStructure {
+                                        connection_id,
+                                        connection_name: connection_name_for_structure.clone(),
+                                        db_type,
+                                        database_name: database_name_for_structure.clone(),
+                                        schema_name: schema_name_for_structure.clone(),
+                                        table_name: table_name_for_structure.clone(),
+                                        environment_type,
+                                    });
+                                }),
+                            ));
+                    }
+
+                    menu
                 } else {
                     menu
                 }

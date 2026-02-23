@@ -2,8 +2,8 @@ use crate::sql_parser::SqliteTableExtractor;
 use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
-    connection_trait::ColumnType, connection_trait::ForeignKeyInfo, ColumnInfo, Connection,
-    QueryResult,
+    connection_trait::ColumnType, connection_trait::ForeignKeyInfo, connection_trait::IndexInfo,
+    ColumnInfo, Connection, QueryResult,
 };
 use futures::{Stream, StreamExt};
 use hex;
@@ -575,6 +575,52 @@ impl Connection for SqliteConnection {
             table_name, column_name, reference_value
         );
         self.execute_query(&query, None, None).await
+    }
+
+    async fn get_indexes_for_table(
+        &self,
+        table_name: &str,
+        _schema: Option<&str>,
+    ) -> Result<Vec<IndexInfo>, anyhow::Error> {
+        tracing::debug!("Getting indexes for SQLite table '{}'", table_name);
+
+        // Get list of indexes for the table
+        // PRAGMA index_list returns: seq, name, unique, origin, partial
+        let list_query = format!("PRAGMA index_list({})", table_name);
+        let list_result = self.execute_query(&list_query, None, None).await?;
+
+        let mut indexes = Vec::new();
+        for row in list_result.rows {
+            if row.len() >= 3 {
+                let index_name = &row[1];
+                let is_unique = &row[2] == "1";
+
+                // Get columns for this index
+                // PRAGMA index_info returns: seqno, cid, name
+                let info_query = format!("PRAGMA index_info({})", index_name);
+                let info_result = self.execute_query(&info_query, None, None).await?;
+
+                let column_names: Vec<String> = info_result
+                    .rows
+                    .iter()
+                    .filter_map(|r| r.get(2).cloned())
+                    .collect();
+
+                // SQLite uses B-tree for all indexes
+                let index_info = IndexInfo {
+                    name: index_name.clone(),
+                    algorithm: "btree".to_string(),
+                    is_unique,
+                    column_names,
+                    condition: None, // SQLite partial index WHERE clause not easily accessible
+                    comment: None,
+                };
+                indexes.push(index_info);
+            }
+        }
+
+        tracing::debug!("Found {} indexes for table '{}'", indexes.len(), table_name);
+        Ok(indexes)
     }
 }
 

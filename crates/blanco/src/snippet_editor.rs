@@ -151,13 +151,15 @@ impl Render for SnippetEditor {
                 // Footer with name input and save button
                 h_flex()
                     .gap_2()
-                    .px_2()
-                    .py_1()
-                    .bg(cx.theme().secondary)
+                    .p_2()
+                    .border_t_1()
+                    .bg(cx.theme().title_bar)
+                    .border_color(cx.theme().border)
                     .items_center()
                     .child(
                         div().flex_1().child(
                             Input::new(&self.name_input)
+                                .small()
                                 .font_family(cx.theme().mono_font_family.clone()),
                         ),
                     )

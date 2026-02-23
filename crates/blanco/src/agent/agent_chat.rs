@@ -57,7 +57,7 @@ impl ChatPanel {
                 .multi_line(true)
                 .rows(3)
                 .auto_grow(2, 6) // Auto-grow between 2 and 6 rows
-                .placeholder("Ask me anything about your SQL query...")
+                .placeholder("Ask me anything about your query...")
         });
 
         let mut subscriptions = Vec::new();
@@ -270,7 +270,7 @@ impl Render for ChatPanel {
                                     .size(px(16.))
                                     .text_color(cx.theme().muted_foreground),
                             )
-                            .child(div().text_sm().font_medium().child("SQL Assistant")),
+                            .child(div().text_sm().font_medium().child("Assistant")),
                     )
                     .child(
                         h_flex().items_center().gap_2().child(

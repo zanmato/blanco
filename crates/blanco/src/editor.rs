@@ -33,6 +33,7 @@ use crate::sql_completion::SqlCompletionProvider;
 use crate::sql_selection_range_provider::SqlSelectionRangeProvider;
 use crate::sql_statement_parser::extract_statement_info;
 use crate::sqruff_service::SqruffService;
+use crate::table_structure::TableStructureTab;
 use blanco_ui::{IconName, SqlLog};
 use database::{DatabaseService, DatabaseServiceTrait};
 use gpui_component::{Icon, RopeExt};
@@ -41,6 +42,7 @@ pub enum TabType {
     Query(QueryTab),
     Settings(SettingsTab),
     Snippet(Entity<SnippetEditor>),
+    TableStructure(Entity<TableStructureTab>),
 }
 
 pub struct QueryTab {
@@ -107,6 +109,18 @@ pub struct TabCreationParams {
     pub connection_name: Option<String>,
     pub database_name: String,
     pub schema_name: Option<String>,
+    pub environment_type: Option<EnvironmentType>,
+}
+
+/// Parameters for creating a table structure tab
+#[derive(Clone)]
+pub struct TableStructureParams {
+    pub connection_id: i64,
+    pub connection_name: String,
+    pub db_type: database::DatabaseType,
+    pub database_name: String,
+    pub schema_name: Option<String>,
+    pub table_name: String,
     pub environment_type: Option<EnvironmentType>,
 }
 
@@ -323,6 +337,54 @@ impl EditorPanel {
         self.scroll_tabbar_to_the_end(window, cx);
 
         cx.notify();
+    }
+
+    pub fn create_table_structure_tab(
+        &mut self,
+        params: TableStructureParams,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let tab_id = self.next_tab_id;
+        self.next_tab_id += 1;
+
+        let tab = cx.new(|cx| {
+            TableStructureTab::new(
+                tab_id,
+                params.connection_id,
+                params.db_type,
+                Some(params.connection_name),
+                params.database_name,
+                params.schema_name,
+                params.table_name,
+                params.environment_type,
+                Vec::new(),
+                Vec::new(),
+                window,
+                cx,
+            )
+        });
+
+        self.tabs.push(TabType::TableStructure(tab));
+        self.active_tab_ix = self.tabs.len() - 1;
+        self.scroll_tabbar_to_the_end(window, cx);
+
+        cx.notify();
+    }
+
+    pub fn update_last_table_structure_tab(
+        &mut self,
+        columns: Vec<blanco_core::connection_trait::ColumnInfo>,
+        indexes: Vec<blanco_core::connection_trait::IndexInfo>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(TabType::TableStructure(tab)) = self.tabs.last_mut() {
+            tab.update(cx, |tab, cx| {
+                tab.set_columns(columns, window, cx);
+                tab.set_indexes(indexes, window, cx);
+            });
+        }
     }
 
     fn set_active_tab(&mut self, ix: usize, _: &mut Window, cx: &mut Context<Self>) {
@@ -1404,6 +1466,29 @@ impl Render for EditorPanel {
                                             )
                                     )
                             }
+                            TabType::TableStructure(table_structure_tab) => {
+                                let label = table_structure_tab.read(cx).title.clone();
+                                let tab_index = ix;
+
+                                Tab::new()
+                                    .label(label)
+                                    .suffix(
+                                        h_flex()
+                                            .gap_2()
+                                            .items_center()
+                                            .pr_1()
+                                            .child(Icon::new(IconName::Sheet).text_color(cx.theme().blue))
+                                            .child(
+                                                Button::new(("close-table-structure-tab", ix))
+                                                    .ghost()
+                                                    .xsmall()
+                                                    .icon(IconName::Close)
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.close_tab(tab_index, cx);
+                                                    }))
+                                            )
+                                    )
+                            }
                         }
                     }))
                     .track_scroll(&self.tabbar_scroll_handle)
@@ -1634,6 +1719,16 @@ impl Render for EditorPanel {
                                 .h_full()
                                 .overflow_hidden()
                                 .child(snippet_editor.clone())
+                        )
+                    }
+                    TabType::TableStructure(table_structure_tab) => {
+                        // Table structure tab: Show column and index information
+                        this.child(
+                            div()
+                                .flex_1()
+                                .h_full()
+                                .overflow_hidden()
+                                .child(table_structure_tab.clone())
                         )
                     }
                 }

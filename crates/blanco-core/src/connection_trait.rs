@@ -89,6 +89,17 @@ pub struct ForeignKeyInfo {
     pub constraint_name: Option<String>,
 }
 
+/// Information about a database index
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct IndexInfo {
+    pub name: String,
+    pub algorithm: String,
+    pub is_unique: bool,
+    pub column_names: Vec<String>,
+    pub condition: Option<String>,
+    pub comment: Option<String>,
+}
+
 /// Information about a database column
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ColumnInfo {
@@ -288,6 +299,14 @@ pub trait Connection: Send + Sync {
         table_name: &str,
         schema: Option<&str>,
     ) -> Result<Vec<ColumnInfo>, anyhow::Error>;
+
+    /// Get index information for a specific table
+    /// Returns detailed index metadata including names, columns, and constraints
+    async fn get_indexes_for_table(
+        &self,
+        table_name: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<IndexInfo>, anyhow::Error>;
 
     /// Extract the primary table name from a SQL query
     /// Returns None if no table can be extracted (e.g., for complex queries or parsing errors)

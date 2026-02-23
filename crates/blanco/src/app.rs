@@ -325,6 +325,76 @@ impl BlancoApp {
                         );
                     });
                     cx.notify();
+                } else if let AppEvent::OpenTableStructure {
+                    connection_id,
+                    connection_name,
+                    db_type,
+                    database_name,
+                    schema_name,
+                    table_name,
+                    environment_type,
+                } = event
+                {
+                    tracing::info!(
+                        "OpenTableStructure called: {} (database: {:?}, schema: {:?}, table: {:?})",
+                        connection_id,
+                        database_name,
+                        schema_name,
+                        table_name,
+                    );
+
+                    // Create a new table structure tab
+                    app.editor_panel.update(cx, |panel, cx| {
+                        panel.create_table_structure_tab(
+                            crate::editor::TableStructureParams {
+                                connection_id: *connection_id,
+                                connection_name: connection_name.clone(),
+                                db_type: db_type.clone(),
+                                database_name: database_name.clone(),
+                                schema_name: schema_name.clone(),
+                                table_name: table_name.clone(),
+                                environment_type: *environment_type,
+                            },
+                            window,
+                            cx,
+                        );
+                    });
+
+                    // Load column and index data asynchronously
+                    let db_service = database::DatabaseService::global(cx).clone();
+                    let connection_id = *connection_id;
+                    let database_name = database_name.clone();
+                    let schema_name = schema_name.clone();
+                    let table_name = table_name.clone();
+                    let editor_panel = app.editor_panel.clone();
+
+                    cx.spawn_in(window, async move |_, window| {
+                        // Get connection and fetch column/index data
+                        use database::DatabaseServiceTrait;
+                        let columns_result = db_service
+                            .get_or_create_connection_by_id(connection_id, Some(&database_name))
+                            .await;
+
+                        if let Ok(connection) = columns_result {
+                            let columns = connection
+                                .get_columns_for_table(&table_name, schema_name.as_deref())
+                                .await
+                                .unwrap_or_default();
+                            let indexes = connection
+                                .get_indexes_for_table(&table_name, schema_name.as_deref())
+                                .await
+                                .unwrap_or_default();
+
+                            let _ = window.update(|window, cx| {
+                                editor_panel.update(cx, |panel, cx| {
+                                    panel.update_last_table_structure_tab(columns, indexes, window, cx);
+                                });
+                            });
+                        }
+                    })
+                    .detach();
+
+                    cx.notify();
                 }
             });
         subscriptions.push(subscription);

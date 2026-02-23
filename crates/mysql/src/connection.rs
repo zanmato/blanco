@@ -1,8 +1,8 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
-    connection_trait::ColumnType, connection_trait::ForeignKeyInfo, ColumnInfo, Connection,
-    QueryResult,
+    connection_trait::ColumnType, connection_trait::ForeignKeyInfo, connection_trait::IndexInfo,
+    ColumnInfo, Connection, QueryResult,
 };
 use futures::StreamExt;
 use smol::lock::RwLock;
@@ -871,5 +871,72 @@ impl Connection for MysqlConnection {
             table_name, column_name, reference_value
         );
         self.execute_query(&query, None, None).await
+    }
+
+    async fn get_indexes_for_table(
+        &self,
+        table_name: &str,
+        _schema: Option<&str>,
+    ) -> Result<Vec<IndexInfo>, anyhow::Error> {
+        tracing::debug!("📋 Getting indexes for table: {}", table_name);
+
+        let database = self
+            .initial_database
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+
+        let pool = self.get_or_create_pool(database).await?;
+
+        let query = "
+            SELECT
+                s.INDEX_NAME,
+                s.NON_UNIQUE,
+                s.INDEX_TYPE,
+                GROUP_CONCAT(s.COLUMN_NAME ORDER BY s.SEQ_IN_INDEX SEPARATOR ',') AS columns,
+                NULL AS idx_condition,
+                NULL AS idx_comment
+            FROM INFORMATION_SCHEMA.STATISTICS s
+            WHERE s.TABLE_SCHEMA = ?
+                AND s.TABLE_NAME = ?
+            GROUP BY s.INDEX_NAME, s.NON_UNIQUE, s.INDEX_TYPE
+            ORDER BY s.INDEX_NAME
+        ";
+
+        let rows = sqlx::query(query)
+            .bind(database)
+            .bind(table_name)
+            .fetch_all(&pool)
+            .await?;
+
+        let mut indexes = Vec::new();
+        for row in rows {
+            let name: String = row.try_get(0)?;
+            let non_unique: i32 = row.try_get(1).unwrap_or(1);
+            let index_type: String = row.try_get(2).unwrap_or_else(|_| "BTREE".to_string());
+            let columns_str: String = row.try_get(3).unwrap_or_default();
+            let condition: Option<String> = row.try_get(4).ok();
+            let comment: Option<String> = row.try_get(5).ok();
+
+            let column_names: Vec<String> = columns_str
+                .split(',')
+                .map(|s| s.to_string())
+                .collect();
+
+            indexes.push(IndexInfo {
+                name,
+                algorithm: index_type,
+                is_unique: non_unique == 0,
+                column_names,
+                condition,
+                comment,
+            });
+        }
+
+        tracing::debug!(
+            "✅ Found {} indexes for table: {}",
+            indexes.len(),
+            table_name
+        );
+        Ok(indexes)
     }
 }
