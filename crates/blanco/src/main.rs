@@ -28,22 +28,20 @@ mod transformers;
 
 use assets::Assets;
 use database::{ConnectionConfig, DatabaseService, DatabaseType};
-use gpui::{AppContext, Application, SharedString, WindowBounds, WindowOptions, px, size};
+use gpui::{AppContext, SharedString, WindowBounds, WindowOptions, px, size};
 use gpui_component::{Theme, ThemeRegistry};
+use gpui_platform::application;
 use std::path::PathBuf;
-use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
 use crate::{app_database::AppDatabase, app_settings::AppSettings, settings::Settings};
 
 fn main() {
-    let app = Application::new().with_assets(Assets);
+    tracing_subscriber::fmt::init();
+    let app = application()
+        .with_quit_mode(gpui::QuitMode::LastWindowClosed)
+        .with_assets(Assets);
 
     app.run(move |cx| {
-        tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer())
-            .with(tracing_subscriber::EnvFilter::from_default_env())
-            .init();
-
         gpui_component::init(cx);
         gpui_tokio::init(cx);
 
@@ -183,13 +181,6 @@ fn main() {
             window_background: gpui::WindowBackgroundAppearance::Opaque,
             app_id: Some("com.blanco.sql-editor".into()),
         };
-
-        cx.on_window_closed(|cx| {
-            if cx.windows().is_empty() {
-                cx.quit();
-            }
-        })
-        .detach();
 
         cx.spawn(async move |cx| {
             cx.open_window(window_options, |window, cx| {

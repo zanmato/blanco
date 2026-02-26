@@ -418,9 +418,10 @@ impl ResultsTableDelegate {
                         column_name,
                         old_value: change.old_value.clone(),
                         // Convert "NULL" string to None for proper NULL handling
-                        new_value: change.new_value.as_ref().and_then(|v| {
-                            if v == "NULL" { None } else { Some(v.clone()) }
-                        }),
+                        new_value: change
+                            .new_value
+                            .as_ref()
+                            .and_then(|v| if v == "NULL" { None } else { Some(v.clone()) }),
                     };
 
                     // Add to the consolidated operation
@@ -508,11 +509,8 @@ impl ResultsTableDelegate {
     pub fn set_query_result(&mut self, result: QueryResult, window: &Window, cx: &App) {
         // Clear previous edit state
         self.edit_state.clear_all();
+        self.clear_selection();
         self.pending_edit_cell = None;
-
-        // Explicitly clear and shrink the rows Vec to release memory back to the allocator
-        // This is necessary because replacing the Vec directly might not immediately free
-        // the underlying memory due to how Rust's allocator works
         self.rows.clear();
         self.rows.shrink_to_fit();
 

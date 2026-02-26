@@ -379,6 +379,43 @@ impl Connection for SqliteConnection {
         Ok(views)
     }
 
+    async fn get_queryable_entities(
+        &self,
+        schema: Option<&str>,
+    ) -> Result<Vec<blanco_core::connection_trait::QueryableEntity>, anyhow::Error> {
+        let schema_filter = schema.unwrap_or("main");
+        let query = format!(
+            "SELECT name, \
+                CASE WHEN type = 'view' THEN 'VIEW' ELSE 'TABLE' END as entity_type \
+             FROM {}.sqlite_master \
+             WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' \
+             ORDER BY name",
+            schema_filter
+        );
+
+        let result = self.execute_query(&query, None, None).await?;
+
+        use blanco_core::connection_trait::{EntityType, QueryableEntity};
+        let entities: Vec<QueryableEntity> = result
+            .rows
+            .into_iter()
+            .filter_map(|row| {
+                if row.len() >= 2 {
+                    let name = row[0].clone();
+                    let entity_type = match row[1].as_str() {
+                        "VIEW" => EntityType::View,
+                        _ => EntityType::Table,
+                    };
+                    Some(QueryableEntity { name, entity_type })
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        Ok(entities)
+    }
+
     fn supports_schemas(&self) -> bool {
         false // SQLite doesn't support schemas in the traditional sense
     }

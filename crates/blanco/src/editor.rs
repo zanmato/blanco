@@ -1023,7 +1023,6 @@ impl EditorPanel {
                             );
 
                         // Create chat panel with the LLM instance
-                        // Clone the Arc to share the LLM instance between sessions
                         let llm_for_panel = llm_instance.llm.clone();
                         let chat_panel = cx.new(|cx| {
                             ChatPanel::new(
@@ -1074,9 +1073,6 @@ impl EditorPanel {
     ///
     /// This cancels any pending lint task and schedules a new one after the debounce delay.
     fn lint_current_query_debounced(&mut self, range: lsp_types::Range, cx: &mut Context<Self>) {
-        // Cancel any pending lint task by dropping it
-        self._lint_debounce_task = Task::ready(());
-
         self._lint_debounce_task = cx.spawn(async move |entity_handle, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(LINT_DEBOUNCE_MS))

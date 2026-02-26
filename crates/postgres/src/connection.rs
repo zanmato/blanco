@@ -368,35 +368,10 @@ impl PostgresConnection {
 
     /// Create a new PostgreSQL connection from a connection string
     pub fn from_connection_string(connection_string: &str) -> Result<Self> {
-        tracing::info!(
-            "🔗 Creating PostgreSQL connection from: {}",
-            connection_string
-        );
-
         let connection_key = PgConnectionKey::from_connection_string(connection_string)?;
-        tracing::info!("📋 Parsed connection key:");
-        tracing::info!("   - host: {}", connection_key.host);
-        tracing::info!("   - port: {}", connection_key.port);
-        tracing::info!("   - database: {}", connection_key.database);
-        tracing::info!("   - username: {}", connection_key.username);
-        tracing::info!(
-            "   - password: [{}]",
-            if connection_key.password.is_some() {
-                "present"
-            } else {
-                "none"
-            }
-        );
-
         let server_key = connection_key.to_server_key();
         let display_name = Self::generate_server_display_name(&server_key);
         let server_connection_string = server_key.to_server_connection_string();
-
-        tracing::info!("🏢 Server key created:");
-        tracing::info!("   - host: {}", server_key.host);
-        tracing::info!("   - port: {}", server_key.port);
-        tracing::info!("   - username: {}", server_key.username);
-        tracing::info!("   - initial_database: {}", connection_key.database);
 
         Ok(Self {
             pools: Arc::new(RwLock::new(HashMap::new())),
@@ -1408,6 +1383,60 @@ impl Connection for PostgresConnection {
             .collect();
 
         Ok(matviews)
+    }
+
+    async fn get_queryable_entities(
+        &self,
+        schema: Option<&str>,
+    ) -> Result<Vec<blanco_core::connection_trait::QueryableEntity>, anyhow::Error> {
+        let schema_filter = schema.unwrap_or("public");
+        let query = "
+            SELECT table_name, entity_type
+            FROM (
+                SELECT table_name, 'TABLE' as entity_type
+                FROM information_schema.tables
+                WHERE table_schema = $1 AND table_type = 'BASE TABLE'
+                UNION ALL
+                SELECT table_name, 'VIEW' as entity_type
+                FROM information_schema.views
+                WHERE table_schema = $1
+                UNION ALL
+                SELECT matviewname, 'MATERIALIZED_VIEW' as entity_type
+                FROM pg_matviews
+                WHERE schemaname = $1
+            ) AS entities
+            ORDER BY table_name
+        ";
+
+        let result = self
+            .execute_query(
+                query,
+                self.initial_database.as_deref(),
+                Some(&[schema_filter.to_string()]),
+            )
+            .await?;
+
+        use blanco_core::connection_trait::{EntityType, QueryableEntity};
+        let entities: Vec<QueryableEntity> = result
+            .rows
+            .into_iter()
+            .filter_map(|row| {
+                if row.len() >= 2 {
+                    let name = row[0].clone();
+                    let entity_type = match row[1].as_str() {
+                        "TABLE" => EntityType::Table,
+                        "VIEW" => EntityType::View,
+                        "MATERIALIZED_VIEW" => EntityType::MaterializedView,
+                        _ => return None,
+                    };
+                    Some(QueryableEntity { name, entity_type })
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        Ok(entities)
     }
 
     fn supports_schemas(&self) -> bool {

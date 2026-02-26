@@ -179,23 +179,7 @@ impl MysqlConnection {
 
     /// Create a new MySQL connection from a connection string
     pub fn from_connection_string(connection_string: &str) -> Result<Self> {
-        tracing::info!("🔗 Creating MySQL connection from: {}", connection_string);
-
         let connection_key = MysqlConnectionKey::from_connection_string(connection_string)?;
-        tracing::info!("📋 Parsed connection key:");
-        tracing::info!("   - host: {}", connection_key.host);
-        tracing::info!("   - port: {}", connection_key.port);
-        tracing::info!("   - database: {}", connection_key.database);
-        tracing::info!("   - username: {}", connection_key.username);
-        tracing::info!(
-            "   - password: [{}]",
-            if connection_key.password.is_some() {
-                "REDACTED"
-            } else {
-                "NONE"
-            }
-        );
-
         let display_name = Self::generate_server_display_name(
             &connection_key.username,
             &connection_key.host,
@@ -687,6 +671,44 @@ impl Connection for MysqlConnection {
         Ok(views)
     }
 
+    async fn get_queryable_entities(
+        &self,
+        _schema: Option<&str>,
+    ) -> Result<Vec<blanco_core::connection_trait::QueryableEntity>, anyhow::Error> {
+        let database = self
+            .initial_database
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+
+        let pool = self.get_or_create_pool(database).await?;
+
+        let query = "
+            SELECT TABLE_NAME as name,
+                   CASE WHEN TABLE_TYPE = 'VIEW' THEN 'VIEW' ELSE 'TABLE' END as entity_type
+            FROM information_schema.tables
+            WHERE TABLE_SCHEMA = ?
+            ORDER BY TABLE_NAME
+        ";
+
+        let rows = sqlx::query(query).bind(database).fetch_all(&pool).await?;
+
+        use blanco_core::connection_trait::{EntityType, QueryableEntity};
+        let entities: Vec<QueryableEntity> = rows
+            .iter()
+            .filter_map(|row| {
+                let name: String = row.try_get(0).ok()?;
+                let entity_type_str: String = row.try_get(1).ok()?;
+                let entity_type = match entity_type_str.as_str() {
+                    "VIEW" => EntityType::View,
+                    _ => EntityType::Table,
+                };
+                Some(QueryableEntity { name, entity_type })
+            })
+            .collect();
+
+        Ok(entities)
+    }
+
     fn supports_schemas(&self) -> bool {
         false // MySQL doesn't support schemas in the PostgreSQL sense
     }
@@ -917,10 +939,7 @@ impl Connection for MysqlConnection {
             let condition: Option<String> = row.try_get(4).ok();
             let comment: Option<String> = row.try_get(5).ok();
 
-            let column_names: Vec<String> = columns_str
-                .split(',')
-                .map(|s| s.to_string())
-                .collect();
+            let column_names: Vec<String> = columns_str.split(',').map(|s| s.to_string()).collect();
 
             indexes.push(IndexInfo {
                 name,

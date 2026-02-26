@@ -1,6 +1,31 @@
 use async_trait::async_trait;
 use futures::Stream;
 
+/// Type of queryable database entity
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum EntityType {
+    Table,
+    View,
+    MaterializedView,
+}
+
+impl EntityType {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            EntityType::Table => "Table",
+            EntityType::View => "View",
+            EntityType::MaterializedView => "Materialized View",
+        }
+    }
+}
+
+/// A queryable database entity with its type
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct QueryableEntity {
+    pub name: String,
+    pub entity_type: EntityType,
+}
+
 /// Represents the semantic type of a database column
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ColumnType {
@@ -287,6 +312,39 @@ pub trait Connection: Send + Sync {
     ) -> Result<Vec<String>, anyhow::Error> {
         // Default implementation returns empty (most databases don't support materialized views)
         Ok(Vec::new())
+    }
+
+    /// Get all queryable entities (tables, views, materialized views) in a single query
+    /// This is more efficient than calling get_tables, get_views, and get_materialized_views separately
+    async fn get_queryable_entities(
+        &self,
+        schema: Option<&str>,
+    ) -> Result<Vec<QueryableEntity>, anyhow::Error> {
+        // Default implementation for backward compatibility - calls individual methods
+        let mut entities = Vec::new();
+
+        for name in self.get_tables(schema).await? {
+            entities.push(QueryableEntity {
+                name,
+                entity_type: EntityType::Table,
+            });
+        }
+
+        for name in self.get_views(schema).await? {
+            entities.push(QueryableEntity {
+                name,
+                entity_type: EntityType::View,
+            });
+        }
+
+        for name in self.get_materialized_views(schema).await? {
+            entities.push(QueryableEntity {
+                name,
+                entity_type: EntityType::MaterializedView,
+            });
+        }
+
+        Ok(entities)
     }
 
     /// Check if this connection type supports schemas (like PostgreSQL) or uses flat table structure (like SQLite)

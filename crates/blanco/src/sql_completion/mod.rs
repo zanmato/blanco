@@ -4,7 +4,8 @@ mod fetch;
 
 pub use cache::{CacheEntry, MetadataCache};
 pub use context::{ParsedSqlContext, SqlContextParser};
-pub use fetch::{fetch_columns, fetch_tables};
+pub use fetch::{fetch_columns, fetch_queryable_entities};
+use blanco_core::connection_trait::QueryableEntity;
 
 use anyhow::Result;
 use database::DatabaseServiceTrait;
@@ -52,7 +53,7 @@ impl SqlCompletionProvider {
     }
 
     /// Get cached tables or fetch them if not cached/expired
-    pub async fn get_cached_tables(&self) -> Result<Vec<String>> {
+    pub async fn get_cached_tables(&self) -> Result<Vec<QueryableEntity>> {
         // First, check if we have valid cached data
         if let Ok(cache) = self.cache.lock()
             && let Some(cached_tables) = &cache.tables
@@ -67,15 +68,16 @@ impl SqlCompletionProvider {
             "Fetching fresh tables for database '{}'",
             self.database_name
         );
-        let tables =
-            fetch_tables(&*self.db_service, self.connection_id, &self.database_name).await?;
+        let entities =
+            fetch_queryable_entities(&*self.db_service, self.connection_id, &self.database_name)
+                .await?;
 
         // Update cache
         if let Ok(mut cache) = self.cache.lock() {
-            cache.tables = Some(CacheEntry::new(tables.clone()));
+            cache.tables = Some(CacheEntry::new(entities.clone()));
         }
 
-        Ok(tables)
+        Ok(entities)
     }
 
     /// Get cached columns for a table or fetch them if not cached/expired
@@ -351,45 +353,47 @@ impl CompletionProvider for SqlCompletionProvider {
             if should_show_tables {
                 // Fetch tables using cache
                 match provider_clone.get_cached_tables().await {
-                    Ok(tables) => {
-                        // Filter tables based on current input
-                        let mut filtered_tables: Vec<String> = if context.current_word.is_empty() {
-                            tables.clone()
-                        } else {
-                            tables
-                                .into_iter()
-                                .filter(|table| {
-                                    table
-                                        .to_lowercase()
-                                        .starts_with(&context.current_word.to_lowercase())
-                                })
-                                .collect()
-                        };
+                    Ok(entities) => {
+                        // Filter entities based on current input
+                        let mut filtered_entities: Vec<QueryableEntity> =
+                            if context.current_word.is_empty() {
+                                entities.clone()
+                            } else {
+                                entities
+                                    .into_iter()
+                                    .filter(|entity| {
+                                        entity
+                                            .name
+                                            .to_lowercase()
+                                            .starts_with(&context.current_word.to_lowercase())
+                                    })
+                                    .collect()
+                            };
 
                         // Sort by shortest first to prioritize shorter names
-                        filtered_tables.sort_by_key(|a| a.len());
+                        filtered_entities.sort_by_key(|e| e.name.len());
 
                         tracing::debug!(
-                            "SQL Completion: Filter logic - context.current_word_is_empty: {}, filtered_tables: {:?}",
+                            "SQL Completion: Filter logic - context.current_word_is_empty: {}, filtered_entities: {:?}",
                             context.current_word.is_empty(),
-                            filtered_tables
+                            filtered_entities.iter().map(|e| &e.name).collect::<Vec<_>>()
                         );
 
                         // Convert to LSP completion items
-                        let completion_items = filtered_tables
+                        let completion_items = filtered_entities
                             .into_iter()
                             .take(20)
-                            .map(|table_name| {
+                            .map(|entity| {
                                 let insert_text_with_alias =
-                                    SqlContextParser::generate_table_abbreviation(&table_name);
+                                    SqlContextParser::generate_table_abbreviation(&entity.name);
                                 CompletionItem {
-                                    label: table_name.clone(),
+                                    label: entity.name.clone(),
                                     kind: Some(CompletionItemKind::CLASS),
                                     text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
                                         lsp_types::Range::new(start_pos, end_pos),
                                         insert_text_with_alias.clone(),
                                     ))),
-                                    detail: Some("Table".to_string()),
+                                    detail: Some(entity.entity_type.display_name().to_string()),
                                     insert_text: Some(insert_text_with_alias),
                                     ..Default::default()
                                 }

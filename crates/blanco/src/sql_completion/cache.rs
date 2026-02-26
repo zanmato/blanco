@@ -1,3 +1,4 @@
+use blanco_core::connection_trait::QueryableEntity;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -29,7 +30,7 @@ impl<T> CacheEntry<T> {
 /// Metadata cache for tables and columns
 #[derive(Debug, Clone)]
 pub struct MetadataCache {
-    pub tables: Option<CacheEntry<Vec<String>>>,
+    pub tables: Option<CacheEntry<Vec<QueryableEntity>>>,
     pub columns: HashMap<String, CacheEntry<Vec<String>>>,
 }
 
