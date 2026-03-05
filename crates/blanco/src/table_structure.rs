@@ -5,7 +5,7 @@ use gpui::{
 use gpui_component::{
     ActiveTheme, StyledExt,
     scroll::ScrollableElement,
-    table::{Column, Table, TableDelegate, TableState},
+    table::{Column, DataTable, TableDelegate, TableState},
     v_flex,
 };
 
@@ -164,7 +164,8 @@ impl Render for TableStructureTab {
                                         .border_color(theme.border)
                                         .overflow_hidden()
                                         .child(
-                                            Table::new(&self.columns_table_state).bordered(false),
+                                            DataTable::new(&self.columns_table_state)
+                                                .bordered(false),
                                         ),
                                 ),
                         )
@@ -188,7 +189,8 @@ impl Render for TableStructureTab {
                                         .border_color(theme.border)
                                         .overflow_hidden()
                                         .child(
-                                            Table::new(&self.indexes_table_state).bordered(false),
+                                            DataTable::new(&self.indexes_table_state)
+                                                .bordered(false),
                                         ),
                                 ),
                         )

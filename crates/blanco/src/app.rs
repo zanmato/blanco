@@ -4,8 +4,12 @@ use gpui::{
     Subscription, Task, Window, actions, div, prelude::FluentBuilder, px, svg,
 };
 use gpui_component::{
-    ActiveTheme, Root, TITLE_BAR_HEIGHT, TitleBar, WindowExt as _, button::Button,
-    menu::AppMenuBar, notification::NotificationType,
+    ActiveTheme, Root, TITLE_BAR_HEIGHT, TitleBar, WindowExt as _,
+    button::{Button, ButtonVariants as _},
+    dialog::{DialogAction, DialogClose, DialogFooter},
+    h_flex,
+    menu::AppMenuBar,
+    notification::NotificationType,
     resizable::{ResizableState, h_resizable, resizable_panel},
 };
 use serde::Deserialize;
@@ -387,7 +391,9 @@ impl BlancoApp {
 
                             let _ = window.update(|window, cx| {
                                 editor_panel.update(cx, |panel, cx| {
-                                    panel.update_last_table_structure_tab(columns, indexes, window, cx);
+                                    panel.update_last_table_structure_tab(
+                                        columns, indexes, window, cx,
+                                    );
                                 });
                             });
                         }
@@ -589,24 +595,33 @@ impl BlancoApp {
                 .h(gpui::px(700.))
                 .w(gpui::px(650.))
                 .child(modal_content.clone())
-                .footer({
-                    let content = content_clone.clone();
-                    move |ok, cancel, window, cx| {
-                        let test_btn = Button::new("test-connection")
-                            .label("Test Connection")
-                            .on_click({
-                                let content = content.clone();
-                                move |_, window, cx| {
-                                    content.update(cx, |modal, cx| {
-                                        modal.test_connection(window, cx);
-                                    });
-                                }
-                            })
-                            .into_any_element();
-
-                        vec![test_btn, cancel(window, cx), ok(window, cx)]
-                    }
-                })
+                .footer(
+                    DialogFooter::new()
+                        .child(
+                            Button::new("test-connection")
+                                .label("Test Connection")
+                                .on_click({
+                                    let content = content_clone.clone();
+                                    move |_, window, cx| {
+                                        content.update(cx, |modal, cx| {
+                                            modal.test_connection(window, cx);
+                                        });
+                                    }
+                                }),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .child(
+                                    DialogClose::new()
+                                        .child(Button::new("cancel").label("Cancel").outline()),
+                                )
+                                .child(
+                                    DialogAction::new()
+                                        .child(Button::new("ok").primary().label("Save")),
+                                ),
+                        ),
+                )
                 .on_ok({
                     let content = content_clone.clone();
                     let app_entity_ref = app_entity.clone();
@@ -695,24 +710,33 @@ impl BlancoApp {
                 .h(gpui::px(700.))
                 .w(gpui::px(650.))
                 .child(modal_content.clone())
-                .footer({
-                    let content = content_clone.clone();
-                    move |ok, cancel, window, cx| {
-                        let test_btn = Button::new("test-connection")
-                            .label("Test Connection")
-                            .on_click({
-                                let content = content.clone();
-                                move |_, window, cx| {
-                                    content.update(cx, |modal, cx| {
-                                        modal.test_connection(window, cx);
-                                    });
-                                }
-                            })
-                            .into_any_element();
-
-                        vec![test_btn, cancel(window, cx), ok(window, cx)]
-                    }
-                })
+                .footer(
+                    DialogFooter::new()
+                        .child(
+                            Button::new("test-connection")
+                                .label("Test Connection")
+                                .on_click({
+                                    let content = content_clone.clone();
+                                    move |_, window, cx| {
+                                        content.update(cx, |modal, cx| {
+                                            modal.test_connection(window, cx);
+                                        });
+                                    }
+                                }),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .child(
+                                    DialogClose::new()
+                                        .child(Button::new("cancel").label("Cancel").outline()),
+                                )
+                                .child(
+                                    DialogAction::new()
+                                        .child(Button::new("ok").primary().label("Save")),
+                                ),
+                        ),
+                )
                 .on_ok({
                     let content = content_clone.clone();
                     let app_entity_ref = app_entity.clone();

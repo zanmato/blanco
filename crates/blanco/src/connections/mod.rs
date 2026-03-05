@@ -1,8 +1,6 @@
 mod delegate;
 
 pub use delegate::ConnectionsTreeDelegate;
-use gpui_component::button::ButtonVariant;
-use gpui_component::dialog::DialogButtonProps;
 
 use crate::app_database::{AppDatabase, ConnectionData, EnvironmentType};
 use crate::app_events::{AppEvent, TreeItemType};
@@ -16,7 +14,8 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme as _, StyledExt, WindowExt,
-    button::{Button, ButtonVariants},
+    button::{Button, ButtonVariants as _},
+    dialog::{DialogAction, DialogClose, DialogFooter},
     label::Label,
 };
 
@@ -1252,29 +1251,29 @@ impl ConnectionsPanel {
                     .title("Export Table Data")
                     .h(px(450.0))
                     .child(modal_content.clone())
-                    .footer({
-                        move |_ok, _cancel, _window, _cx| {
-                            vec![
-                                Button::new("export-cancel").label("Cancel").on_click(
-                                    |_, window, cx| {
-                                        window.close_dialog(cx);
-                                    },
+                    .footer(
+                        DialogFooter::new()
+                            .child(
+                                DialogClose::new()
+                                    .child(Button::new("export-cancel").label("Cancel").outline()),
+                            )
+                            .child(
+                                DialogAction::new().child(
+                                    Button::new("export-submit")
+                                        .primary()
+                                        .label("Export")
+                                        .on_click({
+                                            let modal_for_button = modal_clone.clone();
+                                            move |_, window, cx| {
+                                                modal_for_button.update(cx, |modal, cx| {
+                                                    modal.start_export(window, cx);
+                                                });
+                                                window.close_dialog(cx);
+                                            }
+                                        }),
                                 ),
-                                Button::new("export-submit")
-                                    .primary()
-                                    .label("Export")
-                                    .on_click({
-                                        let modal_for_button = modal_clone.clone();
-                                        move |_, window, cx| {
-                                            modal_for_button.update(cx, |modal, cx| {
-                                                modal.start_export(window, cx);
-                                            });
-                                            window.close_dialog(cx);
-                                        }
-                                    }),
-                            ]
-                        }
-                    })
+                            ),
+                    )
             })
         } else {
             tracing::error!("Cannot export: No table name provided");
@@ -1304,43 +1303,46 @@ impl ConnectionsPanel {
 
         window.open_dialog(cx, move |dialog, _, _| {
             dialog
-                .confirm()
+                .title("Confirm Remove Connection")
                 .child(format!(
                     "Are you sure you want to remove the connection \"{}\"?",
                     connection_name
                 ))
-                .button_props(
-                    DialogButtonProps::default()
-                        .cancel_text("No")
-                        .cancel_variant(ButtonVariant::Secondary)
-                        .ok_text("Yes")
-                        .ok_variant(ButtonVariant::Danger),
-                )
-                .on_ok({
-                    let this_handle = this_handle.clone();
-                    move |_, _, cx| {
-                        let this_handle = this_handle.clone();
-                        let app_database = AppDatabase::global(cx).clone();
-                        cx.spawn(async move |cx| {
-                            if let Err(e) = app_database.delete_connection(connection_id).await {
-                                tracing::error!("Failed to delete connection: {}", e);
-                                return;
-                            }
+                .footer(
+                    DialogFooter::new()
+                        .child(
+                            DialogClose::new().child(Button::new("cancel").label("No").outline()),
+                        )
+                        .child(DialogAction::new().child(
+                            Button::new("confirm").danger().label("Yes").on_click({
+                                let this_handle = this_handle.clone();
+                                move |_, window, cx| {
+                                    let this_handle = this_handle.clone();
+                                    let app_database = AppDatabase::global(cx).clone();
+                                    cx.spawn(async move |cx| {
+                                        if let Err(e) =
+                                            app_database.delete_connection(connection_id).await
+                                        {
+                                            tracing::error!("Failed to delete connection: {}", e);
+                                            return;
+                                        }
 
-                            let _ = this_handle.update(cx, |this, cx| {
-                                this.connections.retain(|c| c.id != Some(connection_id));
-                                this.loaded_connections.remove(&connection_id);
-                                this.expanded_connections.remove(&connection_id);
-                                this.database_metadata.remove(&connection_id);
-                                this.update_tree_items(cx);
-                                cx.notify();
-                            });
-                        })
-                        .detach();
-                        true
-                    }
-                })
-                .on_cancel(|_, _, _| true)
+                                        let _ = this_handle.update(cx, |this, cx| {
+                                            this.connections
+                                                .retain(|c| c.id != Some(connection_id));
+                                            this.loaded_connections.remove(&connection_id);
+                                            this.expanded_connections.remove(&connection_id);
+                                            this.database_metadata.remove(&connection_id);
+                                            this.update_tree_items(cx);
+                                            cx.notify();
+                                        });
+                                    })
+                                    .detach();
+                                    window.close_dialog(cx);
+                                }
+                            }),
+                        )),
+                )
         });
     }
 

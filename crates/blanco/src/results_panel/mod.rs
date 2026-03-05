@@ -10,7 +10,7 @@ use gpui_component::{
     ActiveTheme, WindowExt as _,
     input::{InputEvent, InputState},
     notification::NotificationType,
-    table::{Table, TableDelegate, TableEvent, TableState},
+    table::{DataTable, TableDelegate, TableEvent, TableState},
     v_flex,
 };
 
@@ -1081,7 +1081,10 @@ impl ResultsPanel {
             let delegate = state.delegate_mut();
 
             // Store original value before editing
-            if let Some(cell_value) = delegate.rows.get(action.row).and_then(|r| r.get(action.col))
+            if let Some(cell_value) = delegate
+                .rows
+                .get(action.row)
+                .and_then(|r| r.get(action.col))
             {
                 delegate
                     .edit_state
@@ -1371,7 +1374,7 @@ impl Render for ResultsPanel {
                     .flex_1() // Allow table to fill available space
                     .overflow_hidden()
                     .min_h(px(200.0)) // Minimum height for table
-                    .child(Table::new(&self.table_state).bordered(false)),
+                    .child(DataTable::new(&self.table_state).bordered(false)),
             )
     }
 }

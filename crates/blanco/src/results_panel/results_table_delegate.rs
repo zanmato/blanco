@@ -42,6 +42,22 @@ fn format_value_for_display(value: &str) -> String {
         .replace('\t', "⇥")
 }
 
+/// Compare two string values as numeric values.
+/// Returns ordering treating empty/null as largest (sorts to end for ascending).
+fn compare_numeric(a: &str, b: &str) -> std::cmp::Ordering {
+    let a_parsed = a.parse::<f64>();
+    let b_parsed = b.parse::<f64>();
+
+    match (a_parsed, b_parsed) {
+        (Ok(a_num), Ok(b_num)) => a_num
+            .partial_cmp(&b_num)
+            .unwrap_or(std::cmp::Ordering::Equal),
+        (Ok(_), Err(_)) => std::cmp::Ordering::Less, // Valid number < invalid
+        (Err(_), Ok(_)) => std::cmp::Ordering::Greater, // Invalid > valid number
+        (Err(_), Err(_)) => a.cmp(b),                // Both invalid, fall back to string
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct TableChange {
     pub change_type: ChangeType,
@@ -914,18 +930,6 @@ impl TableDelegate for ResultsTableDelegate {
                         )
                     }),
             )
-            .when(is_row_number_col, |this| {
-                this.on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |table, event: &gpui::MouseDownEvent, _window, cx| {
-                        if event.click_count == 1 {
-                            table.select_all_rows(cx);
-                            table.refresh(cx);
-                            cx.notify();
-                        }
-                    }),
-                )
-            })
     }
 
     fn render_td(
@@ -1309,14 +1313,28 @@ impl TableDelegate for ResultsTableDelegate {
             return;
         }
 
-        // Sort rows by the specified column (excluding row number column)
+        // Get the column type (adjust for row number column)
+        let col_type = self
+            .column_types
+            .get(col_ix - 1)
+            .copied()
+            .unwrap_or(ColumnType::Unknown);
+        let is_numeric = col_type.is_numeric();
+
+        // Sort rows by the specified column
         self.rows.sort_by(|a, b| {
             let a_val = a.get(col_ix).map(|s| s.as_str()).unwrap_or("");
             let b_val = b.get(col_ix).map(|s| s.as_str()).unwrap_or("");
 
+            let ordering = if is_numeric {
+                compare_numeric(a_val, b_val)
+            } else {
+                a_val.cmp(b_val)
+            };
+
             match sort {
-                ColumnSort::Descending => b_val.cmp(a_val),
-                _ => a_val.cmp(b_val),
+                ColumnSort::Descending => ordering.reverse(),
+                _ => ordering,
             }
         });
 

@@ -5,7 +5,8 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme, Sizable, WindowExt as _,
-    button::{Button, ButtonVariants},
+    button::{Button, ButtonVariants as _},
+    dialog::{DialogAction, DialogClose, DialogFooter},
     h_flex,
     highlighter::Diagnostic,
     input::{Input, InputEvent, InputState, TabSize},
@@ -712,7 +713,14 @@ impl EditorPanel {
                 .title("Query Parameters")
                 .w(px(500.))
                 .child(param_form.clone())
-                .confirm()
+                .footer(
+                    DialogFooter::new()
+                        .child(
+                            DialogClose::new()
+                                .child(Button::new("cancel").label("Cancel").outline()),
+                        )
+                        .child(DialogAction::new().child(Button::new("ok").primary().label("Run"))),
+                )
                 .on_ok({
                     let param_form = param_form.clone();
                     let database_name = database_name.clone();
@@ -868,6 +876,7 @@ impl EditorPanel {
             let mut editor = InputState::new(window, cx)
                 .code_editor("sql".to_string())
                 .line_number(true)
+                .folding(false)
                 .tab_size(TabSize {
                     tab_size: 2,
                     hard_tabs: false,
@@ -1285,12 +1294,17 @@ impl EditorPanel {
                             .title("Rename Tab")
                             .w(px(300.))
                             .child(form_for_modal.clone())
-                            .footer({
-                                let _form = form_clone.clone();
-                                move |ok, cancel, window, cx| {
-                                    vec![cancel(window, cx), ok(window, cx)]
-                                }
-                            })
+                            .footer(
+                                DialogFooter::new()
+                                    .child(
+                                        DialogClose::new()
+                                            .child(Button::new("cancel").label("Cancel").outline()),
+                                    )
+                                    .child(
+                                        DialogAction::new()
+                                            .child(Button::new("ok").primary().label("Rename")),
+                                    ),
+                            )
                             .on_ok({
                                 let form = form_clone.clone();
                                 move |_modal, window, cx| {
