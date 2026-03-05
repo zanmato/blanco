@@ -1,7 +1,7 @@
 [package]
 name = "postgres"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "PostgreSQL database implementation for Blanco SQL editor"
 
 [dependencies]
@@ -22,7 +22,7 @@ sqlx = { workspace = true, features = [
 ] }
 
 # SQL parsing
-sql-parse = { workspace = true }
+sqlparser = { workspace = true }
 
 # Common dependencies
 serde_json = { workspace = true }

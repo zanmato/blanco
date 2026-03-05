@@ -2,8 +2,8 @@ use crate::sql_parser::PostgresTableExtractor;
 use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
-    connection_trait::ColumnType, connection_trait::ForeignKeyInfo, connection_trait::IndexInfo,
-    ColumnInfo, Connection, QueryResult,
+    ColumnInfo, Connection, QueryResult, connection_trait::ColumnType,
+    connection_trait::ForeignKeyInfo, connection_trait::IndexInfo,
 };
 use futures::{Stream, StreamExt};
 use smol::lock::RwLock;
@@ -744,43 +744,166 @@ impl PostgresConnection {
         }
     }
 
-    /// Handle timestamp types
+    /// Handle integer types using the raw PostgreSQL type name
+    fn handle_integer_type(
+        &self,
+        row: &sqlx::postgres::PgRow,
+        column_index: usize,
+        raw_type: &str,
+    ) -> String {
+        match raw_type.to_lowercase().as_str() {
+            // 16-bit integers
+            "smallint" | "int2" | "smallserial" => {
+                if let Ok(val) = row.try_get::<Option<i16>, _>(column_index) {
+                    return val
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "NULL".to_string());
+                }
+            }
+            // 32-bit integers
+            "integer" | "int" | "int4" | "serial" => {
+                if let Ok(val) = row.try_get::<Option<i32>, _>(column_index) {
+                    return val
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "NULL".to_string());
+                }
+            }
+            // 64-bit integers
+            "bigint" | "int8" | "bigserial" => {
+                if let Ok(val) = row.try_get::<Option<i64>, _>(column_index) {
+                    return val
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "NULL".to_string());
+                }
+            }
+            _ => {
+                // Fallback: try sizes in order
+                if let Ok(val) = row.try_get::<Option<i16>, _>(column_index) {
+                    return val
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "NULL".to_string());
+                }
+                if let Ok(val) = row.try_get::<Option<i32>, _>(column_index) {
+                    return val
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "NULL".to_string());
+                }
+                if let Ok(val) = row.try_get::<Option<i64>, _>(column_index) {
+                    return val
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "NULL".to_string());
+                }
+            }
+        }
+        "NULL".to_string()
+    }
+
+    /// Handle numeric types using the raw PostgreSQL type name
+    fn handle_numeric_type(
+        &self,
+        row: &sqlx::postgres::PgRow,
+        column_index: usize,
+        raw_type: &str,
+    ) -> String {
+        match raw_type.to_lowercase().as_str() {
+            // 32-bit float
+            "real" | "float4" => {
+                if let Ok(val) = row.try_get::<Option<f32>, _>(column_index) {
+                    return val
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "NULL".to_string());
+                }
+            }
+            // 64-bit float
+            "double precision" | "float8" => {
+                if let Ok(val) = row.try_get::<Option<f64>, _>(column_index) {
+                    return val
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "NULL".to_string());
+                }
+            }
+            // Decimal/numeric types
+            "numeric" | "decimal" | "money" => {
+                if let Ok(val) = row.try_get::<Option<rust_decimal::Decimal>, _>(column_index) {
+                    return val
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "NULL".to_string());
+                }
+            }
+            _ => {
+                // Fallback: try types in order
+                if let Ok(val) = row.try_get::<Option<rust_decimal::Decimal>, _>(column_index) {
+                    return val
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "NULL".to_string());
+                }
+                if let Ok(val) = row.try_get::<Option<f64>, _>(column_index) {
+                    return val
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "NULL".to_string());
+                }
+            }
+        }
+        "NULL".to_string()
+    }
+
+    /// Handle timestamp types using the raw PostgreSQL type name
     fn handle_timestamp_type(
         &self,
         row: &sqlx::postgres::PgRow,
         column_index: usize,
-        column_type: &str,
+        raw_type: &str,
     ) -> String {
-        // Handle TIMESTAMPTZ (PostgreSQL internal name for timestamp with time zone)
-        if column_type == "TIMESTAMPTZ" || column_type.contains("with time zone") {
-            // Try DateTime<Utc> for TIMESTAMPTZ
-            if let Ok(val) = row.try_get::<Option<chrono::DateTime<chrono::Local>>, _>(column_index)
-            {
-                return val
-                    .map(|v| v.to_rfc3339())
-                    .unwrap_or_else(|| "NULL".to_string());
+        match raw_type.to_lowercase().as_str() {
+            // Timestamp with timezone
+            "timestamptz" => {
+                if let Ok(val) =
+                    row.try_get::<Option<chrono::DateTime<chrono::Local>>, _>(column_index)
+                {
+                    return val
+                        .map(|v| v.to_rfc3339())
+                        .unwrap_or_else(|| "NULL".to_string());
+                }
             }
-            // Try DateTime<FixedOffset> as fallback
-            if let Ok(val) =
-                row.try_get::<Option<chrono::DateTime<chrono::FixedOffset>>, _>(column_index)
-            {
-                return val
-                    .map(|v| v.format("%Y-%m-%d %H:%M:%S %:z").to_string())
-                    .unwrap_or_else(|| "NULL".to_string());
+            // Timestamp without timezone
+            "timestamp" => {
+                if let Ok(val) = row.try_get::<Option<chrono::NaiveDateTime>, _>(column_index) {
+                    return val
+                        .map(|v| v.format("%Y-%m-%d %H:%M:%S").to_string())
+                        .unwrap_or_else(|| "NULL".to_string());
+                }
             }
-        }
-
-        // Try timestamp with UTC for regular timestamp types
-        if let Ok(val) = row.try_get::<Option<chrono::DateTime<chrono::Local>>, _>(column_index) {
-            return val
-                .map(|v| v.format("%Y-%m-%d %H:%M:%S").to_string())
-                .unwrap_or_else(|| "NULL".to_string());
-        }
-        // Try timestamp without timezone
-        if let Ok(val) = row.try_get::<Option<chrono::NaiveDateTime>, _>(column_index) {
-            return val
-                .map(|v| v.format("%Y-%m-%d %H:%M:%S").to_string())
-                .unwrap_or_else(|| "NULL".to_string());
+            // Date
+            "date" => {
+                if let Ok(val) = row.try_get::<Option<chrono::NaiveDate>, _>(column_index) {
+                    return val
+                        .map(|v| v.format("%Y-%m-%d").to_string())
+                        .unwrap_or_else(|| "NULL".to_string());
+                }
+            }
+            // Time without timezone
+            "time" => {
+                if let Ok(val) = row.try_get::<Option<chrono::NaiveTime>, _>(column_index) {
+                    return val
+                        .map(|v| v.format("%H:%M:%S").to_string())
+                        .unwrap_or_else(|| "NULL".to_string());
+                }
+            }
+            // Time with timezone
+            "timetz" => {
+                if let Ok(val) = row.try_get::<Option<chrono::NaiveTime>, _>(column_index) {
+                    return val
+                        .map(|v| v.format("%H:%M:%S").to_string())
+                        .unwrap_or_else(|| "NULL".to_string());
+                }
+            }
+            // Interval
+            "interval" => {
+                if let Ok(val) = row.try_get::<Option<String>, _>(column_index) {
+                    return val.unwrap_or_else(|| "NULL".to_string());
+                }
+            }
+            _ => {}
         }
         "NULL".to_string()
     }
@@ -877,7 +1000,11 @@ impl PostgresConnection {
                             // Try UTF-8 conversion first
                             match String::from_utf8(bytes.to_vec()) {
                                 Ok(string_val) => {
-                                    tracing::debug!("Successfully converted unknown type '{}' to string via bytes: {}", column_type, string_val);
+                                    tracing::debug!(
+                                        "Successfully converted unknown type '{}' to string via bytes: {}",
+                                        column_type,
+                                        string_val
+                                    );
                                     string_val
                                 }
                                 Err(_) => {
@@ -886,7 +1013,11 @@ impl PostgresConnection {
                                         .iter()
                                         .map(|b| format!("{:02x}", b))
                                         .collect::<String>();
-                                    tracing::warn!("Unable to convert column type '{}' to valid UTF-8, showing hex: {}...", column_type, &hex_repr[..hex_repr.len().min(40)]);
+                                    tracing::warn!(
+                                        "Unable to convert column type '{}' to valid UTF-8, showing hex: {}...",
+                                        column_type,
+                                        &hex_repr[..hex_repr.len().min(40)]
+                                    );
                                     format!(
                                         "[binary data: {} bytes, starts with: {}]",
                                         bytes.len(),
@@ -896,7 +1027,11 @@ impl PostgresConnection {
                             }
                         }
                         Err(_) => {
-                            tracing::warn!("Unable to access raw bytes for column type '{}' at index {}, falling back to NULL", column_type, column_index);
+                            tracing::warn!(
+                                "Unable to access raw bytes for column type '{}' at index {}, falling back to NULL",
+                                column_type,
+                                column_index
+                            );
                             "NULL".to_string()
                         }
                     }
@@ -919,12 +1054,18 @@ impl PostgresConnection {
         row: &sqlx::postgres::PgRow,
         column_index: usize,
         column_types: &[ColumnType],
+        raw_column_types: &[String],
     ) -> String {
         // Get column type first for type-based routing
         let column_type = column_types
             .get(column_index)
             .copied()
             .unwrap_or(ColumnType::Unknown);
+
+        let raw_type = raw_column_types
+            .get(column_index)
+            .map(|s| s.as_str())
+            .unwrap_or("");
 
         // 1. Handle NULL values immediately
         if Self::is_null_value(row, column_index) {
@@ -934,72 +1075,38 @@ impl PostgresConnection {
         // 2. Route based on PostgreSQL type (column-type-first approach)
         match column_type {
             // Array types - priority handling
-            ColumnType::Array => {
-                // For arrays, we need the original type name from sqlx
-                // Get the raw type info to determine the array element type
-                let type_name = if let Ok(col) = row.try_get_raw(column_index) {
-                    col.type_info().name().to_string()
-                } else {
-                    "array".to_string()
-                };
-                self.handle_array_type(row, column_index, &type_name)
-            }
+            ColumnType::Array => self.handle_array_type(row, column_index, raw_type),
 
             // Integer types
             ColumnType::Integer | ColumnType::UnsignedInteger => {
-                // Try different integer sizes
-                if let Ok(val) = row.try_get::<Option<i16>, _>(column_index) {
-                    val.map(|v| v.to_string())
-                        .unwrap_or_else(|| "NULL".to_string())
-                } else if let Ok(val) = row.try_get::<Option<i32>, _>(column_index) {
-                    val.map(|v| v.to_string())
-                        .unwrap_or_else(|| "NULL".to_string())
-                } else if let Ok(val) = row.try_get::<Option<i64>, _>(column_index) {
-                    val.map(|v| v.to_string())
-                        .unwrap_or_else(|| "NULL".to_string())
-                } else {
-                    "NULL".to_string()
-                }
+                self.handle_integer_type(row, column_index, raw_type)
             }
 
             // Numeric types
-            ColumnType::Numeric => {
-                if let Ok(val) = row.try_get::<Option<rust_decimal::Decimal>, _>(column_index) {
-                    val.map(|v| v.to_string())
-                        .unwrap_or_else(|| "NULL".to_string())
-                } else if let Ok(val) = row.try_get::<Option<f32>, _>(column_index) {
-                    val.map(|v| v.to_string())
-                        .unwrap_or_else(|| "NULL".to_string())
-                } else if let Ok(val) = row.try_get::<Option<f64>, _>(column_index) {
-                    val.map(|v| v.to_string())
-                        .unwrap_or_else(|| "NULL".to_string())
-                } else {
-                    "NULL".to_string()
-                }
-            }
+            ColumnType::Numeric => self.handle_numeric_type(row, column_index, raw_type),
 
             // Boolean type
-            ColumnType::Boolean => self.handle_bool_type(row, column_index, ""),
+            ColumnType::Boolean => self.handle_bool_type(row, column_index, raw_type),
 
             // Text type
-            ColumnType::Text => self.handle_string_type(row, column_index, ""),
+            ColumnType::Text => self.handle_string_type(row, column_index, raw_type),
 
             // DateTime types
-            ColumnType::DateTime => self.handle_timestamp_type(row, column_index, ""),
+            ColumnType::DateTime => self.handle_timestamp_type(row, column_index, raw_type),
 
             // UUID type
-            ColumnType::Uuid => self.handle_uuid_type(row, column_index, ""),
+            ColumnType::Uuid => self.handle_uuid_type(row, column_index, raw_type),
 
             // JSON types
-            ColumnType::Json => self.handle_json_type(row, column_index, ""),
+            ColumnType::Json => self.handle_json_type(row, column_index, raw_type),
 
             // Binary type
-            ColumnType::Binary => self.handle_unknown_type(row, column_index, "bytea"),
+            ColumnType::Binary => self.handle_unknown_type(row, column_index, raw_type),
 
             // Unknown/custom types - use optimized raw value access
             ColumnType::Unknown => {
                 tracing::warn!("Unknown column type falling back to raw value access");
-                self.handle_unknown_type(row, column_index, "unknown")
+                self.handle_unknown_type(row, column_index, raw_type)
             }
         }
     }
@@ -1130,6 +1237,7 @@ impl PostgresConnection {
 
         let mut columns: Vec<String> = Vec::new();
         let mut column_types: Vec<ColumnType> = Vec::new();
+        let mut raw_column_types: Vec<String> = Vec::new();
         let mut rows: Vec<Vec<String>> = Vec::new();
         let mut rows_affected: u64 = 0;
 
@@ -1151,17 +1259,29 @@ impl PostgresConnection {
                             .map(|col| col.name().to_string())
                             .collect();
 
-                        column_types = row
+                        let (types, raw_types): (Vec<ColumnType>, Vec<String>) = row
                             .columns()
                             .iter()
-                            .map(|col| Self::map_postgres_type(col.type_info().name()))
-                            .collect();
+                            .map(|col| {
+                                let raw_type = col.type_info().name().to_string();
+                                (Self::map_postgres_type(&raw_type), raw_type)
+                            })
+                            .unzip();
+                        column_types = types;
+                        raw_column_types = raw_types;
                     }
 
                     // Convert row to strings immediately to avoid memory doubling
                     let row_idx = rows.len();
                     let row_data: Vec<String> = (0..columns.len())
-                        .map(|i| self.convert_row_value_to_string(&row, i, &column_types))
+                        .map(|i| {
+                            self.convert_row_value_to_string(
+                                &row,
+                                i,
+                                &column_types,
+                                &raw_column_types,
+                            )
+                        })
                         .collect();
 
                     // Collect OIDs from Unknown (regclass) columns for later resolution
@@ -1591,6 +1711,7 @@ impl Connection for PostgresConnection {
         let mut stream = rows_stream;
         let mut columns = Vec::new();
         let mut column_types = Vec::new();
+        let mut raw_column_types = Vec::new();
 
         // Process the first row to get column information
         let mut first_row_data = None;
@@ -1604,14 +1725,22 @@ impl Connection for PostgresConnection {
                     .iter()
                     .map(|col| col.name().to_string())
                     .collect();
-                column_types = row
+
+                let (types, raw_types): (Vec<ColumnType>, Vec<String>) = row
                     .columns()
                     .iter()
-                    .map(|col| Self::map_postgres_type(col.type_info().name()))
-                    .collect();
+                    .map(|col| {
+                        let raw_type = col.type_info().name().to_string();
+                        (Self::map_postgres_type(&raw_type), raw_type)
+                    })
+                    .unzip();
+                column_types = types;
+                raw_column_types = raw_types;
 
                 let row_data: Vec<String> = (0..columns.len())
-                    .map(|i| self.convert_row_value_to_string(&row, i, &column_types))
+                    .map(|i| {
+                        self.convert_row_value_to_string(&row, i, &column_types, &raw_column_types)
+                    })
                     .collect();
 
                 first_row_data = Some(row_data.clone());
@@ -1619,7 +1748,9 @@ impl Connection for PostgresConnection {
             } else {
                 // Process subsequent rows
                 let row_data: Vec<String> = (0..columns.len())
-                    .map(|i| self.convert_row_value_to_string(&row, i, &column_types))
+                    .map(|i| {
+                        self.convert_row_value_to_string(&row, i, &column_types, &raw_column_types)
+                    })
                     .collect();
                 rows.push(row_data);
             }

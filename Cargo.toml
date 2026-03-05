@@ -17,8 +17,14 @@ publish = false
 
 [workspace.dependencies]
 # Core GPUI dependencies
-gpui = { git = "https://github.com/zed-industries/zed", rev = "8b5328cad3d9ca3576296be574a1c7bfbcaf3557" }
-gpui-macros = "0.2.2"
+gpui = { git = "https://github.com/zed-industries/zed", rev = "d08d98f6c1c1aefb342de072d9beac25eaf6130f" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "d08d98f6c1c1aefb342de072d9beac25eaf6130f", features = [
+    "font-kit",
+    "x11",
+    "wayland",
+    "runtime_shaders",
+] }
+gpui_macros = { git = "https://github.com/zed-industries/zed", rev = "d08d98f6c1c1aefb342de072d9beac25eaf6130f" }
 gpui-component = { path = "vendor/gpui-component/crates/ui", features = [
     "tree-sitter-languages",
 ] }
@@ -66,7 +72,7 @@ sqlx = { version = "0.8", features = [
 rust_decimal = "1.32"
 
 # SQL parsing
-sql-parse = "0.28"
+sqlparser = "0.61"
 
 # HTTP client
 http = "1.0"
@@ -113,3 +119,6 @@ opt-level = 3
 [profile.profiling]
 inherits = "release"
 debug = true
+
+[patch.crates-io]
+tree-sitter-sequel = { path = "../tree-sitter-sql" }

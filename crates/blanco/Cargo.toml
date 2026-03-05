@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 # Workspace dependencies
 gpui = { workspace = true }
+gpui_platform = { workspace = true }
 gpui-component = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }

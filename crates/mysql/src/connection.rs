@@ -1,13 +1,13 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
-    connection_trait::ColumnType, connection_trait::ForeignKeyInfo, connection_trait::IndexInfo,
-    ColumnInfo, Connection, QueryResult,
+    ColumnInfo, Connection, QueryResult, connection_trait::ColumnType,
+    connection_trait::ForeignKeyInfo, connection_trait::IndexInfo,
 };
 use futures::StreamExt;
 use smol::lock::RwLock;
 use sqlx::mysql::MySqlPoolOptions;
-use sqlx::{Column, Row, ValueRef};
+use sqlx::{Column, Row};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -323,140 +323,246 @@ impl MysqlConnection {
         Ok(database)
     }
 
+    /// Handle MySQL integer types using the raw type name (already uppercased)
+    fn handle_integer_type(
+        &self,
+        row: &sqlx::mysql::MySqlRow,
+        column_index: usize,
+        raw_type: &str,
+    ) -> String {
+        // Check for TINYINT(1) which is often used for booleans
+        if raw_type.contains("TINYINT") {
+            // Check if it's TINYINT(1) - boolean representation
+            if raw_type.contains("TINYINT(1)") || raw_type == "TINYINT" {
+                if let Ok(Some(v)) = row.try_get::<Option<i8>, _>(column_index) {
+                    if v == 0 || v == 1 {
+                        return if v == 1 { "true" } else { "false" }.to_string();
+                    }
+                    return v.to_string();
+                }
+            }
+            if let Ok(Some(v)) = row.try_get::<Option<i8>, _>(column_index) {
+                return v.to_string();
+            }
+        }
+
+        // SMALLINT
+        if raw_type.contains("SMALLINT") {
+            if let Ok(Some(v)) = row.try_get::<Option<i16>, _>(column_index) {
+                return v.to_string();
+            }
+        }
+
+        // MEDIUMINT
+        if raw_type.contains("MEDIUMINT") {
+            if let Ok(Some(v)) = row.try_get::<Option<i32>, _>(column_index) {
+                return v.to_string();
+            }
+        }
+
+        // INT, INTEGER
+        if raw_type.contains("INT") && !raw_type.contains("TINYINT")
+            && !raw_type.contains("SMALLINT") && !raw_type.contains("MEDIUMINT")
+            && !raw_type.contains("BIGINT") {
+            if let Ok(Some(v)) = row.try_get::<Option<i32>, _>(column_index) {
+                return v.to_string();
+            }
+        }
+
+        // BIGINT
+        if raw_type.contains("BIGINT") {
+            if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(column_index) {
+                return v.to_string();
+            }
+        }
+
+        // Fallback: try i64
+        if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(column_index) {
+            return v.to_string();
+        }
+        "NULL".to_string()
+    }
+
+    /// Handle MySQL unsigned integer types (raw_type already uppercased)
+    fn handle_unsigned_integer_type(
+        &self,
+        row: &sqlx::mysql::MySqlRow,
+        column_index: usize,
+        raw_type: &str,
+    ) -> String {
+        if raw_type.contains("TINYINT") {
+            if let Ok(Some(v)) = row.try_get::<Option<u8>, _>(column_index) {
+                return v.to_string();
+            }
+        }
+        if raw_type.contains("SMALLINT") {
+            if let Ok(Some(v)) = row.try_get::<Option<u16>, _>(column_index) {
+                return v.to_string();
+            }
+        }
+        if raw_type.contains("MEDIUMINT") {
+            if let Ok(Some(v)) = row.try_get::<Option<u32>, _>(column_index) {
+                return v.to_string();
+            }
+        }
+        if raw_type.contains("BIGINT") {
+            if let Ok(Some(v)) = row.try_get::<Option<u64>, _>(column_index) {
+                return v.to_string();
+            }
+        }
+
+        // Fallback
+        if let Ok(Some(v)) = row.try_get::<Option<u64>, _>(column_index) {
+            return v.to_string();
+        }
+        "NULL".to_string()
+    }
+
+    /// Handle MySQL numeric types using the raw type name (already uppercased)
+    fn handle_numeric_type(
+        &self,
+        row: &sqlx::mysql::MySqlRow,
+        column_index: usize,
+        raw_type: &str,
+    ) -> String {
+        // DECIMAL, NUMERIC
+        if raw_type.contains("DECIMAL") || raw_type.contains("NUMERIC") {
+            if let Ok(Some(v)) = row.try_get::<Option<rust_decimal::Decimal>, _>(column_index) {
+                return v.to_string();
+            }
+        }
+
+        // FLOAT
+        if raw_type.contains("FLOAT") {
+            if let Ok(Some(v)) = row.try_get::<Option<f32>, _>(column_index) {
+                return v.to_string();
+            }
+        }
+
+        // DOUBLE, REAL
+        if raw_type.contains("DOUBLE") || raw_type.contains("REAL") {
+            if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(column_index) {
+                return v.to_string();
+            }
+        }
+
+        // Fallback: try decimal then f64
+        if let Ok(Some(v)) = row.try_get::<Option<rust_decimal::Decimal>, _>(column_index) {
+            return v.to_string();
+        }
+        if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(column_index) {
+            return v.to_string();
+        }
+        "NULL".to_string()
+    }
+
+    /// Handle MySQL datetime types using the raw type name (already uppercased)
+    fn handle_datetime_type(
+        &self,
+        row: &sqlx::mysql::MySqlRow,
+        column_index: usize,
+        raw_type: &str,
+    ) -> String {
+        // DATE
+        if raw_type.contains("DATE") && !raw_type.contains("DATETIME") {
+            if let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveDate>, _>(column_index) {
+                return v.format("%Y-%m-%d").to_string();
+            }
+        }
+
+        // TIME
+        if raw_type.contains("TIME") && !raw_type.contains("DATETIME") && !raw_type.contains("TIMESTAMP") {
+            if let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveTime>, _>(column_index) {
+                return v.format("%H:%M:%S").to_string();
+            }
+        }
+
+        // DATETIME, TIMESTAMP
+        if raw_type.contains("DATETIME") || raw_type.contains("TIMESTAMP") {
+            if let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveDateTime>, _>(column_index) {
+                return v.format("%Y-%m-%d %H:%M:%S").to_string();
+            }
+        }
+
+        // YEAR
+        if raw_type.contains("YEAR") {
+            if let Ok(Some(v)) = row.try_get::<Option<i16>, _>(column_index) {
+                return v.to_string();
+            }
+        }
+
+        // Fallback: try string conversion
+        if let Ok(Some(v)) = row.try_get::<Option<String>, _>(column_index) {
+            return v;
+        }
+        "NULL".to_string()
+    }
+
     /// Convert MySQL row value to string
     pub fn convert_row_value_to_string(
         &self,
         row: &sqlx::mysql::MySqlRow,
         column_index: usize,
         column_types: &[ColumnType],
+        raw_column_types: &[String],
     ) -> String {
-        // Use column type enum for type-based routing
         let column_type = column_types
             .get(column_index)
             .copied()
             .unwrap_or(ColumnType::Unknown);
 
-        // Get the raw type name for detailed matching
-        let type_name = if let Ok(col) = row.try_get_raw(column_index) {
-            col.type_info().to_string()
-        } else {
-            "unknown".to_string()
-        };
+        let raw_type = raw_column_types
+            .get(column_index)
+            .map(|s| s.to_uppercase())
+            .unwrap_or_default();
 
-        // Route based on column type enum
         match column_type {
-            // Integer types
-            ColumnType::Integer => {
-                if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(column_index) {
-                    // Special handling for TINYINT(1) which is often used for booleans
-                    if type_name.to_uppercase().contains("TINYINT") && (v == 0 || v == 1) {
-                        return if v == 1 { "true" } else { "false" }.to_string();
-                    }
-                    return v.to_string();
-                }
-            }
-
-            // Unsigned integer types
-            ColumnType::UnsignedInteger => {
-                if let Ok(Some(v)) = row.try_get::<Option<u64>, _>(column_index) {
-                    return v.to_string();
-                }
-            }
-
-            // Numeric types
-            ColumnType::Numeric => {
-                // Try decimal first
-                if let Ok(Some(v)) = row.try_get::<Option<rust_decimal::Decimal>, _>(column_index) {
-                    return v.to_string();
-                }
-                // Try float
-                if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(column_index) {
-                    return v.to_string();
-                }
-            }
-
-            // Boolean type
+            ColumnType::Integer => self.handle_integer_type(row, column_index, &raw_type),
+            ColumnType::UnsignedInteger => self.handle_unsigned_integer_type(row, column_index, &raw_type),
+            ColumnType::Numeric => self.handle_numeric_type(row, column_index, &raw_type),
             ColumnType::Boolean => {
                 if let Ok(Some(v)) = row.try_get::<Option<bool>, _>(column_index) {
                     return if v { "true" } else { "false" }.to_string();
                 }
+                "NULL".to_string()
             }
-
-            // Date and time types
-            ColumnType::DateTime => {
-                // Try string conversion first for better compatibility
-                if let Ok(Some(v)) = row.try_get::<Option<String>, _>(column_index) {
-                    return v;
-                }
-                if let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveDate>, _>(column_index) {
-                    return v.to_string();
-                }
-                if let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveDateTime>, _>(column_index) {
-                    return v.to_string();
-                }
-                if let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveTime>, _>(column_index) {
-                    return v.to_string();
-                }
-                if let Ok(Some(v)) =
-                    row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>(column_index)
-                {
-                    return v.to_string();
-                }
-            }
-
-            // Text type
+            ColumnType::DateTime => self.handle_datetime_type(row, column_index, &raw_type),
             ColumnType::Text => {
                 if let Ok(v) = row.try_get::<Option<String>, _>(column_index) {
                     return v.unwrap_or_else(|| "NULL".to_string());
                 }
+                "NULL".to_string()
             }
-
-            // JSON type
             ColumnType::Json => {
                 if let Ok(v) = row.try_get::<Option<String>, _>(column_index) {
                     return v.unwrap_or_else(|| "NULL".to_string());
                 }
+                "NULL".to_string()
             }
-
-            // Binary type
             ColumnType::Binary => {
                 if let Ok(Some(v)) = row.try_get::<Option<Vec<u8>>, _>(column_index) {
                     return format!("0x{}", hex::encode(v));
                 }
+                "NULL".to_string()
             }
-
-            // Unknown type - try common types
             ColumnType::Unknown => {
-                tracing::debug!("unknown type: {}", type_name);
-                // Try boolean first (for SELECT TRUE/FALSE literals)
+                // Fallback for unknown types
                 if let Ok(Some(v)) = row.try_get::<Option<bool>, _>(column_index) {
                     return if v { "true" } else { "false" }.to_string();
                 }
-                // Try integer next
                 if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(column_index) {
-                    // Check if this could be a boolean (0/1)
-                    if v == 0 || v == 1 {
-                        return if v == 1 { "true" } else { "false" }.to_string();
-                    }
                     return v.to_string();
                 }
-                // Try float
                 if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(column_index) {
                     return v.to_string();
                 }
+                if let Ok(v) = row.try_get::<Option<String>, _>(column_index) {
+                    return v.unwrap_or_else(|| "NULL".to_string());
+                }
+                "NULL".to_string()
             }
-
-            // Array, Uuid - not typically used in MySQL but handle gracefully
-            _ => {}
+            _ => "NULL".to_string(),
         }
-
-        // Universal fallback: try string conversion
-        if let Ok(v) = row.try_get::<Option<String>, _>(column_index) {
-            return v.unwrap_or_else(|| "NULL".to_string());
-        }
-
-        // Ultimate fallback if nothing works
-        "NULL".to_string()
     }
 }
 
@@ -530,6 +636,7 @@ impl Connection for MysqlConnection {
 
         let mut columns: Vec<String> = Vec::new();
         let mut column_types: Vec<ColumnType> = Vec::new();
+        let mut raw_column_types: Vec<String> = Vec::new();
         let mut rows: Vec<Vec<String>> = Vec::new();
         let mut rows_affected: u64 = 0;
 
@@ -547,11 +654,16 @@ impl Connection for MysqlConnection {
                             .map(|col| col.name().to_string())
                             .collect();
 
-                        column_types = row
+                        let (types, raw_types): (Vec<ColumnType>, Vec<String>) = row
                             .columns()
                             .iter()
-                            .map(|col| Self::map_mysql_type(col.type_info().to_string().as_str()))
-                            .collect();
+                            .map(|col| {
+                                let raw_type = col.type_info().to_string();
+                                (Self::map_mysql_type(&raw_type), raw_type)
+                            })
+                            .unzip();
+                        column_types = types;
+                        raw_column_types = raw_types;
 
                         tracing::info!("columns {:?}, {:?}", columns, column_types);
                     }
@@ -562,7 +674,12 @@ impl Connection for MysqlConnection {
                         .iter()
                         .enumerate()
                         .map(|(i, _)| {
-                            self.convert_row_value_to_string(&row, i, column_types.as_slice())
+                            self.convert_row_value_to_string(
+                                &row,
+                                i,
+                                &column_types,
+                                &raw_column_types,
+                            )
                         })
                         .collect();
                     rows.push(row_data);
@@ -571,12 +688,6 @@ impl Connection for MysqlConnection {
         }
 
         let execution_time = start_time.elapsed().as_millis() as i64;
-
-        tracing::debug!(
-            "✅ Query executed successfully: {} rows returned, {} rows affected",
-            rows.len(),
-            rows_affected
-        );
 
         Ok(QueryResult {
             columns,

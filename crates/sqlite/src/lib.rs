@@ -11,19 +11,18 @@ pub mod sql_parser;
 // Re-export main types for convenience
 pub use connection::{SqliteConnection, SqliteConnectionKey};
 
-pub use sql_parser::{CompletionKind, ParsedQuery, SqliteTableExtractor, TableAlias};
+pub use sql_parser::SqliteTableExtractor;
 
 #[cfg(test)]
 mod tests {
     use blanco_core::Connection;
-    use sqlx::{sqlite::SqlitePoolOptions, Row};
+    use sqlx::sqlite::SqlitePoolOptions;
     use std::env;
     use tempfile::NamedTempFile;
 
     #[test]
     fn test_sqlite_data_type_serialization() -> Result<(), Box<dyn std::error::Error>> {
         smol::block_on(async {
-            // Use environment variable for connection string or fallback to temporary file
             let connection_string = env::var("SQLITE_CONNECTION_STRING").unwrap_or_else(|_| {
                 // Create a temporary file for SQLite database
                 let temp_file = NamedTempFile::new().expect("Failed to create temporary file");
@@ -109,9 +108,8 @@ mod tests {
             )
         "#;
 
-            let result = sqlx::query(insert_sql).execute(&pool).await?;
+            let _result = sqlx::query(insert_sql).execute(&pool).await?;
 
-            // For SQLite, let's create a new table using the Blanco connection to test it properly
             let mut sqlite_connection = crate::SqliteConnection::new(connection_string.clone())?;
 
             // Establish the actual database connection
@@ -164,14 +162,18 @@ mod tests {
             // Test numeric affinity types
             assert!(value_map.get("real_col").unwrap().contains("12345"));
             assert!(value_map.get("numeric_col").unwrap().contains("98765"));
-            assert!(value_map
-                .get("numeric_affinity_col")
-                .unwrap()
-                .contains("123"));
-            assert!(value_map
-                .get("real_affinity_col")
-                .unwrap()
-                .contains("3.14159"));
+            assert!(
+                value_map
+                    .get("numeric_affinity_col")
+                    .unwrap()
+                    .contains("123")
+            );
+            assert!(
+                value_map
+                    .get("real_affinity_col")
+                    .unwrap()
+                    .contains("3.14159")
+            );
 
             // Test text affinity types
             assert_eq!(
@@ -210,10 +212,12 @@ mod tests {
 
             // Test blob affinity types (SQLite converts binary data to text when possible)
             assert!(value_map.get("blob_col").unwrap().contains("48656c6c6f")); // "Hello World"
-            assert!(value_map
-                .get("blob_affinity_col")
-                .unwrap()
-                .contains("48656c6c6f")); // "Hello"
+            assert!(
+                value_map
+                    .get("blob_affinity_col")
+                    .unwrap()
+                    .contains("48656c6c6f")
+            ); // "Hello"
 
             // Test custom types (should fall back to string conversion)
             assert_eq!(

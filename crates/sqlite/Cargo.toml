@@ -1,7 +1,7 @@
 [package]
 name = "sqlite"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "SQLite database implementation for Blanco SQL editor"
 
 [dependencies]
@@ -14,7 +14,7 @@ async-trait = { workspace = true }
 sqlx = { workspace = true, features = ["sqlite", "chrono", "uuid"] }
 
 # SQL parsing
-sql-parse = { workspace = true }
+sqlparser = { workspace = true }
 
 # Common dependencies
 serde_json = { workspace = true }
