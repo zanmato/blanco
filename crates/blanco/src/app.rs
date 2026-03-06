@@ -7,6 +7,7 @@ use gpui_component::{
     ActiveTheme, Root, TITLE_BAR_HEIGHT, TitleBar, WindowExt as _,
     button::{Button, ButtonVariants as _},
     dialog::{DialogAction, DialogClose, DialogFooter},
+    global_state::GlobalState,
     h_flex,
     menu::AppMenuBar,
     notification::NotificationType,
@@ -942,8 +943,8 @@ impl Render for BlancoApp {
                         .bg(cx.theme().title_bar)
                         .child(
                             svg()
-                                .h(px(32.))
-                                .w(px(103.))
+                                .h(px(40.))
+                                .w(px(128.))
                                 .text_color(window.text_style().color)
                                 .path("images/blanco.svg"),
                         )
@@ -1016,6 +1017,48 @@ fn init_menus(cx: &mut App) {
         #[cfg(not(target_os = "macos"))]
         gpui::KeyBinding::new("alt-f4", Quit, None),
     ]);
+
+    // Convert menus to OwnedMenu for global state (AppMenuBar component)
+    let owned_menus: Vec<gpui::OwnedMenu> = vec![
+        Menu {
+            name: "File".into(),
+            items: vec![
+                MenuItem::action("New Connection", OpenNewConnectionModal),
+                MenuItem::action("New Snippet", NewSnippet),
+                MenuItem::action("Settings", OpenSettings),
+                MenuItem::Separator,
+                MenuItem::action("Quit", Quit),
+            ],
+        },
+        Menu {
+            name: "Edit".into(),
+            items: vec![
+                MenuItem::action("Undo", gpui_component::input::Undo),
+                MenuItem::action("Redo", gpui_component::input::Redo),
+                MenuItem::separator(),
+                MenuItem::action("Cut", gpui_component::input::Cut),
+                MenuItem::action("Copy", gpui_component::input::Copy),
+                MenuItem::action("Paste", gpui_component::input::Paste),
+                MenuItem::separator(),
+                MenuItem::action("Select All", gpui_component::input::SelectAll),
+            ],
+        },
+        Menu {
+            name: "View".into(),
+            items: vec![
+                MenuItem::action("Render Whitespace", ToggleRenderWhitespace),
+                MenuItem::action("Word Wrap", ToggleWordWrap),
+            ],
+        },
+    ]
+    .into_iter()
+    .map(|m| m.owned())
+    .collect();
+
+    // Set global state menus for AppMenuBar component
+    GlobalState::global_mut(cx).set_app_menus(owned_menus);
+
+    // Set native OS menus (requires fresh Menu instances since Menu doesn't implement Clone)
     cx.set_menus(vec![
         Menu {
             name: "File".into(),

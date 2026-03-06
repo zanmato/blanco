@@ -1,3 +1,8 @@
+mod parameter_form;
+mod rename_form;
+mod snippet_editor;
+mod table_structure;
+
 use gpui::{
     App, AppContext, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, KeybindingKeystroke, Keystroke, ParentElement, Render,
@@ -26,15 +31,12 @@ use crate::app_database::AppDatabase;
 use crate::app_database::{EnvironmentType, QueryTabData};
 use crate::app_events::AppEvent;
 use crate::app_settings::AppSettings;
-use crate::parameter_form::ParameterForm;
-use crate::rename_form::RenameTabForm;
 use crate::results_panel::ResultsPanel;
-use crate::snippet_editor::SnippetEditor;
-use crate::sql_completion::SqlCompletionProvider;
-use crate::sql_selection_range_provider::SqlSelectionRangeProvider;
-use crate::sql_statement_parser::extract_statement_info;
-use crate::sqruff_service::SqruffService;
-use crate::table_structure::TableStructureTab;
+use crate::sql::{extract_statement_info, SqlCompletionProvider, SqlSelectionRangeProvider, SqruffService};
+use self::parameter_form::ParameterForm;
+use self::rename_form::RenameTabForm;
+use self::snippet_editor::SnippetEditor;
+use self::table_structure::TableStructureTab;
 use blanco_ui::{IconName, SqlLog};
 use database::{DatabaseService, DatabaseServiceTrait};
 use gpui_component::{Icon, RopeExt};
@@ -47,8 +49,6 @@ pub enum TabType {
 }
 
 pub struct QueryTab {
-    #[allow(dead_code)]
-    pub id: usize,
     pub title: String,
     pub connection_id: i64,              // Connection ID from app database
     pub db_type: database::DatabaseType, // Database type for this connection
@@ -69,8 +69,6 @@ pub struct QueryTab {
 impl EventEmitter<AppEvent> for QueryTab {}
 
 pub struct SettingsTab {
-    #[allow(dead_code)]
-    pub id: usize,
     pub title: String,
     pub settings_view: Entity<crate::settings::SettingsView>,
 }
@@ -79,7 +77,6 @@ pub struct EditorPanel {
     focus_handle: FocusHandle,
     tabs: Vec<TabType>,
     active_tab_ix: usize,
-    next_tab_id: usize,
     sidebar_collapsed: bool,
     tabbar_scroll_handle: gpui::ScrollHandle,
     _subscriptions: Vec<gpui::Subscription>,
@@ -250,9 +247,6 @@ impl EditorPanel {
             return;
         }
 
-        let tab_id = self.next_tab_id;
-        self.next_tab_id += 1;
-
         // Settings are now stored in the global AppDatabase
         let settings_view = cx.new(crate::settings::SettingsView::new);
 
@@ -289,7 +283,6 @@ impl EditorPanel {
         .detach();
 
         let settings_tab = SettingsTab {
-            id: tab_id,
             title: "Settings".to_string(),
             settings_view,
         };
@@ -302,8 +295,6 @@ impl EditorPanel {
     }
 
     pub fn create_snippet_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.next_tab_id += 1;
-
         let snippet_editor = cx.new(|cx| SnippetEditor::new(window, cx));
 
         self.tabs.push(TabType::Snippet(snippet_editor));
@@ -319,8 +310,6 @@ impl EditorPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.next_tab_id += 1;
-
         let snippet_editor = cx.new(|cx| SnippetEditor::new(window, cx));
 
         // Load snippet data
@@ -346,12 +335,8 @@ impl EditorPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let tab_id = self.next_tab_id;
-        self.next_tab_id += 1;
-
         let tab = cx.new(|cx| {
             TableStructureTab::new(
-                tab_id,
                 params.connection_id,
                 params.db_type,
                 Some(params.connection_name),
@@ -699,7 +684,7 @@ impl EditorPanel {
     fn show_parameter_modal(
         &mut self,
         query: String,
-        params: Vec<crate::sql_statement_parser::QueryParameter>,
+        params: Vec<crate::sql::statement_parser::QueryParameter>,
         connection_id: i64,
         database_name: String,
         window: &mut Window,
@@ -761,7 +746,6 @@ impl EditorPanel {
             focus_handle: cx.focus_handle(),
             tabs: vec![],
             active_tab_ix: 0,
-            next_tab_id: 0,
             sidebar_collapsed,
             tabbar_scroll_handle: gpui::ScrollHandle::default(),
             _subscriptions: Vec::new(),
@@ -865,9 +849,6 @@ impl EditorPanel {
         params: TabCreationParams,
         cx: &mut Context<Self>,
     ) {
-        let tab_id = self.next_tab_id;
-        self.next_tab_id += 1;
-
         let editor = cx.new(|cx| {
             // Read settings
             let word_wrap = AppSettings::global(cx).settings.editor.word_wrap;
@@ -945,7 +926,6 @@ impl EditorPanel {
 
         // Create query tab with the connection string
         let query_tab = QueryTab {
-            id: tab_id,
             title: params.title.clone(),
             connection_id: params.connection_id,
             db_type: params.db_type.clone(),
@@ -966,7 +946,7 @@ impl EditorPanel {
         };
 
         self.tabs.push(TabType::Query(query_tab));
-        self.active_tab_ix = tab_id;
+        self.active_tab_ix = self.tabs.len() - 1;
         self.scroll_tabbar_to_the_end(window, cx);
 
         cx.notify();
@@ -1035,7 +1015,6 @@ impl EditorPanel {
                         let llm_for_panel = llm_instance.llm.clone();
                         let chat_panel = cx.new(|cx| {
                             ChatPanel::new(
-                                query_tab.id,
                                 llm_for_panel,
                                 llm_instance.provider_name.clone(),
                                 llm_instance.model_name.clone(),
@@ -1047,8 +1026,7 @@ impl EditorPanel {
                         query_tab.chat_panel = Some(chat_panel);
 
                         // Emit chat session started event
-                        cx.emit(crate::app_events::AppEvent::ChatSessionStarted {
-                            tab_id: query_tab.id,
+                        cx.emit(AppEvent::ChatSessionStarted {
                             provider: llm_instance.provider_name,
                             model: llm_instance.model_name,
                         });
@@ -1063,14 +1041,11 @@ impl EditorPanel {
                 }
             } else if !query_tab.chat_enabled {
                 // Emit chat session ended event
-                cx.emit(crate::app_events::AppEvent::ChatSessionEnded {
-                    tab_id: query_tab.id,
-                });
+                cx.emit(AppEvent::ChatSessionEnded);
             }
 
             // Emit chat toggled event
-            cx.emit(crate::app_events::AppEvent::ChatToggled {
-                tab_id: query_tab.id,
+            cx.emit(AppEvent::ChatToggled {
                 enabled: query_tab.chat_enabled,
             });
 
@@ -1599,7 +1574,6 @@ impl Render for EditorPanel {
                                                                     div()
                                                                         .flex_1()
                                                                         .max_h(px(160.))
-                                                                        .overflow_hidden()
                                                                         .bg(cx.theme().highlight_theme.style.editor_background.unwrap_or(cx.theme().background))
                                                                         .child(query_tab.sql_log.clone())
                                                                 )

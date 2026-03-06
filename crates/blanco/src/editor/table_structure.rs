@@ -13,7 +13,6 @@ use crate::app_database::EnvironmentType;
 use blanco_core::connection_trait::{ColumnInfo, IndexInfo};
 
 pub struct TableStructureTab {
-    pub id: usize,
     pub title: String,
     pub connection_id: i64,
     pub db_type: database::DatabaseType,
@@ -31,7 +30,6 @@ pub struct TableStructureTab {
 
 impl TableStructureTab {
     pub fn new(
-        id: usize,
         connection_id: i64,
         db_type: database::DatabaseType,
         connection_name: Option<String>,
@@ -63,7 +61,6 @@ impl TableStructureTab {
         });
 
         Self {
-            id,
             title,
             connection_id,
             db_type,

@@ -1235,7 +1235,7 @@ impl ConnectionsPanel {
         if let Some(table_name) = table_name {
             // Create the export modal content
             let modal_content = cx.new(|cx| {
-                crate::export_modal::ExportModal::new(
+                crate::export::modal::ExportModal::new(
                     connection_id,
                     database_name,
                     schema_name,

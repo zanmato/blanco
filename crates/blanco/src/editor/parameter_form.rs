@@ -9,7 +9,7 @@ use gpui_component::{
 };
 use std::collections::HashMap;
 
-use crate::sql_statement_parser::QueryParameter;
+use crate::sql::statement_parser::QueryParameter;
 
 #[derive(Clone, Debug)]
 pub struct ParameterInput {
@@ -40,8 +40,8 @@ impl ParameterForm {
 
         for param in parameters {
             let label = match &param.style {
-                crate::sql_statement_parser::ParameterStyle::Positional(n) => format!("${}", n),
-                crate::sql_statement_parser::ParameterStyle::Named(name) => {
+                crate::sql::statement_parser::ParameterStyle::Positional(n) => format!("${}", n),
+                crate::sql::statement_parser::ParameterStyle::Named(name) => {
                     format!(":{}", name)
                 }
             };

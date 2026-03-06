@@ -110,15 +110,11 @@ pub enum AppEvent {
 
     /// Chat events
     ChatSessionStarted {
-        tab_id: usize,
         provider: String,
         model: String,
     },
-    ChatSessionEnded {
-        tab_id: usize,
-    },
+    ChatSessionEnded,
     ChatToggled {
-        tab_id: usize,
         enabled: bool,
     },
 

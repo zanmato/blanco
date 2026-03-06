@@ -253,7 +253,7 @@ impl ExportModal {
                     };
 
                     // Create export service
-                    let export_service = crate::export_service::ExportService::new();
+                    let export_service = super::service::ExportService::new();
 
                     // Execute streaming export
                     match export_service

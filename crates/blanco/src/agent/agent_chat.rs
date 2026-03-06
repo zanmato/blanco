@@ -34,14 +34,11 @@ pub struct ChatPanel {
     pub messages: Vec<Entity<ChatMessageState>>,
     pub _subscriptions: Vec<Subscription>,
     pub loading_state: LoadingState,
-    #[allow(dead_code)]
-    pub tab_id: usize,
     pub tool_mode_select: Entity<SelectState<ToolModeSelectDelegate>>,
 }
 
 impl ChatPanel {
     pub fn new(
-        tab_id: usize,
         llm: Arc<Box<dyn LLMProvider>>,
         provider_name: String,
         model_name: String,
@@ -177,7 +174,6 @@ impl ChatPanel {
             messages: Vec::new(),
             _subscriptions: subscriptions,
             loading_state: LoadingState::Idle,
-            tab_id,
             tool_mode_select,
         }
     }

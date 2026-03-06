@@ -24,7 +24,7 @@ use serde_json::Value;
 use blanco_core::{QueryResult, connection_trait::ColumnType};
 
 use crate::app::{AddRow, DuplicateRow, SetCellNull};
-use crate::foreign_key_popover::ForeignKeyPopover;
+use super::foreign_key_popover::ForeignKeyPopover;
 use crate::results_panel::table_operations::{
     ColumnChange, OperationType, RowIdentifier, TableChangeOperation,
 };

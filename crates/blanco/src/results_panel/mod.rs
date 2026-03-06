@@ -34,6 +34,7 @@ pub struct TableOperationResponse {
     pub duration: Duration,
     pub sql_queries: Vec<String>,
 }
+mod foreign_key_popover;
 mod results_table_delegate;
 mod table_operations;
 
@@ -1212,7 +1213,7 @@ impl ResultsPanel {
                 };
 
             // Create export service
-            let export_service = crate::export_service::ExportService::new();
+            let export_service = crate::export::service::ExportService::new();
 
             // Execute export
             match export_service
@@ -1221,7 +1222,7 @@ impl ResultsPanel {
             {
                 Ok(result) => {
                     match result {
-                        crate::export_service::ExportResult::Success {
+                        crate::export::service::ExportResult::Success {
                             file_path,
                             rows_exported,
                             ..
@@ -1246,7 +1247,7 @@ impl ResultsPanel {
                                 );
                             });
                         }
-                        crate::export_service::ExportResult::Error { message } => {
+                        crate::export::service::ExportResult::Error { message } => {
                             tracing::error!("Export failed: {}", message);
                             let _ = entity.update_in(cx, |_panel, window, cx| {
                                 window.push_notification(
@@ -1258,7 +1259,7 @@ impl ResultsPanel {
                                 );
                             });
                         }
-                        crate::export_service::ExportResult::Cancelled => {
+                        crate::export::service::ExportResult::Cancelled => {
                             tracing::info!("Export cancelled by user");
                         }
                     }

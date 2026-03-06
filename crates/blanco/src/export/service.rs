@@ -6,9 +6,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::{
-    export_modal::ExportOptions, results_panel::SelectedTableData, transformers::DataTransformer,
-};
+use crate::{results_panel::SelectedTableData, transformers::DataTransformer};
+use super::modal::ExportOptions;
 use blanco_core::connection_trait::ColumnType;
 
 /// Progress information for export operations
