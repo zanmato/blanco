@@ -22,11 +22,11 @@ impl MysqlConnection {
 
         let mut tables = Vec::new();
         for row in &query_result.rows {
-            if !row.is_empty() {
-                if let Ok(table_info_json) = serde_json::from_str::<serde_json::Value>(&row[0]) {
+            if !row.is_empty()
+                && let Ok(table_info_json) = serde_json::from_str::<serde_json::Value>(&row[0]) {
                     // Parse the JSON into our structured types
-                    if let Some(table_name) = table_info_json.get("name").and_then(|v| v.as_str()) {
-                        if let Some(columns_array) =
+                    if let Some(table_name) = table_info_json.get("name").and_then(|v| v.as_str())
+                        && let Some(columns_array) =
                             table_info_json.get("columns").and_then(|v| v.as_array())
                         {
                             let column_count = table_info_json
@@ -82,9 +82,7 @@ impl MysqlConnection {
                                 column_count,
                             });
                         }
-                    }
                 }
-            }
         }
 
         tracing::info!(
@@ -105,8 +103,8 @@ impl MysqlConnection {
         let mut where_conditions = vec!["t.table_type = 'BASE TABLE'".to_string()];
 
         // Add table name filter with LIKE wildcard support if specified
-        if let Some(names_str) = table_names {
-            if !names_str.trim().is_empty() {
+        if let Some(names_str) = table_names
+            && !names_str.trim().is_empty() {
                 let patterns: Vec<String> = names_str
                     .split(',')
                     .map(|s| s.trim().to_string())
@@ -125,7 +123,6 @@ impl MysqlConnection {
                     }
                 }
             }
-        }
 
         let where_clause = where_conditions.join(" AND ");
 

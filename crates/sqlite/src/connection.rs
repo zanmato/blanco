@@ -208,8 +208,8 @@ impl SqliteConnection {
         let path = std::path::Path::new(database_path);
 
         // Try to get just the filename
-        if let Some(file_name) = path.file_name() {
-            if let Some(name_str) = file_name.to_str() {
+        if let Some(file_name) = path.file_name()
+            && let Some(name_str) = file_name.to_str() {
                 // Remove the .sqlite, .db, or .db3 extension if present
                 let name = if let Some(dot_pos) = name_str.rfind('.') {
                     &name_str[..dot_pos]
@@ -219,7 +219,6 @@ impl SqliteConnection {
 
                 return format!("SQLite - {}", name);
             }
-        }
 
         // Fallback to full path if we can't extract a nice name
         format!("SQLite - {}", database_path)
@@ -313,11 +312,10 @@ impl Connection for SqliteConnection {
         match self.execute_query("PRAGMA database_list", None, None).await {
             Ok(result) => {
                 for row in &result.rows {
-                    if let Some(schema_name) = row.get(1) {
-                        if schema_name != "main" && !schemas.contains(schema_name) {
+                    if let Some(schema_name) = row.get(1)
+                        && schema_name != "main" && !schemas.contains(schema_name) {
                             schemas.push(schema_name.clone());
                         }
-                    }
                 }
             }
             Err(e) => {
@@ -688,25 +686,22 @@ fn handle_integer_type(
     raw_type: &str,
 ) -> String {
     // BIGINT, INT8
-    if raw_type.contains("bigint") || raw_type == "int8" {
-        if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(column_index) {
+    if (raw_type.contains("bigint") || raw_type == "int8")
+        && let Ok(Some(v)) = row.try_get::<Option<i64>, _>(column_index) {
             return v.to_string();
         }
-    }
 
     // SMALLINT, INT2
-    if raw_type.contains("smallint") || raw_type == "int2" {
-        if let Ok(Some(v)) = row.try_get::<Option<i16>, _>(column_index) {
+    if (raw_type.contains("smallint") || raw_type == "int2")
+        && let Ok(Some(v)) = row.try_get::<Option<i16>, _>(column_index) {
             return v.to_string();
         }
-    }
 
     // TINYINT
-    if raw_type.contains("tinyint") {
-        if let Ok(Some(v)) = row.try_get::<Option<i8>, _>(column_index) {
+    if raw_type.contains("tinyint")
+        && let Ok(Some(v)) = row.try_get::<Option<i8>, _>(column_index) {
             return v.to_string();
         }
-    }
 
     // INTEGER, INT, INT4, MEDIUMINT
     if let Ok(Some(v)) = row.try_get::<Option<i32>, _>(column_index) {
@@ -736,11 +731,10 @@ fn handle_numeric_type(
     }
 
     // REAL, DOUBLE, FLOAT
-    if raw_type.contains("real") || raw_type.contains("double") || raw_type.contains("float") {
-        if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(column_index) {
+    if (raw_type.contains("real") || raw_type.contains("double") || raw_type.contains("float"))
+        && let Ok(Some(v)) = row.try_get::<Option<f64>, _>(column_index) {
             return v.to_string();
         }
-    }
 
     // Fallback for NUMERIC affinity: try f64 then i64
     if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(column_index) {
@@ -759,25 +753,22 @@ fn handle_datetime_type(
     raw_type: &str,
 ) -> String {
     // DATE
-    if raw_type == "date" {
-        if let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveDate>, _>(column_index) {
+    if raw_type == "date"
+        && let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveDate>, _>(column_index) {
             return v.format("%Y-%m-%d").to_string();
         }
-    }
 
     // TIME
-    if raw_type == "time" {
-        if let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveTime>, _>(column_index) {
+    if raw_type == "time"
+        && let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveTime>, _>(column_index) {
             return v.format("%H:%M:%S").to_string();
         }
-    }
 
     // DATETIME, TIMESTAMP
-    if raw_type.contains("datetime") || raw_type.contains("timestamp") {
-        if let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveDateTime>, _>(column_index) {
+    if (raw_type.contains("datetime") || raw_type.contains("timestamp"))
+        && let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveDateTime>, _>(column_index) {
             return v.format("%Y-%m-%d %H:%M:%S").to_string();
         }
-    }
 
     // Fallback: try string conversion (SQLite often stores dates as strings)
     if let Ok(Some(v)) = row.try_get::<Option<String>, _>(column_index) {

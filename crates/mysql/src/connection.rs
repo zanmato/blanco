@@ -22,19 +22,6 @@ pub struct MysqlConnection {
     display_name: String,
     server_connection_string: String, // Connection string without database
     initial_database: Option<String>, // Original database from connection string
-    ssh_config: Option<MysqlSshConfig>, // SSH tunnel configuration
-    local_tunnel_port: Option<u16>,   // Local port for SSH tunnel (if configured)
-}
-
-/// SSH configuration for MySQL connections
-#[derive(Debug, Clone)]
-pub struct MysqlSshConfig {
-    pub ssh_host: String,
-    pub ssh_port: u16,
-    pub ssh_user: String,
-    pub ssh_password: Option<String>,
-    pub ssh_private_key_path: Option<String>,
-    pub ssh_private_key_password: Option<String>,
 }
 
 /// Connection key for MySQL connections (legacy - kept for compatibility)
@@ -196,35 +183,7 @@ impl MysqlConnection {
             display_name,
             server_connection_string,
             initial_database: Some(connection_key.database),
-            ssh_config: None,
-            local_tunnel_port: None,
         })
-    }
-
-    /// Create a new MySQL connection with SSH tunnel support
-    pub fn from_key_with_ssh(
-        connection_key: MysqlConnectionKey,
-        ssh_config: MysqlSshConfig,
-    ) -> Self {
-        let display_name = Self::generate_server_display_name_with_ssh(
-            &connection_key.username,
-            &connection_key.host,
-            connection_key.port,
-            &ssh_config,
-        );
-
-        Self {
-            pools: Arc::new(RwLock::new(HashMap::new())),
-            host: connection_key.host.clone(),
-            port: connection_key.port,
-            username: connection_key.username.clone(),
-            password: connection_key.password.clone(),
-            display_name,
-            server_connection_string: connection_key.to_connection_string(),
-            initial_database: Some(connection_key.database),
-            ssh_config: Some(ssh_config),
-            local_tunnel_port: Some(13306), // Default port for MySQL, will be auto-assigned
-        }
     }
 
     fn generate_server_display_name(username: &str, host: &str, port: u16) -> String {
@@ -246,18 +205,6 @@ impl MysqlConnection {
         }
     }
 
-    fn generate_server_display_name_with_ssh(
-        username: &str,
-        host: &str,
-        port: u16,
-        ssh_config: &MysqlSshConfig,
-    ) -> String {
-        format!(
-            "MySQL via SSH: {}@{}:{} (via {}@{}:{})",
-            username, host, port, ssh_config.ssh_user, ssh_config.ssh_host, ssh_config.ssh_port
-        )
-    }
-
     /// Get or create a connection pool for the specified database
     pub async fn get_or_create_pool(&self, database_name: &str) -> Result<sqlx::MySqlPool> {
         let pools = self.pools.read().await;
@@ -276,21 +223,7 @@ impl MysqlConnection {
             return Ok(pool.clone());
         }
 
-        let connection_string = if let Some(local_port) = self.local_tunnel_port {
-            if let Some(password) = &self.password {
-                format!(
-                    "mysql://{}:{}@localhost:{}/{}",
-                    self.username, password, local_port, database_name
-                )
-            } else {
-                format!(
-                    "mysql://{}@localhost:{}/{}",
-                    self.username, local_port, database_name
-                )
-            }
-        } else {
-            self.generate_database_connection_string(database_name)
-        };
+        let connection_string = self.generate_database_connection_string(database_name);
         let pool = MySqlPoolOptions::new()
             .max_connections(5)
             .connect(&connection_string)
@@ -333,48 +266,43 @@ impl MysqlConnection {
         // Check for TINYINT(1) which is often used for booleans
         if raw_type.contains("TINYINT") {
             // Check if it's TINYINT(1) - boolean representation
-            if raw_type.contains("TINYINT(1)") || raw_type == "TINYINT" {
-                if let Ok(Some(v)) = row.try_get::<Option<i8>, _>(column_index) {
+            if (raw_type.contains("TINYINT(1)") || raw_type == "TINYINT")
+                && let Ok(Some(v)) = row.try_get::<Option<i8>, _>(column_index) {
                     if v == 0 || v == 1 {
                         return if v == 1 { "true" } else { "false" }.to_string();
                     }
                     return v.to_string();
                 }
-            }
             if let Ok(Some(v)) = row.try_get::<Option<i8>, _>(column_index) {
                 return v.to_string();
             }
         }
 
         // SMALLINT
-        if raw_type.contains("SMALLINT") {
-            if let Ok(Some(v)) = row.try_get::<Option<i16>, _>(column_index) {
+        if raw_type.contains("SMALLINT")
+            && let Ok(Some(v)) = row.try_get::<Option<i16>, _>(column_index) {
                 return v.to_string();
             }
-        }
 
         // MEDIUMINT
-        if raw_type.contains("MEDIUMINT") {
-            if let Ok(Some(v)) = row.try_get::<Option<i32>, _>(column_index) {
+        if raw_type.contains("MEDIUMINT")
+            && let Ok(Some(v)) = row.try_get::<Option<i32>, _>(column_index) {
                 return v.to_string();
             }
-        }
 
         // INT, INTEGER
         if raw_type.contains("INT") && !raw_type.contains("TINYINT")
             && !raw_type.contains("SMALLINT") && !raw_type.contains("MEDIUMINT")
-            && !raw_type.contains("BIGINT") {
-            if let Ok(Some(v)) = row.try_get::<Option<i32>, _>(column_index) {
+            && !raw_type.contains("BIGINT")
+            && let Ok(Some(v)) = row.try_get::<Option<i32>, _>(column_index) {
                 return v.to_string();
             }
-        }
 
         // BIGINT
-        if raw_type.contains("BIGINT") {
-            if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(column_index) {
+        if raw_type.contains("BIGINT")
+            && let Ok(Some(v)) = row.try_get::<Option<i64>, _>(column_index) {
                 return v.to_string();
             }
-        }
 
         // Fallback: try i64
         if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(column_index) {
@@ -390,26 +318,22 @@ impl MysqlConnection {
         column_index: usize,
         raw_type: &str,
     ) -> String {
-        if raw_type.contains("TINYINT") {
-            if let Ok(Some(v)) = row.try_get::<Option<u8>, _>(column_index) {
+        if raw_type.contains("TINYINT")
+            && let Ok(Some(v)) = row.try_get::<Option<u8>, _>(column_index) {
                 return v.to_string();
             }
-        }
-        if raw_type.contains("SMALLINT") {
-            if let Ok(Some(v)) = row.try_get::<Option<u16>, _>(column_index) {
+        if raw_type.contains("SMALLINT")
+            && let Ok(Some(v)) = row.try_get::<Option<u16>, _>(column_index) {
                 return v.to_string();
             }
-        }
-        if raw_type.contains("MEDIUMINT") {
-            if let Ok(Some(v)) = row.try_get::<Option<u32>, _>(column_index) {
+        if raw_type.contains("MEDIUMINT")
+            && let Ok(Some(v)) = row.try_get::<Option<u32>, _>(column_index) {
                 return v.to_string();
             }
-        }
-        if raw_type.contains("BIGINT") {
-            if let Ok(Some(v)) = row.try_get::<Option<u64>, _>(column_index) {
+        if raw_type.contains("BIGINT")
+            && let Ok(Some(v)) = row.try_get::<Option<u64>, _>(column_index) {
                 return v.to_string();
             }
-        }
 
         // Fallback
         if let Ok(Some(v)) = row.try_get::<Option<u64>, _>(column_index) {
@@ -426,25 +350,22 @@ impl MysqlConnection {
         raw_type: &str,
     ) -> String {
         // DECIMAL, NUMERIC
-        if raw_type.contains("DECIMAL") || raw_type.contains("NUMERIC") {
-            if let Ok(Some(v)) = row.try_get::<Option<rust_decimal::Decimal>, _>(column_index) {
+        if (raw_type.contains("DECIMAL") || raw_type.contains("NUMERIC"))
+            && let Ok(Some(v)) = row.try_get::<Option<rust_decimal::Decimal>, _>(column_index) {
                 return v.to_string();
             }
-        }
 
         // FLOAT
-        if raw_type.contains("FLOAT") {
-            if let Ok(Some(v)) = row.try_get::<Option<f32>, _>(column_index) {
+        if raw_type.contains("FLOAT")
+            && let Ok(Some(v)) = row.try_get::<Option<f32>, _>(column_index) {
                 return v.to_string();
             }
-        }
 
         // DOUBLE, REAL
-        if raw_type.contains("DOUBLE") || raw_type.contains("REAL") {
-            if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(column_index) {
+        if (raw_type.contains("DOUBLE") || raw_type.contains("REAL"))
+            && let Ok(Some(v)) = row.try_get::<Option<f64>, _>(column_index) {
                 return v.to_string();
             }
-        }
 
         // Fallback: try decimal then f64
         if let Ok(Some(v)) = row.try_get::<Option<rust_decimal::Decimal>, _>(column_index) {
@@ -464,32 +385,28 @@ impl MysqlConnection {
         raw_type: &str,
     ) -> String {
         // DATE
-        if raw_type.contains("DATE") && !raw_type.contains("DATETIME") {
-            if let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveDate>, _>(column_index) {
+        if raw_type.contains("DATE") && !raw_type.contains("DATETIME")
+            && let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveDate>, _>(column_index) {
                 return v.format("%Y-%m-%d").to_string();
             }
-        }
 
         // TIME
-        if raw_type.contains("TIME") && !raw_type.contains("DATETIME") && !raw_type.contains("TIMESTAMP") {
-            if let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveTime>, _>(column_index) {
+        if raw_type.contains("TIME") && !raw_type.contains("DATETIME") && !raw_type.contains("TIMESTAMP")
+            && let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveTime>, _>(column_index) {
                 return v.format("%H:%M:%S").to_string();
             }
-        }
 
         // DATETIME, TIMESTAMP
-        if raw_type.contains("DATETIME") || raw_type.contains("TIMESTAMP") {
-            if let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveDateTime>, _>(column_index) {
+        if (raw_type.contains("DATETIME") || raw_type.contains("TIMESTAMP"))
+            && let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveDateTime>, _>(column_index) {
                 return v.format("%Y-%m-%d %H:%M:%S").to_string();
             }
-        }
 
         // YEAR
-        if raw_type.contains("YEAR") {
-            if let Ok(Some(v)) = row.try_get::<Option<i16>, _>(column_index) {
+        if raw_type.contains("YEAR")
+            && let Ok(Some(v)) = row.try_get::<Option<i16>, _>(column_index) {
                 return v.to_string();
             }
-        }
 
         // Fallback: try string conversion
         if let Ok(Some(v)) = row.try_get::<Option<String>, _>(column_index) {
@@ -987,8 +904,8 @@ impl Connection for MysqlConnection {
             .and_then(|val| val.parse::<i64>().ok())
             .filter(|n| *n >= 0);
 
-        if let Some(count) = row_count {
-            if count <= ROW_ESTIMATE_THRESHOLD {
+        if let Some(count) = row_count
+            && count <= ROW_ESTIMATE_THRESHOLD {
                 // Small table: fetch all rows with referenced row first
                 let query = format!(
                     "SELECT * FROM {} ORDER BY {} = '{}' DESC LIMIT {}",
@@ -996,7 +913,6 @@ impl Connection for MysqlConnection {
                 );
                 return self.execute_query(&query, None, None).await;
             }
-        }
 
         // Large table or estimate unavailable: fetch only referenced row
         let query = format!(

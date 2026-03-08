@@ -386,7 +386,7 @@ impl AgentToolRegistry {
         registry
     }
 
-    pub fn set_mode(&mut self, mode: ToolMode) {
+    pub fn _set_mode(&mut self, mode: ToolMode) {
         self.mode = mode;
 
         // Remove or add write-tab handler based on mode
@@ -399,7 +399,7 @@ impl AgentToolRegistry {
         }
     }
 
-    pub fn mode(&self) -> ToolMode {
+    pub fn _mode(&self) -> ToolMode {
         self.mode
     }
 
@@ -467,7 +467,7 @@ impl AgentToolRegistry {
         }
     }
 
-    pub async fn execute_tool(
+    pub async fn _execute_tool(
         &self,
         tool_call: &ToolCall,
         context: &ToolContext,

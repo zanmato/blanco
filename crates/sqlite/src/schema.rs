@@ -143,8 +143,8 @@ impl SqliteConnection {
         ];
 
         // Add table name filter with LIKE wildcard support if specified
-        if let Some(names_str) = table_names {
-            if !names_str.trim().is_empty() {
+        if let Some(names_str) = table_names
+            && !names_str.trim().is_empty() {
                 let patterns: Vec<String> = names_str
                     .split(',')
                     .map(|s| s.trim().to_string())
@@ -163,7 +163,6 @@ impl SqliteConnection {
                     }
                 }
             }
-        }
 
         let where_clause = where_conditions.join(" AND ");
 

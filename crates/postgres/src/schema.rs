@@ -35,17 +35,15 @@ impl PostgresConnection {
 
         let mut tables = Vec::new();
         for row in &query_result.rows {
-            if !row.is_empty() {
-                if let Ok(table_info_json) = serde_json::from_str::<serde_json::Value>(&row[0]) {
+            if !row.is_empty()
+                && let Ok(table_info_json) = serde_json::from_str::<serde_json::Value>(&row[0]) {
                     // Parse the JSON into our structured types
-                    if let Some(table_name) = table_info_json.get("name").and_then(|v| v.as_str()) {
-                        if let Some(schema_name) =
+                    if let Some(table_name) = table_info_json.get("name").and_then(|v| v.as_str())
+                        && let Some(schema_name) =
                             table_info_json.get("schema").and_then(|v| v.as_str())
-                        {
-                            if let Some(object_type) =
+                            && let Some(object_type) =
                                 table_info_json.get("object_type").and_then(|v| v.as_str())
-                            {
-                                if let Some(columns_array) =
+                                && let Some(columns_array) =
                                     table_info_json.get("columns").and_then(|v| v.as_array())
                                 {
                                     let column_count = table_info_json
@@ -101,11 +99,7 @@ impl PostgresConnection {
                                         column_count,
                                     });
                                 }
-                            }
-                        }
-                    }
                 }
-            }
         }
 
         tracing::info!(

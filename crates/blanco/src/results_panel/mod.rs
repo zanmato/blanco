@@ -18,7 +18,7 @@ use blanco_core::QueryResult;
 use blanco_core::connection_trait::ColumnType;
 use database::DatabaseService;
 
-use crate::app::{AddRow, DuplicateRow, SetCellNull};
+use crate::app::{AddRow, DeleteRow, DuplicateRow, SetCellNull};
 use crate::app_events::AppEvent;
 use crate::transformers::CopyHandler;
 
@@ -594,11 +594,11 @@ impl ResultsPanel {
 
         // Create clones for different uses
         let change_operations_for_pipeline = change_operations.clone();
-        let change_operations_for_logging = change_operations.clone();
+        let _change_operations_for_logging = change_operations.clone();
         let table_name_for_logging = table_name.clone();
         let _table_name_for_event = table_name.clone();
         let connection_id_for_pipeline = delegate.connection_id;
-        let connection_id_for_event = delegate.connection_id;
+        let _connection_id_for_event = delegate.connection_id;
         let database_name = delegate.database_name.clone();
 
         tracing::info!("Commit Changes: Starting table operations execution");
@@ -700,10 +700,24 @@ impl ResultsPanel {
 
             // Handle successful operations
             if response.success {
-                // Clear edits and refresh the table
+                // Clear edits, remove deleted rows, and refresh the table
                 let _ = entity.update(cx, |panel, cx| {
                     panel.table_state.update(cx, |state, cx| {
-                        state.delegate_mut().edit_state.clear_edits();
+                        let delegate = state.delegate_mut();
+
+                        // Collect deleted row indices and sort in reverse order to remove from bottom up
+                        let mut deleted_rows: Vec<usize> =
+                            delegate.edit_state.pending_deleted_rows.iter().copied().collect();
+                        deleted_rows.sort_by(|a, b| b.cmp(a)); // Reverse sort
+
+                        // Remove deleted rows from the table
+                        for row_idx in deleted_rows {
+                            if row_idx < delegate.rows.len() {
+                                delegate.rows.remove(row_idx);
+                            }
+                        }
+
+                        delegate.edit_state.clear_edits();
                         state.refresh(cx);
                     });
 
@@ -826,6 +840,13 @@ impl ResultsPanel {
                         state.delegate_mut().remove_row(row);
                     });
                 }
+                ChangeType::DeleteRow => {
+                    // Remove deletion mark - the row stays in the table
+                    let row = change.row_index;
+                    self.table_state.update(cx, |state, _cx| {
+                        state.delegate_mut().edit_state.pending_deleted_rows.remove(&row);
+                    });
+                }
             }
         }
 
@@ -889,52 +910,114 @@ impl ResultsPanel {
     }
 
     pub fn duplicate_row(&mut self, cx: &mut Context<Self>) {
+        let selected_rows = self.table_state.read(cx).selected_rows().clone();
+        for row_ix in selected_rows {
+            self.duplicate_row_with_row(row_ix, cx);
+        }
+    }
+
+    pub fn duplicate_row_with_row(&mut self, row_ix: usize, cx: &mut Context<Self>) {
         self.table_state.update(cx, |state, cx| {
-            let selected_rows = state.selected_rows().clone();
+            let delegate = state.delegate_mut();
+            if let Some(row_to_duplicate) = delegate.rows.get(row_ix).cloned() {
+                // Add the duplicated row
+                delegate.rows.push(row_to_duplicate.clone());
 
-            // Check if the row exists
-            for row_ix in selected_rows {
-                let delegate = state.delegate_mut();
-                if let Some(row_to_duplicate) = delegate.rows.get(row_ix).cloned() {
-                    // Add the duplicated row
-                    delegate.rows.push(row_to_duplicate.clone());
+                // Mark this as a pending new row
+                let new_row_index = delegate.rows.len() - 1;
+                delegate.edit_state.pending_new_rows.push(new_row_index);
 
-                    // Mark this as a pending new row
-                    let new_row_index = delegate.rows.len() - 1;
-                    delegate.edit_state.pending_new_rows.push(new_row_index);
+                // Track the INSERT change with proper column values (excluding row number and primary key columns)
+                if let Some(table_name) = &delegate.table_name {
+                    // For new rows (duplicated rows), exclude primary key to avoid UPDATE/INSERT confusion
+                    let _column_names = delegate.get_insert_column_names(true); // exclude_primary_key = true
+                    let values = delegate.get_insert_values(new_row_index, true); // exclude_primary_key = true
+                    let values_vec: Vec<Option<String>> = values
+                        .iter()
+                        .map(|val| {
+                            if val == "NULL" {
+                                None // Use None for actual NULL values
+                            } else {
+                                Some(val.clone()) // Keep value (including empty strings)
+                            }
+                        })
+                        .collect();
 
-                    // Track the INSERT change with proper column values (excluding row number and primary key columns)
-                    if let Some(table_name) = &delegate.table_name {
-                        // For new rows (duplicated rows), exclude primary key to avoid UPDATE/INSERT confusion
-                        let _column_names = delegate.get_insert_column_names(true); // exclude_primary_key = true
-                        let values = delegate.get_insert_values(new_row_index, true); // exclude_primary_key = true
-                        let values_vec: Vec<Option<String>> = values
-                            .iter()
-                            .map(|val| {
-                                if val == "NULL" {
-                                    None // Use None for actual NULL values
-                                } else {
-                                    Some(val.clone()) // Keep value (including empty strings)
-                                }
-                            })
-                            .collect();
-
-                        let change = TableChange::new(
-                            ChangeType::InsertRow,
-                            table_name.clone(),
-                            new_row_index,
-                            None,
-                            None,
-                            None, // No single new_value for insert operations
-                            None, // No primary key value for new rows
-                            Some(values_vec.clone()), // Use insert_values parameter instead
-                        );
-                        delegate.edit_state.add_change(change);
-                    }
-
-                    state.refresh(cx);
+                    let change = TableChange::new(
+                        ChangeType::InsertRow,
+                        table_name.clone(),
+                        new_row_index,
+                        None,
+                        None,
+                        None,             // No single new_value for insert operations
+                        None,             // No primary key value for new rows
+                        Some(values_vec), // Use insert_values parameter instead
+                    );
+                    delegate.edit_state.add_change(change);
                 }
+
+                state.refresh(cx);
             }
+        });
+        cx.notify();
+    }
+
+    pub fn delete_row(&mut self, cx: &mut Context<Self>) {
+        let selected_rows = self.table_state.read(cx).selected_rows().clone();
+        for row_ix in selected_rows {
+            self.delete_row_with_row(row_ix, cx);
+        }
+    }
+
+    pub fn delete_row_with_row(&mut self, row_ix: usize, cx: &mut Context<Self>) {
+        self.table_state.update(cx, |state, cx| {
+            let delegate = state.delegate_mut();
+
+            // Skip if already marked for deletion
+            if delegate.edit_state.is_row_deleted(row_ix) {
+                return;
+            }
+
+            // Skip if this is a new row (just remove it instead)
+            if delegate.edit_state.is_new_row(row_ix) {
+                // Remove the row and its changes
+                delegate.remove_row(row_ix);
+                delegate.edit_state.pending_new_rows.retain(|&r| r != row_ix);
+                state.refresh(cx);
+                return;
+            }
+
+            // Get primary key value for the row
+            let pk_value = if let Some(pk_col_idx) = delegate.get_primary_key_column_index() {
+                let display_col = pk_col_idx + 1; // +1 for row number column
+                delegate
+                    .rows
+                    .get(row_ix)
+                    .and_then(|row| row.get(display_col))
+                    .cloned()
+            } else {
+                None
+            };
+
+            // Mark the row as deleted
+            delegate.edit_state.pending_deleted_rows.insert(row_ix);
+
+            // Track the DELETE change
+            if let Some(table_name) = &delegate.table_name {
+                let change = TableChange::new(
+                    ChangeType::DeleteRow,
+                    table_name.clone(),
+                    row_ix,
+                    None,
+                    None,
+                    None,
+                    pk_value,
+                    None,
+                );
+                delegate.edit_state.add_change(change);
+            }
+
+            state.refresh(cx);
         });
         cx.notify();
     }
@@ -1065,11 +1148,20 @@ impl ResultsPanel {
 
     fn on_duplicate_row(
         &mut self,
-        _action: &DuplicateRow,
+        action: &DuplicateRow,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.duplicate_row(cx);
+        self.duplicate_row_with_row(action.row, cx);
+    }
+
+    fn on_delete_row(
+        &mut self,
+        action: &DeleteRow,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.delete_row_with_row(action.row, cx);
     }
 
     fn on_set_cell_null(
@@ -1247,18 +1339,6 @@ impl ResultsPanel {
                                 );
                             });
                         }
-                        crate::export::service::ExportResult::Error { message } => {
-                            tracing::error!("Export failed: {}", message);
-                            let _ = entity.update_in(cx, |_panel, window, cx| {
-                                window.push_notification(
-                                    (
-                                        NotificationType::Error,
-                                        SharedString::from(format!("Export failed: {}", message)),
-                                    ),
-                                    cx,
-                                );
-                            });
-                        }
                         crate::export::service::ExportResult::Cancelled => {
                             tracing::info!("Export cancelled by user");
                         }
@@ -1365,6 +1445,7 @@ impl Render for ResultsPanel {
             .on_action(cx.listener(Self::on_export_as_markdown))
             .on_action(cx.listener(Self::on_add_row))
             .on_action(cx.listener(Self::on_duplicate_row))
+            .on_action(cx.listener(Self::on_delete_row))
             .on_action(cx.listener(Self::on_set_cell_null))
             // The table component (table should have built-in scrolling)
             .child(

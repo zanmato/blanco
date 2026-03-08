@@ -75,31 +75,17 @@ pub struct CopyAsFormat {
 
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
-pub struct SelectRow {
-    pub row: usize,
-}
-
-#[derive(Action, Clone, PartialEq, Eq)]
-#[action(namespace = blanco_app, no_json)]
-pub struct SelectCell {
-    pub row: usize,
-    pub col: usize,
-}
-
-#[derive(Action, Clone, PartialEq, Eq)]
-#[action(namespace = blanco_app, no_json)]
-pub struct DoubleClickCell {
-    pub row: usize,
-    pub col: usize,
-}
-
-#[derive(Action, Clone, PartialEq, Eq)]
-#[action(namespace = blanco_app, no_json)]
 pub struct AddRow;
 
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
 pub struct DuplicateRow {
+    pub row: usize,
+}
+
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct DeleteRow {
     pub row: usize,
 }
 
@@ -276,7 +262,7 @@ impl BlancoApp {
                     connection_data,
                 } = event
                 {
-                    app.open_edit_connection_modal(connection_data.clone(), window, cx);
+                    app.open_edit_connection_modal(*connection_data.clone(), window, cx);
                 } else if let AppEvent::CreateNewQueryTab {
                     connection_id,
                     connection_name,
@@ -320,7 +306,7 @@ impl BlancoApp {
                                 content,
                                 db_id: None,
                                 connection_id: *connection_id,
-                                db_type: db_type.clone(),
+                                db_type: *db_type,
                                 connection_name: Some(connection_name.clone()),
                                 database_name: database_name.clone(),
                                 schema_name: schema_name.clone(),
@@ -354,7 +340,7 @@ impl BlancoApp {
                             crate::editor::TableStructureParams {
                                 connection_id: *connection_id,
                                 connection_name: connection_name.clone(),
-                                db_type: db_type.clone(),
+                                db_type: *db_type,
                                 database_name: database_name.clone(),
                                 schema_name: schema_name.clone(),
                                 table_name: table_name.clone(),
@@ -443,15 +429,6 @@ impl BlancoApp {
                         // Update editor panel's sidebar state
                         editor_panel_for_events.update(cx, |panel, cx| {
                             panel.set_sidebar_collapsed(app.sidebar_collapsed, cx);
-                        });
-                }
-                AppEvent::RenameTabRequested { tab_index, new_name } => {
-                        tracing::info!("📝 RenameTabRequested event received: tab_index={}, new_name={}", tab_index, new_name);
-
-                        // Dispatch the RenameTab action to handle the rename
-                        cx.dispatch_action(&RenameTab {
-                            tab_index: *tab_index,
-                            new_name: new_name.clone(),
                         });
                 }
                 AppEvent::EditorSettingChanged { setting, value } => {

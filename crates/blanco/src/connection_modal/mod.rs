@@ -696,11 +696,10 @@ impl NewConnectionModal {
         // Create entities for SQLite form
         let sqlite_file_path = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("/path/to/database.db");
-            if let Some(conn) = &connection_data {
-                if let Some(path) = &conn.database_path {
+            if let Some(conn) = &connection_data
+                && let Some(path) = &conn.database_path {
                     input.set_value(path.clone(), window, cx);
                 }
-            }
             input
         });
         let sqlite_form = SqliteForm::new(sqlite_file_path);
@@ -708,104 +707,93 @@ impl NewConnectionModal {
         // Create entities for PostgreSQL form
         let pg_host = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("localhost");
-            if let Some(conn) = &connection_data {
-                if let Some(host) = &conn.host {
+            if let Some(conn) = &connection_data
+                && let Some(host) = &conn.host {
                     input.set_value(host.clone(), window, cx);
                 }
-            }
             input
         });
         let pg_port = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("5432");
-            if let Some(conn) = &connection_data {
-                if let Some(port) = conn.port {
+            if let Some(conn) = &connection_data
+                && let Some(port) = conn.port {
                     input.set_value(port.to_string(), window, cx);
                 }
-            }
             input
         });
         let pg_database = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("Database Name");
-            if let Some(conn) = &connection_data {
-                if let Some(db) = &conn.database_name {
+            if let Some(conn) = &connection_data
+                && let Some(db) = &conn.database_name {
                     input.set_value(db.clone(), window, cx);
                 }
-            }
             input
         });
         let pg_username = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("postgres");
-            if let Some(conn) = &connection_data {
-                if let Some(user) = &conn.username {
+            if let Some(conn) = &connection_data
+                && let Some(user) = &conn.username {
                     input.set_value(user.clone(), window, cx);
                 }
-            }
             input
         });
         let pg_password = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("Password");
-            if let Some(conn) = &connection_data {
-                if let Some(pass) = &conn.password {
+            if let Some(conn) = &connection_data
+                && let Some(pass) = &conn.password {
                     input.set_value(pass.clone(), window, cx);
                 }
-            }
             input
         });
 
         // Create SSH tunnel input entities
         let ssh_host = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("SSH Host");
-            if let Some(conn) = &connection_data {
-                if let Some(host) = &conn.ssh_host {
+            if let Some(conn) = &connection_data
+                && let Some(host) = &conn.ssh_host {
                     input.set_value(host.clone(), window, cx);
                 }
-            }
             input
         });
         let ssh_port = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("22");
-            if let Some(conn) = &connection_data {
-                if let Some(port) = conn.ssh_port {
+            if let Some(conn) = &connection_data
+                && let Some(port) = conn.ssh_port {
                     input.set_value(port.to_string(), window, cx);
                 }
-            }
             input
         });
         let ssh_user = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("SSH Username");
-            if let Some(conn) = &connection_data {
-                if let Some(user) = &conn.ssh_user {
+            if let Some(conn) = &connection_data
+                && let Some(user) = &conn.ssh_user {
                     input.set_value(user.clone(), window, cx);
                 }
-            }
             input
         });
         let ssh_password = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("SSH Password (optional)");
-            if let Some(conn) = &connection_data {
-                if let Some(pass) = &conn.ssh_password {
+            if let Some(conn) = &connection_data
+                && let Some(pass) = &conn.ssh_password {
                     input.set_value(pass.clone(), window, cx);
                 }
-            }
             input
         });
         let ssh_private_key = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("Private Key Path (optional)");
-            if let Some(conn) = &connection_data {
-                if let Some(key) = &conn.ssh_private_key_path {
+            if let Some(conn) = &connection_data
+                && let Some(key) = &conn.ssh_private_key_path {
                     input.set_value(key.clone(), window, cx);
                 }
-            }
             input
         });
         let ssh_private_key_password = cx.new(|cx| {
             let mut input =
                 InputState::new(window, cx).placeholder("Private Key Password (optional)");
-            if let Some(conn) = &connection_data {
-                if let Some(pass) = &conn.ssh_private_key_password {
+            if let Some(conn) = &connection_data
+                && let Some(pass) = &conn.ssh_private_key_password {
                     input.set_value(pass.clone(), window, cx);
                 }
-            }
             input
         });
 
@@ -827,29 +815,26 @@ impl NewConnectionModal {
         });
         let pg_ssl_key = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("SSL Key Path (optional)");
-            if let Some(conn) = &connection_data {
-                if let Some(path) = &conn.ssl_key_path {
+            if let Some(conn) = &connection_data
+                && let Some(path) = &conn.ssl_key_path {
                     input.set_value(path.clone(), window, cx);
                 }
-            }
             input
         });
         let pg_ssl_cert = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("SSL Cert Path (optional)");
-            if let Some(conn) = &connection_data {
-                if let Some(path) = &conn.ssl_cert_path {
+            if let Some(conn) = &connection_data
+                && let Some(path) = &conn.ssl_cert_path {
                     input.set_value(path.clone(), window, cx);
                 }
-            }
             input
         });
         let pg_ssl_ca_cert = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("SSL CA Cert Path (optional)");
-            if let Some(conn) = &connection_data {
-                if let Some(path) = &conn.ssl_ca_cert_path {
+            if let Some(conn) = &connection_data
+                && let Some(path) = &conn.ssl_ca_cert_path {
                     input.set_value(path.clone(), window, cx);
                 }
-            }
             input
         });
 
@@ -872,113 +857,101 @@ impl NewConnectionModal {
         );
 
         // Set SSH enabled state if connection has SSH config
-        if let Some(conn) = &connection_data {
-            if conn.uses_ssh_tunnel() {
+        if let Some(conn) = &connection_data
+            && conn.uses_ssh_tunnel() {
                 postgres_form.ssh_enabled = true;
             }
-        }
 
         // Create entities for MySQL form
         let mysql_host = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("localhost");
-            if let Some(conn) = &connection_data {
-                if let Some(host) = &conn.host {
+            if let Some(conn) = &connection_data
+                && let Some(host) = &conn.host {
                     input.set_value(host.clone(), window, cx);
                 }
-            }
             input
         });
         let mysql_port = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("3306");
-            if let Some(conn) = &connection_data {
-                if let Some(port) = conn.port {
+            if let Some(conn) = &connection_data
+                && let Some(port) = conn.port {
                     input.set_value(port.to_string(), window, cx);
                 }
-            }
             input
         });
         let mysql_database = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("Database Name");
-            if let Some(conn) = &connection_data {
-                if let Some(db) = &conn.database_name {
+            if let Some(conn) = &connection_data
+                && let Some(db) = &conn.database_name {
                     input.set_value(db.clone(), window, cx);
                 }
-            }
             input
         });
         let mysql_username = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("root");
-            if let Some(conn) = &connection_data {
-                if let Some(user) = &conn.username {
+            if let Some(conn) = &connection_data
+                && let Some(user) = &conn.username {
                     input.set_value(user.clone(), window, cx);
                 }
-            }
             input
         });
         let mysql_password = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("Password");
-            if let Some(conn) = &connection_data {
-                if let Some(pass) = &conn.password {
+            if let Some(conn) = &connection_data
+                && let Some(pass) = &conn.password {
                     input.set_value(pass.clone(), window, cx);
                 }
-            }
             input
         });
 
         // Create separate SSH tunnel input entities for MySQL
         let mysql_ssh_host = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("SSH Host");
-            if let Some(conn) = &connection_data {
-                if let Some(host) = &conn.ssh_host {
+            if let Some(conn) = &connection_data
+                && let Some(host) = &conn.ssh_host {
                     input.set_value(host.clone(), window, cx);
                 }
-            }
             input
         });
         let mysql_ssh_port = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("22");
-            if let Some(conn) = &connection_data {
-                if let Some(port) = conn.ssh_port {
+            if let Some(conn) = &connection_data
+                && let Some(port) = conn.ssh_port {
                     input.set_value(port.to_string(), window, cx);
                 }
-            }
             input
         });
         let mysql_ssh_user = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("SSH Username");
-            if let Some(conn) = &connection_data {
-                if let Some(user) = &conn.ssh_user {
+            if let Some(conn) = &connection_data
+                && let Some(user) = &conn.ssh_user {
                     input.set_value(user.clone(), window, cx);
                 }
-            }
             input
         });
         let mysql_ssh_password = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("SSH Password (optional)");
-            if let Some(conn) = &connection_data {
-                if let Some(pass) = &conn.ssh_password {
+            if let Some(conn) = &connection_data
+                && let Some(pass) = &conn.ssh_password {
                     input.set_value(pass.clone(), window, cx);
                 }
-            }
             input
         });
         let mysql_ssh_private_key = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("Private Key Path (optional)");
-            if let Some(conn) = &connection_data {
-                if let Some(key) = &conn.ssh_private_key_path {
+            if let Some(conn) = &connection_data
+                && let Some(key) = &conn.ssh_private_key_path {
                     input.set_value(key.clone(), window, cx);
                 }
-            }
             input
         });
         let mysql_ssh_private_key_password = cx.new(|cx| {
             let mut input =
                 InputState::new(window, cx).placeholder("Private Key Password (optional)");
-            if let Some(conn) = &connection_data {
-                if let Some(pass) = &conn.ssh_private_key_password {
+            if let Some(conn) = &connection_data
+                && let Some(pass) = &conn.ssh_private_key_password {
                     input.set_value(pass.clone(), window, cx);
                 }
-            }
             input
         });
 
@@ -999,29 +972,26 @@ impl NewConnectionModal {
         });
         let mysql_ssl_key = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("SSL Key Path (optional)");
-            if let Some(conn) = &connection_data {
-                if let Some(path) = &conn.ssl_key_path {
+            if let Some(conn) = &connection_data
+                && let Some(path) = &conn.ssl_key_path {
                     input.set_value(path.clone(), window, cx);
                 }
-            }
             input
         });
         let mysql_ssl_cert = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("SSL Cert Path (optional)");
-            if let Some(conn) = &connection_data {
-                if let Some(path) = &conn.ssl_cert_path {
+            if let Some(conn) = &connection_data
+                && let Some(path) = &conn.ssl_cert_path {
                     input.set_value(path.clone(), window, cx);
                 }
-            }
             input
         });
         let mysql_ssl_ca_cert = cx.new(|cx| {
             let mut input = InputState::new(window, cx).placeholder("SSL CA Cert Path (optional)");
-            if let Some(conn) = &connection_data {
-                if let Some(path) = &conn.ssl_ca_cert_path {
+            if let Some(conn) = &connection_data
+                && let Some(path) = &conn.ssl_ca_cert_path {
                     input.set_value(path.clone(), window, cx);
                 }
-            }
             input
         });
 
@@ -1044,11 +1014,10 @@ impl NewConnectionModal {
         );
 
         // Set SSH enabled state if connection has SSH config
-        if let Some(conn) = &connection_data {
-            if conn.uses_ssh_tunnel() {
+        if let Some(conn) = &connection_data
+            && conn.uses_ssh_tunnel() {
                 mysql_form.ssh_enabled = true;
             }
-        }
 
         Self {
             focus_handle: cx.focus_handle(),

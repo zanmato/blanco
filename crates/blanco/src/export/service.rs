@@ -15,8 +15,8 @@ use blanco_core::connection_trait::ColumnType;
 pub struct ExportProgress {
     pub exported_rows: usize,
     pub total_rows: usize,
-    pub current_file_size: u64,
-    pub is_complete: bool,
+    pub _current_file_size: u64,
+    pub _is_complete: bool,
 }
 
 /// Result of an export operation
@@ -25,10 +25,7 @@ pub enum ExportResult {
     Success {
         file_path: String,
         rows_exported: usize,
-        file_size: u64,
-    },
-    Error {
-        message: String,
+        _file_size: u64,
     },
     Cancelled,
 }
@@ -181,8 +178,8 @@ impl ExportService {
             let progress = ExportProgress {
                 exported_rows: rows_written,
                 total_rows: rows_written, // Estimate since we don't know total in advance
-                current_file_size: bytes_written as u64,
-                is_complete: false,
+                _current_file_size: bytes_written as u64,
+                _is_complete: false,
             };
 
             progress_callback(progress);
@@ -213,8 +210,8 @@ impl ExportService {
         let final_progress = ExportProgress {
             exported_rows: rows_written,
             total_rows: rows_written,
-            current_file_size: file_size,
-            is_complete: true,
+            _current_file_size: file_size,
+            _is_complete: true,
         };
 
         progress_callback(final_progress);
@@ -222,7 +219,7 @@ impl ExportService {
         Ok(ExportResult::Success {
             file_path: file_path.to_string_lossy().to_string(),
             rows_exported: rows_written,
-            file_size,
+            _file_size: file_size,
         })
     }
 
@@ -264,7 +261,7 @@ impl ExportService {
         Ok(ExportResult::Success {
             file_path: file_path.to_string_lossy().to_string(),
             rows_exported,
-            file_size,
+            _file_size: file_size,
         })
     }
 }

@@ -22,7 +22,7 @@ impl DatabaseType {
     }
 
     /// Parse a string into a DatabaseType
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn from_name(s: &str) -> Option<Self> {
         match s {
             "SQLite" => Some(DatabaseType::SQLite),
             "PostgreSQL" => Some(DatabaseType::PostgreSQL),

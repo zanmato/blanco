@@ -1164,13 +1164,11 @@ impl PostgresConnection {
 
         let mut oid_to_name = std::collections::HashMap::new();
         for row in rows {
-            if let Ok(Some(oid_text)) = row.try_get::<Option<String>, _>(0) {
-                if let Ok(oid_val) = oid_text.parse::<i32>() {
-                    if let Ok(Some(name)) = row.try_get::<Option<String>, _>(1) {
+            if let Ok(Some(oid_text)) = row.try_get::<Option<String>, _>(0)
+                && let Ok(oid_val) = oid_text.parse::<i32>()
+                    && let Ok(Some(name)) = row.try_get::<Option<String>, _>(1) {
                         oid_to_name.insert(oid_val, name);
                     }
-                }
-            }
         }
 
         Ok(oid_to_name)
@@ -1287,9 +1285,9 @@ impl PostgresConnection {
                     // Collect OIDs from Unknown (regclass) columns for later resolution
                     // We do this before pushing the row so we have the current row_idx
                     for (col_idx, col_type) in column_types.iter().enumerate() {
-                        if *col_type == ColumnType::Unknown {
-                            if let Ok(raw_value) = row.try_get_raw(col_idx) {
-                                if !raw_value.is_null() {
+                        if *col_type == ColumnType::Unknown
+                            && let Ok(raw_value) = row.try_get_raw(col_idx)
+                                && !raw_value.is_null() {
                                     match raw_value.as_bytes() {
                                         Ok(bytes) => {
                                             // PostgreSQL OIDs are 4-byte integers in network byte order (big-endian)
@@ -1305,8 +1303,6 @@ impl PostgresConnection {
                                         }
                                     }
                                 }
-                            }
-                        }
                     }
 
                     rows.push(row_data);
@@ -1836,8 +1832,8 @@ impl Connection for PostgresConnection {
             .and_then(|val| val.parse::<i64>().ok())
             .filter(|n| *n >= 0);
 
-        if let Some(count) = row_count {
-            if count <= ROW_ESTIMATE_THRESHOLD {
+        if let Some(count) = row_count
+            && count <= ROW_ESTIMATE_THRESHOLD {
                 // Small table: fetch all rows with referenced row first
                 let query = format!(
                     "SELECT * FROM {} ORDER BY {} = '{}' DESC LIMIT {}",
@@ -1847,7 +1843,6 @@ impl Connection for PostgresConnection {
                     .execute_query(&query, self.initial_database.as_deref(), None)
                     .await;
             }
-        }
 
         // Large table or estimate unavailable: fetch only referenced row
         let query = format!(

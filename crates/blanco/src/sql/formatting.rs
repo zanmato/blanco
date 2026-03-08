@@ -56,7 +56,7 @@ impl SqruffService {
     /// # Arguments
     /// * `sql` - The SQL text to lint
     /// * `statement_offset` - Optional byte offset to add to diagnostics
-    ///                      (useful when linting a sub-section of a larger file)
+    ///   (useful when linting a sub-section of a larger file)
     ///
     /// # Returns
     /// Vector of diagnostics or an error message
@@ -87,7 +87,7 @@ impl SqruffService {
         // The caller is responsible for adjusting positions to the full file if needed
         let diagnostics: Vec<Diagnostic> = violations
             .iter()
-            .filter_map(|violation| {
+            .map(|violation| {
                 // Convert sqruff violation to gpui_component Diagnostic
                 let severity = Self::severity_for_rule(violation.rule_code());
 
@@ -107,7 +107,7 @@ impl SqruffService {
 
                 let message = format!("{}: {}", violation.rule_code(), violation.description);
 
-                Some(Diagnostic::new(start..end, message).with_severity(severity))
+                Diagnostic::new(start..end, message).with_severity(severity)
             })
             .collect();
 

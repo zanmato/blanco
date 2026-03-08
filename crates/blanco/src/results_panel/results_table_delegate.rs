@@ -23,8 +23,8 @@ use serde_json::Value;
 
 use blanco_core::{QueryResult, connection_trait::ColumnType};
 
-use crate::app::{AddRow, DuplicateRow, SetCellNull};
 use super::foreign_key_popover::ForeignKeyPopover;
+use crate::app::{AddRow, DeleteRow, DuplicateRow, SetCellNull};
 use crate::results_panel::table_operations::{
     ColumnChange, OperationType, RowIdentifier, TableChangeOperation,
 };
@@ -73,6 +73,7 @@ pub struct TableChange {
 pub enum ChangeType {
     UpdateCell,
     InsertRow,
+    DeleteRow,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -82,6 +83,7 @@ pub struct CellEditState {
     pub original_values: HashMap<(usize, usize), String>,
     pub edited_values: HashMap<(usize, usize), String>,
     pub pending_new_rows: Vec<usize>, // Track rows that are newly added
+    pub pending_deleted_rows: HashSet<usize>, // Track rows marked for deletion
     pub editing_input: Option<Entity<InputState>>, // Store input state per delegate
     pub changes: Vec<TableChange>,    // Track all changes for SQL generation
     pub selected_rows: HashSet<usize>, // Track selected rows
@@ -138,6 +140,7 @@ impl CellEditState {
     pub fn has_unsaved_changes(&self) -> bool {
         !self.edited_values.is_empty()
             || !self.pending_new_rows.is_empty()
+            || !self.pending_deleted_rows.is_empty()
             || !self.changes.is_empty()
     }
 
@@ -145,6 +148,7 @@ impl CellEditState {
         self.edited_values.clear();
         self.original_values.clear();
         self.pending_new_rows.clear();
+        self.pending_deleted_rows.clear();
         self.editing_cell = None;
         self.editing_input = None;
         self.expanded_cell = None;
@@ -155,6 +159,7 @@ impl CellEditState {
         self.original_values.clear();
         self.edited_values.clear();
         self.pending_new_rows.clear();
+        self.pending_deleted_rows.clear();
         self.editing_input = None;
         self.expanded_cell = None;
         self.changes.clear();
@@ -183,10 +188,15 @@ impl CellEditState {
         self.edited_values.clear();
         self.original_values.clear();
         self.pending_new_rows.clear();
+        self.pending_deleted_rows.clear();
     }
 
     pub fn is_new_row(&self, row_index: usize) -> bool {
         self.pending_new_rows.contains(&row_index)
+    }
+
+    pub fn is_row_deleted(&self, row_index: usize) -> bool {
+        self.pending_deleted_rows.contains(&row_index)
     }
 
     pub fn clear_selection(&mut self) {
@@ -406,9 +416,34 @@ impl ResultsTableDelegate {
         let mut update_operations: HashMap<(String, String, String), Vec<ColumnChange>> =
             HashMap::new();
         let mut insert_operations: Vec<TableChangeOperation> = Vec::new();
+        let mut delete_operations: Vec<TableChangeOperation> = Vec::new();
 
         for change in &self.edit_state.changes {
             match change.change_type {
+                ChangeType::DeleteRow => {
+                    // Get primary key information for DELETE operation
+                    let (pk_column, pk_value) = if let Some(ref pk_column) = self.primary_key_column
+                    {
+                        if let Some(pk_val) = &change.primary_key_value {
+                            (pk_column.clone(), pk_val.clone())
+                        } else {
+                            continue;
+                        }
+                    } else {
+                        continue; // Skip this change if we can't determine PK
+                    };
+
+                    let operation = TableChangeOperation {
+                        operation_type: OperationType::Delete,
+                        table_name: change.table_name.clone(),
+                        row_identifier: RowIdentifier::PrimaryKey {
+                            column: pk_column,
+                            value: pk_value,
+                        },
+                        changes: vec![],
+                    };
+                    delete_operations.push(operation);
+                }
                 ChangeType::UpdateCell => {
                     // Get primary key information - always use delegate's primary key column
                     let (pk_column, pk_value) = if let Some(ref pk_column) = self.primary_key_column
@@ -518,6 +553,9 @@ impl ResultsTableDelegate {
 
         // Add insert operations
         operations.extend(insert_operations);
+
+        // Add delete operations
+        operations.extend(delete_operations);
 
         operations
     }
@@ -1056,7 +1094,7 @@ impl TableDelegate for ResultsTableDelegate {
                         .items_center()
                         .p_0()
                         .when(
-                            self.column_types.get(col_ix - 1).map_or(false, |ct| ct.is_numeric()),
+                            self.column_types.get(col_ix - 1).is_some_and(|ct| ct.is_numeric()),
                             |this| this.justify_end()
                         )
                         .when(
@@ -1156,7 +1194,7 @@ impl TableDelegate for ResultsTableDelegate {
                 && self
                     .column_types
                     .get(col_ix - 1)
-                    .map_or(false, |ct| ct.is_numeric());
+                    .is_some_and(|ct| ct.is_numeric());
 
             // Render static cell with appropriate handlers
             let cell_content = h_flex()
@@ -1242,6 +1280,8 @@ impl TableDelegate for ResultsTableDelegate {
                     },
                 );
 
+            let is_deleted = self.edit_state.is_row_deleted(row_ix);
+
             div()
                 .group("")
                 .font_family(cx.theme().mono_font_family.clone())
@@ -1249,13 +1289,25 @@ impl TableDelegate for ResultsTableDelegate {
                 .size_full() // Fill the entire cell container
                 .flex() // Enable flexbox layout
                 .items_center() // Center vertically
-                .when(is_row_number_col, |this| {
-                    this.font_weight(FontWeight::BOLD) // Bold row numbers
-                        .text_color(cx.theme().muted_foreground) // Muted color for row numbers
-                        .cursor_pointer() // Pointer cursor for row selection
-                        .when(self.edit_state.is_new_row(row_ix), |this| {
-                            this.border_l_3().border_color(cx.theme().yellow)
-                        })
+                .when(is_deleted, |this| {
+                    this.when(is_row_number_col, |this| {
+                        this.font_weight(FontWeight::BOLD) // Bold row numbers
+                            .text_color(cx.theme().muted_foreground) // Muted color for row numbers
+                            .cursor_pointer() // Pointer cursor for row selection
+                            .when(self.edit_state.is_new_row(row_ix), |this| {
+                                this.border_l_3().border_color(cx.theme().red)
+                            })
+                    })
+                })
+                .when(!is_deleted, |this| {
+                    this.when(is_row_number_col, |this| {
+                        this.font_weight(FontWeight::BOLD) // Bold row numbers
+                            .text_color(cx.theme().muted_foreground) // Muted color for row numbers
+                            .cursor_pointer() // Pointer cursor for row selection
+                            .when(self.edit_state.is_new_row(row_ix), |this| {
+                                this.border_l_3().border_color(cx.theme().yellow)
+                            })
+                    })
                 })
                 .when(is_numeric && !is_row_number_col, |this| {
                     this.text_align(gpui::TextAlign::Right)
@@ -1435,6 +1487,11 @@ impl TableDelegate for ResultsTableDelegate {
             "Duplicate Row",
             Icon::new(IconName::Copy),
             Box::new(DuplicateRow { row: cell.0 }),
+        )
+        .menu_with_icon(
+            "Delete Row",
+            Icon::new(IconName::Delete),
+            Box::new(DeleteRow { row: cell.0 }),
         )
         .when(is_nullable, |this| {
             this.menu_with_icon(

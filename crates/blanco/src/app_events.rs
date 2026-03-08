@@ -17,17 +17,13 @@ pub enum AppEvent {
     },
     EditConnection {
         connection_id: i64,
-        connection_data: ConnectionData,
+        connection_data: Box<ConnectionData>,
     },
 
     /// UI events
     ToggleSidebar,
 
     /// Query execution events
-    QueryExecutionStarted {
-        connection_id: Option<i64>,
-        query: String,
-    },
     QueryExecutionCompleted {
         connection_id: Option<i64>,
         database_name: Option<String>,
@@ -48,13 +44,6 @@ pub enum AppEvent {
         rows_affected: Option<u64>,
         error_message: Option<String>,
         operations_executed: usize,
-    },
-    TabChanged {
-        tab_id: usize,
-    },
-    RenameTabRequested {
-        tab_index: usize,
-        new_name: String,
     },
     CreateNewQueryTab {
         connection_id: i64,

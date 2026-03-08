@@ -48,7 +48,7 @@ pub struct DatabaseSchema {
 #[derive(Debug, Clone)]
 pub struct DatabaseTable {
     pub name: String,
-    pub schema: Option<String>,
+    pub _schema: Option<String>,
     pub item_type: DatabaseItemType,
 }
 
@@ -71,7 +71,7 @@ pub struct Database {
 /// Metadata about a database's schemas and tables
 #[derive(Debug, Clone)]
 pub struct DatabaseMetadata {
-    pub connection_id: Option<i64>,
+    pub _connection_id: Option<i64>,
     pub databases: Vec<Database>, // For PostgreSQL: database -> schema -> table
     pub schemas: Vec<DatabaseSchema>, // For SQLite: direct schema -> table
     pub supports_schemas: bool,
@@ -79,7 +79,7 @@ pub struct DatabaseMetadata {
 
 pub struct ConnectionsPanel {
     pub connections: Vec<ConnectionData>,
-    selected_connection_id: Option<i64>,
+    _selected_connection_id: Option<i64>,
     database_metadata: std::collections::HashMap<i64, DatabaseMetadata>, // Store metadata per connection
     tree_state: Entity<TreeState<ConnectionsTreeDelegate>>,
     pub loaded_connections: std::collections::HashSet<i64>,
@@ -130,7 +130,7 @@ impl CreateNewQueryTabParams for TreeItemMetadata {
                 Some(crate::app_events::AppEvent::CreateNewQueryTab {
                     connection_id: self.connection_id,
                     connection_name: self.connection_name.clone(),
-                    db_type: self.db_type.clone(),
+                    db_type: self.db_type,
                     database_name: self.database_name.clone().unwrap_or_default(),
                     schema_name: self.schema_name.clone(),
                     table_name: self.table_name.clone(),
@@ -167,7 +167,7 @@ impl ConnectionsPanel {
 
         let panel = Self {
             connections,
-            selected_connection_id: None,
+            _selected_connection_id: None,
             database_metadata,
             tree_state,
             loaded_connections,
@@ -566,7 +566,7 @@ impl ConnectionsPanel {
                         };
 
                         DatabaseMetadata {
-                            connection_id: Some(connection_id),
+                            _connection_id: Some(connection_id),
                             databases: databases
                                 .into_iter()
                                 .map(|db_name| Database {
@@ -610,7 +610,7 @@ impl ConnectionsPanel {
                                 for table_name in table_list {
                                     all_items.push(DatabaseTable {
                                         name: table_name,
-                                        schema: Some(schema_name.clone()),
+                                        _schema: Some(schema_name.clone()),
                                         item_type: DatabaseItemType::Table,
                                     });
                                 }
@@ -621,7 +621,7 @@ impl ConnectionsPanel {
                                 for view_name in view_list {
                                     all_items.push(DatabaseTable {
                                         name: view_name,
-                                        schema: Some(schema_name.clone()),
+                                        _schema: Some(schema_name.clone()),
                                         item_type: DatabaseItemType::View,
                                     });
                                 }
@@ -634,7 +634,7 @@ impl ConnectionsPanel {
                         }
 
                         DatabaseMetadata {
-                            connection_id: Some(connection_id),
+                            _connection_id: Some(connection_id),
                             databases: Vec::new(), // Not used for SQLite
                             schemas: schema_tables
                                 .into_iter()
@@ -727,7 +727,7 @@ impl ConnectionsPanel {
                     // Load tables and views for all schemas (without lazy loading for now)
                     let mut schema_tables: Vec<(String, Vec<DatabaseTable>)> = Vec::new();
                     for schema_name in &schemas {
-                        let mut all_items: Vec<DatabaseTable> = Vec::new();
+                        let all_items: Vec<DatabaseTable> = Vec::new();
 
                         /*
                         Don't perform any initial loading here - load on schema expand instead
@@ -736,7 +736,7 @@ impl ConnectionsPanel {
                             for table_name in table_list {
                                 all_items.push(DatabaseTable {
                                     name: table_name,
-                                    schema: Some(schema_name.clone()),
+                                    _schema: Some(schema_name.clone()),
                                     item_type: DatabaseItemType::Table,
                                 });
                             }
@@ -747,7 +747,7 @@ impl ConnectionsPanel {
                             for view_name in view_list {
                                 all_items.push(DatabaseTable {
                                     name: view_name,
-                                    schema: Some(schema_name.clone()),
+                                    _schema: Some(schema_name.clone()),
                                     item_type: DatabaseItemType::View,
                                 });
                             }
@@ -850,7 +850,7 @@ impl ConnectionsPanel {
                         for table_name in table_list {
                             all_items.push(DatabaseTable {
                                 name: table_name,
-                                schema: Some(schema_name.clone()),
+                                _schema: Some(schema_name.clone()),
                                 item_type: DatabaseItemType::Table,
                             });
                         }
@@ -869,7 +869,7 @@ impl ConnectionsPanel {
                         for view_name in view_list {
                             all_items.push(DatabaseTable {
                                 name: view_name,
-                                schema: Some(schema_name.clone()),
+                                _schema: Some(schema_name.clone()),
                                 item_type: DatabaseItemType::View,
                             });
                         }
@@ -888,7 +888,7 @@ impl ConnectionsPanel {
                         for matview_name in matview_list {
                             all_items.push(DatabaseTable {
                                 name: matview_name,
-                                schema: Some(schema_name.clone()),
+                                _schema: Some(schema_name.clone()),
                                 item_type: DatabaseItemType::MaterializedView,
                             });
                         }
@@ -1359,7 +1359,7 @@ impl ConnectionsPanel {
             // Emit an event to open the edit modal
             cx.emit(AppEvent::EditConnection {
                 connection_id,
-                connection_data: conn_data,
+                connection_data: Box::new(conn_data),
             });
         } else {
             tracing::error!("Connection with ID {} not found", connection_id);

@@ -26,10 +26,6 @@ impl AppDatabase {
         cx.global::<Self>()
     }
 
-    /// Get access to the underlying database pool
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
-    }
 }
 
 impl AppDatabase {

@@ -145,7 +145,7 @@ impl ChatSession {
         let old_state = self.loading_state.clone();
         self.loading_state = new_state.clone();
         cx.emit(ChatEvent::LoadingStateChanged {
-            old_state,
+            _old_state: old_state,
             new_state,
         });
     }

@@ -23,17 +23,11 @@ pub struct LLMInstance {
 /// This resolver handles the creation and caching of LLM instances
 /// based on current application settings. It can handle runtime changes
 /// to settings and will recreate instances when necessary.
+#[derive(Default)]
 pub struct ChatProviderResolver {
     cached_llm: Option<(LLMInstance, u64)>,
 }
 
-impl Default for ChatProviderResolver {
-    fn default() -> Self {
-        Self {
-            cached_llm: None,
-        }
-    }
-}
 
 impl ChatProviderResolver {
     /// Get an LLM instance based on current settings

@@ -14,13 +14,13 @@ use blanco_core::connection_trait::{ColumnInfo, IndexInfo};
 
 pub struct TableStructureTab {
     pub title: String,
-    pub connection_id: i64,
-    pub db_type: database::DatabaseType,
-    pub connection_name: Option<String>,
-    pub database_name: String,
-    pub schema_name: Option<String>,
-    pub table_name: String,
-    pub environment_type: Option<EnvironmentType>,
+    pub _connection_id: i64,
+    pub _db_type: database::DatabaseType,
+    pub _connection_name: Option<String>,
+    pub _database_name: String,
+    pub _schema_name: Option<String>,
+    pub _table_name: String,
+    pub _environment_type: Option<EnvironmentType>,
     columns_table_state: Entity<TableState<ColumnsTableDelegate>>,
     indexes_table_state: Entity<TableState<IndexesTableDelegate>>,
     focus_handle: FocusHandle,
@@ -29,6 +29,7 @@ pub struct TableStructureTab {
 }
 
 impl TableStructureTab {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         connection_id: i64,
         db_type: database::DatabaseType,
@@ -62,13 +63,13 @@ impl TableStructureTab {
 
         Self {
             title,
-            connection_id,
-            db_type,
-            connection_name,
-            database_name,
-            schema_name,
-            table_name,
-            environment_type,
+            _connection_id: connection_id,
+            _db_type: db_type,
+            _connection_name: connection_name,
+            _database_name: database_name,
+            _schema_name: schema_name,
+            _table_name: table_name,
+            _environment_type: environment_type,
             columns_table_state,
             indexes_table_state,
             focus_handle: cx.focus_handle(),

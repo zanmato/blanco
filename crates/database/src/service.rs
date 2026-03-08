@@ -483,7 +483,7 @@ impl DatabaseServiceTrait for DatabaseService {
             configs
                 .get(&connection_id)
                 .map(|config| {
-                    DriverType::from(config.db_type.clone())
+                    DriverType::from(config.db_type)
                         .to_string()
                         .to_owned()
                 })
@@ -508,9 +508,9 @@ impl DatabaseServiceTrait for DatabaseService {
 
         for ((config_id, db_name), connection) in connections.iter() {
             statuses.insert(
-                (config_id.clone(), db_name.clone()),
+                (*config_id, db_name.clone()),
                 blanco_core::database_service::ConnectionStatus {
-                    connection_id: config_id.clone(),
+                    connection_id: *config_id,
                     database_name: db_name.clone(),
                     is_connected: true,
                     connection_type: connection.get_connection_type().to_owned(),

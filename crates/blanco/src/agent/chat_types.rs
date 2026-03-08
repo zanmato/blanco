@@ -111,7 +111,7 @@ pub enum ChatEvent {
     },
     SessionCleared,
     LoadingStateChanged {
-        old_state: LoadingState,
+        _old_state: LoadingState,
         new_state: LoadingState,
     },
 }

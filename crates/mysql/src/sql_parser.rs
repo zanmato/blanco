@@ -24,11 +24,10 @@ impl MysqlTableExtractor {
 
     /// Extract the table name from a SELECT query
     pub fn extract_table(&self, sql: &str, alias: bool) -> Result<String> {
-        if let Some(statement) = self.parse_sql(sql)? {
-            if let Some(table_name) = self.extract_from_statement(&statement, alias) {
+        if let Some(statement) = self.parse_sql(sql)?
+            && let Some(table_name) = self.extract_from_statement(&statement, alias) {
                 return Ok(table_name);
             }
-        }
 
         Err(anyhow!("Could not extract table name from query"))
     }
@@ -59,11 +58,10 @@ impl MysqlTableExtractor {
 
     /// Extract table name from a Query
     fn extract_from_query(&self, query: &sqlparser::ast::Query, alias: bool) -> Option<String> {
-        if let SetExpr::Select(select) = &*query.body {
-            if let Some(first_table) = select.from.first() {
+        if let SetExpr::Select(select) = &*query.body
+            && let Some(first_table) = select.from.first() {
                 return self.extract_from_table_factor(&first_table.relation, alias);
             }
-        }
         None
     }
 
@@ -75,11 +73,10 @@ impl MysqlTableExtractor {
                 alias: table_alias,
                 ..
             } => {
-                if alias {
-                    if let Some(a) = table_alias {
+                if alias
+                    && let Some(a) = table_alias {
                         return Some(a.name.to_string());
                     }
-                }
                 Some(name.to_string())
             }
             TableFactor::Derived {

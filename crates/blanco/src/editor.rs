@@ -42,7 +42,7 @@ use database::{DatabaseService, DatabaseServiceTrait};
 use gpui_component::{Icon, RopeExt};
 
 pub enum TabType {
-    Query(QueryTab),
+    Query(Box<QueryTab>),
     Settings(SettingsTab),
     Snippet(Entity<SnippetEditor>),
     TableStructure(Entity<TableStructureTab>),
@@ -51,7 +51,7 @@ pub enum TabType {
 pub struct QueryTab {
     pub title: String,
     pub connection_id: i64,              // Connection ID from app database
-    pub db_type: database::DatabaseType, // Database type for this connection
+    pub _db_type: database::DatabaseType, // Database type for this connection
     pub connection_name: Option<String>, // Connection name from database
     pub database_name: String,           // Database name this tab is connected to
     pub schema_name: Option<String>,     // Optional schema name for context
@@ -255,28 +255,25 @@ impl EditorPanel {
             &settings_view,
             window,
             |editor_panel, _settings_view, event, window, cx| {
-                match event {
-                    AppEvent::EditorSettingChanged { setting, value } => {
-                        // Forward the event to the BlancoApp
-                        cx.emit(AppEvent::EditorSettingChanged {
-                            setting: setting.clone(),
-                            value: value.clone(),
-                        });
+                if let AppEvent::EditorSettingChanged { setting, value } = event {
+                    // Forward the event to the BlancoApp
+                    cx.emit(AppEvent::EditorSettingChanged {
+                        setting: setting.clone(),
+                        value: value.clone(),
+                    });
 
-                        // Also update all editors directly for immediate feedback
-                        let value_bool = value.parse::<bool>().unwrap_or(false);
-                        match setting.as_str() {
-                            "word_wrap" => {
-                                editor_panel.set_all_editors_soft_wrap(value_bool, window, cx);
-                            }
-                            "show_whitespace" => {
-                                editor_panel
-                                    .set_all_editors_show_whitespace(value_bool, window, cx);
-                            }
-                            _ => {}
+                    // Also update all editors directly for immediate feedback
+                    let value_bool = value.parse::<bool>().unwrap_or(false);
+                    match setting.as_str() {
+                        "word_wrap" => {
+                            editor_panel.set_all_editors_soft_wrap(value_bool, window, cx);
                         }
+                        "show_whitespace" => {
+                            editor_panel
+                                .set_all_editors_show_whitespace(value_bool, window, cx);
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
             },
         )
@@ -576,13 +573,11 @@ impl EditorPanel {
 
                             // Load full table metadata (including primary keys and foreign keys)
                             if let (Some(table_name), false) = (&table_name, result.rows.is_empty())
-                            {
-                                if let Ok(columns) =
+                                && let Ok(columns) =
                                     connection.get_columns_for_table(table_name, None).await
                                 {
                                     result.table_columns = Some(columns);
                                 }
-                            }
                         }
 
                         // Store rows_affected before moving result
@@ -913,7 +908,7 @@ impl EditorPanel {
         self._subscriptions.push(subscription);
 
         // Create SqruffService for this tab
-        let sqruff_service = match SqruffService::new(&params.db_type.to_sqruff_dialect()) {
+        let sqruff_service = match SqruffService::new(params.db_type.to_sqruff_dialect()) {
             Ok(service) => Some(Arc::new(service)),
             Err(e) => {
                 error!(
@@ -928,7 +923,7 @@ impl EditorPanel {
         let query_tab = QueryTab {
             title: params.title.clone(),
             connection_id: params.connection_id,
-            db_type: params.db_type.clone(),
+            _db_type: params.db_type,
             connection_name: params.connection_name.clone(),
             database_name: params.database_name.clone(),
             schema_name: params.schema_name.clone(),
@@ -945,7 +940,7 @@ impl EditorPanel {
             chat_panel: None,
         };
 
-        self.tabs.push(TabType::Query(query_tab));
+        self.tabs.push(TabType::Query(Box::new(query_tab)));
         self.active_tab_ix = self.tabs.len() - 1;
         self.scroll_tabbar_to_the_end(window, cx);
 
@@ -1150,10 +1145,10 @@ impl EditorPanel {
                             })
                             .collect();
 
-                        state.diagnostics_mut().map(|set| {
+                        if let Some(set) = state.diagnostics_mut() {
                             set.clear();
                             set.extend(adjusted_diagnostics);
-                        });
+                        }
                         cx.notify();
                     });
                 }
@@ -1228,7 +1223,6 @@ impl EditorPanel {
                                 end: end_pos,
                             },
                             new_text: formatted,
-                            ..Default::default()
                         };
                         state.apply_lsp_edits(&vec![text_edit], window, cx);
                     });
@@ -1612,6 +1606,20 @@ impl Render for EditorPanel {
                                                                             if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
                                                                                 query_tab.results_panel.update(cx, |results_panel, cx| {
                                                                                     results_panel.duplicate_row(cx);
+                                                                                });
+                                                                            }
+                                                                        }))
+                                                                )
+                                                                .child(
+                                                                    Button::new("delete-row")
+                                                                        .outline()
+                                                                        .small()
+                                                                        .icon(IconName::Delete)
+                                                                        .label("Delete")
+                                                                        .on_click(cx.listener(|this, _, _window, cx| {
+                                                                            if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
+                                                                                query_tab.results_panel.update(cx, |results_panel, cx| {
+                                                                                    results_panel.delete_row(cx);
                                                                                 });
                                                                             }
                                                                         }))
