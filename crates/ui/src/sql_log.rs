@@ -56,7 +56,7 @@ impl SqlLog {
 
         // Create a Rope for the highlighter to parse
         let rope = ropey::Rope::from(&new_text[..]);
-        highlighter.update(None, &rope);
+        highlighter.update(None, &rope, None);
 
         // Create the log entry
         let entry = LogEntry {
@@ -118,6 +118,9 @@ impl Render for SqlLog {
         // Create a container with syntax-highlighted entries
         div()
             .size_full()
+            .flex_1()
+            .max_h(px(160.))
+            .min_h_0()
             .bg(cx
                 .theme()
                 .highlight_theme
@@ -127,9 +130,8 @@ impl Render for SqlLog {
             .child(
                 div()
                     .id("sql-log")
-                    .w_full()
-                    .h_full()
                     .p_4()
+                    .size_full()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll_handle)
                     .font_family(cx.theme().mono_font_family.clone())
