@@ -860,6 +860,43 @@ impl ResultsTableDelegate {
     pub fn clear_selection(&mut self) {
         self.edit_state.clear_selection();
     }
+
+    pub fn handle_minimize(
+        state: &mut TableState<ResultsTableDelegate>,
+        cell: (usize, usize),
+        window: &mut Window,
+        cx: &mut Context<'_, TableState<ResultsTableDelegate>>,
+    ) {
+        // Get current text before recreating input
+        let current_text = state
+            .delegate_mut()
+            .edit_state
+            .editing_input
+            .as_ref()
+            .map(|input| input.read(cx).text().to_string())
+            .unwrap_or_default();
+
+        // Recreate InputState with single-line mode and subscribe to events
+        let new_input = cx.new(|cx| InputState::new(window, cx).default_value(current_text));
+        state.delegate_mut().edit_state.editing_input = Some(new_input.clone());
+
+        // Re-subscribe to input events (blur/change)
+        crate::results_panel::ResultsPanel::subscribe_to_input_events(
+            state, &new_input, cell.1, cell.0, cx,
+        );
+
+        // Re-focus the input after recreation
+        new_input.focus_handle(cx).focus(window, cx);
+
+        // Toggle expanded state
+        state
+            .delegate_mut()
+            .edit_state
+            .toggle_expanded(cell.1, cell.0);
+
+        state.refresh(cx);
+        cx.notify();
+    }
 }
 
 impl TableDelegate for ResultsTableDelegate {
@@ -1026,60 +1063,43 @@ impl TableDelegate for ResultsTableDelegate {
                                     .h(px(200.))
                                     .bg(cx.theme().background)
                                     .shadow_lg()
+                                    .on_action(cx.listener(
+                                        move |table,
+                                              _event: &gpui_component::input::Escape,
+                                              window,
+                                              cx| {
+                                            Self::handle_minimize(
+                                                table,
+                                                (col_ix, row_ix),
+                                                window,
+                                                cx,
+                                            );
+                                        },
+                                    ))
                                     .child(
-                                        Input::new(&input).disabled(!self.is_editable()).size_full().font_family(cx.theme().mono_font_family.clone()).text_size(px(12.)).suffix(
-                                            div()
-                                                .cursor_pointer()
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    cx.listener(
-                                                        move |table, _event, window, cx| {
-                                                            // Get current text before recreating input
-                                                            let current_text = table
-                                                                .delegate_mut()
-                                                                .edit_state
-                                                                .editing_input
-                                                                .as_ref().map(|input| input
-                                                                            .read(cx)
-                                                                            .text()
-                                                                            .to_string())
-                                                                .unwrap_or_default();
-
-                                                            // Recreate InputState with single-line mode and subscribe to events
-                                                            let new_input = cx.new(|cx| {
-                                                                InputState::new(window, cx)
-                                                                    .default_value(current_text)
-                                                            });
-                                                            table
-                                                                .delegate_mut()
-                                                                .edit_state
-                                                                .editing_input =
-                                                                Some(new_input.clone());
-
-                                                            // Re-subscribe to input events (blur/change)
-                                                            crate::results_panel::ResultsPanel::subscribe_to_input_events(
-                                                                table, &new_input, row_ix, col_ix,
-                                                                cx,
-                                                            );
-
-                                                            // Re-focus the input after recreation
-                                                            new_input
-                                                                .focus_handle(cx)
-                                                                .focus(window, cx);
-
-                                                            // Toggle expanded state
-                                                            table
-                                                                .delegate_mut()
-                                                                .edit_state
-                                                                .toggle_expanded(row_ix, col_ix);
-
-                                                            table.refresh(cx);
-                                                            cx.notify();
-                                                        },
-                                                    ),
-                                                )
-                                                .child(Icon::new(IconName::Minimize).text_xs()),
-                                        ),
+                                        Input::new(&input)
+                                            .disabled(!self.is_editable())
+                                            .size_full()
+                                            .font_family(cx.theme().mono_font_family.clone())
+                                            .text_size(px(12.))
+                                            .suffix(
+                                                div()
+                                                    .cursor_pointer()
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        cx.listener(
+                                                            move |table, _event, window, cx| {
+                                                                Self::handle_minimize(
+                                                                    table,
+                                                                    (col_ix, row_ix),
+                                                                    window,
+                                                                    cx,
+                                                                );
+                                                            },
+                                                        ),
+                                                    )
+                                                    .child(Icon::new(IconName::Minimize).text_xs()),
+                                            ),
                                     ),
                             )
                             .with_priority(99),

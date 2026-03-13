@@ -22,6 +22,13 @@ use crate::app::{AddRow, DeleteRow, DuplicateRow, SetCellNull};
 use crate::app_events::AppEvent;
 use crate::transformers::CopyHandler;
 
+mod foreign_key_popover;
+mod results_table_delegate;
+mod table_operations;
+
+// Re-exports from results_table_delegate
+pub use results_table_delegate::{ChangeType, ResultsTableDelegate, TableChange};
+
 // Response structure for table operations
 #[derive(Debug, Clone)]
 pub struct TableOperationResponse {
@@ -34,12 +41,6 @@ pub struct TableOperationResponse {
     pub duration: Duration,
     pub sql_queries: Vec<String>,
 }
-mod foreign_key_popover;
-mod results_table_delegate;
-mod table_operations;
-
-// Re-exports from results_table_delegate
-pub use results_table_delegate::{ChangeType, ResultsTableDelegate, TableChange};
 
 // Data structures for copy functionality
 #[derive(Clone, Debug)]
@@ -140,6 +141,7 @@ impl ResultsPanel {
                 state.delegate_mut().set_original_query(query.clone());
             }
             // Move the result into the delegate instead of cloning
+            state.clear_selection(cx);
             state.delegate_mut().set_query_result(result, window, cx);
             state.refresh(cx);
         });
@@ -706,8 +708,12 @@ impl ResultsPanel {
                         let delegate = state.delegate_mut();
 
                         // Collect deleted row indices and sort in reverse order to remove from bottom up
-                        let mut deleted_rows: Vec<usize> =
-                            delegate.edit_state.pending_deleted_rows.iter().copied().collect();
+                        let mut deleted_rows: Vec<usize> = delegate
+                            .edit_state
+                            .pending_deleted_rows
+                            .iter()
+                            .copied()
+                            .collect();
                         deleted_rows.sort_by(|a, b| b.cmp(a)); // Reverse sort
 
                         // Remove deleted rows from the table
@@ -844,7 +850,11 @@ impl ResultsPanel {
                     // Remove deletion mark - the row stays in the table
                     let row = change.row_index;
                     self.table_state.update(cx, |state, _cx| {
-                        state.delegate_mut().edit_state.pending_deleted_rows.remove(&row);
+                        state
+                            .delegate_mut()
+                            .edit_state
+                            .pending_deleted_rows
+                            .remove(&row);
                     });
                 }
             }
@@ -982,7 +992,10 @@ impl ResultsPanel {
             if delegate.edit_state.is_new_row(row_ix) {
                 // Remove the row and its changes
                 delegate.remove_row(row_ix);
-                delegate.edit_state.pending_new_rows.retain(|&r| r != row_ix);
+                delegate
+                    .edit_state
+                    .pending_new_rows
+                    .retain(|&r| r != row_ix);
                 state.refresh(cx);
                 return;
             }
@@ -1155,12 +1168,7 @@ impl ResultsPanel {
         self.duplicate_row_with_row(action.row, cx);
     }
 
-    fn on_delete_row(
-        &mut self,
-        action: &DeleteRow,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn on_delete_row(&mut self, action: &DeleteRow, _window: &mut Window, cx: &mut Context<Self>) {
         self.delete_row_with_row(action.row, cx);
     }
 
