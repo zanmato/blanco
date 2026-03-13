@@ -24,6 +24,10 @@ use ropey::Rope;
 use std::{rc::Rc, sync::Arc, time::Duration};
 use tracing::{debug, error, info};
 
+use self::parameter_form::ParameterForm;
+use self::rename_form::RenameTabForm;
+use self::snippet_editor::SnippetEditor;
+use self::table_structure::TableStructureTab;
 use crate::agent::{ChatPanel, ChatSessionContext};
 use crate::app::RenameTab;
 use crate::app::{ExecuteSubstitutedQuery, FormatQuery};
@@ -32,11 +36,9 @@ use crate::app_database::{EnvironmentType, QueryTabData};
 use crate::app_events::AppEvent;
 use crate::app_settings::AppSettings;
 use crate::results_panel::ResultsPanel;
-use crate::sql::{extract_statement_info, SqlCompletionProvider, SqlSelectionRangeProvider, SqruffService};
-use self::parameter_form::ParameterForm;
-use self::rename_form::RenameTabForm;
-use self::snippet_editor::SnippetEditor;
-use self::table_structure::TableStructureTab;
+use crate::sql::{
+    SqlCompletionProvider, SqlSelectionRangeProvider, SqruffService, extract_statement_info,
+};
 use blanco_ui::{IconName, SqlLog};
 use database::{DatabaseService, DatabaseServiceTrait};
 use gpui_component::{Icon, RopeExt};
@@ -50,11 +52,11 @@ pub enum TabType {
 
 pub struct QueryTab {
     pub title: String,
-    pub connection_id: i64,              // Connection ID from app database
+    pub connection_id: i64,               // Connection ID from app database
     pub _db_type: database::DatabaseType, // Database type for this connection
-    pub connection_name: Option<String>, // Connection name from database
-    pub database_name: String,           // Database name this tab is connected to
-    pub schema_name: Option<String>,     // Optional schema name for context
+    pub connection_name: Option<String>,  // Connection name from database
+    pub database_name: String,            // Database name this tab is connected to
+    pub schema_name: Option<String>,      // Optional schema name for context
     pub environment_type: Option<EnvironmentType>, // Environment type from connection
     pub editor: Entity<InputState>,
     pub db_id: Option<i64>, // Database ID for persistence
@@ -269,8 +271,7 @@ impl EditorPanel {
                             editor_panel.set_all_editors_soft_wrap(value_bool, window, cx);
                         }
                         "show_whitespace" => {
-                            editor_panel
-                                .set_all_editors_show_whitespace(value_bool, window, cx);
+                            editor_panel.set_all_editors_show_whitespace(value_bool, window, cx);
                         }
                         _ => {}
                     }
@@ -512,8 +513,14 @@ impl EditorPanel {
             cx.notify();
 
             // Log the query to the SQL log, truncating if too long
-            let query_for_log = if query.len() > SQL_QUERY_LOG_MAX_LENGTH {
-                format!("{}... (truncated)", &query[..SQL_QUERY_LOG_MAX_LENGTH])
+            let query_for_log = if query.chars().count() > SQL_QUERY_LOG_MAX_LENGTH {
+                format!(
+                    "{}... (truncated)",
+                    query
+                        .chars()
+                        .take(SQL_QUERY_LOG_MAX_LENGTH)
+                        .collect::<String>()
+                )
             } else {
                 query.clone()
             };
@@ -575,9 +582,9 @@ impl EditorPanel {
                             if let (Some(table_name), false) = (&table_name, result.rows.is_empty())
                                 && let Ok(columns) =
                                     connection.get_columns_for_table(table_name, None).await
-                                {
-                                    result.table_columns = Some(columns);
-                                }
+                            {
+                                result.table_columns = Some(columns);
+                            }
                         }
 
                         // Store rows_affected before moving result
@@ -1518,7 +1525,6 @@ impl Render for EditorPanel {
                                                     v_flex()
                                                         .h_full()
                                                         .w_full()
-                                                        .overflow_hidden()
                                                         .min_w_0()
                                                         // Button bar (between editor and results)
                                                         .child(
@@ -1564,13 +1570,7 @@ impl Render for EditorPanel {
                                                                         .child(query_tab.results_panel.clone())
                                                                 )
                                                                 // SQL Log panel (bottom)
-                                                                .child(
-                                                                    div()
-                                                                        .flex_1()
-                                                                        .max_h(px(160.))
-                                                                        .bg(cx.theme().highlight_theme.style.editor_background.unwrap_or(cx.theme().background))
-                                                                        .child(query_tab.sql_log.clone())
-                                                                )
+                                                                .child(query_tab.sql_log.clone())
                                                         )
                                                         // Row operation buttons
                                                         .child(
