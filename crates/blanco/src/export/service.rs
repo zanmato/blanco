@@ -35,7 +35,7 @@ pub enum ExportResult {
 pub struct StreamRowData {
     pub columns: Vec<String>,
     pub column_types: Vec<ColumnType>,
-    pub row_data: Vec<String>,
+    pub row_data: Vec<Option<String>>,
 }
 
 /// Service for handling data export operations

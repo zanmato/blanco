@@ -36,7 +36,8 @@ impl PostgresConnection {
         let mut tables = Vec::new();
         for row in &query_result.rows {
             if !row.is_empty()
-                && let Ok(table_info_json) = serde_json::from_str::<serde_json::Value>(&row[0]) {
+                && let Some(row_value) = row[0].as_deref()
+                && let Ok(table_info_json) = serde_json::from_str::<serde_json::Value>(row_value) {
                     // Parse the JSON into our structured types
                     if let Some(table_name) = table_info_json.get("name").and_then(|v| v.as_str())
                         && let Some(schema_name) =

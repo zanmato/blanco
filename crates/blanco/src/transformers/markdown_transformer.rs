@@ -64,7 +64,7 @@ impl DataTransformer for MarkdownTransformer {
                 for row in &data.selected_rows {
                     for cell in &row.cells {
                         if cell.col == col_idx {
-                            max_width = max_width.max(cell.value.len());
+                            max_width = max_width.max(cell.value.as_ref().map_or(4, |v| v.len()));
                             break; // Found the cell for this column, move to next row
                         }
                     }
@@ -104,7 +104,7 @@ impl DataTransformer for MarkdownTransformer {
                     let mut cell_found = false;
                     for cell in &row.cells {
                         if cell.col == col_idx {
-                            format_cell_to(&cell.value, column_widths[i], &mut output);
+                            format_cell_to(cell.value.as_deref().unwrap_or("NULL"), column_widths[i], &mut output);
                             cell_found = true;
                             break;
                         }
@@ -132,7 +132,7 @@ impl DataTransformer for MarkdownTransformer {
 
     fn transform_stream_row(
         &self,
-        row_data: &[String],
+        row_data: &[Option<String>],
         _columns: &[String],
         _column_types: &[ColumnType],
     ) -> Result<String, TransformError> {
@@ -142,7 +142,7 @@ impl DataTransformer for MarkdownTransformer {
         output.push('|');
         for value in row_data {
             output.push(' ');
-            output.push_str(value);
+            output.push_str(value.as_deref().unwrap_or("NULL"));
             output.push_str(" |");
         }
         output.push('\n');

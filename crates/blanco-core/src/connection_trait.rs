@@ -93,7 +93,7 @@ impl DriverType {
 pub struct QueryResult {
     pub columns: Vec<String>,
     pub column_types: Vec<ColumnType>,
-    pub rows: Vec<Vec<String>>,
+    pub rows: Vec<Vec<Option<String>>>,
     pub rows_affected: u64,
     pub query_text: Option<String>,
     pub execution_time_ms: Option<i64>,
@@ -270,7 +270,7 @@ pub trait Connection: Send + Sync {
         (
             Vec<String>,
             Vec<ColumnType>,
-            Box<dyn Stream<Item = Result<Vec<String>, anyhow::Error>> + Send + Unpin>,
+            Box<dyn Stream<Item = Result<Vec<Option<String>>, anyhow::Error>> + Send + Unpin>,
         ),
         anyhow::Error,
     > {

@@ -149,63 +149,55 @@ mod tests {
             let first_row = query_result.rows.first().unwrap();
 
             // Create a map for easy lookup of values by column name
-            let value_map: std::collections::HashMap<String, String> = query_result
+            let value_map: std::collections::HashMap<String, Option<String>> = query_result
                 .columns
                 .iter()
                 .enumerate()
                 .map(|(i, col)| (col.clone(), first_row[i].clone()))
                 .collect();
 
+            let get_val = |key: &str| -> &str {
+                value_map.get(key).and_then(|v| v.as_deref()).unwrap_or("")
+            };
+
             // Test basic types
-            assert_eq!(value_map.get("id"), Some(&"1".to_string()));
-            assert_eq!(value_map.get("smallint_col"), Some(&"32767".to_string()));
-            assert_eq!(value_map.get("int_col"), Some(&"2147483647".to_string()));
-            assert_eq!(
-                value_map.get("bigint_col"),
-                Some(&"9223372036854775807".to_string())
-            );
-            assert_eq!(value_map.get("decimal_col"), Some(&"12345.67".to_string()));
-            assert_eq!(
-                value_map.get("numeric_col"),
-                Some(&"98765.43210".to_string())
-            );
-            assert_eq!(value_map.get("real_col"), Some(&"123.456".to_string()));
-            assert_eq!(
-                value_map.get("double_precision_col"),
-                Some(&"987654321.1234568".to_string())
-            );
+            assert_eq!(get_val("id"), "1");
+            assert_eq!(get_val("smallint_col"), "32767");
+            assert_eq!(get_val("int_col"), "2147483647");
+            assert_eq!(get_val("bigint_col"), "9223372036854775807");
+            assert_eq!(get_val("decimal_col"), "12345.67");
+            assert_eq!(get_val("numeric_col"), "98765.43210");
+            assert_eq!(get_val("real_col"), "123.456");
+            assert_eq!(get_val("double_precision_col"), "987654321.1234568");
 
             // Test string types
             // CHAR type is fixed length and gets padded
-            assert!(value_map.get("char_col").unwrap().starts_with("fixed_len"));
+            assert!(get_val("char_col").starts_with("fixed_len"));
+            assert_eq!(get_val("varchar_col"), "variable_string");
             assert_eq!(
-                value_map.get("varchar_col"),
-                Some(&"variable_string".to_string())
-            );
-            assert_eq!(
-                value_map.get("text_col"),
-                Some(&"This is a test text with unicode: ñiño 你好 🚀".to_string())
+                get_val("text_col"),
+                "This is a test text with unicode: ñiño 你好 🚀"
             );
 
             // Test boolean
-            assert_eq!(value_map.get("bool_col"), Some(&"true".to_string()));
+            assert_eq!(get_val("bool_col"), "true");
 
             // Test date/time types, just verify they contain expected patterns
-            let date_val = value_map.get("date_col").unwrap();
+            let date_val = get_val("date_col");
             assert!(
                 date_val.contains('-') && date_val.len() >= 10,
                 "Date should be in YYYY-MM-DD format, got: {}",
                 date_val
             );
-            assert!(value_map.get("time_col").unwrap().contains(":"));
-            let timestamp_val = value_map.get("timestamp_col").unwrap();
+            assert!(get_val("time_col").contains(":"));
+            let timestamp_val = get_val("timestamp_col");
             assert!(
                 timestamp_val.contains('-') && timestamp_val.contains(':'),
                 "Timestamp should contain date and time, got: {}",
                 timestamp_val
             );
             // Check timestamp with time zone, be more flexible with the time format
-            let ts_tz = value_map.get("timestamp_with_time_zone_col").unwrap();
+            let ts_tz = get_val("timestamp_with_time_zone_col");
             assert!(
                 ts_tz.contains('-') || ts_tz.contains("T"),
                 "Timestamp with TZ should contain date, got: {}",
@@ -220,39 +212,30 @@ mod tests {
 
             // Test UUID
             assert_eq!(
-                value_map.get("uuid_col"),
-                Some(&"550e8400-e29b-41d4-a716-446655440000".to_string())
+                get_val("uuid_col"),
+                "550e8400-e29b-41d4-a716-446655440000"
             );
 
             // Test JSON types (key order may vary, so check for content)
-            let json_col = value_map.get("json_col").unwrap();
+            let json_col = get_val("json_col");
             assert!(json_col.contains("\"name\":\"test\""));
             assert!(json_col.contains("\"value\":42"));
             assert!(json_col.contains("\"active\":true"));
-            assert!(value_map.get("jsonb_col").unwrap().contains("nested"));
+            assert!(get_val("jsonb_col").contains("nested"));
 
             // Test array types
+            assert_eq!(get_val("int_array_col"), "{1,2,3,4,5}");
             assert_eq!(
-                value_map.get("int_array_col"),
-                Some(&"{1,2,3,4,5}".to_string())
+                get_val("text_array_col"),
+                "{\"hello\",\"world\",\"test\"}"
             );
             assert_eq!(
-                value_map.get("text_array_col"),
-                Some(&"{\"hello\",\"world\",\"test\"}".to_string())
-            );
-            assert_eq!(
-                value_map.get("uuid_array_col"),
-                Some(
-                    &"{550e8400-e29b-41d4-a716-446655440000,660e8400-e29b-41d4-a716-446655440001}"
-                        .to_string()
-                )
+                get_val("uuid_array_col"),
+                "{550e8400-e29b-41d4-a716-446655440000,660e8400-e29b-41d4-a716-446655440001}"
             );
 
-            assert_eq!(
-                value_map.get("regclass_col"),
-                Some(&"comprehensive_test".to_string())
-            );
-            assert_eq!(value_map.get("custom_enum"), Some(&"a".to_string()));
+            assert_eq!(get_val("regclass_col"), "comprehensive_test");
+            assert_eq!(get_val("custom_enum"), "a");
 
             Ok(())
         })

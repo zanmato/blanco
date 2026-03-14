@@ -167,7 +167,8 @@ impl ForeignKeyPopover {
         // Add data row cells
         for row in &result.rows {
             for value in row {
-                let is_null = value == "NULL";
+                let is_null = value.is_none();
+                let display_value = value.clone().unwrap_or_else(|| "NULL".to_string());
                 all_cells.push(
                     div()
                         .px_2()
@@ -180,7 +181,7 @@ impl ForeignKeyPopover {
                         .text_ellipsis()
                         .whitespace_nowrap()
                         .when(is_null, |this| this.italic().opacity(0.6))
-                        .child(value.clone()),
+                        .child(display_value),
                 );
             }
         }

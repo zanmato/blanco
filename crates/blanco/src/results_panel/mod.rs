@@ -48,7 +48,7 @@ pub struct SelectedCell {
     #[allow(dead_code)]
     pub row: usize,
     pub col: usize,
-    pub value: String,
+    pub value: Option<String>,
     pub column_name: Option<String>,
     pub column_type: Option<ColumnType>,
 }
@@ -178,7 +178,7 @@ impl ResultsPanel {
             .get(row)
             .and_then(|r| r.get(col))
             .cloned()
-            .unwrap_or_else(|| "".to_string());
+            .unwrap_or(None);
 
         // Check if this is a new row (pending insert) or existing row
         let is_new_row = self
@@ -190,7 +190,8 @@ impl ResultsPanel {
             .contains(&row);
 
         // Create input state for editing with the current cell value
-        let input = cx.new(|cx| InputState::new(window, cx).default_value(&current_value));
+        let display_value = current_value.clone().unwrap_or_default();
+        let input = cx.new(|cx| InputState::new(window, cx).default_value(&display_value));
 
         // Start editing in the delegate with the input
         self.table_state.update(cx, |state, cx| {
@@ -241,7 +242,7 @@ impl ResultsPanel {
                     .delegate_mut()
                     .edit_state
                     .edited_values
-                    .insert((row_clone, col_clone), new_text.clone());
+                    .insert((row_clone, col_clone), Some(new_text.clone()));
 
                 // Debug: Input change handled in edited_values for commit_cell_edit
                 // Note: Can't refresh here due to borrowing issues
@@ -286,9 +287,9 @@ impl ResultsPanel {
         cx: &mut Context<Self>,
     ) -> Option<String> {
         let mut committed_value = None;
-        let mut old_value = None;
+        let mut old_value: Option<String> = None;
         let mut table_name = None;
-        let mut primary_key_value = None;
+        let mut primary_key_value: Option<String> = None;
 
         self.table_state.update(cx, |state, cx| {
             let delegate = state.delegate_mut();
@@ -301,7 +302,7 @@ impl ResultsPanel {
             }
 
             // Get the original value before updating
-            old_value = delegate.rows.get(row).and_then(|r| r.get(col)).cloned();
+            old_value = delegate.rows.get(row).and_then(|r| r.get(col)).and_then(|v| v.clone());
             table_name = delegate.table_name.clone();
 
             // Get primary key value if we have a primary key column
@@ -316,13 +317,13 @@ impl ResultsPanel {
                         .rows
                         .get(row)
                         .and_then(|r| r.get(pk_index))
-                        .cloned();
+                        .and_then(|v| v.clone());
                 }
             }
 
             // Update the cell value
-            delegate.update_cell_value(row, col, new_value.clone());
-            committed_value = delegate.commit_cell_edit(row, col);
+            delegate.update_cell_value(row, col, Some(new_value.clone()));
+            committed_value = delegate.commit_cell_edit(row, col).and_then(|v| v);
 
             // Track the change for SQL generation (but not for new rows)
             if let (Some(old_val), Some(tbl_name)) = (&old_value, &table_name)
@@ -345,14 +346,14 @@ impl ResultsPanel {
                                     .edit_state
                                     .original_values
                                     .get(&(row, col))
-                                    .cloned()
+                                    .and_then(|v| v.clone())
                             } else {
                                 // Otherwise get the current value from the row
                                 delegate
                                     .rows
                                     .get(row)
                                     .and_then(|r| r.get(pk_index))
-                                    .cloned()
+                                    .and_then(|v| v.clone())
                             }
                         } else {
                             None
@@ -447,8 +448,8 @@ impl ResultsPanel {
                     delegate.table_name.clone().unwrap_or_default(),
                     *row,
                     Some(*col),
-                    Some(original_value.clone()),
-                    Some(new_value.clone()),
+                    original_value.clone(),
+                    new_value.clone(),
                     None, // primary_key_value
                     None, // No insert_values for UpdateCell operations
                 ));
@@ -470,7 +471,7 @@ impl ResultsPanel {
         cx.notify();
     }
 
-    pub fn commit_all_edits(&mut self, cx: &mut Context<Self>) -> Vec<(usize, usize, String)> {
+    pub fn commit_all_edits(&mut self, cx: &mut Context<Self>) -> Vec<(usize, usize, Option<String>)> {
         let mut committed_changes = Vec::new();
 
         self.table_state.update(cx, |state, cx| {
@@ -527,7 +528,7 @@ impl ResultsPanel {
         cx: &mut Context<Self>,
     ) {
         self.table_state.update(cx, |state, cx| {
-            state.delegate_mut().update_cell_value(row, col, new_value);
+            state.delegate_mut().update_cell_value(row, col, Some(new_value));
             state.refresh(cx);
         });
         cx.notify();
@@ -833,7 +834,7 @@ impl ResultsPanel {
                         if let Some(old_value) = &change.old_value {
                             self.table_state.update(cx, |state, _cx| {
                                 if let Some(cell) = state.delegate_mut().get_cell_mut(row, col) {
-                                    *cell = old_value.clone();
+                                    *cell = Some(old_value.clone());
                                 }
                             });
                         }
@@ -884,7 +885,7 @@ impl ResultsPanel {
             let column_count = delegate.columns.len();
 
             // Create a new row with empty values
-            let new_row: Vec<String> = (0..column_count).map(|_| "".to_string()).collect();
+            let new_row: Vec<Option<String>> = (0..column_count).map(|_| None).collect();
             delegate.rows.push(new_row);
 
             // Mark this as a pending new row
@@ -941,17 +942,7 @@ impl ResultsPanel {
                 if let Some(table_name) = &delegate.table_name {
                     // For new rows (duplicated rows), exclude primary key to avoid UPDATE/INSERT confusion
                     let _column_names = delegate.get_insert_column_names(true); // exclude_primary_key = true
-                    let values = delegate.get_insert_values(new_row_index, true); // exclude_primary_key = true
-                    let values_vec: Vec<Option<String>> = values
-                        .iter()
-                        .map(|val| {
-                            if val == "NULL" {
-                                None // Use None for actual NULL values
-                            } else {
-                                Some(val.clone()) // Keep value (including empty strings)
-                            }
-                        })
-                        .collect();
+                    let values_vec = delegate.get_insert_values(new_row_index, true); // exclude_primary_key = true
 
                     let change = TableChange::new(
                         ChangeType::InsertRow,
@@ -1007,7 +998,7 @@ impl ResultsPanel {
                     .rows
                     .get(row_ix)
                     .and_then(|row| row.get(display_col))
-                    .cloned()
+                    .and_then(|v| v.clone())
             } else {
                 None
             };
@@ -1195,7 +1186,7 @@ impl ResultsPanel {
             }
 
             // Set the cell to NULL
-            delegate.update_cell_value(action.row, action.col, "NULL".to_string());
+            delegate.update_cell_value(action.row, action.col, None);
             delegate.commit_cell_edit(action.row, action.col);
             state.refresh(cx);
         });

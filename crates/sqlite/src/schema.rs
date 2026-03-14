@@ -22,7 +22,10 @@ impl SqliteConnection {
 
         for table_row in &tables_result.rows {
             if !table_row.is_empty() {
-                let table_name = &table_row[0];
+                let table_name = match &table_row[0] {
+                    Some(name) => name,
+                    None => continue,
+                };
 
                 // Get column information for this table using JSON aggregation
                 let columns_query = format!(
@@ -48,13 +51,16 @@ impl SqliteConnection {
                     .rows
                     .first()
                     .and_then(|row| row.first())
-                    .map_or("[]".to_string(), |s| s.clone());
+                    .and_then(|s| s.as_ref())
+                    .cloned()
+                    .unwrap_or_else(|| "[]".to_string());
 
                 let column_count = columns_result
                     .rows
                     .first()
                     .and_then(|row| row.get(1))
-                    .and_then(|count: &String| count.parse::<i64>().ok())
+                    .and_then(|count| count.as_ref())
+                    .and_then(|count| count.parse::<i64>().ok())
                     .unwrap_or(0);
 
                 // Parse the columns JSON into ColumnInfo structs

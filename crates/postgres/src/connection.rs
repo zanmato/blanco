@@ -526,7 +526,7 @@ impl PostgresConnection {
         row: &sqlx::postgres::PgRow,
         column_index: usize,
         column_type: &str,
-    ) -> String {
+    ) -> Option<String> {
         let base_type = Self::extract_base_array_type(column_type);
 
         match base_type {
@@ -544,7 +544,7 @@ impl PostgresConnection {
                             );
                             result
                         })
-                        .unwrap_or_else(|| "NULL".to_string());
+                        ;
                 }
             }
             Some("int4") | Some("integer") | Some("int") | Some("INT4") => {
@@ -565,7 +565,7 @@ impl PostgresConnection {
                             );
                             result
                         })
-                        .unwrap_or_else(|| "NULL".to_string());
+                        ;
                 }
             }
             Some("int8") | Some("bigint") | Some("INT8") => {
@@ -586,7 +586,7 @@ impl PostgresConnection {
                             );
                             result
                         })
-                        .unwrap_or_else(|| "NULL".to_string());
+                        ;
                 }
             }
             Some("int2") | Some("smallint") | Some("INT2") => {
@@ -607,7 +607,7 @@ impl PostgresConnection {
                             );
                             result
                         })
-                        .unwrap_or_else(|| "NULL".to_string());
+                        ;
                 }
             }
             Some("float4") | Some("real") | Some("FLOAT4") => {
@@ -628,7 +628,7 @@ impl PostgresConnection {
                             );
                             result
                         })
-                        .unwrap_or_else(|| "NULL".to_string());
+                        ;
                 }
             }
             Some("float8") | Some("double precision") | Some("FLOAT8") => {
@@ -649,7 +649,7 @@ impl PostgresConnection {
                             );
                             result
                         })
-                        .unwrap_or_else(|| "NULL".to_string());
+                        ;
                 }
             }
             Some("bool") | Some("boolean") | Some("BOOL") => {
@@ -661,7 +661,7 @@ impl PostgresConnection {
                             .join(","));
                         tracing::debug!("Successfully converted array to Vec<bool> for column type '{}': {}", column_type, result);
                         result
-                    }).unwrap_or_else(|| "NULL".to_string());
+                    });
                 }
             }
             Some("uuid") | Some("UUID") => {
@@ -673,7 +673,7 @@ impl PostgresConnection {
                             .join(","));
                         tracing::debug!("Successfully converted array to Vec<uuid::Uuid> for column type '{}': {}", column_type, result);
                         result
-                    }).unwrap_or_else(|| "NULL".to_string());
+                    });
                 }
             }
             _ => {
@@ -688,7 +688,7 @@ impl PostgresConnection {
                             );
                             v
                         })
-                        .unwrap_or_else(|| "NULL".to_string());
+                        ;
                 }
             }
         }
@@ -697,7 +697,7 @@ impl PostgresConnection {
             "Array column type '{}' couldn't be converted to any supported array type",
             column_type
         );
-        "NULL".to_string()
+        None
     }
 
     /// Handle UUID types
@@ -706,12 +706,11 @@ impl PostgresConnection {
         row: &sqlx::postgres::PgRow,
         column_index: usize,
         _column_type: &str,
-    ) -> String {
+    ) -> Option<String> {
         if let Ok(val) = row.try_get::<Option<uuid::Uuid>, _>(column_index) {
             val.map(|v| v.to_string())
-                .unwrap_or_else(|| "NULL".to_string())
         } else {
-            "NULL".to_string()
+            None
         }
     }
 
@@ -721,11 +720,11 @@ impl PostgresConnection {
         row: &sqlx::postgres::PgRow,
         column_index: usize,
         _column_type: &str,
-    ) -> String {
+    ) -> Option<String> {
         if let Ok(val) = row.try_get::<Option<String>, _>(column_index) {
-            val.unwrap_or_else(|| "NULL".to_string())
+            val
         } else {
-            "NULL".to_string()
+            None
         }
     }
 
@@ -735,12 +734,11 @@ impl PostgresConnection {
         row: &sqlx::postgres::PgRow,
         column_index: usize,
         _column_type: &str,
-    ) -> String {
+    ) -> Option<String> {
         if let Ok(val) = row.try_get::<Option<bool>, _>(column_index) {
             val.map(|v| v.to_string())
-                .unwrap_or_else(|| "NULL".to_string())
         } else {
-            "NULL".to_string()
+            None
         }
     }
 
@@ -750,14 +748,14 @@ impl PostgresConnection {
         row: &sqlx::postgres::PgRow,
         column_index: usize,
         raw_type: &str,
-    ) -> String {
+    ) -> Option<String> {
         match raw_type.to_lowercase().as_str() {
             // 16-bit integers
             "smallint" | "int2" | "smallserial" => {
                 if let Ok(val) = row.try_get::<Option<i16>, _>(column_index) {
                     return val
                         .map(|v| v.to_string())
-                        .unwrap_or_else(|| "NULL".to_string());
+                        ;
                 }
             }
             // 32-bit integers
@@ -765,7 +763,7 @@ impl PostgresConnection {
                 if let Ok(val) = row.try_get::<Option<i32>, _>(column_index) {
                     return val
                         .map(|v| v.to_string())
-                        .unwrap_or_else(|| "NULL".to_string());
+                        ;
                 }
             }
             // 64-bit integers
@@ -773,7 +771,7 @@ impl PostgresConnection {
                 if let Ok(val) = row.try_get::<Option<i64>, _>(column_index) {
                     return val
                         .map(|v| v.to_string())
-                        .unwrap_or_else(|| "NULL".to_string());
+                        ;
                 }
             }
             _ => {
@@ -781,21 +779,21 @@ impl PostgresConnection {
                 if let Ok(val) = row.try_get::<Option<i16>, _>(column_index) {
                     return val
                         .map(|v| v.to_string())
-                        .unwrap_or_else(|| "NULL".to_string());
+                        ;
                 }
                 if let Ok(val) = row.try_get::<Option<i32>, _>(column_index) {
                     return val
                         .map(|v| v.to_string())
-                        .unwrap_or_else(|| "NULL".to_string());
+                        ;
                 }
                 if let Ok(val) = row.try_get::<Option<i64>, _>(column_index) {
                     return val
                         .map(|v| v.to_string())
-                        .unwrap_or_else(|| "NULL".to_string());
+                        ;
                 }
             }
         }
-        "NULL".to_string()
+        None
     }
 
     /// Handle numeric types using the raw PostgreSQL type name
@@ -804,14 +802,14 @@ impl PostgresConnection {
         row: &sqlx::postgres::PgRow,
         column_index: usize,
         raw_type: &str,
-    ) -> String {
+    ) -> Option<String> {
         match raw_type.to_lowercase().as_str() {
             // 32-bit float
             "real" | "float4" => {
                 if let Ok(val) = row.try_get::<Option<f32>, _>(column_index) {
                     return val
                         .map(|v| v.to_string())
-                        .unwrap_or_else(|| "NULL".to_string());
+                        ;
                 }
             }
             // 64-bit float
@@ -819,7 +817,7 @@ impl PostgresConnection {
                 if let Ok(val) = row.try_get::<Option<f64>, _>(column_index) {
                     return val
                         .map(|v| v.to_string())
-                        .unwrap_or_else(|| "NULL".to_string());
+                        ;
                 }
             }
             // Decimal/numeric types
@@ -827,7 +825,7 @@ impl PostgresConnection {
                 if let Ok(val) = row.try_get::<Option<rust_decimal::Decimal>, _>(column_index) {
                     return val
                         .map(|v| v.to_string())
-                        .unwrap_or_else(|| "NULL".to_string());
+                        ;
                 }
             }
             _ => {
@@ -835,16 +833,16 @@ impl PostgresConnection {
                 if let Ok(val) = row.try_get::<Option<rust_decimal::Decimal>, _>(column_index) {
                     return val
                         .map(|v| v.to_string())
-                        .unwrap_or_else(|| "NULL".to_string());
+                        ;
                 }
                 if let Ok(val) = row.try_get::<Option<f64>, _>(column_index) {
                     return val
                         .map(|v| v.to_string())
-                        .unwrap_or_else(|| "NULL".to_string());
+                        ;
                 }
             }
         }
-        "NULL".to_string()
+        None
     }
 
     /// Handle timestamp types using the raw PostgreSQL type name
@@ -853,7 +851,7 @@ impl PostgresConnection {
         row: &sqlx::postgres::PgRow,
         column_index: usize,
         raw_type: &str,
-    ) -> String {
+    ) -> Option<String> {
         match raw_type.to_lowercase().as_str() {
             // Timestamp with timezone
             "timestamptz" => {
@@ -862,7 +860,7 @@ impl PostgresConnection {
                 {
                     return val
                         .map(|v| v.to_rfc3339())
-                        .unwrap_or_else(|| "NULL".to_string());
+                        ;
                 }
             }
             // Timestamp without timezone
@@ -870,7 +868,7 @@ impl PostgresConnection {
                 if let Ok(val) = row.try_get::<Option<chrono::NaiveDateTime>, _>(column_index) {
                     return val
                         .map(|v| v.format("%Y-%m-%d %H:%M:%S").to_string())
-                        .unwrap_or_else(|| "NULL".to_string());
+                        ;
                 }
             }
             // Date
@@ -878,7 +876,7 @@ impl PostgresConnection {
                 if let Ok(val) = row.try_get::<Option<chrono::NaiveDate>, _>(column_index) {
                     return val
                         .map(|v| v.format("%Y-%m-%d").to_string())
-                        .unwrap_or_else(|| "NULL".to_string());
+                        ;
                 }
             }
             // Time without timezone
@@ -886,7 +884,7 @@ impl PostgresConnection {
                 if let Ok(val) = row.try_get::<Option<chrono::NaiveTime>, _>(column_index) {
                     return val
                         .map(|v| v.format("%H:%M:%S").to_string())
-                        .unwrap_or_else(|| "NULL".to_string());
+                        ;
                 }
             }
             // Time with timezone
@@ -894,18 +892,18 @@ impl PostgresConnection {
                 if let Ok(val) = row.try_get::<Option<chrono::NaiveTime>, _>(column_index) {
                     return val
                         .map(|v| v.format("%H:%M:%S").to_string())
-                        .unwrap_or_else(|| "NULL".to_string());
+                        ;
                 }
             }
             // Interval
             "interval" => {
                 if let Ok(val) = row.try_get::<Option<String>, _>(column_index) {
-                    return val.unwrap_or_else(|| "NULL".to_string());
+                    return val;
                 }
             }
             _ => {}
         }
-        "NULL".to_string()
+        None
     }
 
     /// Handle JSON types
@@ -914,7 +912,7 @@ impl PostgresConnection {
         row: &sqlx::postgres::PgRow,
         column_index: usize,
         _column_type: &str,
-    ) -> String {
+    ) -> Option<String> {
         if let Ok(val) = row.try_get::<Option<serde_json::Value>, _>(column_index) {
             return val
                 .map(|v| {
@@ -924,7 +922,7 @@ impl PostgresConnection {
                         v.to_string()
                     }
                 })
-                .unwrap_or_else(|| "NULL".to_string());
+                ;
         }
         // Fallback to string representation
         self.try_string_conversion(row, column_index, "json")
@@ -936,10 +934,10 @@ impl PostgresConnection {
         row: &sqlx::postgres::PgRow,
         column_index: usize,
         column_type: &str,
-    ) -> String {
+    ) -> Option<String> {
         // First try optional string
         if let Ok(val) = row.try_get::<Option<String>, _>(column_index) {
-            return val.unwrap_or_else(|| "NULL".to_string());
+            return val;
         }
 
         // For system catalog types like regclass, try specific conversions
@@ -949,25 +947,25 @@ impl PostgresConnection {
                 if let Ok(oid_val) = row.try_get::<Option<i32>, _>(column_index) {
                     return oid_val
                         .map(|oid| format!("OID:{}", oid))
-                        .unwrap_or_else(|| "NULL".to_string());
+                        ;
                 }
                 // Try non-optional i32
                 if let Ok(oid_val) = row.try_get::<i32, _>(column_index) {
-                    return format!("OID:{}", oid_val);
+                    return Some(format!("OID:{}", oid_val));
                 }
             }
             _ => {
                 // For other types, try various string conversion approaches
                 // Try direct string conversion
                 if let Ok(val) = row.try_get::<String, _>(column_index) {
-                    return val;
+                    return Some(val);
                 }
             }
         }
 
         // If all specific attempts fail, log and return NULL
         tracing::warn!("Failed to convert column type '{}' to string", column_type);
-        "NULL".to_string()
+        None
     }
 
     /// Handle unknown types with improved raw value access
@@ -976,11 +974,11 @@ impl PostgresConnection {
         row: &sqlx::postgres::PgRow,
         column_index: usize,
         column_type: &str,
-    ) -> String {
+    ) -> Option<String> {
         // Try raw value access for unknown types (custom enums, domains, etc.)
         if let Ok(raw_value) = row.try_get_raw(column_index) {
             if raw_value.is_null() {
-                return "NULL".to_string();
+                return None;
             }
 
             // Try to extract as text using raw value
@@ -991,7 +989,7 @@ impl PostgresConnection {
                         column_type,
                         text_val
                     );
-                    text_val.to_string()
+                    Some(text_val.to_string())
                 }
                 Err(_) => {
                     // If raw access fails, try to get bytes and convert to UTF-8
@@ -1005,7 +1003,7 @@ impl PostgresConnection {
                                         column_type,
                                         string_val
                                     );
-                                    string_val
+                                    Some(string_val)
                                 }
                                 Err(_) => {
                                     // If UTF-8 fails, provide hex representation for binary data
@@ -1018,11 +1016,11 @@ impl PostgresConnection {
                                         column_type,
                                         &hex_repr[..hex_repr.len().min(40)]
                                     );
-                                    format!(
+                                    Some(format!(
                                         "[binary data: {} bytes, starts with: {}]",
                                         bytes.len(),
                                         &hex_repr[..hex_repr.len().min(20)]
-                                    )
+                                    ))
                                 }
                             }
                         }
@@ -1032,7 +1030,7 @@ impl PostgresConnection {
                                 column_type,
                                 column_index
                             );
-                            "NULL".to_string()
+                            None
                         }
                     }
                 }
@@ -1043,7 +1041,7 @@ impl PostgresConnection {
                 column_type,
                 column_index
             );
-            "NULL".to_string()
+            None
         }
     }
 
@@ -1055,7 +1053,7 @@ impl PostgresConnection {
         column_index: usize,
         column_types: &[ColumnType],
         raw_column_types: &[String],
-    ) -> String {
+    ) -> Option<String> {
         // Get column type first for type-based routing
         let column_type = column_types
             .get(column_index)
@@ -1069,7 +1067,7 @@ impl PostgresConnection {
 
         // 1. Handle NULL values immediately
         if Self::is_null_value(row, column_index) {
-            return "NULL".to_string();
+            return None;
         }
 
         // 2. Route based on PostgreSQL type (column-type-first approach)
@@ -1132,7 +1130,7 @@ impl PostgresConnection {
         let tables: Vec<String> = result
             .rows
             .into_iter()
-            .filter_map(|row| row.into_iter().next())
+            .filter_map(|row| row.into_iter().next().flatten())
             .collect();
 
         Ok(tables)
@@ -1236,7 +1234,7 @@ impl PostgresConnection {
         let mut columns: Vec<String> = Vec::new();
         let mut column_types: Vec<ColumnType> = Vec::new();
         let mut raw_column_types: Vec<String> = Vec::new();
-        let mut rows: Vec<Vec<String>> = Vec::new();
+        let mut rows: Vec<Vec<Option<String>>> = Vec::new();
         let mut rows_affected: u64 = 0;
 
         // Track OIDs that need resolution: (row_idx, col_idx, oid_value)
@@ -1271,7 +1269,7 @@ impl PostgresConnection {
 
                     // Convert row to strings immediately to avoid memory doubling
                     let row_idx = rows.len();
-                    let row_data: Vec<String> = (0..columns.len())
+                    let row_data: Vec<Option<String>> = (0..columns.len())
                         .map(|i| {
                             self.convert_row_value_to_string(
                                 &row,
@@ -1324,7 +1322,7 @@ impl PostgresConnection {
             // Update data rows with resolved names
             for (row_idx, col_idx, oid) in oids_to_resolve {
                 if let Some(name) = oid_to_name.get(&oid) {
-                    rows[row_idx][col_idx] = name.clone();
+                    rows[row_idx][col_idx] = Some(name.clone());
                 }
             }
         }
@@ -1426,7 +1424,7 @@ impl Connection for PostgresConnection {
         let databases: Vec<String> = result
             .rows
             .into_iter()
-            .filter_map(|row| row.into_iter().next())
+            .filter_map(|row| row.into_iter().next().flatten())
             .collect();
         Ok(databases)
     }
@@ -1442,7 +1440,7 @@ impl Connection for PostgresConnection {
         let schemas: Vec<String> = result
             .rows
             .into_iter()
-            .filter_map(|row| row.into_iter().next())
+            .filter_map(|row| row.into_iter().next().flatten())
             .collect();
         Ok(schemas)
     }
@@ -1470,7 +1468,7 @@ impl Connection for PostgresConnection {
         let views: Vec<String> = result
             .rows
             .into_iter()
-            .filter_map(|row| row.into_iter().next())
+            .filter_map(|row| row.into_iter().next().flatten())
             .collect();
 
         Ok(views)
@@ -1495,7 +1493,7 @@ impl Connection for PostgresConnection {
         let matviews: Vec<String> = result
             .rows
             .into_iter()
-            .filter_map(|row| row.into_iter().next())
+            .filter_map(|row| row.into_iter().next().flatten())
             .collect();
 
         Ok(matviews)
@@ -1538,8 +1536,8 @@ impl Connection for PostgresConnection {
             .into_iter()
             .filter_map(|row| {
                 if row.len() >= 2 {
-                    let name = row[0].clone();
-                    let entity_type = match row[1].as_str() {
+                    let name = row[0].clone()?;
+                    let entity_type = match row[1].as_deref().unwrap_or("") {
                         "TABLE" => EntityType::Table,
                         "VIEW" => EntityType::View,
                         "MATERIALIZED_VIEW" => EntityType::MaterializedView,
@@ -1626,18 +1624,18 @@ impl Connection for PostgresConnection {
         let mut columns = Vec::new();
         for row in result.rows {
             if row.len() >= 9 {
-                let column_name = &row[0];
-                let data_type = &row[1];
-                let is_nullable = &row[2];
+                let column_name = row[0].clone().unwrap_or_default();
+                let data_type = row[1].clone().unwrap_or_default();
+                let is_nullable_str = row[2].as_deref().unwrap_or("");
                 let default_value = &row[3];
-                let max_length = &row[4];
-                let is_primary_key = &row[5]; // PK column name or empty
-                let fk_table = &row[6];
-                let fk_column = &row[7];
-                let fk_constraint = &row[8];
+                let max_length = row[4].as_deref().unwrap_or("");
+                let is_primary_key_str = row[5].as_deref().unwrap_or("");
+                let fk_table = row[6].as_deref().unwrap_or("");
+                let fk_column = row[7].as_deref().unwrap_or("");
+                let fk_constraint = row[8].as_deref().unwrap_or("");
 
                 // Only create ForeignKeyInfo if we have actual FK values
-                let foreign_key = match (fk_table.as_str(), fk_column.as_str()) {
+                let foreign_key = match (fk_table, fk_column) {
                     ("", "") | (_, "") => None,
                     (table, column) => Some(ForeignKeyInfo {
                         foreign_table_name: table.to_string(),
@@ -1645,21 +1643,17 @@ impl Connection for PostgresConnection {
                         constraint_name: if fk_constraint.is_empty() {
                             None
                         } else {
-                            Some(fk_constraint.clone())
+                            Some(fk_constraint.to_string())
                         },
                     }),
                 };
 
                 columns.push(ColumnInfo {
-                    name: column_name.clone(),
-                    data_type: data_type.clone(),
-                    is_nullable: is_nullable == "YES",
-                    is_primary_key: !is_primary_key.is_empty(),
-                    default_value: if default_value.is_empty() {
-                        None
-                    } else {
-                        Some(default_value.clone())
-                    },
+                    name: column_name,
+                    data_type,
+                    is_nullable: is_nullable_str == "YES",
+                    is_primary_key: !is_primary_key_str.is_empty(),
+                    default_value: default_value.clone().filter(|s| !s.is_empty()),
                     character_maximum_length: max_length.parse().ok(),
                     foreign_key,
                 });
@@ -1683,7 +1677,7 @@ impl Connection for PostgresConnection {
         (
             Vec<String>,
             Vec<ColumnType>,
-            Box<dyn Stream<Item = Result<Vec<String>, anyhow::Error>> + Send + Unpin>,
+            Box<dyn Stream<Item = Result<Vec<Option<String>>, anyhow::Error>> + Send + Unpin>,
         ),
         anyhow::Error,
     > {
@@ -1733,7 +1727,7 @@ impl Connection for PostgresConnection {
                 column_types = types;
                 raw_column_types = raw_types;
 
-                let row_data: Vec<String> = (0..columns.len())
+                let row_data: Vec<Option<String>> = (0..columns.len())
                     .map(|i| {
                         self.convert_row_value_to_string(&row, i, &column_types, &raw_column_types)
                     })
@@ -1743,7 +1737,7 @@ impl Connection for PostgresConnection {
                 rows.push(row_data);
             } else {
                 // Process subsequent rows
-                let row_data: Vec<String> = (0..columns.len())
+                let row_data: Vec<Option<String>> = (0..columns.len())
                     .map(|i| {
                         self.convert_row_value_to_string(&row, i, &column_types, &raw_column_types)
                     })
@@ -1829,6 +1823,7 @@ impl Connection for PostgresConnection {
             .rows
             .first()
             .and_then(|row| row.first())
+            .and_then(|val| val.as_ref())
             .and_then(|val| val.parse::<i64>().ok())
             .filter(|n| *n >= 0);
 
@@ -1895,11 +1890,11 @@ impl Connection for PostgresConnection {
         let mut indexes = Vec::new();
         for row in result.rows {
             if row.len() >= 6 {
-                let index_name = &row[0];
-                let algorithm = &row[1];
-                let is_unique = &row[2] == "true";
+                let index_name = row[0].clone().unwrap_or_default();
+                let algorithm = row[1].clone().unwrap_or_default();
+                let is_unique = row[2].as_deref() == Some("true");
                 // PostgreSQL returns arrays as {col1,col2,col3} format
-                let columns_str = &row[3];
+                let columns_str = row[3].clone().unwrap_or_default();
                 let column_names: Vec<String> = columns_str
                     .trim_start_matches('{')
                     .trim_end_matches('}')
@@ -1907,20 +1902,12 @@ impl Connection for PostgresConnection {
                     .filter(|s| !s.is_empty())
                     .map(|s| s.to_string())
                     .collect();
-                let condition = if row[4].is_empty() || row[4] == "NULL" {
-                    None
-                } else {
-                    Some(row[4].clone())
-                };
-                let comment = if row[5].is_empty() || row[5] == "NULL" {
-                    None
-                } else {
-                    Some(row[5].clone())
-                };
+                let condition = row[4].clone().filter(|s| !s.is_empty());
+                let comment = row[5].clone().filter(|s| !s.is_empty());
 
                 indexes.push(IndexInfo {
-                    name: index_name.clone(),
-                    algorithm: algorithm.clone(),
+                    name: index_name,
+                    algorithm,
                     is_unique,
                     column_names,
                     condition,

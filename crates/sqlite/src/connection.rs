@@ -142,7 +142,7 @@ impl SqliteConnection {
         let mut columns: Vec<String> = Vec::new();
         let mut column_types: Vec<ColumnType> = Vec::new();
         let mut raw_column_types: Vec<String> = Vec::new();
-        let mut rows: Vec<Vec<String>> = Vec::new();
+        let mut rows: Vec<Vec<Option<String>>> = Vec::new();
         let mut rows_affected: u64 = 0;
 
         while let Some(result) = results.next().await {
@@ -172,7 +172,7 @@ impl SqliteConnection {
                     }
 
                     // Convert row to strings immediately to avoid memory doubling
-                    let row_data: Vec<String> = columns
+                    let row_data: Vec<Option<String>> = columns
                         .iter()
                         .enumerate()
                         .map(|(i, _)| {
@@ -312,7 +312,7 @@ impl Connection for SqliteConnection {
         match self.execute_query("PRAGMA database_list", None, None).await {
             Ok(result) => {
                 for row in &result.rows {
-                    if let Some(schema_name) = row.get(1)
+                    if let Some(Some(schema_name)) = row.get(1)
                         && schema_name != "main" && !schemas.contains(schema_name) {
                             schemas.push(schema_name.clone());
                         }
@@ -337,7 +337,7 @@ impl Connection for SqliteConnection {
         let tables: Vec<String> = result
             .rows
             .into_iter()
-            .filter_map(|row| row.into_iter().next())
+            .filter_map(|row| row.into_iter().next().flatten())
             .collect();
 
         tracing::debug!(
@@ -359,7 +359,7 @@ impl Connection for SqliteConnection {
         let views: Vec<String> = result
             .rows
             .into_iter()
-            .filter_map(|row| row.into_iter().next())
+            .filter_map(|row| row.into_iter().next().flatten())
             .collect();
 
         Ok(views)
@@ -387,8 +387,9 @@ impl Connection for SqliteConnection {
             .into_iter()
             .filter_map(|row| {
                 if row.len() >= 2 {
-                    let name = row[0].clone();
-                    let entity_type = match row[1].as_str() {
+                    let name = row[0].clone()?;
+                    let entity_type_str = row[1].as_deref().unwrap_or("");
+                    let entity_type = match entity_type_str {
                         "VIEW" => EntityType::View,
                         _ => EntityType::Table,
                     };
@@ -425,18 +426,18 @@ impl Connection for SqliteConnection {
         let mut foreign_keys: HashMap<String, ForeignKeyInfo> = HashMap::new();
         for row in fk_result.rows {
             if row.len() >= 5 {
-                let from_column = &row[3]; // Local column
-                let to_table = &row[2]; // Foreign table
-                let to_column = &row[4]; // Foreign column
-
-                foreign_keys.insert(
-                    from_column.clone(),
-                    ForeignKeyInfo {
-                        foreign_table_name: to_table.clone(),
-                        foreign_column_name: to_column.clone(),
-                        constraint_name: None,
-                    },
-                );
+                if let (Some(Some(from_column)), Some(Some(to_table)), Some(Some(to_column))) =
+                    (row.get(3), row.get(2), row.get(4))
+                {
+                    foreign_keys.insert(
+                        from_column.clone(),
+                        ForeignKeyInfo {
+                            foreign_table_name: to_table.clone(),
+                            foreign_column_name: to_column.clone(),
+                            constraint_name: None,
+                        },
+                    );
+                }
             }
         }
 
@@ -444,24 +445,20 @@ impl Connection for SqliteConnection {
         for row in result.rows {
             if row.len() >= 6 {
                 // PRAGMA table_info returns: cid, name, type, notnull, dflt_value, pk
-                let column_name = &row[1];
-                let data_type = &row[2];
-                let not_null = &row[3]; // 1 for NOT NULL, 0 for nullable
-                let default_value = &row[4]; // Default value or NULL
-                let is_primary_key = &row[5]; // 1 for PK, 0 for not PK
+                let column_name = row[1].clone().unwrap_or_default();
+                let data_type = row[2].clone().unwrap_or_default();
+                let not_null = row[3].as_deref().unwrap_or(""); // 1 for NOT NULL, 0 for nullable
+                let default_value = row[4].clone(); // Default value or None
+                let is_primary_key = row[5].as_deref().unwrap_or(""); // 1 for PK, 0 for not PK
 
                 let column_info = ColumnInfo {
                     name: column_name.clone(),
-                    data_type: data_type.clone(),
+                    data_type,
                     is_nullable: not_null != "1", // Reverse logic: notnull=1 means NOT NULL
                     is_primary_key: is_primary_key == "1",
-                    default_value: if default_value.is_empty() {
-                        None
-                    } else {
-                        Some(default_value.clone())
-                    },
+                    default_value: default_value.filter(|v| !v.is_empty()),
                     character_maximum_length: None, // SQLite doesn't provide this info in PRAGMA
-                    foreign_key: foreign_keys.get(column_name).cloned(),
+                    foreign_key: foreign_keys.get(&column_name).cloned(),
                 };
                 columns.push(column_info);
             }
@@ -495,7 +492,7 @@ impl Connection for SqliteConnection {
         (
             Vec<String>,
             Vec<ColumnType>,
-            Box<dyn Stream<Item = Result<Vec<String>, anyhow::Error>> + Send + Unpin>,
+            Box<dyn Stream<Item = Result<Vec<Option<String>>, anyhow::Error>> + Send + Unpin>,
         ),
         anyhow::Error,
     > {
@@ -541,7 +538,7 @@ impl Connection for SqliteConnection {
                 column_types = types;
                 raw_column_types = raw_types;
 
-                let row_data: Vec<String> = (0..columns.len())
+                let row_data: Vec<Option<String>> = (0..columns.len())
                     .map(|i| {
                         convert_sqlite_row_value_to_string(
                             &row,
@@ -556,7 +553,7 @@ impl Connection for SqliteConnection {
                 rows.push(row_data);
             } else {
                 // Process subsequent rows
-                let row_data: Vec<String> = (0..columns.len())
+                let row_data: Vec<Option<String>> = (0..columns.len())
                     .map(|i| {
                         convert_sqlite_row_value_to_string(
                             &row,
@@ -636,8 +633,8 @@ impl Connection for SqliteConnection {
         let mut indexes = Vec::new();
         for row in list_result.rows {
             if row.len() >= 3 {
-                let index_name = &row[1];
-                let is_unique = &row[2] == "1";
+                let index_name = row[1].clone().unwrap_or_default();
+                let is_unique = row[2].as_deref() == Some("1");
 
                 // Get columns for this index
                 // PRAGMA index_info returns: seqno, cid, name
@@ -647,12 +644,12 @@ impl Connection for SqliteConnection {
                 let column_names: Vec<String> = info_result
                     .rows
                     .iter()
-                    .filter_map(|r| r.get(2).cloned())
+                    .filter_map(|r| r.get(2).and_then(|v| v.clone()))
                     .collect();
 
                 // SQLite uses B-tree for all indexes
                 let index_info = IndexInfo {
-                    name: index_name.clone(),
+                    name: index_name,
                     algorithm: "btree".to_string(),
                     is_unique,
                     column_names,
@@ -684,34 +681,34 @@ fn handle_integer_type(
     row: &sqlx::sqlite::SqliteRow,
     column_index: usize,
     raw_type: &str,
-) -> String {
+) -> Option<String> {
     // BIGINT, INT8
     if (raw_type.contains("bigint") || raw_type == "int8")
         && let Ok(Some(v)) = row.try_get::<Option<i64>, _>(column_index) {
-            return v.to_string();
+            return Some(v.to_string());
         }
 
     // SMALLINT, INT2
     if (raw_type.contains("smallint") || raw_type == "int2")
         && let Ok(Some(v)) = row.try_get::<Option<i16>, _>(column_index) {
-            return v.to_string();
+            return Some(v.to_string());
         }
 
     // TINYINT
     if raw_type.contains("tinyint")
         && let Ok(Some(v)) = row.try_get::<Option<i8>, _>(column_index) {
-            return v.to_string();
+            return Some(v.to_string());
         }
 
     // INTEGER, INT, INT4, MEDIUMINT
     if let Ok(Some(v)) = row.try_get::<Option<i32>, _>(column_index) {
-        return v.to_string();
+        return Some(v.to_string());
     }
     // Fallback to i64
     if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(column_index) {
-        return v.to_string();
+        return Some(v.to_string());
     }
-    "NULL".to_string()
+    None
 }
 
 /// Handle SQLite numeric types using the raw type name (already lowercased)
@@ -719,31 +716,31 @@ fn handle_numeric_type(
     row: &sqlx::sqlite::SqliteRow,
     column_index: usize,
     raw_type: &str,
-) -> String {
+) -> Option<String> {
     // DECIMAL, NUMERIC
     if raw_type.contains("decimal") || raw_type.contains("numeric") {
         if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(column_index) {
-            return v.to_string();
+            return Some(v.to_string());
         }
         if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(column_index) {
-            return v.to_string();
+            return Some(v.to_string());
         }
     }
 
     // REAL, DOUBLE, FLOAT
     if (raw_type.contains("real") || raw_type.contains("double") || raw_type.contains("float"))
         && let Ok(Some(v)) = row.try_get::<Option<f64>, _>(column_index) {
-            return v.to_string();
+            return Some(v.to_string());
         }
 
     // Fallback for NUMERIC affinity: try f64 then i64
     if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(column_index) {
-        return v.to_string();
+        return Some(v.to_string());
     }
     if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(column_index) {
-        return v.to_string();
+        return Some(v.to_string());
     }
-    "NULL".to_string()
+    None
 }
 
 /// Handle SQLite datetime types using the raw type name (already lowercased)
@@ -751,30 +748,30 @@ fn handle_datetime_type(
     row: &sqlx::sqlite::SqliteRow,
     column_index: usize,
     raw_type: &str,
-) -> String {
+) -> Option<String> {
     // DATE
     if raw_type == "date"
         && let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveDate>, _>(column_index) {
-            return v.format("%Y-%m-%d").to_string();
+            return Some(v.format("%Y-%m-%d").to_string());
         }
 
     // TIME
     if raw_type == "time"
         && let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveTime>, _>(column_index) {
-            return v.format("%H:%M:%S").to_string();
+            return Some(v.format("%H:%M:%S").to_string());
         }
 
     // DATETIME, TIMESTAMP
     if (raw_type.contains("datetime") || raw_type.contains("timestamp"))
         && let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveDateTime>, _>(column_index) {
-            return v.format("%Y-%m-%d %H:%M:%S").to_string();
+            return Some(v.format("%Y-%m-%d %H:%M:%S").to_string());
         }
 
     // Fallback: try string conversion (SQLite often stores dates as strings)
     if let Ok(Some(v)) = row.try_get::<Option<String>, _>(column_index) {
-        return v;
+        return Some(v);
     }
-    "NULL".to_string()
+    None
 }
 
 /// Helper function for SQLite type conversion using column-type-first approach
@@ -783,7 +780,7 @@ fn convert_sqlite_row_value_to_string(
     column_index: usize,
     column_types: &[ColumnType],
     raw_column_types: &[String],
-) -> String {
+) -> Option<String> {
     let column_type = column_types
         .get(column_index)
         .copied()
@@ -796,7 +793,7 @@ fn convert_sqlite_row_value_to_string(
 
     // Handle NULL values immediately
     if is_null_value(row, column_index) {
-        return "NULL".to_string();
+        return None;
     }
 
     // Route based on SQLite type affinity
@@ -805,42 +802,42 @@ fn convert_sqlite_row_value_to_string(
         ColumnType::Numeric => handle_numeric_type(row, column_index, &raw_type),
         ColumnType::Text => {
             if let Ok(val) = row.try_get::<Option<String>, _>(column_index) {
-                return val.unwrap_or_else(|| "NULL".to_string());
+                return val;
             }
-            "NULL".to_string()
+            None
         }
         ColumnType::Boolean => {
             if let Ok(Some(v)) = row.try_get::<Option<bool>, _>(column_index) {
-                return if v { "true" } else { "false" }.to_string();
+                return Some(if v { "true" } else { "false" }.to_string());
             }
-            "NULL".to_string()
+            None
         }
         ColumnType::DateTime => handle_datetime_type(row, column_index, &raw_type),
         ColumnType::Json => {
             if let Ok(val) = row.try_get::<Option<String>, _>(column_index) {
-                return val.unwrap_or_else(|| "NULL".to_string());
+                return val;
             }
-            "NULL".to_string()
+            None
         }
         ColumnType::Binary => {
             if let Ok(Some(v)) = row.try_get::<Option<Vec<u8>>, _>(column_index) {
-                return format!("0x{}", hex::encode(v));
+                return Some(format!("0x{}", hex::encode(v)));
             }
-            "NULL".to_string()
+            None
         }
         ColumnType::Unknown => {
             // SQLite's dynamic typing: try common types in order
             if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(column_index) {
-                return v.to_string();
+                return Some(v.to_string());
             }
             if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(column_index) {
-                return v.to_string();
+                return Some(v.to_string());
             }
             if let Ok(val) = row.try_get::<Option<String>, _>(column_index) {
-                return val.unwrap_or_else(|| "NULL".to_string());
+                return val;
             }
-            "NULL".to_string()
+            None
         }
-        _ => "NULL".to_string(),
+        _ => None,
     }
 }

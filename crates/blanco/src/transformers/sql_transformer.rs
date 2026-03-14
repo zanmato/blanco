@@ -19,10 +19,6 @@ fn should_quote_value(column_type: &ColumnType) -> bool {
 
 /// Format a single SQL value based on its column type
 fn format_sql_value(value: &str, column_type: Option<&ColumnType>) -> String {
-    if value.is_empty() || value.eq_ignore_ascii_case("null") {
-        return "NULL".to_string();
-    }
-
     let col_type = column_type.unwrap_or(&ColumnType::Unknown);
 
     if should_quote_value(col_type) {
@@ -113,14 +109,18 @@ impl DataTransformer for SqlTransformer {
                     // Use column type from cell if available, fall back to Unknown (which quotes)
                     let col_type = cell.column_type.as_ref().unwrap_or(&ColumnType::Unknown);
 
-                    if cell.value.is_empty() || cell.value.eq_ignore_ascii_case("null") {
-                        output.push_str("NULL");
-                    } else if should_quote_value(col_type) {
-                        output.push('\'');
-                        sql_escape_string_to(&cell.value, &mut output);
-                        output.push('\'');
-                    } else {
-                        output.push_str(&cell.value);
+                    match &cell.value {
+                        None => output.push_str("NULL"),
+                        Some(val) if val.is_empty() => output.push_str("''"),
+                        Some(val) => {
+                            if should_quote_value(col_type) {
+                                output.push('\'');
+                                sql_escape_string_to(val, &mut output);
+                                output.push('\'');
+                            } else {
+                                output.push_str(val);
+                            }
+                        }
                     }
 
                     // Add comma separator if not last cell
@@ -175,7 +175,7 @@ impl DataTransformer for SqlTransformer {
 
     fn transform_stream_row(
         &self,
-        row_data: &[String],
+        row_data: &[Option<String>],
         _columns: &[String],
         column_types: &[ColumnType],
     ) -> Result<String, TransformError> {
@@ -204,14 +204,18 @@ impl DataTransformer for SqlTransformer {
             // Get column type for this column, default to Unknown
             let col_type = column_types.get(i).unwrap_or(&ColumnType::Unknown);
 
-            if value.is_empty() || value.eq_ignore_ascii_case("null") {
-                output.push_str("NULL");
-            } else if should_quote_value(col_type) {
-                output.push('\'');
-                sql_escape_string_to(value, &mut output);
-                output.push('\'');
-            } else {
-                output.push_str(value);
+            match value {
+                None => output.push_str("NULL"),
+                Some(val) if val.is_empty() => output.push_str("''"),
+                Some(val) => {
+                    if should_quote_value(col_type) {
+                        output.push('\'');
+                        sql_escape_string_to(val, &mut output);
+                        output.push('\'');
+                    } else {
+                        output.push_str(val);
+                    }
+                }
             }
         }
 

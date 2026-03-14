@@ -80,8 +80,8 @@ pub enum ChangeType {
 pub struct CellEditState {
     pub editing_cell: Option<(usize, usize)>,  // (row, col)
     pub expanded_cell: Option<(usize, usize)>, // (row, col) - cell in expanded multi-line mode
-    pub original_values: HashMap<(usize, usize), String>,
-    pub edited_values: HashMap<(usize, usize), String>,
+    pub original_values: HashMap<(usize, usize), Option<String>>,
+    pub edited_values: HashMap<(usize, usize), Option<String>>,
     pub pending_new_rows: Vec<usize>, // Track rows that are newly added
     pub pending_deleted_rows: HashSet<usize>, // Track rows marked for deletion
     pub editing_input: Option<Entity<InputState>>, // Store input state per delegate
@@ -113,12 +113,12 @@ impl CellEditState {
         }
     }
 
-    pub fn get_edited_value(&self, row: usize, col: usize) -> Option<&String> {
+    pub fn get_edited_value(&self, row: usize, col: usize) -> Option<&Option<String>> {
         self.edited_values.get(&(row, col))
     }
 
     #[allow(dead_code)]
-    pub fn get_original_value(&self, row: usize, col: usize) -> Option<&String> {
+    pub fn get_original_value(&self, row: usize, col: usize) -> Option<&Option<String>> {
         self.original_values.get(&(row, col))
     }
 
@@ -294,7 +294,7 @@ impl TableChange {
 pub struct ResultsTableDelegate {
     pub columns: Vec<Column>,
     pub column_types: Vec<ColumnType>,
-    pub rows: Vec<Vec<String>>,
+    pub rows: Vec<Vec<Option<String>>>,
     pub edit_state: CellEditState,
     pub table_name: Option<String>,
     pub primary_key_column: Option<String>,
@@ -354,7 +354,7 @@ impl ResultsTableDelegate {
     }
 
     /// Get column values for INSERT operations, excluding row number and primary key (for new rows)
-    pub fn get_insert_values(&self, row_index: usize, exclude_primary_key: bool) -> Vec<String> {
+    pub fn get_insert_values(&self, row_index: usize, exclude_primary_key: bool) -> Vec<Option<String>> {
         let pk_index = if exclude_primary_key {
             self.get_primary_key_column_index()
         } else {
@@ -390,7 +390,7 @@ impl ResultsTableDelegate {
     }
 
     /// Get a mutable reference to a cell
-    pub fn get_cell_mut(&mut self, row: usize, col: usize) -> Option<&mut String> {
+    pub fn get_cell_mut(&mut self, row: usize, col: usize) -> Option<&mut Option<String>> {
         self.rows
             .get_mut(row)
             .and_then(|row_data| row_data.get_mut(col))
@@ -468,11 +468,7 @@ impl ResultsTableDelegate {
                     let column_change = ColumnChange {
                         column_name,
                         old_value: change.old_value.clone(),
-                        // Convert "NULL" string to None for proper NULL handling
-                        new_value: change
-                            .new_value
-                            .as_ref()
-                            .and_then(|v| if v == "NULL" { None } else { Some(v.clone()) }),
+                        new_value: change.new_value.clone(),
                     };
 
                     // Add to the consolidated operation
@@ -504,7 +500,7 @@ impl ResultsTableDelegate {
                             });
 
                         // Only exclude if PK is NULL or empty
-                        pk_value.is_none_or(|v| v.is_empty() || v == "NULL")
+                        pk_value.is_none_or(|v| v.as_ref().is_none_or(|s| s.is_empty()))
                     });
 
                     let column_names = self.get_insert_column_names(exclude_primary_key);
@@ -514,16 +510,10 @@ impl ResultsTableDelegate {
                         .into_iter()
                         .zip(row_values.iter())
                         .map(|(column_name, value)| {
-                            // Use None for NULL values, Some for actual values (including empty strings)
-                            let new_value = if value == "NULL" {
-                                None
-                            } else {
-                                Some(value.clone())
-                            };
                             ColumnChange {
                                 column_name,
                                 old_value: None,
-                                new_value,
+                                new_value: value.clone(),
                             }
                         })
                         .collect();
@@ -575,6 +565,9 @@ impl ResultsTableDelegate {
         let text_size = px(12.);
         let font = gpui::font(cx.theme().mono_font_family.clone());
 
+        // Pre-collect sample rows (cloned) to avoid borrow conflicts with result.rows
+        let sample_rows: Vec<Vec<Option<String>>> = result.rows.iter().take(5).cloned().collect();
+
         // Calculate column widths based on actual text measurement
         let mut column_widths: Vec<f64> = result
             .columns
@@ -614,10 +607,11 @@ impl ResultsTableDelegate {
                 let mut max_width = shaped_line.width.to_f64();
 
                 // Check sample rows to determine content width (limit to first 5 rows for performance)
-                for row in result.rows.iter().take(5) {
-                    if let Some(cell_value) = row.get(i) {
+                for row in sample_rows.iter() {
+                    if let Some(Some(cell_value)) = row.get(i) {
+                        let shared_value: SharedString = cell_value.clone().into();
                         let shaped_line = window.text_system().shape_line(
-                            SharedString::from(cell_value),
+                            shared_value,
                             text_size,
                             &[TextRun {
                                 len: cell_value.len(),
@@ -681,7 +675,7 @@ impl ResultsTableDelegate {
             .into_iter()
             .enumerate()
             .map(|(row_index, mut row)| {
-                let mut new_row = vec![(row_index + 1).to_string()];
+                let mut new_row = vec![Some((row_index + 1).to_string())];
                 new_row.append(&mut row);
                 new_row
             })
@@ -743,11 +737,11 @@ impl ResultsTableDelegate {
         self.pending_edit_cell = Some((row, col));
     }
 
-    pub fn update_cell_value(&mut self, row: usize, col: usize, new_value: String) {
+    pub fn update_cell_value(&mut self, row: usize, col: usize, new_value: Option<String>) {
         self.edit_state.edited_values.insert((row, col), new_value);
     }
 
-    pub fn commit_cell_edit(&mut self, row: usize, col: usize) -> Option<String> {
+    pub fn commit_cell_edit(&mut self, row: usize, col: usize) -> Option<Option<String>> {
         tracing::info!("delegate.commit_cell_edit called for ({}, {})", row, col);
         tracing::info!(
             "edited_values contains: {:?}",
@@ -762,7 +756,7 @@ impl ResultsTableDelegate {
         }
 
         if let Some(new_value) = self.edit_state.edited_values.get(&(row, col)).cloned() {
-            tracing::info!("Found edited value: '{}' for ({}, {})", new_value, row, col);
+            tracing::info!("Found edited value: '{:?}' for ({}, {})", new_value, row, col);
 
             // Get the original value
             let original_value = self.edit_state.original_values.get(&(row, col)).cloned();
@@ -770,7 +764,7 @@ impl ResultsTableDelegate {
             // Update the actual row data
             if let Some(row_data) = self.rows.get_mut(row) {
                 if let Some(cell) = row_data.get_mut(col) {
-                    tracing::info!("Updating cell from '{}' to '{}'", cell, new_value);
+                    tracing::info!("Updating cell from '{:?}' to '{:?}'", cell, new_value);
                     *cell = new_value.clone();
                     tracing::info!("Cell updated successfully");
                 } else {
@@ -781,6 +775,7 @@ impl ResultsTableDelegate {
             }
 
             // Track the change for SQL generation (but not for new rows)
+            // original_value is Option<Option<String>>, the outer Option is whether editing started
             if let (Some(original), Some(table_name)) = (&original_value, &self.table_name) {
                 // Check if this is a new row - if so, don't create UPDATE changes
                 // New rows should be handled by INSERT operations only
@@ -795,10 +790,10 @@ impl ResultsTableDelegate {
                         {
                             // If we're updating the primary key column itself, get the original value
                             if pk_index == col {
-                                self.edit_state.original_values.get(&(row, col)).cloned()
+                                self.edit_state.original_values.get(&(row, col)).and_then(|v| v.clone())
                             } else {
                                 // Otherwise get the current value from the row
-                                self.rows.get(row).and_then(|r| r.get(pk_index)).cloned()
+                                self.rows.get(row).and_then(|r| r.get(pk_index)).and_then(|v| v.clone())
                             }
                         } else {
                             None
@@ -821,8 +816,8 @@ impl ResultsTableDelegate {
                         table_name.clone(),
                         row,
                         Some(col),
-                        Some(original.clone()),
-                        Some(new_value.clone()),
+                        original.clone(),
+                        new_value.clone(),
                         primary_key_value,
                         None, // No insert_values for UpdateCell operations
                     );
@@ -1019,23 +1014,22 @@ impl TableDelegate for ResultsTableDelegate {
         let is_edited = self.edit_state.is_edited(row_ix, col_ix) && !is_row_number_col;
         let is_editable = self.is_editable() && !is_row_number_col;
 
-        let current_value = if is_edited {
-            self.edit_state.get_edited_value(row_ix, col_ix).cloned()
+        let current_value: Option<String> = if is_edited {
+            self.edit_state.get_edited_value(row_ix, col_ix).and_then(|v| v.clone())
         } else {
             self.rows
                 .get(row_ix)
                 .and_then(|row| row.get(col_ix))
-                .cloned()
-        }
-        .unwrap_or_else(|| "--".to_string());
+                .and_then(|v| v.clone())
+        };
 
-        // Check if the value is NULL
-        let is_null = current_value.eq_ignore_ascii_case("null") || current_value == "--";
+        // Check if the value is NULL (None = database NULL)
+        let is_null = current_value.is_none();
         let display_text = if is_null {
             "NULL".to_string()
         } else {
             // Format multi-line values for display (replace newlines with visual indicators)
-            format_value_for_display(&current_value)
+            format_value_for_display(current_value.as_deref().unwrap_or(""))
         };
 
         if is_editing {
@@ -1395,8 +1389,8 @@ impl TableDelegate for ResultsTableDelegate {
 
         // Sort rows by the specified column
         self.rows.sort_by(|a, b| {
-            let a_val = a.get(col_ix).map(|s| s.as_str()).unwrap_or("");
-            let b_val = b.get(col_ix).map(|s| s.as_str()).unwrap_or("");
+            let a_val = a.get(col_ix).and_then(|s| s.as_deref()).unwrap_or("");
+            let b_val = b.get(col_ix).and_then(|s| s.as_deref()).unwrap_or("");
 
             let ordering = if is_numeric {
                 compare_numeric(a_val, b_val)
@@ -1413,7 +1407,7 @@ impl TableDelegate for ResultsTableDelegate {
         // Update row numbers after sorting
         for (index, row) in self.rows.iter_mut().enumerate() {
             if let Some(row_num_cell) = row.get_mut(0) {
-                *row_num_cell = (index + 1).to_string();
+                *row_num_cell = Some((index + 1).to_string());
             }
         }
     }

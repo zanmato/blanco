@@ -68,7 +68,7 @@ pub trait DataTransformer: Send + Sync {
     /// This is called for each row as it's processed
     fn transform_stream_row(
         &self,
-        row_data: &[String],
+        row_data: &[Option<String>],
         columns: &[String],
         column_types: &[ColumnType],
     ) -> Result<String, TransformError>;
@@ -83,7 +83,8 @@ pub trait DataTransformer: Send + Sync {
     /// Transform header row specifically (helper method)
     fn transform_header_row(&self, columns: &[String]) -> Result<String, TransformError> {
         // Default implementation - transform headers as a regular row
-        self.transform_stream_row(columns, columns, &[])
+        let header_values: Vec<Option<String>> = columns.iter().map(|c| Some(c.clone())).collect();
+        self.transform_stream_row(&header_values, columns, &[])
     }
 
     /// Check if this transformer supports streaming
@@ -174,7 +175,7 @@ impl SelectedTableData {
     }
 
     /// Get all selected data as a flat collection of values
-    pub fn get_all_selected_values(&self) -> Vec<String> {
+    pub fn get_all_selected_values(&self) -> Vec<Option<String>> {
         let mut values = Vec::new();
 
         // Add row cell values

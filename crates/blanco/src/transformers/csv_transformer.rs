@@ -49,7 +49,7 @@ impl DataTransformer for CsvTransformer {
                         if i > 0 {
                             output.push(';');
                         }
-                        csv_escape_to(&cell.value, &mut output);
+                        csv_escape_to(cell.value.as_deref().unwrap_or(""), &mut output);
                     }
                     output.push('\n');
                 }
@@ -94,7 +94,7 @@ impl DataTransformer for CsvTransformer {
 
     fn transform_stream_row(
         &self,
-        row_data: &[String],
+        row_data: &[Option<String>],
         _columns: &[String],
         _column_types: &[ColumnType],
     ) -> Result<String, TransformError> {
@@ -106,7 +106,7 @@ impl DataTransformer for CsvTransformer {
             if i > 0 {
                 output.push(';');
             }
-            csv_escape_to(value, &mut output);
+            csv_escape_to(value.as_deref().unwrap_or(""), &mut output);
         }
         output.push('\n');
 

@@ -262,32 +262,32 @@ impl MysqlConnection {
         row: &sqlx::mysql::MySqlRow,
         column_index: usize,
         raw_type: &str,
-    ) -> String {
+    ) -> Option<String> {
         // Check for TINYINT(1) which is often used for booleans
         if raw_type.contains("TINYINT") {
             // Check if it's TINYINT(1) - boolean representation
             if (raw_type.contains("TINYINT(1)") || raw_type == "TINYINT")
                 && let Ok(Some(v)) = row.try_get::<Option<i8>, _>(column_index) {
                     if v == 0 || v == 1 {
-                        return if v == 1 { "true" } else { "false" }.to_string();
+                        return Some(if v == 1 { "true" } else { "false" }.to_string());
                     }
-                    return v.to_string();
+                    return Some(v.to_string());
                 }
             if let Ok(Some(v)) = row.try_get::<Option<i8>, _>(column_index) {
-                return v.to_string();
+                return Some(v.to_string());
             }
         }
 
         // SMALLINT
         if raw_type.contains("SMALLINT")
             && let Ok(Some(v)) = row.try_get::<Option<i16>, _>(column_index) {
-                return v.to_string();
+                return Some(v.to_string());
             }
 
         // MEDIUMINT
         if raw_type.contains("MEDIUMINT")
             && let Ok(Some(v)) = row.try_get::<Option<i32>, _>(column_index) {
-                return v.to_string();
+                return Some(v.to_string());
             }
 
         // INT, INTEGER
@@ -295,20 +295,20 @@ impl MysqlConnection {
             && !raw_type.contains("SMALLINT") && !raw_type.contains("MEDIUMINT")
             && !raw_type.contains("BIGINT")
             && let Ok(Some(v)) = row.try_get::<Option<i32>, _>(column_index) {
-                return v.to_string();
+                return Some(v.to_string());
             }
 
         // BIGINT
         if raw_type.contains("BIGINT")
             && let Ok(Some(v)) = row.try_get::<Option<i64>, _>(column_index) {
-                return v.to_string();
+                return Some(v.to_string());
             }
 
         // Fallback: try i64
         if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(column_index) {
-            return v.to_string();
+            return Some(v.to_string());
         }
-        "NULL".to_string()
+        None
     }
 
     /// Handle MySQL unsigned integer types (raw_type already uppercased)
@@ -317,29 +317,29 @@ impl MysqlConnection {
         row: &sqlx::mysql::MySqlRow,
         column_index: usize,
         raw_type: &str,
-    ) -> String {
+    ) -> Option<String> {
         if raw_type.contains("TINYINT")
             && let Ok(Some(v)) = row.try_get::<Option<u8>, _>(column_index) {
-                return v.to_string();
+                return Some(v.to_string());
             }
         if raw_type.contains("SMALLINT")
             && let Ok(Some(v)) = row.try_get::<Option<u16>, _>(column_index) {
-                return v.to_string();
+                return Some(v.to_string());
             }
         if raw_type.contains("MEDIUMINT")
             && let Ok(Some(v)) = row.try_get::<Option<u32>, _>(column_index) {
-                return v.to_string();
+                return Some(v.to_string());
             }
         if raw_type.contains("BIGINT")
             && let Ok(Some(v)) = row.try_get::<Option<u64>, _>(column_index) {
-                return v.to_string();
+                return Some(v.to_string());
             }
 
         // Fallback
         if let Ok(Some(v)) = row.try_get::<Option<u64>, _>(column_index) {
-            return v.to_string();
+            return Some(v.to_string());
         }
-        "NULL".to_string()
+        None
     }
 
     /// Handle MySQL numeric types using the raw type name (already uppercased)
@@ -348,33 +348,33 @@ impl MysqlConnection {
         row: &sqlx::mysql::MySqlRow,
         column_index: usize,
         raw_type: &str,
-    ) -> String {
+    ) -> Option<String> {
         // DECIMAL, NUMERIC
         if (raw_type.contains("DECIMAL") || raw_type.contains("NUMERIC"))
             && let Ok(Some(v)) = row.try_get::<Option<rust_decimal::Decimal>, _>(column_index) {
-                return v.to_string();
+                return Some(v.to_string());
             }
 
         // FLOAT
         if raw_type.contains("FLOAT")
             && let Ok(Some(v)) = row.try_get::<Option<f32>, _>(column_index) {
-                return v.to_string();
+                return Some(v.to_string());
             }
 
         // DOUBLE, REAL
         if (raw_type.contains("DOUBLE") || raw_type.contains("REAL"))
             && let Ok(Some(v)) = row.try_get::<Option<f64>, _>(column_index) {
-                return v.to_string();
+                return Some(v.to_string());
             }
 
         // Fallback: try decimal then f64
         if let Ok(Some(v)) = row.try_get::<Option<rust_decimal::Decimal>, _>(column_index) {
-            return v.to_string();
+            return Some(v.to_string());
         }
         if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(column_index) {
-            return v.to_string();
+            return Some(v.to_string());
         }
-        "NULL".to_string()
+        None
     }
 
     /// Handle MySQL datetime types using the raw type name (already uppercased)
@@ -383,46 +383,46 @@ impl MysqlConnection {
         row: &sqlx::mysql::MySqlRow,
         column_index: usize,
         raw_type: &str,
-    ) -> String {
+    ) -> Option<String> {
         // DATE
         if raw_type.contains("DATE") && !raw_type.contains("DATETIME")
             && let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveDate>, _>(column_index) {
-                return v.format("%Y-%m-%d").to_string();
+                return Some(v.format("%Y-%m-%d").to_string());
             }
 
         // TIME
         if raw_type.contains("TIME") && !raw_type.contains("DATETIME") && !raw_type.contains("TIMESTAMP")
             && let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveTime>, _>(column_index) {
-                return v.format("%H:%M:%S").to_string();
+                return Some(v.format("%H:%M:%S").to_string());
             }
 
         // DATETIME, TIMESTAMP
         if (raw_type.contains("DATETIME") || raw_type.contains("TIMESTAMP"))
             && let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveDateTime>, _>(column_index) {
-                return v.format("%Y-%m-%d %H:%M:%S").to_string();
+                return Some(v.format("%Y-%m-%d %H:%M:%S").to_string());
             }
 
         // YEAR
         if raw_type.contains("YEAR")
             && let Ok(Some(v)) = row.try_get::<Option<i16>, _>(column_index) {
-                return v.to_string();
+                return Some(v.to_string());
             }
 
         // Fallback: try string conversion
         if let Ok(Some(v)) = row.try_get::<Option<String>, _>(column_index) {
-            return v;
+            return Some(v);
         }
-        "NULL".to_string()
+        None
     }
 
-    /// Convert MySQL row value to string
+    /// Convert MySQL row value to Option<String> (None = SQL NULL)
     pub fn convert_row_value_to_string(
         &self,
         row: &sqlx::mysql::MySqlRow,
         column_index: usize,
         column_types: &[ColumnType],
         raw_column_types: &[String],
-    ) -> String {
+    ) -> Option<String> {
         let column_type = column_types
             .get(column_index)
             .copied()
@@ -439,46 +439,46 @@ impl MysqlConnection {
             ColumnType::Numeric => self.handle_numeric_type(row, column_index, &raw_type),
             ColumnType::Boolean => {
                 if let Ok(Some(v)) = row.try_get::<Option<bool>, _>(column_index) {
-                    return if v { "true" } else { "false" }.to_string();
+                    return Some(if v { "true" } else { "false" }.to_string());
                 }
-                "NULL".to_string()
+                None
             }
             ColumnType::DateTime => self.handle_datetime_type(row, column_index, &raw_type),
             ColumnType::Text => {
                 if let Ok(v) = row.try_get::<Option<String>, _>(column_index) {
-                    return v.unwrap_or_else(|| "NULL".to_string());
+                    return v;
                 }
-                "NULL".to_string()
+                None
             }
             ColumnType::Json => {
                 if let Ok(v) = row.try_get::<Option<String>, _>(column_index) {
-                    return v.unwrap_or_else(|| "NULL".to_string());
+                    return v;
                 }
-                "NULL".to_string()
+                None
             }
             ColumnType::Binary => {
                 if let Ok(Some(v)) = row.try_get::<Option<Vec<u8>>, _>(column_index) {
-                    return format!("0x{}", hex::encode(v));
+                    return Some(format!("0x{}", hex::encode(v)));
                 }
-                "NULL".to_string()
+                None
             }
             ColumnType::Unknown => {
                 // Fallback for unknown types
                 if let Ok(Some(v)) = row.try_get::<Option<bool>, _>(column_index) {
-                    return if v { "true" } else { "false" }.to_string();
+                    return Some(if v { "true" } else { "false" }.to_string());
                 }
                 if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(column_index) {
-                    return v.to_string();
+                    return Some(v.to_string());
                 }
                 if let Ok(Some(v)) = row.try_get::<Option<f64>, _>(column_index) {
-                    return v.to_string();
+                    return Some(v.to_string());
                 }
                 if let Ok(v) = row.try_get::<Option<String>, _>(column_index) {
-                    return v.unwrap_or_else(|| "NULL".to_string());
+                    return v;
                 }
-                "NULL".to_string()
+                None
             }
-            _ => "NULL".to_string(),
+            _ => None,
         }
     }
 }
@@ -554,7 +554,7 @@ impl Connection for MysqlConnection {
         let mut columns: Vec<String> = Vec::new();
         let mut column_types: Vec<ColumnType> = Vec::new();
         let mut raw_column_types: Vec<String> = Vec::new();
-        let mut rows: Vec<Vec<String>> = Vec::new();
+        let mut rows: Vec<Vec<Option<String>>> = Vec::new();
         let mut rows_affected: u64 = 0;
 
         while let Some(result) = results.next().await {
@@ -587,7 +587,7 @@ impl Connection for MysqlConnection {
 
                     // Convert row to strings immediately instead of collecting raw rows
                     // This prevents memory doubling by not holding both raw and converted data
-                    let row_data: Vec<String> = columns
+                    let row_data: Vec<Option<String>> = columns
                         .iter()
                         .enumerate()
                         .map(|(i, _)| {
@@ -901,6 +901,7 @@ impl Connection for MysqlConnection {
             .rows
             .first()
             .and_then(|row| row.first())
+            .and_then(|val| val.as_ref())
             .and_then(|val| val.parse::<i64>().ok())
             .filter(|n| *n >= 0);
 
