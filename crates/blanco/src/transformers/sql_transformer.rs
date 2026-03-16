@@ -16,17 +16,6 @@ fn should_quote_value(column_type: &ColumnType) -> bool {
     )
 }
 
-/// Format a single SQL value based on its column type
-fn format_sql_value(value: &str, column_type: Option<&ColumnType>) -> String {
-    let col_type = column_type.unwrap_or(&ColumnType::Unknown);
-
-    if should_quote_value(col_type) {
-        format!("'{}'", sql_escape_string(value))
-    } else {
-        value.to_string()
-    }
-}
-
 pub struct SqlTransformer {
     table_name: Option<String>,
     first_row: AtomicBool,
@@ -51,14 +40,6 @@ impl SqlTransformer {
 impl DataTransformer for SqlTransformer {
     fn format_name(&self) -> &'static str {
         "SQL"
-    }
-
-    fn file_extension(&self) -> &'static str {
-        "sql"
-    }
-
-    fn description(&self) -> &'static str {
-        "SQL INSERT statements with proper escaping"
     }
 
     fn transform_selected_data(&self, data: &SelectedTableData) -> Result<String, TransformError> {
@@ -135,16 +116,6 @@ impl DataTransformer for SqlTransformer {
 
         Ok(output)
     }
-
-    fn transform_single_cell(
-        &self,
-        value: &str,
-        column_type: &ColumnType,
-    ) -> Result<String, TransformError> {
-        Ok(format_sql_value(value, Some(column_type)))
-    }
-
-    // === Streaming Methods ===
 
     fn initialize_stream(
         &self,
@@ -227,11 +198,6 @@ impl DataTransformer for SqlTransformer {
     }
 }
 
-/// Escape a string for SQL (single quotes) - returns a new String
-fn sql_escape_string(value: &str) -> String {
-    value.replace('\'', "''")
-}
-
 /// Escape a string for SQL (single quotes) - writes directly to buffer
 /// This avoids allocating a new String for each cell value
 fn sql_escape_string_to(value: &str, output: &mut String) {
@@ -261,6 +227,21 @@ fn sql_identifier(name: &str) -> String {
 mod tests {
     use super::*;
 
+    fn sql_escape_string(value: &str) -> String {
+        let mut output = String::new();
+        sql_escape_string_to(value, &mut output);
+        output
+    }
+
+    fn format_sql_value(value: &str, column_type: Option<&ColumnType>) -> String {
+        let col_type = column_type.unwrap_or(&ColumnType::Unknown);
+        if should_quote_value(col_type) {
+            format!("'{}'", sql_escape_string(value))
+        } else {
+            value.to_string()
+        }
+    }
+
     #[test]
     fn test_sql_escape() {
         assert_eq!(sql_escape_string("simple"), "simple");
@@ -277,13 +258,11 @@ mod tests {
 
     #[test]
     fn test_should_quote_value() {
-        // Types that should NOT be quoted
         assert!(!should_quote_value(&ColumnType::Integer));
         assert!(!should_quote_value(&ColumnType::UnsignedInteger));
         assert!(!should_quote_value(&ColumnType::Numeric));
         assert!(!should_quote_value(&ColumnType::Boolean));
 
-        // Types that SHOULD be quoted
         assert!(should_quote_value(&ColumnType::Text));
         assert!(should_quote_value(&ColumnType::DateTime));
         assert!(should_quote_value(&ColumnType::Uuid));
@@ -295,15 +274,10 @@ mod tests {
 
     #[test]
     fn test_format_sql_value_numeric() {
-        // Integer types - not quoted
         assert_eq!(format_sql_value("42", Some(&ColumnType::Integer)), "42");
         assert_eq!(format_sql_value("0", Some(&ColumnType::Integer)), "0");
         assert_eq!(format_sql_value("-123", Some(&ColumnType::Integer)), "-123");
-
-        // Unsigned integer types - not quoted
         assert_eq!(format_sql_value("42", Some(&ColumnType::UnsignedInteger)), "42");
-
-        // Numeric types - not quoted
         assert_eq!(format_sql_value("3.14", Some(&ColumnType::Numeric)), "3.14");
         assert_eq!(format_sql_value("0.0", Some(&ColumnType::Numeric)), "0.0");
         assert_eq!(format_sql_value("-99.99", Some(&ColumnType::Numeric)), "-99.99");
@@ -311,7 +285,6 @@ mod tests {
 
     #[test]
     fn test_format_sql_value_boolean() {
-        // Boolean types - not quoted
         assert_eq!(format_sql_value("true", Some(&ColumnType::Boolean)), "true");
         assert_eq!(format_sql_value("false", Some(&ColumnType::Boolean)), "false");
         assert_eq!(format_sql_value("TRUE", Some(&ColumnType::Boolean)), "TRUE");
@@ -320,37 +293,26 @@ mod tests {
 
     #[test]
     fn test_format_sql_value_text() {
-        // Text types - quoted
         assert_eq!(format_sql_value("hello", Some(&ColumnType::Text)), "'hello'");
         assert_eq!(format_sql_value("it's", Some(&ColumnType::Text)), "'it''s'");
         assert_eq!(format_sql_value("", Some(&ColumnType::Text)), "''");
-
-        // DateTime types - quoted
         assert_eq!(
             format_sql_value("2024-01-15", Some(&ColumnType::DateTime)),
             "'2024-01-15'"
         );
-
-        // UUID types - quoted
         assert_eq!(
             format_sql_value("550e8400-e29b-41d4-a716-446655440000", Some(&ColumnType::Uuid)),
             "'550e8400-e29b-41d4-a716-446655440000'"
         );
-
-        // JSON types - quoted
         assert_eq!(
             format_sql_value("{\"key\": \"value\"}", Some(&ColumnType::Json)),
             "'{\"key\": \"value\"}'"
         );
-
-        // Unknown type - quoted (safe default)
         assert_eq!(format_sql_value("value", Some(&ColumnType::Unknown)), "'value'");
     }
 
     #[test]
     fn test_format_sql_value_empty_and_literal_null() {
-        // NULL is now handled at the Option<String> level (None = NULL).
-        // format_sql_value only formats concrete string values.
         assert_eq!(format_sql_value("", Some(&ColumnType::Integer)), "");
         assert_eq!(format_sql_value("NULL", Some(&ColumnType::Integer)), "NULL");
         assert_eq!(format_sql_value("null", Some(&ColumnType::Text)), "'null'");
@@ -359,7 +321,6 @@ mod tests {
 
     #[test]
     fn test_format_sql_value_none_type() {
-        // None type falls back to Unknown, which quotes
         assert_eq!(format_sql_value("value", None), "'value'");
         assert_eq!(format_sql_value("", None), "''");
         assert_eq!(format_sql_value("NULL", None), "'NULL'");
@@ -369,41 +330,5 @@ mod tests {
     fn test_sql_transformer() {
         let transformer = SqlTransformer::new();
         assert_eq!(transformer.format_name(), "SQL");
-        assert_eq!(transformer.file_extension(), "sql");
-
-        // Text columns should be quoted
-        assert_eq!(
-            transformer.transform_single_cell("test", &ColumnType::Text).unwrap(),
-            "'test'"
-        );
-        assert_eq!(transformer.transform_single_cell("", &ColumnType::Text).unwrap(), "''");
-        assert_eq!(
-            transformer.transform_single_cell("NULL", &ColumnType::Text).unwrap(),
-            "'NULL'"
-        );
-        assert_eq!(
-            transformer.transform_single_cell("it's", &ColumnType::Text).unwrap(),
-            "'it''s'"
-        );
-
-        // Numeric columns should NOT be quoted
-        assert_eq!(
-            transformer.transform_single_cell("42", &ColumnType::Integer).unwrap(),
-            "42"
-        );
-        assert_eq!(
-            transformer.transform_single_cell("3.14", &ColumnType::Numeric).unwrap(),
-            "3.14"
-        );
-
-        // Boolean columns should NOT be quoted
-        assert_eq!(
-            transformer.transform_single_cell("true", &ColumnType::Boolean).unwrap(),
-            "true"
-        );
-        assert_eq!(
-            transformer.transform_single_cell("false", &ColumnType::Boolean).unwrap(),
-            "false"
-        );
     }
 }

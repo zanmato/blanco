@@ -19,7 +19,7 @@ mod time_format;
 mod transformers;
 
 use assets::Assets;
-use database::{ConnectionConfig, DatabaseService, DatabaseType};
+use database::DatabaseService;
 use gpui::{AppContext, SharedString, WindowBounds, WindowOptions, px, size};
 use gpui_component::{Theme, ThemeRegistry};
 use gpui_platform::application;
@@ -61,70 +61,10 @@ fn main() {
             .unwrap_or(Vec::new());
 
         for connection in connections {
-            if let Some(connection_id) = connection.id {
-                // Convert ConnectionData to ConnectionConfig
-                let db_type = match connection.db_type.as_str() {
-                    "SQLite" => DatabaseType::SQLite,
-                    "PostgreSQL" => DatabaseType::PostgreSQL,
-                    "MySQL" => DatabaseType::MySQL,
-                    _ => DatabaseType::PostgreSQL, // Default to PostgreSQL
-                };
-
-                let connection_config = match db_type {
-                    DatabaseType::SQLite => ConnectionConfig::new_sqlite(
-                        connection_id,
-                        connection.name.clone(),
-                        connection
-                            .database_path
-                            .unwrap_or_else(|| format!("{}.db", connection.name)),
-                    ),
-                    _ => {
-                        let default_port = match db_type {
-                            DatabaseType::PostgreSQL => 5432,
-                            DatabaseType::MySQL => 3306,
-                            DatabaseType::SQLite => 0,
-                        };
-
-                        let mut config = ConnectionConfig::new(
-                            connection_id,
-                            connection.name.clone(),
-                            db_type,
-                            connection.host.unwrap_or_else(|| "localhost".to_string()),
-                            connection.port.unwrap_or(default_port) as u16,
-                            connection.database_name.unwrap_or_else(|| "".to_string()),
-                            connection.username.unwrap_or_else(|| "".to_string()),
-                            connection.password,
-                        );
-
-                        // Add SSH configuration if present
-                        if let Some(ssh_host) = connection.ssh_host
-                            && let Some(ssh_user) = connection.ssh_user
-                        {
-                            config = config.with_ssh_config(
-                                ssh_host,
-                                ssh_user,
-                                connection.ssh_password,
-                                connection.ssh_private_key_path,
-                                connection.ssh_private_key_password,
-                                connection.ssh_port,
-                            );
-                        }
-
-                        // Add SSL configuration if present
-                        config = config.with_ssl_config(
-                            connection.ssl_mode,
-                            connection.ssl_key_path,
-                            connection.ssl_cert_path,
-                            connection.ssl_ca_cert_path,
-                        );
-
-                        config
-                    }
-                };
-
+            if let Some(config) = connection.to_connection_config() {
                 let db_service = DatabaseService::global(cx).clone();
                 cx.spawn(async move |_| {
-                    db_service.add_connection_config(connection_config).await;
+                    db_service.add_connection_config(config).await;
                 })
                 .detach();
             }

@@ -1,8 +1,8 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
-    ColumnInfo, Connection, QueryResult,
-    connection_trait::ColumnType, connection_trait::ForeignKeyInfo, connection_trait::IndexInfo,
+    ColumnInfo, Connection, QueryResult, connection_trait::ColumnType,
+    connection_trait::ForeignKeyInfo, connection_trait::IndexInfo,
 };
 use futures::StreamExt;
 use smol::lock::RwLock;
@@ -267,12 +267,13 @@ impl MysqlConnection {
         if raw_type.contains("TINYINT") {
             // Check if it's TINYINT(1) - boolean representation
             if (raw_type.contains("TINYINT(1)") || raw_type == "TINYINT")
-                && let Ok(Some(v)) = row.try_get::<Option<i8>, _>(column_index) {
-                    if v == 0 || v == 1 {
-                        return Some(if v == 1 { "true" } else { "false" }.to_string());
-                    }
-                    return Some(v.to_string());
+                && let Ok(Some(v)) = row.try_get::<Option<i8>, _>(column_index)
+            {
+                if v == 0 || v == 1 {
+                    return Some(if v == 1 { "true" } else { "false" }.to_string());
                 }
+                return Some(v.to_string());
+            }
             if let Ok(Some(v)) = row.try_get::<Option<i8>, _>(column_index) {
                 return Some(v.to_string());
             }
@@ -280,29 +281,35 @@ impl MysqlConnection {
 
         // SMALLINT
         if raw_type.contains("SMALLINT")
-            && let Ok(Some(v)) = row.try_get::<Option<i16>, _>(column_index) {
-                return Some(v.to_string());
-            }
+            && let Ok(Some(v)) = row.try_get::<Option<i16>, _>(column_index)
+        {
+            return Some(v.to_string());
+        }
 
         // MEDIUMINT
         if raw_type.contains("MEDIUMINT")
-            && let Ok(Some(v)) = row.try_get::<Option<i32>, _>(column_index) {
-                return Some(v.to_string());
-            }
+            && let Ok(Some(v)) = row.try_get::<Option<i32>, _>(column_index)
+        {
+            return Some(v.to_string());
+        }
 
         // INT, INTEGER
-        if raw_type.contains("INT") && !raw_type.contains("TINYINT")
-            && !raw_type.contains("SMALLINT") && !raw_type.contains("MEDIUMINT")
+        if raw_type.contains("INT")
+            && !raw_type.contains("TINYINT")
+            && !raw_type.contains("SMALLINT")
+            && !raw_type.contains("MEDIUMINT")
             && !raw_type.contains("BIGINT")
-            && let Ok(Some(v)) = row.try_get::<Option<i32>, _>(column_index) {
-                return Some(v.to_string());
-            }
+            && let Ok(Some(v)) = row.try_get::<Option<i32>, _>(column_index)
+        {
+            return Some(v.to_string());
+        }
 
         // BIGINT
         if raw_type.contains("BIGINT")
-            && let Ok(Some(v)) = row.try_get::<Option<i64>, _>(column_index) {
-                return Some(v.to_string());
-            }
+            && let Ok(Some(v)) = row.try_get::<Option<i64>, _>(column_index)
+        {
+            return Some(v.to_string());
+        }
 
         // Fallback: try i64
         if let Ok(Some(v)) = row.try_get::<Option<i64>, _>(column_index) {
@@ -319,21 +326,25 @@ impl MysqlConnection {
         raw_type: &str,
     ) -> Option<String> {
         if raw_type.contains("TINYINT")
-            && let Ok(Some(v)) = row.try_get::<Option<u8>, _>(column_index) {
-                return Some(v.to_string());
-            }
+            && let Ok(Some(v)) = row.try_get::<Option<u8>, _>(column_index)
+        {
+            return Some(v.to_string());
+        }
         if raw_type.contains("SMALLINT")
-            && let Ok(Some(v)) = row.try_get::<Option<u16>, _>(column_index) {
-                return Some(v.to_string());
-            }
+            && let Ok(Some(v)) = row.try_get::<Option<u16>, _>(column_index)
+        {
+            return Some(v.to_string());
+        }
         if raw_type.contains("MEDIUMINT")
-            && let Ok(Some(v)) = row.try_get::<Option<u32>, _>(column_index) {
-                return Some(v.to_string());
-            }
+            && let Ok(Some(v)) = row.try_get::<Option<u32>, _>(column_index)
+        {
+            return Some(v.to_string());
+        }
         if raw_type.contains("BIGINT")
-            && let Ok(Some(v)) = row.try_get::<Option<u64>, _>(column_index) {
-                return Some(v.to_string());
-            }
+            && let Ok(Some(v)) = row.try_get::<Option<u64>, _>(column_index)
+        {
+            return Some(v.to_string());
+        }
 
         // Fallback
         if let Ok(Some(v)) = row.try_get::<Option<u64>, _>(column_index) {
@@ -351,21 +362,24 @@ impl MysqlConnection {
     ) -> Option<String> {
         // DECIMAL, NUMERIC
         if (raw_type.contains("DECIMAL") || raw_type.contains("NUMERIC"))
-            && let Ok(Some(v)) = row.try_get::<Option<rust_decimal::Decimal>, _>(column_index) {
-                return Some(v.to_string());
-            }
+            && let Ok(Some(v)) = row.try_get::<Option<rust_decimal::Decimal>, _>(column_index)
+        {
+            return Some(v.to_string());
+        }
 
         // FLOAT
         if raw_type.contains("FLOAT")
-            && let Ok(Some(v)) = row.try_get::<Option<f32>, _>(column_index) {
-                return Some(v.to_string());
-            }
+            && let Ok(Some(v)) = row.try_get::<Option<f32>, _>(column_index)
+        {
+            return Some(v.to_string());
+        }
 
         // DOUBLE, REAL
         if (raw_type.contains("DOUBLE") || raw_type.contains("REAL"))
-            && let Ok(Some(v)) = row.try_get::<Option<f64>, _>(column_index) {
-                return Some(v.to_string());
-            }
+            && let Ok(Some(v)) = row.try_get::<Option<f64>, _>(column_index)
+        {
+            return Some(v.to_string());
+        }
 
         // Fallback: try decimal then f64
         if let Ok(Some(v)) = row.try_get::<Option<rust_decimal::Decimal>, _>(column_index) {
@@ -385,28 +399,35 @@ impl MysqlConnection {
         raw_type: &str,
     ) -> Option<String> {
         // DATE
-        if raw_type.contains("DATE") && !raw_type.contains("DATETIME")
-            && let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveDate>, _>(column_index) {
-                return Some(v.format("%Y-%m-%d").to_string());
-            }
+        if raw_type.contains("DATE")
+            && !raw_type.contains("DATETIME")
+            && let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveDate>, _>(column_index)
+        {
+            return Some(v.format("%Y-%m-%d").to_string());
+        }
 
         // TIME
-        if raw_type.contains("TIME") && !raw_type.contains("DATETIME") && !raw_type.contains("TIMESTAMP")
-            && let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveTime>, _>(column_index) {
-                return Some(v.format("%H:%M:%S").to_string());
-            }
+        if raw_type.contains("TIME")
+            && !raw_type.contains("DATETIME")
+            && !raw_type.contains("TIMESTAMP")
+            && let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveTime>, _>(column_index)
+        {
+            return Some(v.format("%H:%M:%S").to_string());
+        }
 
         // DATETIME, TIMESTAMP
         if (raw_type.contains("DATETIME") || raw_type.contains("TIMESTAMP"))
-            && let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveDateTime>, _>(column_index) {
-                return Some(v.format("%Y-%m-%d %H:%M:%S").to_string());
-            }
+            && let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveDateTime>, _>(column_index)
+        {
+            return Some(v.format("%Y-%m-%d %H:%M:%S").to_string());
+        }
 
         // YEAR
         if raw_type.contains("YEAR")
-            && let Ok(Some(v)) = row.try_get::<Option<i16>, _>(column_index) {
-                return Some(v.to_string());
-            }
+            && let Ok(Some(v)) = row.try_get::<Option<i16>, _>(column_index)
+        {
+            return Some(v.to_string());
+        }
 
         // Fallback: try string conversion
         if let Ok(Some(v)) = row.try_get::<Option<String>, _>(column_index) {
@@ -435,7 +456,9 @@ impl MysqlConnection {
 
         match column_type {
             ColumnType::Integer => self.handle_integer_type(row, column_index, &raw_type),
-            ColumnType::UnsignedInteger => self.handle_unsigned_integer_type(row, column_index, &raw_type),
+            ColumnType::UnsignedInteger => {
+                self.handle_unsigned_integer_type(row, column_index, &raw_type)
+            }
             ColumnType::Numeric => self.handle_numeric_type(row, column_index, &raw_type),
             ColumnType::Boolean => {
                 if let Ok(Some(v)) = row.try_get::<Option<bool>, _>(column_index) {
@@ -494,7 +517,7 @@ impl Connection for MysqlConnection {
     }
 
     async fn connect(&mut self, connection_string: &str) -> Result<(), anyhow::Error> {
-        tracing::info!("🔌 Connecting to MySQL server: {}", connection_string);
+        tracing::info!("Connecting to MySQL server: {}", connection_string);
 
         // Parse and validate the connection string to extract server details
         let key = MysqlConnectionKey::from_connection_string(connection_string)?;
@@ -516,7 +539,7 @@ impl Connection for MysqlConnection {
             self.get_or_create_pool(&key.database).await?;
         }
 
-        tracing::info!("✅ MySQL connection established successfully");
+        tracing::info!("MySQL connection established successfully");
         Ok(())
     }
 
@@ -621,7 +644,7 @@ impl Connection for MysqlConnection {
     }
 
     async fn get_databases(&self) -> Result<Vec<String>, anyhow::Error> {
-        tracing::debug!("🗄️ Getting MySQL databases");
+        tracing::debug!("Getting MySQL databases");
 
         let pool = if let Some(database) = &self.initial_database {
             self.get_or_create_pool(database).await?
@@ -642,7 +665,7 @@ impl Connection for MysqlConnection {
             })
             .collect();
 
-        tracing::debug!("✅ Found {} databases", databases.len());
+        tracing::debug!("Found {} databases", databases.len());
         Ok(databases)
     }
 
@@ -657,7 +680,7 @@ impl Connection for MysqlConnection {
     }
 
     async fn get_tables(&self, _schema: Option<&str>) -> Result<Vec<String>, anyhow::Error> {
-        tracing::debug!("📋 Getting MySQL tables");
+        tracing::debug!("Getting MySQL tables");
 
         let database = self
             .initial_database
@@ -674,7 +697,7 @@ impl Connection for MysqlConnection {
             .filter(|table| !table.is_empty())
             .collect();
 
-        tracing::debug!("✅ Found {} tables", tables.len());
+        tracing::debug!("Found {} tables", tables.len());
         Ok(tables)
     }
 
@@ -746,7 +769,7 @@ impl Connection for MysqlConnection {
         table_name: &str,
         _schema: Option<&str>,
     ) -> Result<Vec<ColumnInfo>, anyhow::Error> {
-        tracing::debug!("📋 Getting columns for table: {}", table_name);
+        tracing::debug!("Getting columns for table: {}", table_name);
 
         let database = self
             .initial_database
@@ -818,14 +841,9 @@ impl Connection for MysqlConnection {
             });
         }
 
-        tracing::debug!(
-            "✅ Found {} columns for table: {}",
-            columns.len(),
-            table_name
-        );
+        tracing::debug!("Found {} columns for table: {}", columns.len(), table_name);
         Ok(columns)
     }
-
 
     async fn get_database_schema_paginated(
         &self,
@@ -878,14 +896,15 @@ impl Connection for MysqlConnection {
             .filter(|n| *n >= 0);
 
         if let Some(count) = row_count
-            && count <= ROW_ESTIMATE_THRESHOLD {
-                // Small table: fetch all rows with referenced row first
-                let query = format!(
-                    "SELECT * FROM {} ORDER BY {} = '{}' DESC LIMIT {}",
-                    table_name, column_name, reference_value, LIMIT_THRESHOLD
-                );
-                return self.execute_query(&query, None, None).await;
-            }
+            && count <= ROW_ESTIMATE_THRESHOLD
+        {
+            // Small table: fetch all rows with referenced row first
+            let query = format!(
+                "SELECT * FROM {} ORDER BY {} = '{}' DESC LIMIT {}",
+                table_name, column_name, reference_value, LIMIT_THRESHOLD
+            );
+            return self.execute_query(&query, None, None).await;
+        }
 
         // Large table or estimate unavailable: fetch only referenced row
         let query = format!(
@@ -900,7 +919,7 @@ impl Connection for MysqlConnection {
         table_name: &str,
         _schema: Option<&str>,
     ) -> Result<Vec<IndexInfo>, anyhow::Error> {
-        tracing::debug!("📋 Getting indexes for table: {}", table_name);
+        tracing::debug!("Getting indexes for table: {}", table_name);
 
         let database = self
             .initial_database
@@ -951,11 +970,7 @@ impl Connection for MysqlConnection {
             });
         }
 
-        tracing::debug!(
-            "✅ Found {} indexes for table: {}",
-            indexes.len(),
-            table_name
-        );
+        tracing::debug!("Found {} indexes for table: {}", indexes.len(), table_name);
         Ok(indexes)
     }
 }

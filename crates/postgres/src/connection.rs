@@ -138,120 +138,6 @@ impl PgServerKey {
         self.ssl_ca_cert_path = ssl_ca_cert_path;
         self
     }
-
-    /// Build SSL query parameters for connection string
-    fn build_ssl_params(&self) -> Vec<String> {
-        let mut params = Vec::new();
-        if let Some(ssl_mode) = &self.ssl_mode {
-            params.push(format!("sslmode={}", ssl_mode));
-        }
-        if let Some(ssl_key) = &self.ssl_key_path {
-            params.push(format!("sslkey={}", ssl_key));
-        }
-        if let Some(ssl_cert) = &self.ssl_cert_path {
-            params.push(format!("sslcert={}", ssl_cert));
-        }
-        if let Some(ssl_ca) = &self.ssl_ca_cert_path {
-            params.push(format!("sslrootcert={}", ssl_ca));
-        }
-        params
-    }
-
-    /// Generate a server-level connection string (without database)
-    pub fn to_server_connection_string(&self) -> String {
-        let password_str = self.password.as_deref().unwrap_or("");
-        let mut url = format!("postgresql://{}:{}", self.username, password_str);
-
-        if !self.host.is_empty() && self.host != "localhost" {
-            url = format!("{}@{}:{}", url, self.host, self.port);
-        } else if self.host == "localhost" {
-            url = format!("{}@localhost:{}", url, self.port);
-        } else {
-            // No host specified - this is an error case
-            tracing::error!("No host specified in PostgreSQL connection string");
-            return format!("postgresql://{}@localhost:{}", self.username, self.port);
-        }
-
-        // Build query parameters
-        let mut params = vec!["application_name=Blanco".to_string()];
-        params.extend(self.build_ssl_params());
-
-        url = format!("{}?{}", url, params.join("&"));
-
-        tracing::debug!("Generated server connection string: {}", url);
-        url
-    }
-
-    /// Generate connection string for a specific database
-    pub fn to_database_connection_string(&self, database: &str) -> String {
-        let password_str = self.password.as_deref().unwrap_or("");
-        let mut url = format!("postgresql://{}:{}", self.username, password_str);
-
-        if !self.host.is_empty() && self.host != "localhost" {
-            url = format!("{}@{}:{}", url, self.host, self.port);
-        } else if self.host == "localhost" {
-            url = format!("{}@localhost:{}", url, self.port);
-        } else {
-            // No host specified - this is an error case
-            tracing::error!("No host specified in PostgreSQL connection string");
-            return format!("postgresql://{}@localhost:{}", self.username, self.port);
-        }
-
-        // Add database
-        url = format!("{}/{}", url, database);
-
-        // Build query parameters
-        let mut params = vec!["application_name=Blanco".to_string()];
-        params.extend(self.build_ssl_params());
-
-        url = format!("{}?{}", url, params.join("&"));
-
-        tracing::debug!("Generated database connection string: {}", url);
-        url
-    }
-
-    /// Generate a server-level connection string with SSH tunnel support
-    pub fn to_server_connection_string_with_tunnel(&self, local_tunnel_port: u16) -> String {
-        let password_str = self.password.as_deref().unwrap_or("");
-        let mut url = format!("postgresql://{}:{}", self.username, password_str);
-
-        // Always use localhost and the tunnel port when SSH tunneling
-        url = format!("{}@localhost:{}", url, local_tunnel_port);
-
-        // Build query parameters
-        let mut params = vec!["application_name=Blanco".to_string()];
-        params.extend(self.build_ssl_params());
-
-        url = format!("{}?{}", url, params.join("&"));
-
-        tracing::debug!("Generated SSH tunnel server connection string: {}", url);
-        url
-    }
-
-    /// Generate connection string for a specific database using SSH tunnel
-    pub fn to_database_connection_string_with_tunnel(
-        &self,
-        database: &str,
-        local_tunnel_port: u16,
-    ) -> String {
-        let password_str = self.password.as_deref().unwrap_or("");
-        let mut url = format!("postgresql://{}:{}", self.username, password_str);
-
-        // Always use localhost and the tunnel port when SSH tunneling
-        url = format!("{}@localhost:{}", url, local_tunnel_port);
-
-        // Add database
-        url = format!("{}/{}", url, database);
-
-        // Build query parameters
-        let mut params = vec!["application_name=Blanco".to_string()];
-        params.extend(self.build_ssl_params());
-
-        url = format!("{}?{}", url, params.join("&"));
-
-        tracing::debug!("Generated SSH tunnel database connection string: {}", url);
-        url
-    }
 }
 
 impl PgConnectionKey {
@@ -347,13 +233,12 @@ impl PostgresConnection {
         let connection_key = PgConnectionKey::from_connection_string(connection_string)?;
         let server_key = connection_key.to_server_key();
         let display_name = Self::generate_server_display_name(&server_key);
-        let server_connection_string = server_key.to_server_connection_string();
 
         Ok(Self {
             pools: Arc::new(RwLock::new(HashMap::new())),
             server_key,
             display_name,
-            server_connection_string,
+            server_connection_string: connection_string.to_string(),
             initial_database: Some(connection_key.database.clone()),
             ssh_config: None,
             local_tunnel_port: None,
@@ -363,13 +248,12 @@ impl PostgresConnection {
     /// Create a new server-level PostgreSQL connection (preferred method for multi-database support)
     pub fn from_server_key(server_key: PgServerKey) -> Self {
         let display_name = Self::generate_server_display_name(&server_key);
-        let server_connection_string = server_key.to_server_connection_string();
 
         Self {
             pools: Arc::new(RwLock::new(HashMap::new())),
             server_key,
             display_name,
-            server_connection_string,
+            server_connection_string: String::new(), // Will be set during connect
             initial_database: None,
             ssh_config: None,
             local_tunnel_port: None,
@@ -388,7 +272,7 @@ impl PostgresConnection {
             pools: Arc::new(RwLock::new(HashMap::new())),
             server_key,
             display_name,
-            server_connection_string: String::new(), // Will be set up during connect
+            server_connection_string: String::new(), // Will be set during connect
             initial_database: Some(connection_key.database.clone()),
             ssh_config: Some(ssh_config),
             local_tunnel_port: None,
@@ -406,7 +290,7 @@ impl PostgresConnection {
             pools: Arc::new(RwLock::new(HashMap::new())),
             server_key,
             display_name,
-            server_connection_string: String::new(), // Will be set up during connect
+            server_connection_string: String::new(), // Will be set during connect
             initial_database: None,
             ssh_config: Some(ssh_config),
             local_tunnel_port: None,
@@ -437,6 +321,15 @@ impl PostgresConnection {
         )
     }
 
+    /// Build a connection string for a specific database by replacing the database
+    /// path component in the stored server connection string.
+    fn connection_string_for_database(&self, database: &str) -> Result<String> {
+        let mut parsed = url::Url::parse(&self.server_connection_string)
+            .map_err(|e| anyhow::anyhow!("Failed to parse connection string: {}", e))?;
+        parsed.set_path(&format!("/{}", database));
+        Ok(parsed.to_string())
+    }
+
     /// Get or create a connection pool for a specific database
     pub(crate) async fn get_or_create_pool(&self, database: &str) -> Result<sqlx::PgPool> {
         let mut pools = self.pools.write().await;
@@ -445,12 +338,7 @@ impl PostgresConnection {
             return Ok(pool.clone());
         }
 
-        let database_connection_string = if let Some(local_port) = self.local_tunnel_port {
-            self.server_key
-                .to_database_connection_string_with_tunnel(database, local_port)
-        } else {
-            self.server_key.to_database_connection_string(database)
-        };
+        let database_connection_string = self.connection_string_for_database(database)?;
         tracing::info!("Creating new connection pool for database: {}", database);
 
         let pool = PgPoolOptions::new()

@@ -1,3 +1,4 @@
+use database::{ConnectionConfig, DatabaseType};
 use gpui_component::ActiveTheme;
 
 /// Environment type for database connections
@@ -95,7 +96,7 @@ pub struct SnippetData {
 pub struct ConnectionData {
     pub id: Option<i64>,
     pub name: String,
-    pub db_type: String,
+    pub db_type: DatabaseType,
     pub host: Option<String>,
     pub port: Option<i32>,
     pub database_name: Option<String>,
@@ -104,11 +105,8 @@ pub struct ConnectionData {
     pub database_path: Option<String>,
     #[allow(dead_code)]
     pub last_used_at: Option<i64>,
-    // Additional fields for unified connection management
-    pub connection_string: Option<String>,
     pub is_active: Option<bool>,
-    pub connection_params: Option<serde_json::Value>, // For extensible parameters
-    pub environment_type: EnvironmentType,            // Environment type (Dev/Test/Prod)
+    pub environment_type: EnvironmentType,
     // SSH tunnel configuration
     pub ssh_host: Option<String>,
     pub ssh_port: Option<i32>,
@@ -116,7 +114,6 @@ pub struct ConnectionData {
     pub ssh_password: Option<String>,
     pub ssh_private_key_path: Option<String>,
     pub ssh_private_key_password: Option<String>,
-    pub local_tunnel_port: Option<i32>, // Auto-assigned local port for the tunnel
     // SSL/TLS configuration
     pub ssl_mode: Option<String>,
     pub ssl_key_path: Option<String>,
@@ -126,22 +123,17 @@ pub struct ConnectionData {
 
 impl ConnectionData {
     pub fn new_sqlite(name: String, database_path: String) -> Self {
-        let connection_string = format!("sqlite://{}", database_path);
         Self {
             id: None,
             name,
-            db_type: "SQLite".to_string(),
+            db_type: DatabaseType::SQLite,
             host: None,
             port: None,
             database_name: None,
             username: None,
             password: None,
-            database_path: Some(database_path.clone()),
-            connection_string: Some(connection_string),
+            database_path: Some(database_path),
             is_active: Some(true),
-            connection_params: Some(serde_json::json!({
-                "database_path": database_path
-            })),
             environment_type: EnvironmentType::default(),
             last_used_at: None,
             ssh_host: None,
@@ -150,7 +142,6 @@ impl ConnectionData {
             ssh_password: None,
             ssh_private_key_path: None,
             ssh_private_key_password: None,
-            local_tunnel_port: None,
             ssl_mode: None,
             ssl_key_path: None,
             ssl_cert_path: None,
@@ -166,33 +157,17 @@ impl ConnectionData {
         username: String,
         password: String,
     ) -> Self {
-        let connection_string = if password.is_empty() {
-            format!("postgresql://{}@{}:{}/{}", username, host, port, database)
-        } else {
-            format!(
-                "postgresql://{}:{}@{}:{}/{}",
-                username, password, host, port, database
-            )
-        };
-
         Self {
             id: None,
             name,
-            db_type: "PostgreSQL".to_string(),
-            host: Some(host.clone()),
+            db_type: DatabaseType::PostgreSQL,
+            host: Some(host),
             port: Some(port),
-            database_name: Some(database.clone()),
-            username: Some(username.clone()),
+            database_name: Some(database),
+            username: Some(username),
             password: Some(password),
             database_path: None,
-            connection_string: Some(connection_string),
             is_active: Some(true),
-            connection_params: Some(serde_json::json!({
-                "host": host,
-                "port": port,
-                "database": database,
-                "username": username
-            })),
             environment_type: EnvironmentType::default(),
             last_used_at: None,
             ssh_host: None,
@@ -201,7 +176,6 @@ impl ConnectionData {
             ssh_password: None,
             ssh_private_key_path: None,
             ssh_private_key_password: None,
-            local_tunnel_port: None,
             ssl_mode: None,
             ssl_key_path: None,
             ssl_cert_path: None,
@@ -224,38 +198,17 @@ impl ConnectionData {
         ssh_private_key_path: Option<String>,
         ssh_private_key_password: Option<String>,
     ) -> Self {
-        let connection_string = if password.is_empty() {
-            format!("postgresql://{}@{}:{}/{}", username, host, port, database)
-        } else {
-            format!(
-                "postgresql://{}:{}@{}:{}/{}",
-                username, password, host, port, database
-            )
-        };
-
         Self {
             id: None,
             name,
-            db_type: "PostgreSQL".to_string(),
-            host: Some(host.clone()),
+            db_type: DatabaseType::PostgreSQL,
+            host: Some(host),
             port: Some(port),
-            database_name: Some(database.clone()),
-            username: Some(username.clone()),
+            database_name: Some(database),
+            username: Some(username),
             password: Some(password),
             database_path: None,
-            connection_string: Some(connection_string),
             is_active: Some(true),
-            connection_params: Some(serde_json::json!({
-                "host": host,
-                "port": port,
-                "database": database,
-                "username": username,
-                "ssh": {
-                    "ssh_host": ssh_host,
-                    "ssh_port": ssh_port,
-                    "ssh_user": ssh_user
-                }
-            })),
             environment_type: EnvironmentType::default(),
             last_used_at: None,
             ssh_host: Some(ssh_host),
@@ -264,43 +217,10 @@ impl ConnectionData {
             ssh_password,
             ssh_private_key_path,
             ssh_private_key_password,
-            local_tunnel_port: Some(15432), // Default port, will be auto-assigned
             ssl_mode: None,
             ssl_key_path: None,
             ssl_cert_path: None,
             ssl_ca_cert_path: None,
-        }
-    }
-
-    /// Check if this connection uses SSH tunnel
-    #[allow(dead_code)]
-    pub fn uses_ssh_tunnel(&self) -> bool {
-        self.ssh_host.is_some() && !self.ssh_host.as_ref().unwrap().trim().is_empty()
-    }
-
-    /// Check if SSH tunnel is properly configured
-    #[allow(dead_code)]
-    pub fn has_valid_ssh_config(&self) -> bool {
-        if let (Some(host), Some(user)) = (&self.ssh_host, &self.ssh_user) {
-            !host.trim().is_empty() && !user.trim().is_empty()
-        } else {
-            false
-        }
-    }
-
-    /// Get SSH display string for UI
-    #[allow(dead_code)]
-    pub fn ssh_display_string(&self) -> Option<String> {
-        if let (Some(host), Some(port), Some(user)) =
-            (&self.ssh_host, &self.ssh_port, &self.ssh_user)
-        {
-            if self.has_valid_ssh_config() {
-                Some(format!("{}@{}:{}", user, host.trim(), port))
-            } else {
-                None
-            }
-        } else {
-            None
         }
     }
 
@@ -312,33 +232,17 @@ impl ConnectionData {
         username: String,
         password: String,
     ) -> Self {
-        let connection_string = if password.is_empty() {
-            format!("mysql://{}@{}:{}/{}", username, host, port, database)
-        } else {
-            format!(
-                "mysql://{}:{}@{}:{}/{}",
-                username, password, host, port, database
-            )
-        };
-
         Self {
             id: None,
             name,
-            db_type: "MySQL".to_string(),
-            host: Some(host.clone()),
+            db_type: DatabaseType::MySQL,
+            host: Some(host),
             port: Some(port),
-            database_name: Some(database.clone()),
-            username: Some(username.clone()),
+            database_name: Some(database),
+            username: Some(username),
             password: Some(password),
             database_path: None,
-            connection_string: Some(connection_string),
             is_active: Some(true),
-            connection_params: Some(serde_json::json!({
-                "host": host,
-                "port": port,
-                "database": database,
-                "username": username
-            })),
             environment_type: EnvironmentType::default(),
             last_used_at: None,
             ssh_host: None,
@@ -347,7 +251,6 @@ impl ConnectionData {
             ssh_password: None,
             ssh_private_key_path: None,
             ssh_private_key_password: None,
-            local_tunnel_port: None,
             ssl_mode: None,
             ssl_key_path: None,
             ssl_cert_path: None,
@@ -355,4 +258,68 @@ impl ConnectionData {
         }
     }
 
+    /// Check if this connection uses SSH tunnel
+    pub fn uses_ssh_tunnel(&self) -> bool {
+        self.ssh_host
+            .as_ref()
+            .is_some_and(|h| !h.trim().is_empty())
+    }
+
+    /// Convert to a ConnectionConfig for use with the database service.
+    /// Returns None if the connection has no ID.
+    pub fn to_connection_config(&self) -> Option<ConnectionConfig> {
+        let connection_id = self.id?;
+
+        let config = match self.db_type {
+            DatabaseType::SQLite => ConnectionConfig::new_sqlite(
+                connection_id,
+                self.name.clone(),
+                self.database_path
+                    .clone()
+                    .unwrap_or_else(|| format!("{}.db", self.name)),
+            ),
+            _ => {
+                let default_port = match self.db_type {
+                    DatabaseType::PostgreSQL => 5432,
+                    DatabaseType::MySQL => 3306,
+                    DatabaseType::SQLite => 0,
+                };
+
+                let mut config = ConnectionConfig::new(
+                    connection_id,
+                    self.name.clone(),
+                    self.db_type,
+                    self.host.clone().unwrap_or_else(|| "localhost".to_string()),
+                    self.port.unwrap_or(default_port) as u16,
+                    self.database_name.clone().unwrap_or_default(),
+                    self.username.clone().unwrap_or_default(),
+                    self.password.clone(),
+                );
+
+                if let Some(ssh_host) = &self.ssh_host {
+                    if let Some(ssh_user) = &self.ssh_user {
+                        config = config.with_ssh_config(
+                            ssh_host.clone(),
+                            ssh_user.clone(),
+                            self.ssh_password.clone(),
+                            self.ssh_private_key_path.clone(),
+                            self.ssh_private_key_password.clone(),
+                            self.ssh_port,
+                        );
+                    }
+                }
+
+                config = config.with_ssl_config(
+                    self.ssl_mode.clone(),
+                    self.ssl_key_path.clone(),
+                    self.ssl_cert_path.clone(),
+                    self.ssl_ca_cert_path.clone(),
+                );
+
+                config
+            }
+        };
+
+        Some(config)
+    }
 }

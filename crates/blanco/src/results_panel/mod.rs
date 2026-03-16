@@ -68,7 +68,6 @@ pub struct SelectedRow {
 pub struct SelectedTableData {
     pub table_name: Option<String>,
     pub columns: Vec<String>,
-    pub column_types: Vec<ColumnType>,
     pub selected_rows: Vec<SelectedRow>,
 }
 
@@ -1402,7 +1401,6 @@ impl ResultsPanel {
                 .skip(1)
                 .map(|c| c.name.to_string())
                 .collect::<Vec<_>>(),
-            column_types: delegate.column_types.clone(),
             selected_rows: selected_rows_data,
         }
     }

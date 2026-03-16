@@ -7,8 +7,6 @@ use crate::results_panel::SelectedTableData;
 
 #[derive(Debug, Clone)]
 pub enum TransformError {
-    InvalidData(String),
-    MissingTableInfo(String),
     FormatError(String),
     EmptySelection,
 }
@@ -16,8 +14,6 @@ pub enum TransformError {
 impl fmt::Display for TransformError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TransformError::InvalidData(msg) => write!(f, "Invalid data: {}", msg),
-            TransformError::MissingTableInfo(msg) => write!(f, "Missing table info: {}", msg),
             TransformError::FormatError(msg) => write!(f, "Format error: {}", msg),
             TransformError::EmptySelection => write!(f, "No data selected for copying"),
         }
@@ -31,23 +27,8 @@ pub trait DataTransformer: Send + Sync {
     /// Returns the display name of this format
     fn format_name(&self) -> &'static str;
 
-    /// Returns the file extension for this format
-    fn file_extension(&self) -> &'static str;
-
     /// Transforms selected table data to the format
     fn transform_selected_data(&self, data: &SelectedTableData) -> Result<String, TransformError>;
-
-    /// Transforms a single cell value (for simple copy operations)
-    fn transform_single_cell(
-        &self,
-        value: &str,
-        _column_type: &ColumnType,
-    ) -> Result<String, TransformError> {
-        Ok(value.to_string())
-    }
-
-    /// Returns a description of what this transformer does
-    fn description(&self) -> &'static str;
 
     // === Streaming Methods ===
 
@@ -74,13 +55,11 @@ pub trait DataTransformer: Send + Sync {
     /// Finalize streaming transformation and return any trailing output
     /// This is called once at the end of the streaming process
     fn finalize_stream(&self) -> Result<String, TransformError> {
-        // Default implementation - most transformers don't need special finalization
         Ok(String::new())
     }
 
     /// Transform header row specifically (helper method)
     fn transform_header_row(&self, columns: &[String]) -> Result<String, TransformError> {
-        // Default implementation - transform headers as a regular row
         let header_values: Vec<Option<String>> = columns.iter().map(|c| Some(c.clone())).collect();
         self.transform_stream_row(&header_values, columns, &[])
     }
@@ -88,7 +67,7 @@ pub trait DataTransformer: Send + Sync {
     /// Check if this transformer supports streaming
     /// Most transformers can support streaming, but some might need all data at once
     fn supports_streaming(&self) -> bool {
-        true // Default to true for most transformers
+        true
     }
 }
 
@@ -116,15 +95,6 @@ impl TransformerRegistry {
         self.transformers
             .get(&format_name.to_lowercase())
             .cloned()
-    }
-
-    pub fn get_available_formats(&self) -> Vec<&str> {
-        self.transformers
-            .keys()
-            .map(|k| k.as_str())
-            .collect::<std::collections::HashSet<_>>()
-            .into_iter()
-            .collect()
     }
 
     pub fn transform_data(
@@ -157,7 +127,6 @@ pub use sql_transformer::SqlTransformer;
 impl Default for TransformerRegistry {
     fn default() -> Self {
         let mut registry = Self::new();
-        // Register built-in transformers
         registry.register(CsvTransformer);
         registry.register(SqlTransformer::new());
         registry.register(JsonTransformer::new());
@@ -170,29 +139,5 @@ impl SelectedTableData {
     /// Check if there's any data selected
     pub fn has_selection(&self) -> bool {
         !self.selected_rows.is_empty()
-    }
-
-    /// Get all selected data as a flat collection of values
-    pub fn get_all_selected_values(&self) -> Vec<Option<String>> {
-        let mut values = Vec::new();
-
-        // Add row cell values
-        for row in &self.selected_rows {
-            for cell in &row.cells {
-                values.push(cell.value.clone());
-            }
-        }
-
-        values
-    }
-
-    /// Get the effective column names (excluding row number column)
-    pub fn get_effective_columns(&self) -> &[String] {
-        &self.columns
-    }
-
-    /// Get the effective column types (excluding row number column)
-    pub fn get_effective_column_types(&self) -> &[ColumnType] {
-        &self.column_types
     }
 }

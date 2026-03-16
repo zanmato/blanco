@@ -1424,6 +1424,7 @@ dependencies = [
  "lsp-types",
  "serde",
  "serde_json",
+ "sqlparser",
  "tracing",
 ]
 
@@ -3649,15 +3650,19 @@ version = "0.5.1"
 dependencies = [
  "aho-corasick",
  "anyhow",
+ "async-channel 2.5.0",
  "chrono",
  "core-text",
  "enum-iterator",
+ "futures",
  "gpui",
  "gpui-component-macros",
  "gpui_macros",
  "html5ever",
  "indoc",
+ "instant",
  "itertools 0.13.0",
+ "log",
  "lsp-types",
  "markdown",
  "markup5ever_rcdom",
@@ -4562,6 +4567,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e0242819d153cba4b4b05a5a8f2a7e9bbf97b6055b2a002b395c96b5ff3c0222"
 dependencies = [
  "cfg-if",
+ "js-sys",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -5350,7 +5358,6 @@ dependencies = [
  "rust_decimal",
  "serde_json",
  "smol",
- "sqlparser",
  "sqlx",
  "tracing",
  "url",
@@ -6277,7 +6284,6 @@ dependencies = [
  "rust_decimal",
  "serde_json",
  "smol",
- "sqlparser",
  "sqlx",
  "tracing",
  "url",
@@ -7993,7 +7999,6 @@ dependencies = [
  "hex",
  "serde_json",
  "smol",
- "sqlparser",
  "sqlx",
  "tempfile",
  "tracing",

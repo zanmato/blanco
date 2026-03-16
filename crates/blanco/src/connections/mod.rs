@@ -256,9 +256,7 @@ impl ConnectionsPanel {
     ) -> TreeItem<TreeItemMetadata> {
         let connection_id = connection.id.unwrap_or(0);
 
-        // Convert db_type string to DatabaseType enum
-        let db_type = database::DatabaseType::from_db_type_str(&connection.db_type)
-            .unwrap_or(database::DatabaseType::PostgreSQL);
+        let db_type = connection.db_type;
 
         // Create metadata for the connection
         let connection_metadata = TreeItemMetadata {

@@ -8,21 +8,17 @@ impl DataTransformer for MarkdownTransformer {
         "Markdown"
     }
 
-    fn file_extension(&self) -> &'static str {
-        "md"
-    }
-
-    fn description(&self) -> &'static str {
-        "GitHub-flavored markdown table format"
-    }
-
     fn transform_selected_data(&self, data: &SelectedTableData) -> Result<String, TransformError> {
         if !data.has_selection() {
             return Err(TransformError::EmptySelection);
         }
 
         // Estimate capacity: ~80 bytes per cell on average (including formatting)
-        let cell_count = data.selected_rows.iter().map(|r| r.cells.len()).sum::<usize>();
+        let cell_count = data
+            .selected_rows
+            .iter()
+            .map(|r| r.cells.len())
+            .sum::<usize>();
         let estimated_capacity = (cell_count * 80) + (data.columns.len() * 30) + 200;
         let mut output = String::with_capacity(estimated_capacity);
 
@@ -104,7 +100,11 @@ impl DataTransformer for MarkdownTransformer {
                     let mut cell_found = false;
                     for cell in &row.cells {
                         if cell.col == col_idx {
-                            format_cell_to(cell.value.as_deref().unwrap_or("NULL"), column_widths[i], &mut output);
+                            format_cell_to(
+                                cell.value.as_deref().unwrap_or("NULL"),
+                                column_widths[i],
+                                &mut output,
+                            );
                             cell_found = true;
                             break;
                         }
@@ -119,15 +119,6 @@ impl DataTransformer for MarkdownTransformer {
         }
 
         Ok(output)
-    }
-
-    fn transform_single_cell(
-        &self,
-        value: &str,
-        _column_type: &ColumnType,
-    ) -> Result<String, TransformError> {
-        // For markdown, we just return the value as-is
-        Ok(value.to_string())
     }
 
     fn transform_stream_row(
@@ -155,15 +146,6 @@ impl DataTransformer for MarkdownTransformer {
     }
 }
 
-/// Format a cell value with proper padding for markdown table. Returns a new String.
-fn format_cell(value: &str, width: usize) -> String {
-    if value.len() >= width {
-        value.to_string()
-    } else {
-        format!("{}{}", value, " ".repeat(width - value.len()))
-    }
-}
-
 /// Format a cell value with proper padding. Writes directly to buffer.
 /// This avoids allocating a new String for each cell
 fn format_cell_to(value: &str, width: usize, output: &mut String) {
@@ -171,29 +153,5 @@ fn format_cell_to(value: &str, width: usize, output: &mut String) {
     let padding = width.saturating_sub(value.len());
     for _ in 0..padding {
         output.push(' ');
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_format_cell() {
-        assert_eq!(format_cell("hello", 10), "hello     ");
-        assert_eq!(format_cell("world", 5), "world");
-        assert_eq!(format_cell("", 3), "   ");
-        assert_eq!(format_cell("too long", 3), "too long");
-    }
-
-    #[test]
-    fn test_markdown_transformer() {
-        let transformer = MarkdownTransformer;
-        assert_eq!(transformer.format_name(), "Markdown");
-        assert_eq!(transformer.file_extension(), "md");
-        assert_eq!(
-            transformer.transform_single_cell("test", &ColumnType::Text).unwrap(),
-            "test"
-        );
     }
 }

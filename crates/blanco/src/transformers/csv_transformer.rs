@@ -8,21 +8,17 @@ impl DataTransformer for CsvTransformer {
         "CSV"
     }
 
-    fn file_extension(&self) -> &'static str {
-        "csv"
-    }
-
-    fn description(&self) -> &'static str {
-        "Comma-separated values with proper quoting"
-    }
-
     fn transform_selected_data(&self, data: &SelectedTableData) -> Result<String, TransformError> {
         if !data.has_selection() {
             return Err(TransformError::EmptySelection);
         }
 
         // Estimate capacity: ~50 bytes per cell on average
-        let cell_count = data.selected_rows.iter().map(|r| r.cells.len()).sum::<usize>();
+        let cell_count = data
+            .selected_rows
+            .iter()
+            .map(|r| r.cells.len())
+            .sum::<usize>();
         let estimated_capacity = (cell_count * 50) + (data.columns.len() * 20) + 100;
         let mut output = String::with_capacity(estimated_capacity);
 
@@ -58,16 +54,6 @@ impl DataTransformer for CsvTransformer {
 
         Ok(output)
     }
-
-    fn transform_single_cell(
-        &self,
-        value: &str,
-        _column_type: &ColumnType,
-    ) -> Result<String, TransformError> {
-        Ok(csv_escape(value))
-    }
-
-    // === Streaming Methods ===
 
     fn initialize_stream(
         &self,
@@ -119,34 +105,6 @@ impl DataTransformer for CsvTransformer {
     }
 }
 
-/// Escape a value for CSV format. Returns a new String.
-fn csv_escape(value: &str) -> String {
-    if value.is_empty() {
-        return String::new();
-    }
-
-    // Check if we need to quote the value
-    let needs_quoting =
-        value.contains(';') || value.contains('"') || value.contains('\n') || value.contains('\r');
-
-    if needs_quoting {
-        // Double up any quotes and wrap in quotes
-        let mut result = String::with_capacity(value.len() + 10);
-        result.push('"');
-        for c in value.chars() {
-            if c == '"' {
-                result.push_str("\"\"");
-            } else {
-                result.push(c);
-            }
-        }
-        result.push('"');
-        result
-    } else {
-        value.to_string()
-    }
-}
-
 /// Escape a value for CSV format. Writes directly to buffer.
 /// This avoids allocating a new String for each cell value
 fn csv_escape_to(value: &str, output: &mut String) {
@@ -177,25 +135,18 @@ fn csv_escape_to(value: &str, output: &mut String) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_csv_escape() {
-        assert_eq!(csv_escape("simple"), "simple");
-        assert_eq!(csv_escape("contains; semicolon"), "\"contains; semicolon\"");
-        assert_eq!(csv_escape("contains\"quote"), "\"contains\"\"quote\"");
-        assert_eq!(csv_escape("multi\nline"), "\"multi\nline\"");
-        assert_eq!(csv_escape(""), "");
+    fn escape(value: &str) -> String {
+        let mut output = String::new();
+        csv_escape_to(value, &mut output);
+        output
     }
 
     #[test]
-    fn test_csv_transformer() {
-        let transformer = CsvTransformer;
-        assert_eq!(transformer.format_name(), "CSV");
-        assert_eq!(transformer.file_extension(), "csv");
-        assert_eq!(
-            transformer
-                .transform_single_cell("test; value", &ColumnType::Text)
-                .unwrap(),
-            "\"test; value\""
-        );
+    fn test_csv_escape() {
+        assert_eq!(escape("simple"), "simple");
+        assert_eq!(escape("contains; semicolon"), "\"contains; semicolon\"");
+        assert_eq!(escape("contains\"quote"), "\"contains\"\"quote\"");
+        assert_eq!(escape("multi\nline"), "\"multi\nline\"");
+        assert_eq!(escape(""), "");
     }
 }

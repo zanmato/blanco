@@ -23,8 +23,8 @@ use crate::{
     app_settings::AppSettings,
     connection_modal::NewConnectionModal,
     connections::ConnectionsPanel,
-    result_ext::ResultExt,
     editor::{EditorPanel, TabCreationParams},
+    result_ext::ResultExt,
     snippets_panel::{RefreshSnippets, SnippetsPanel},
 };
 
@@ -377,13 +377,15 @@ impl BlancoApp {
                                 .await
                                 .unwrap_or_default();
 
-                            window.update(|window, cx| {
-                                editor_panel.update(cx, |panel, cx| {
-                                    panel.update_last_table_structure_tab(
-                                        columns, indexes, window, cx,
-                                    );
-                                });
-                            }).log_err();
+                            window
+                                .update(|window, cx| {
+                                    editor_panel.update(cx, |panel, cx| {
+                                        panel.update_last_table_structure_tab(
+                                            columns, indexes, window, cx,
+                                        );
+                                    });
+                                })
+                                .log_err();
                         }
                     })
                     .detach();
@@ -394,7 +396,6 @@ impl BlancoApp {
         subscriptions.push(subscription);
 
         // Subscribe to editor panel events to update other components
-        let sidebar_clone = sidebar.clone();
         let editor_panel_for_subscription = editor_panel.clone();
 
         let subscription = cx.subscribe_in(&editor_panel, window, move |app, _editor_panel, event, window, cx| {
@@ -414,18 +415,7 @@ impl BlancoApp {
                     }
                 }
                 AppEvent::ToggleSidebar => {
-                        tracing::info!("🔄 ToggleSidebar event received!");
                         app.sidebar_collapsed = !app.sidebar_collapsed;
-                        tracing::info!("🔄 New sidebar_collapsed state: {}", app.sidebar_collapsed);
-
-                        // Update sidebar's collapse state
-                        sidebar_clone.update(cx, |_sidebar, _cx| {
-                            tracing::info!(
-                                "🔄 Calling sidebar.set_collapsed with: {}",
-                                app.sidebar_collapsed
-                            );
-                            // sidebar.set_collapsed(app.sidebar_collapsed, cx);
-                        });
 
                         // Update editor panel's sidebar state
                         editor_panel_for_events.update(cx, |panel, cx| {
@@ -433,7 +423,6 @@ impl BlancoApp {
                         });
                 }
                 AppEvent::EditorSettingChanged { setting, value } => {
-                    tracing::info!("📝 EditorSettingChanged event received: setting={}, value={}", setting, value);
                     let value_bool = value.parse::<bool>().unwrap_or(false);
                     match setting.as_str() {
                         "word_wrap" => {
@@ -607,7 +596,7 @@ impl BlancoApp {
                     move |_, window, cx| {
                         if let Some(conn_data) = content.read(cx).get_connection_data(cx) {
                             // Capture connection data for the event
-                            let conn_type = conn_data.db_type.clone();
+                            let conn_type = conn_data.db_type.to_string();
                             let db_name = conn_data.database_name.clone();
 
                             // Start the async save operation
@@ -727,7 +716,7 @@ impl BlancoApp {
                             conn_data.id = original_id;
 
                             // Capture connection data for the event
-                            let conn_type = conn_data.db_type.clone();
+                            let conn_type = conn_data.db_type.to_string();
                             let db_name = conn_data.database_name.clone();
 
                             // Start the async save operation

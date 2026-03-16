@@ -243,24 +243,21 @@ impl ConnectionConfig {
                     )
                 };
 
-                // Append SSL parameters
-                let mut ssl_params = Vec::new();
+                let mut params = vec!["application_name=Blanco".to_string()];
                 if let Some(ssl_mode) = &self.ssl_mode {
-                    ssl_params.push(format!("sslmode={}", ssl_mode));
+                    params.push(format!("sslmode={}", ssl_mode));
                 }
                 if let Some(ssl_key) = &self.ssl_key_path {
-                    ssl_params.push(format!("sslkey={}", ssl_key));
+                    params.push(format!("sslkey={}", ssl_key));
                 }
                 if let Some(ssl_cert) = &self.ssl_cert_path {
-                    ssl_params.push(format!("sslcert={}", ssl_cert));
+                    params.push(format!("sslcert={}", ssl_cert));
                 }
                 if let Some(ssl_ca) = &self.ssl_ca_cert_path {
-                    ssl_params.push(format!("sslrootcert={}", ssl_ca));
+                    params.push(format!("sslrootcert={}", ssl_ca));
                 }
 
-                if !ssl_params.is_empty() {
-                    conn_str = format!("{}?{}", conn_str, ssl_params.join("&"));
-                }
+                conn_str = format!("{}?{}", conn_str, params.join("&"));
 
                 conn_str
             }
@@ -346,10 +343,10 @@ mod tests {
         );
 
         let conn_str = config.connection_string(None, None, None);
-        assert_eq!(conn_str, "postgresql://user:pass@localhost:5432/default_db");
+        assert_eq!(conn_str, "postgresql://user:pass@localhost:5432/default_db?application_name=Blanco");
 
         let override_db = config.connection_string(Some("new_db"), None, None);
-        assert_eq!(override_db, "postgresql://user:pass@localhost:5432/new_db");
+        assert_eq!(override_db, "postgresql://user:pass@localhost:5432/new_db?application_name=Blanco");
     }
 
     #[test]
@@ -370,6 +367,32 @@ mod tests {
 
         let override_db = config.connection_string(Some("new_db"), None, None);
         assert_eq!(override_db, "mysql://user:pass@localhost:3306/new_db");
+    }
+
+    #[test]
+    fn test_postgres_connection_string_with_ssl() {
+        let config = ConnectionConfig::new(
+            1,
+            "Test DB".to_string(),
+            DatabaseType::PostgreSQL,
+            "localhost".to_string(),
+            5432,
+            "db".to_string(),
+            "user".to_string(),
+            Some("pass".to_string()),
+        )
+        .with_ssl_config(
+            Some("require".to_string()),
+            None,
+            None,
+            Some("/path/to/ca.pem".to_string()),
+        );
+
+        let conn_str = config.connection_string(None, None, None);
+        assert_eq!(
+            conn_str,
+            "postgresql://user:pass@localhost:5432/db?application_name=Blanco&sslmode=require&sslrootcert=/path/to/ca.pem"
+        );
     }
 
     #[test]

@@ -51,10 +51,10 @@ impl NewConnectionModal {
         let (initial_name, initial_db_type, editing_connection_id, db_type_locked) =
             if let Some(conn) = &connection_data {
                 let conn_id = conn.id;
-                let db_type_index = match conn.db_type.as_str() {
-                    "PostgreSQL" => 1,
-                    "MySQL" => 2,
-                    _ => 0,
+                let db_type_index = match conn.db_type {
+                    database::DatabaseType::PostgreSQL => 1,
+                    database::DatabaseType::MySQL => 2,
+                    database::DatabaseType::SQLite => 0,
                 };
                 (conn.name.clone(), Some(db_type_index), conn_id, true)
             } else {
