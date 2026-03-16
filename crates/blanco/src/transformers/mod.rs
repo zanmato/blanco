@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use blanco_core::connection_trait::ColumnType;
 use std::collections::HashMap;
 use std::fmt;

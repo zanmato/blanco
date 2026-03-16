@@ -119,7 +119,7 @@ impl DataTransformer for CsvTransformer {
     }
 }
 
-/// Escape a value for CSV format - returns a new String
+/// Escape a value for CSV format. Returns a new String.
 fn csv_escape(value: &str) -> String {
     if value.is_empty() {
         return String::new();
@@ -147,7 +147,7 @@ fn csv_escape(value: &str) -> String {
     }
 }
 
-/// Escape a value for CSV format - writes directly to buffer
+/// Escape a value for CSV format. Writes directly to buffer.
 /// This avoids allocating a new String for each cell value
 fn csv_escape_to(value: &str, output: &mut String) {
     if value.is_empty() {

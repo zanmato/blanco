@@ -1,6 +1,5 @@
 use crate::transformers::{DataTransformer, SelectedTableData, TransformError};
 use blanco_core::connection_trait::ColumnType;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Determine if a value should be quoted based on its column type
@@ -31,7 +30,6 @@ fn format_sql_value(value: &str, column_type: Option<&ColumnType>) -> String {
 pub struct SqlTransformer {
     table_name: Option<String>,
     first_row: AtomicBool,
-    column_list: Mutex<Option<String>>,
 }
 
 impl SqlTransformer {
@@ -39,7 +37,6 @@ impl SqlTransformer {
         Self {
             table_name: None,
             first_row: AtomicBool::new(true),
-            column_list: Mutex::new(None),
         }
     }
 
@@ -47,7 +44,6 @@ impl SqlTransformer {
         Self {
             table_name: Some(table_name),
             first_row: AtomicBool::new(true),
-            column_list: Mutex::new(None),
         }
     }
 }
@@ -155,21 +151,17 @@ impl DataTransformer for SqlTransformer {
         columns: &[String],
         _column_types: &[ColumnType],
     ) -> Result<String, TransformError> {
-        // Generate and store column list once
         let column_list = columns
             .iter()
             .map(|col| sql_identifier(col))
             .collect::<Vec<_>>()
             .join(", ");
 
-        *self.column_list.lock().unwrap() = Some(column_list);
-
-        // Start with INSERT statement header
         let table_name = self.table_name.as_deref().unwrap_or("exported_data");
         Ok(format!(
             "INSERT INTO {} ({})\nVALUES\n",
             sql_identifier(table_name),
-            self.column_list.lock().unwrap().as_ref().unwrap()
+            column_list
         ))
     }
 
@@ -331,7 +323,7 @@ mod tests {
         // Text types - quoted
         assert_eq!(format_sql_value("hello", Some(&ColumnType::Text)), "'hello'");
         assert_eq!(format_sql_value("it's", Some(&ColumnType::Text)), "'it''s'");
-        assert_eq!(format_sql_value("", Some(&ColumnType::Text)), "NULL");
+        assert_eq!(format_sql_value("", Some(&ColumnType::Text)), "''");
 
         // DateTime types - quoted
         assert_eq!(
@@ -356,11 +348,12 @@ mod tests {
     }
 
     #[test]
-    fn test_format_sql_value_null() {
-        // NULL handling is consistent across all types
-        assert_eq!(format_sql_value("", Some(&ColumnType::Integer)), "NULL");
+    fn test_format_sql_value_empty_and_literal_null() {
+        // NULL is now handled at the Option<String> level (None = NULL).
+        // format_sql_value only formats concrete string values.
+        assert_eq!(format_sql_value("", Some(&ColumnType::Integer)), "");
         assert_eq!(format_sql_value("NULL", Some(&ColumnType::Integer)), "NULL");
-        assert_eq!(format_sql_value("null", Some(&ColumnType::Text)), "NULL");
+        assert_eq!(format_sql_value("null", Some(&ColumnType::Text)), "'null'");
         assert_eq!(format_sql_value("NULL", Some(&ColumnType::Boolean)), "NULL");
     }
 
@@ -368,8 +361,8 @@ mod tests {
     fn test_format_sql_value_none_type() {
         // None type falls back to Unknown, which quotes
         assert_eq!(format_sql_value("value", None), "'value'");
-        assert_eq!(format_sql_value("", None), "NULL");
-        assert_eq!(format_sql_value("NULL", None), "NULL");
+        assert_eq!(format_sql_value("", None), "''");
+        assert_eq!(format_sql_value("NULL", None), "'NULL'");
     }
 
     #[test]
@@ -383,10 +376,10 @@ mod tests {
             transformer.transform_single_cell("test", &ColumnType::Text).unwrap(),
             "'test'"
         );
-        assert_eq!(transformer.transform_single_cell("", &ColumnType::Text).unwrap(), "NULL");
+        assert_eq!(transformer.transform_single_cell("", &ColumnType::Text).unwrap(), "''");
         assert_eq!(
             transformer.transform_single_cell("NULL", &ColumnType::Text).unwrap(),
-            "NULL"
+            "'NULL'"
         );
         assert_eq!(
             transformer.transform_single_cell("it's", &ColumnType::Text).unwrap(),

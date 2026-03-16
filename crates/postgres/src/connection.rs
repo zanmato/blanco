@@ -1,9 +1,8 @@
-use crate::sql_parser::PostgresTableExtractor;
 use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
-    ColumnInfo, Connection, QueryResult, connection_trait::ColumnType,
-    connection_trait::ForeignKeyInfo, connection_trait::IndexInfo,
+    ColumnInfo, Connection, QueryResult,
+    connection_trait::ColumnType, connection_trait::ForeignKeyInfo, connection_trait::IndexInfo,
 };
 use futures::{Stream, StreamExt};
 use smol::lock::RwLock;
@@ -102,7 +101,7 @@ pub struct PgServerKey {
     pub ssl_ca_cert_path: Option<String>,
 }
 
-/// Connection key for PostgreSQL connections (legacy - kept for compatibility)
+/// Connection key for PostgreSQL connections
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct PgConnectionKey {
     pub host: String,
@@ -343,29 +342,6 @@ impl PgConnectionKey {
 }
 
 impl PostgresConnection {
-    /// Create a new PostgreSQL connection for a specific database (legacy constructor for compatibility)
-    pub fn new(
-        host: String,
-        port: u16,
-        _database: String, // Database name not used in server-level architecture
-        username: String,
-        password: Option<String>,
-    ) -> Self {
-        let server_key = PgServerKey::new(host, port, username, password);
-        let display_name = Self::generate_server_display_name(&server_key);
-        let server_connection_string = server_key.to_server_connection_string();
-
-        Self {
-            pools: Arc::new(RwLock::new(HashMap::new())),
-            server_key,
-            display_name,
-            server_connection_string,
-            initial_database: None,
-            ssh_config: None,
-            local_tunnel_port: None,
-        }
-    }
-
     /// Create a new PostgreSQL connection from a connection string
     pub fn from_connection_string(connection_string: &str) -> Result<Self> {
         let connection_key = PgConnectionKey::from_connection_string(connection_string)?;
@@ -1756,21 +1732,6 @@ impl Connection for PostgresConnection {
         Ok((columns, column_types, Box::new(all_rows_stream)))
     }
 
-    fn extract_table_name_from_query(&self, query: &str, alias: bool) -> Result<Option<String>> {
-        tracing::debug!("Extracting table name from PostgreSQL query: {}", query);
-
-        let extractor = PostgresTableExtractor::new();
-        match extractor.extract_table(query, alias) {
-            Ok(table_name) => {
-                tracing::debug!("Successfully extracted table name: {}", table_name);
-                Ok(Some(table_name))
-            }
-            Err(e) => {
-                tracing::debug!("Could not extract table name from query: {}", e);
-                Ok(None)
-            }
-        }
-    }
 
     async fn get_database_schema_paginated(
         &self,

@@ -1,9 +1,8 @@
-use crate::sql_parser::SqliteTableExtractor;
 use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
-    ColumnInfo, Connection, QueryResult, connection_trait::ColumnType,
-    connection_trait::ForeignKeyInfo, connection_trait::IndexInfo,
+    ColumnInfo, Connection, QueryResult,
+    connection_trait::ColumnType, connection_trait::ForeignKeyInfo, connection_trait::IndexInfo,
 };
 use futures::{Stream, StreamExt};
 use hex;
@@ -47,7 +46,7 @@ impl SqliteConnectionKey {
             connection_string
         };
 
-        // For now, don't expand ~ - just use the path as-is
+        // Tilde expansion is not supported; paths must be absolute or relative to cwd
         let expanded_path = path.to_string();
 
         // Convert to absolute path
@@ -468,21 +467,6 @@ impl Connection for SqliteConnection {
         Ok(columns)
     }
 
-    fn extract_table_name_from_query(&self, query: &str, alias: bool) -> Result<Option<String>> {
-        tracing::debug!("Extracting table name from SQLite query: {}", query);
-
-        let extractor = SqliteTableExtractor::new();
-        match extractor.extract_table(query, alias) {
-            Ok(table_name) => {
-                tracing::debug!("Successfully extracted table name: {}", table_name);
-                Ok(Some(table_name))
-            }
-            Err(e) => {
-                tracing::debug!("Could not extract table name from query: {}", e);
-                Ok(None)
-            }
-        }
-    }
 
     async fn execute_query_stream_rows(
         &self,

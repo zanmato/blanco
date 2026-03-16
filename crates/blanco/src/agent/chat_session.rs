@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use super::chat_types::{ChatCommand, ChatEvent, ChatMessage, LoadingState, MessageRole};
 use super::tool_handlers::ToolMode;
+use crate::result_ext::ResultExt;
 use database::DatabaseService;
 use gpui_component::input::InputState;
 use llm::{chat::ChatMessage as LlmChatMessage, chat::Tool, FunctionCall, LLMProvider, ToolCall};
@@ -228,9 +229,9 @@ impl ChatSession {
             let (tx, rx) = smol::channel::unbounded::<ChatMessage>();
 
             // Set initial loading state to connecting
-            let _ = chat_session_handle.update(async_cx, |session, cx| {
+            chat_session_handle.update(async_cx, |session, cx| {
                 session.set_loading_state(LoadingState::Connecting, cx);
-            });
+            }).log_err();
 
             // Spawn a task to listen for UI updates
             let handle_clone = chat_session_handle.clone();
@@ -269,10 +270,10 @@ impl ChatSession {
                 Err(e) => LoadingState::Error(e.to_string()),
             };
 
-            let _ = chat_session_handle.update(async_cx, |session, cx| {
+            chat_session_handle.update(async_cx, |session, cx| {
                 session.set_loading_state(final_state, cx);
                 session.current_message_task = None;
-            });
+            }).log_err();
 
             response
         })
@@ -310,9 +311,9 @@ impl ChatSession {
             tracing::debug!("Starting message loop iteration {}", loop_count);
 
             // Set loading state to streaming when making request
-            let _ = chat_session_handle.update(async_cx, |session, cx| {
+            chat_session_handle.update(async_cx, |session, cx| {
                 session.set_loading_state(LoadingState::Streaming, cx);
-            });
+            }).log_err();
 
             // Get tools from session's tool registry
             let tools: Vec<Tool> = chat_session_handle
@@ -358,9 +359,9 @@ impl ChatSession {
                     );
 
                     // Set loading state to processing tools
-                    let _ = chat_session_handle.update(async_cx, |session, cx| {
+                    chat_session_handle.update(async_cx, |session, cx| {
                         session.set_loading_state(LoadingState::ProcessingTools, cx);
-                    });
+                    }).log_err();
 
                     // Process tool calls with real-time UI updates
                     request_messages = Self::process_tool_calls_with_realtime_ui(

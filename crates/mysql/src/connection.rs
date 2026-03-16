@@ -1,8 +1,8 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
-    ColumnInfo, Connection, QueryResult, connection_trait::ColumnType,
-    connection_trait::ForeignKeyInfo, connection_trait::IndexInfo,
+    ColumnInfo, Connection, QueryResult,
+    connection_trait::ColumnType, connection_trait::ForeignKeyInfo, connection_trait::IndexInfo,
 };
 use futures::StreamExt;
 use smol::lock::RwLock;
@@ -24,7 +24,7 @@ pub struct MysqlConnection {
     initial_database: Option<String>, // Original database from connection string
 }
 
-/// Connection key for MySQL connections (legacy - kept for compatibility)
+/// Connection key for MySQL connections
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct MysqlConnectionKey {
     pub host: String,
@@ -187,7 +187,7 @@ impl MysqlConnection {
     }
 
     fn generate_server_display_name(username: &str, host: &str, port: u16) -> String {
-        format!("MySQL: {}@{}:{}", username, host, port)
+        format!("MySQL - {}@{}:{}", username, host, port)
     }
 
     /// Generate connection string for a specific database
@@ -826,34 +826,6 @@ impl Connection for MysqlConnection {
         Ok(columns)
     }
 
-    fn extract_table_name_from_query(
-        &self,
-        query: &str,
-        _alias: bool,
-    ) -> Result<Option<String>, anyhow::Error> {
-        // Simple regex-based extraction for common table patterns
-        let query_lower = query.to_lowercase();
-
-        // Look for FROM table_name patterns
-        if let Some(from_pos) = query_lower.find(" from ") {
-            let after_from = &query_lower[from_pos + 6..];
-            let words: Vec<&str> = after_from.split_whitespace().collect();
-            if let Some(first_word) = words.first() {
-                return Ok(Some(first_word.to_string()));
-            }
-        }
-
-        // Look for INTO table_name patterns
-        if let Some(into_pos) = query_lower.find(" into ") {
-            let after_into = &query_lower[into_pos + 6..];
-            let words: Vec<&str> = after_into.split_whitespace().collect();
-            if let Some(first_word) = words.first() {
-                return Ok(Some(first_word.to_string()));
-            }
-        }
-
-        Ok(None)
-    }
 
     async fn get_database_schema_paginated(
         &self,

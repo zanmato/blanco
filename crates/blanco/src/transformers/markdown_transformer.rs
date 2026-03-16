@@ -155,7 +155,7 @@ impl DataTransformer for MarkdownTransformer {
     }
 }
 
-/// Format a cell value with proper padding for markdown table - returns a new String
+/// Format a cell value with proper padding for markdown table. Returns a new String.
 fn format_cell(value: &str, width: usize) -> String {
     if value.len() >= width {
         value.to_string()
@@ -164,7 +164,7 @@ fn format_cell(value: &str, width: usize) -> String {
     }
 }
 
-/// Format a cell value with proper padding - writes directly to buffer
+/// Format a cell value with proper padding. Writes directly to buffer.
 /// This avoids allocating a new String for each cell
 fn format_cell_to(value: &str, width: usize, output: &mut String) {
     output.push_str(value);

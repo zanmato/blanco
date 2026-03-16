@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::transformers::{DataTransformer, SelectedTableData, TransformError};
 use blanco_core::connection_trait::ColumnType;
 use std::collections::HashMap;
@@ -321,7 +319,7 @@ mod tests {
         );
         assert_eq!(
             transformer.transform_single_cell("", &ColumnType::Text).unwrap(),
-            "null"
+            "\"\""
         );
         assert_eq!(
             transformer.transform_single_cell("hello", &ColumnType::Text).unwrap(),

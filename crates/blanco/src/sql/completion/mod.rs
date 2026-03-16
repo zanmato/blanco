@@ -170,8 +170,6 @@ impl SqlCompletionProvider {
             // If alias resolution fails and table_name is likely an alias (single letter),
             // we could try common table names or return None to avoid invalid table queries
             if is_valid_identifier(table_name) && !is_sql_keyword(table_name) {
-                // For now, return the table_name as-is, but in a real implementation,
-                // we might want to maintain alias history or provide better fallbacks
                 return Some(table_name.clone());
             }
         }

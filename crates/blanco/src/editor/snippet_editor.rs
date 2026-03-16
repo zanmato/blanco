@@ -12,6 +12,7 @@ use gpui_component::{
 };
 
 use crate::app_database::{AppDatabase, SnippetData};
+use crate::result_ext::ResultExt;
 use crate::snippets_panel::RefreshSnippets;
 
 pub struct SnippetEditor {
@@ -106,10 +107,10 @@ impl SnippetEditor {
             };
 
             // Update the entity with the new snippet ID
-            let _ = weak_handle.update(cx, |editor, _cx| {
+            weak_handle.update(cx, |editor, _cx| {
                 editor.snippet_id = Some(id);
                 editor.name = saved_name.clone();
-            });
+            }).log_err();
             cx.update(|cx| {
                 cx.dispatch_action(&RefreshSnippets);
             });

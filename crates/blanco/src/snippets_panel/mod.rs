@@ -5,6 +5,7 @@ pub use delegate::{SnippetItemMetadata, SnippetsTreeDelegate};
 use crate::app::{NewSnippet, OpenSnippetEditor};
 use crate::app_database::{AppDatabase, SnippetData};
 use crate::app_events::AppEvent;
+use crate::result_ext::ResultExt;
 use blanco_ui::draggable_tree::{DraggableTreeState, TreeItem};
 use gpui::{
     AppContext, ClipboardItem, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
@@ -217,9 +218,9 @@ impl SnippetsPanel {
             }
 
             // Defer the tree refresh to avoid nested update panic
-            let _ = weak_panel.update(cx, |this, cx| {
+            weak_panel.update(cx, |this, cx| {
                 this.refresh_snippets(cx);
-            });
+            }).log_err();
         })
         .detach();
     }

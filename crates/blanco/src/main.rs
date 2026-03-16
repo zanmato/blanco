@@ -10,6 +10,7 @@ mod connection_modal;
 mod connections;
 mod editor;
 mod export;
+mod result_ext;
 mod results_panel;
 mod settings;
 mod snippets_panel;
@@ -42,10 +43,12 @@ fn main() {
         // Initialize app database (for query tabs, history, connections) synchronously
         let db = smol::block_on(async { AppDatabase::new().await });
 
-        if let Err(e) = db {
-            tracing::error!("Critical: Failed to initialize database: {}", e);
-        } else {
-            cx.set_global(db.unwrap());
+        match db {
+            Ok(database) => cx.set_global(database),
+            Err(e) => {
+                tracing::error!("Critical: Failed to initialize database: {}", e);
+                return;
+            }
         }
 
         // Initialize database service with tokio runtime handle for automatic SSH tunnel establishment

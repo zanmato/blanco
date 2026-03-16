@@ -6,11 +6,9 @@
 
 pub mod connection;
 pub mod schema;
-pub mod sql_parser;
 
 // Re-export main types for convenience
 pub use connection::{MysqlConnection, MysqlConnectionKey};
-pub use sql_parser::MysqlTableExtractor;
 
 #[cfg(test)]
 mod tests {

@@ -23,6 +23,7 @@ use crate::{
     app_settings::AppSettings,
     connection_modal::NewConnectionModal,
     connections::ConnectionsPanel,
+    result_ext::ResultExt,
     editor::{EditorPanel, TabCreationParams},
     snippets_panel::{RefreshSnippets, SnippetsPanel},
 };
@@ -197,10 +198,10 @@ impl BlancoApp {
                             "DatabaseServiceMessage::Connected received for connection_id: {}, database_name: {}",
                             conn_msg.connection_id, conn_msg.database_name
                         );
-                        let _ = _weak_handle.update(cx, |_, cx| {
+                        _weak_handle.update(cx, |_, cx| {
                             info!("Dispatching DatabaseConnected action to app");
                             cx.dispatch_action(&DatabaseConnected::from(conn_msg));
-                        });
+                        }).log_err();
                     }
                     database::DatabaseServiceMessage::Disconnected(disconn_msg) => {
                         info!(
@@ -376,13 +377,13 @@ impl BlancoApp {
                                 .await
                                 .unwrap_or_default();
 
-                            let _ = window.update(|window, cx| {
+                            window.update(|window, cx| {
                                 editor_panel.update(cx, |panel, cx| {
                                     panel.update_last_table_structure_tab(
                                         columns, indexes, window, cx,
                                     );
                                 });
-                            });
+                            }).log_err();
                         }
                     })
                     .detach();
@@ -833,9 +834,12 @@ impl BlancoApp {
         let db = AppDatabase::global(cx).clone();
         let new_value_str = new_value.to_string();
         cx.spawn(async move |_, _| async move {
-            let _ = db
+            if let Err(e) = db
                 .save_setting("editor.show_whitespace", &new_value_str, false)
-                .await;
+                .await
+            {
+                tracing::error!("Failed to save show_whitespace setting: {}", e);
+            }
         })
         .detach();
 
@@ -860,9 +864,12 @@ impl BlancoApp {
         let db = AppDatabase::global(cx).clone();
         let new_value_str = new_value.to_string();
         cx.spawn(async move |_, _| async move {
-            let _ = db
+            if let Err(e) = db
                 .save_setting("editor.word_wrap", &new_value_str, false)
-                .await;
+                .await
+            {
+                tracing::error!("Failed to save word_wrap setting: {}", e);
+            }
         })
         .detach();
 

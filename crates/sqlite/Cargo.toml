@@ -13,9 +13,6 @@ async-trait = { workspace = true }
 # Database dependencies
 sqlx = { workspace = true, features = ["sqlite", "chrono", "uuid"] }
 
-# SQL parsing
-sqlparser = { workspace = true }
-
 # Common dependencies
 serde_json = { workspace = true }
 chrono = { workspace = true }

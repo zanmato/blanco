@@ -21,9 +21,6 @@ sqlx = { workspace = true, features = [
   "tls-native-tls",
 ] }
 
-# SQL parsing
-sqlparser = { workspace = true }
-
 # Common dependencies
 serde_json = { workspace = true }
 uuid = { workspace = true }

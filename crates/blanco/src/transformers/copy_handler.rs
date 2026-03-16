@@ -1,9 +1,8 @@
-#![allow(dead_code)]
-
 use blanco_core::connection_trait::ColumnType;
 use gpui::{App, AppContext, ClipboardItem, Context};
 use std::sync::Arc;
 
+use crate::result_ext::ResultExt;
 use crate::results_panel::ResultsPanel;
 use crate::transformers::{SelectedTableData, TransformError, TransformerRegistry};
 
@@ -104,10 +103,10 @@ impl CopyHandler {
             };
 
             if !transformed.is_empty() {
-                let _ = entity.update(cx, |_, cx| {
+                entity.update(cx, |_, cx| {
                     tracing::debug!("Writing transformed data to clipboard");
                     cx.write_to_clipboard(ClipboardItem::new_string(transformed));
-                });
+                }).log_err();
             } else {
                 tracing::error!("Copy transformation produced empty result");
             }
@@ -206,21 +205,21 @@ mod tests {
                     SelectedCell {
                         row: 1,
                         col: 0,
-                        value: "2".to_string(),
+                        value: Some("2".to_string()),
                         column_name: Some("id".to_string()),
                         column_type: Some(ColumnType::Integer),
                     },
                     SelectedCell {
                         row: 1,
                         col: 1,
-                        value: "Bob".to_string(),
+                        value: Some("Bob".to_string()),
                         column_name: Some("name".to_string()),
                         column_type: Some(ColumnType::Text),
                     },
                     SelectedCell {
                         row: 1,
                         col: 2,
-                        value: "bob@example.com".to_string(),
+                        value: Some("bob@example.com".to_string()),
                         column_name: Some("email".to_string()),
                         column_type: Some(ColumnType::Text),
                     },

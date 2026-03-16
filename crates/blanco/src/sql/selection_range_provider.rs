@@ -13,15 +13,14 @@ use super::statement_parser::extract_statement_info;
 pub struct SqlSelectionRangeProvider;
 
 impl SqlSelectionRangeProvider {
-    /// Create a new SQL selection range provider
-    pub fn new() -> Result<Self, String> {
-        Ok(Self)
+    pub fn new() -> Self {
+        Self
     }
 }
 
 impl Default for SqlSelectionRangeProvider {
     fn default() -> Self {
-        Self::new().expect("Failed to create SQL selection range provider")
+        Self::new()
     }
 }
 

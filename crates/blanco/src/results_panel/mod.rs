@@ -20,14 +20,17 @@ use database::DatabaseService;
 
 use crate::app::{AddRow, DeleteRow, DuplicateRow, SetCellNull};
 use crate::app_events::AppEvent;
+use crate::result_ext::ResultExt;
 use crate::transformers::CopyHandler;
 
+mod cell_edit_state;
 mod foreign_key_popover;
 mod results_table_delegate;
 mod table_operations;
 
-// Re-exports from results_table_delegate
-pub use results_table_delegate::{ChangeType, ResultsTableDelegate, TableChange};
+// Re-exports
+pub use cell_edit_state::{ChangeType, TableChange};
+pub use results_table_delegate::ResultsTableDelegate;
 
 // Response structure for table operations
 #[derive(Debug, Clone)]
@@ -704,7 +707,7 @@ impl ResultsPanel {
             // Handle successful operations
             if response.success {
                 // Clear edits, remove deleted rows, and refresh the table
-                let _ = entity.update(cx, |panel, cx| {
+                entity.update(cx, |panel, cx| {
                     panel.table_state.update(cx, |state, cx| {
                         let delegate = state.delegate_mut();
 
@@ -751,10 +754,10 @@ impl ResultsPanel {
                             log.append_text(&blanco_ui::SqlLogMessage::Comment(log_message), cx);
                         });
                     }
-                });
+                }).log_err();
 
                 // Emit table operation completed event
-                let _ = entity.update(cx, |_, cx| {
+                entity.update(cx, |_, cx| {
                     cx.emit(AppEvent::TableOperationCompleted {
                         table_name: response.table_name,
                         connection_id: response.connection_id,
@@ -763,7 +766,7 @@ impl ResultsPanel {
                         error_message: None,
                         operations_executed: response.operations_executed,
                     });
-                });
+                }).log_err();
             } else {
                 // Handle failed operations - show error but keep edits for retry
                 if let Some(sql_log) = sql_log_response_entity {
@@ -786,7 +789,7 @@ impl ResultsPanel {
                 }
 
                 // Emit table operation completed event with failure
-                let _ = entity.update(cx, |_, cx| {
+                entity.update(cx, |_, cx| {
                     cx.emit(AppEvent::TableOperationCompleted {
                         table_name: response.table_name,
                         connection_id: response.connection_id,
@@ -795,7 +798,7 @@ impl ResultsPanel {
                         error_message: response.error_message,
                         operations_executed: response.operations_executed,
                     });
-                });
+                }).log_err();
             }
         })
         .detach();
@@ -1325,7 +1328,7 @@ impl ResultsPanel {
                                 rows_exported
                             );
                             // Show success notification via entity update
-                            let _ = entity.update_in(cx, |_panel, window, cx| {
+                            entity.update_in(cx, |_panel, window, cx| {
                                 window.push_notification(
                                     (
                                         NotificationType::Success,
@@ -1336,7 +1339,7 @@ impl ResultsPanel {
                                     ),
                                     cx,
                                 );
-                            });
+                            }).log_err();
                         }
                         crate::export::service::ExportResult::Cancelled => {
                             tracing::info!("Export cancelled by user");
@@ -1345,7 +1348,7 @@ impl ResultsPanel {
                 }
                 Err(e) => {
                     tracing::error!("Export failed: {}", e);
-                    let _ = entity.update_in(cx, |_panel, window, cx| {
+                    entity.update_in(cx, |_panel, window, cx| {
                         window.push_notification(
                             (
                                 NotificationType::Error,
@@ -1353,7 +1356,7 @@ impl ResultsPanel {
                             ),
                             cx,
                         );
-                    });
+                    }).log_err();
                 }
             }
         })

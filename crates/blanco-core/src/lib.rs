@@ -6,6 +6,7 @@
 
 pub mod connection_trait;
 pub mod database_service;
+pub mod table_extractor;
 
 // Re-export main types for convenience
 pub use connection_trait::{
@@ -14,6 +15,7 @@ pub use connection_trait::{
 };
 
 pub use database_service::{ConnectionStatus, DatabaseService};
+pub use table_extractor::TableExtractor;
 
 // Re-export lsp-types Position for convenience
 pub use lsp_types::Position;

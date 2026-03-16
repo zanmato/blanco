@@ -6,12 +6,9 @@
 
 pub mod connection;
 pub mod schema;
-pub mod sql_parser;
 
 // Re-export main types for convenience
 pub use connection::{PgConnectionKey, PostgresConnection};
-
-pub use sql_parser::PostgresTableExtractor;
 
 #[cfg(test)]
 mod tests {

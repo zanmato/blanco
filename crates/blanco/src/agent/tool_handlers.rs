@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use blanco_core::DatabaseService;
+use crate::result_ext::ResultExt;
 use llm::{chat::FunctionTool, chat::ParameterProperty, chat::ParametersSchema, chat::Tool, FunctionCall, ToolCall};
 
 /// Context for executing tools with GPUI/database access
@@ -282,9 +283,9 @@ impl AgentToolHandler for WriteTabHandler {
                 .unwrap_or("")
                 .to_string();
 
-            let _ = input_state.update_in(cx, |input_state, window, cx| {
+            input_state.update_in(cx, |input_state, window, cx| {
                 input_state.set_value(content.clone(), window, cx);
-            });
+            }).log_err();
 
             ToolCall {
                 id: "write-tab".to_string(),

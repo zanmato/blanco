@@ -372,7 +372,15 @@ pub trait Connection: Send + Sync {
         &self,
         query: &str,
         alias: bool,
-    ) -> Result<Option<String>, anyhow::Error>;
+    ) -> Result<Option<String>, anyhow::Error> {
+        let driver = DriverType::from_string(self.get_connection_type())
+            .unwrap_or(DriverType::PostgreSQL);
+        let extractor = crate::TableExtractor::for_driver(driver);
+        match extractor.extract_table(query, alias) {
+            Ok(table_name) => Ok(Some(table_name)),
+            Err(_) => Ok(None),
+        }
+    }
 
     /// Get database schema with pagination support
     /// Returns structured schema information including tables and columns
