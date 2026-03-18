@@ -3,7 +3,6 @@
 mod agent;
 mod app;
 mod app_database;
-mod app_events;
 mod app_settings;
 mod assets;
 mod connection_modal;
@@ -95,7 +94,7 @@ fn main() {
         let window_options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(window_bounds)),
             titlebar: Some(gpui::TitlebarOptions {
-                title: Some("Blanco - SQL Editor".into()),
+                title: Some("Blanco".into()),
                 appears_transparent: true,
                 traffic_light_position: Some(gpui::Point {
                     x: px(8.0),

@@ -6,7 +6,6 @@ use gpui_component::ActiveTheme;
 use gpui_component::highlighter::{HighlightTheme, SyntaxHighlighter};
 use gpui_component::scroll::Scrollbar;
 use std::sync::Arc;
-use std::time::Duration;
 
 pub enum SqlLogMessage {
     SqlStatement(String),
@@ -70,19 +69,10 @@ impl SqlLog {
         // Check if we need to trim old entries
         self.trim_entries();
 
-        let scroll_handle = self.scroll_handle.clone();
+        // Set scroll-to-bottom flag. This is consumed during the next prepaint
+        // triggered by cx.notify(), so no delayed task is needed.
+        self.scroll_handle.scroll_to_bottom();
 
-        // Schedule scroll to bottom after render
-        cx.spawn(async move |_, cx| {
-            // Small delay to ensure content is rendered
-            cx.background_executor()
-                .timer(Duration::from_millis(50))
-                .await;
-            scroll_handle.scroll_to_bottom();
-        })
-        .detach();
-
-        // Notify that the view needs to be re-rendered
         cx.notify();
     }
 

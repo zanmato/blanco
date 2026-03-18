@@ -1,10 +1,6 @@
-use crate::app_events::AppEvent;
 use crate::app_settings::AppSettings;
 use crate::settings::Settings;
-use gpui::{
-    App, Context, EventEmitter, FocusHandle, Focusable, IntoElement, Render, SharedString, Task,
-    Window,
-};
+use gpui::{App, Context, FocusHandle, Focusable, IntoElement, Render, SharedString, Task, Window};
 use gpui_component::ThemeRegistry;
 use gpui_component::{
     Theme,
@@ -21,8 +17,6 @@ pub struct SettingsView {
     focus_handle: FocusHandle,
     save_tasks: std::collections::HashMap<String, gpui::Task<()>>,
 }
-
-impl EventEmitter<AppEvent> for SettingsView {}
 
 impl SettingsView {
     pub fn new(cx: &mut Context<Self>) -> Self {
@@ -102,11 +96,6 @@ impl SettingsView {
                                     if let Some(view) = view_handle.upgrade() {
                                         view.update(cx, |view, cx| {
                                             view.save_setting_debounced(key, value, false, cx);
-                                            // Emit event to update all open editors
-                                            cx.emit(AppEvent::EditorSettingChanged {
-                                                setting: "word_wrap".to_string(),
-                                                value: val.to_string(),
-                                            });
                                         });
                                     }
                                 }
@@ -131,11 +120,6 @@ impl SettingsView {
                                     if let Some(view) = view_handle.upgrade() {
                                         view.update(cx, |view, cx| {
                                             view.save_setting_debounced(key, value, false, cx);
-                                            // Emit event to update all open editors
-                                            cx.emit(AppEvent::EditorSettingChanged {
-                                                setting: "show_whitespace".to_string(),
-                                                value: val.to_string(),
-                                            });
                                         });
                                     }
                                 }

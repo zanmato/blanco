@@ -6,7 +6,7 @@ mod sql_operations;
 mod table_structure;
 
 use gpui::{
-    App, AppContext, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    App, AppContext, ClickEvent, Context, Entity, FocusHandle, Focusable,
     InteractiveElement, IntoElement, KeybindingKeystroke, Keystroke, ParentElement, Render,
     Styled, Task, WeakEntity, Window, div, prelude::FluentBuilder, px, rems,
 };
@@ -31,7 +31,6 @@ use crate::app::RenameTab;
 use crate::app::{ExecuteSubstitutedQuery, FormatQuery};
 use crate::app_database::AppDatabase;
 use crate::app_database::{EnvironmentType, QueryTabData};
-use crate::app_events::AppEvent;
 use crate::app_settings::AppSettings;
 use crate::result_ext::ResultExt;
 use crate::results_panel::ResultsPanel;
@@ -65,7 +64,6 @@ pub struct QueryTab {
     pub sqruff_service: Option<Arc<SqruffService>>,
 }
 
-impl EventEmitter<AppEvent> for QueryTab {}
 
 pub struct SettingsTab {
     pub title: String,
@@ -249,34 +247,6 @@ impl EditorPanel {
         // Settings are now stored in the global AppDatabase
         let settings_view = cx.new(crate::settings::SettingsView::new);
 
-        // Subscribe to settings view events to forward them to the app and update editors
-        cx.subscribe_in(
-            &settings_view,
-            window,
-            |editor_panel, _settings_view, event, window, cx| {
-                if let AppEvent::EditorSettingChanged { setting, value } = event {
-                    // Forward the event to the BlancoApp
-                    cx.emit(AppEvent::EditorSettingChanged {
-                        setting: setting.clone(),
-                        value: value.clone(),
-                    });
-
-                    // Also update all editors directly for immediate feedback
-                    let value_bool = value.parse::<bool>().unwrap_or(false);
-                    match setting.as_str() {
-                        "word_wrap" => {
-                            editor_panel.set_all_editors_soft_wrap(value_bool, window, cx);
-                        }
-                        "show_whitespace" => {
-                            editor_panel.set_all_editors_show_whitespace(value_bool, window, cx);
-                        }
-                        _ => {}
-                    }
-                }
-            },
-        )
-        .detach();
-
         let settings_tab = SettingsTab {
             title: "Settings".to_string(),
             settings_view,
@@ -410,6 +380,15 @@ impl EditorPanel {
         };
 
         panel.restore_saved_tabs_with_connections_sync(saved_tabs, window, cx);
+
+        // React to AppSettings changes (e.g. from SettingsView)
+        let settings_subscription = cx.observe_global_in::<AppSettings>(window, |this, window, cx| {
+            let word_wrap = AppSettings::global(cx).settings.editor.word_wrap;
+            let show_whitespace = AppSettings::global(cx).settings.editor.show_whitespace;
+            this.set_all_editors_soft_wrap(word_wrap, window, cx);
+            this.set_all_editors_show_whitespace(show_whitespace, window, cx);
+        });
+        panel._subscriptions.push(settings_subscription);
 
         panel
     }
@@ -669,30 +648,16 @@ impl EditorPanel {
                             )
                         });
                         query_tab.chat_panel = Some(chat_panel);
-
-                        // Emit chat session started event
-                        cx.emit(AppEvent::ChatSessionStarted {
-                            provider: llm_instance.provider_name,
-                            model: llm_instance.model_name,
-                        });
                     }
                     Err(e) => {
                         tracing::error!(
                             "Failed to create chat provider: {}. Not creating chat panel.",
                             e
                         );
-                        query_tab.chat_enabled = false; // Disable chat if creation failed
+                        query_tab.chat_enabled = false;
                     }
                 }
-            } else if !query_tab.chat_enabled {
-                // Emit chat session ended event
-                cx.emit(AppEvent::ChatSessionEnded);
             }
-
-            // Emit chat toggled event
-            cx.emit(AppEvent::ChatToggled {
-                enabled: query_tab.chat_enabled,
-            });
 
             cx.notify();
         }
@@ -760,6 +725,323 @@ impl EditorPanel {
             }).log_err();
         }
     }
+
+    fn with_active_results_panel(
+        &mut self,
+        cx: &mut Context<Self>,
+        f: impl FnOnce(&mut ResultsPanel, &mut Context<ResultsPanel>),
+    ) {
+        if let Some(TabType::Query(query_tab)) = self.tabs.get_mut(self.active_tab_ix) {
+            query_tab.results_panel.update(cx, f);
+        }
+    }
+
+    fn render_tab_bar_item(&self, ix: usize, tab: &TabType, cx: &mut Context<Self>) -> Tab {
+        match tab {
+            TabType::Query(query_tab) => {
+                let show_close_button = self.tabs.len() > 1;
+                let tab_index = ix;
+
+                Tab::new()
+                    .label(&query_tab.title)
+                    .suffix(
+                        h_flex()
+                            .gap_1()
+                            .pr_1()
+                            .child(
+                                div()
+                                    .pr_1()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(
+                                        query_tab.connection_name.clone()
+                                            .unwrap_or_else(|| "No Connection".to_string())
+                                    )
+                            )
+                            .when_some(query_tab.environment_type, |this, env_type| {
+                                this.child(
+                                    div()
+                                        .text_size(rems(0.55))
+                                        .font_family(cx.theme().mono_font_family.clone())
+                                        .px(px(6.))
+                                        .pt_0p5()
+                                        .rounded_md()
+                                        .border_1()
+                                        .border_color(env_type.get_color(cx))
+                                        .text_color(env_type.get_color(cx))
+                                        .child(env_type.display_name())
+                                )
+                            })
+                            .when(show_close_button, |this| {
+                                this.child(
+                                    Button::new(("close-tab", ix))
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(IconName::Close)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.close_tab(tab_index, cx);
+                                        }))
+                                )
+                            })
+                            .into_any_element()
+                    )
+            }
+            TabType::Snippet(snippet_editor) => {
+                let label = snippet_editor.read(cx).get_title();
+                let tab_index = ix;
+
+                Tab::new()
+                    .label(label)
+                    .suffix(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .pr_1()
+                            .child(Icon::new(IconName::File).text_color(cx.theme().green))
+                            .child(
+                                Button::new(("close-snippet-tab", ix))
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(IconName::Close)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.close_tab(tab_index, cx);
+                                    }))
+                            )
+                    )
+            }
+            TabType::Settings(settings_tab) => {
+                let label = settings_tab.title.clone();
+                let tab_index = ix;
+
+                Tab::new()
+                    .label(label)
+                    .suffix(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .pr_1()
+                            .child(Icon::new(IconName::Settings))
+                            .child(
+                                Button::new(("close-settings-tab", ix))
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(IconName::Close)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.close_tab(tab_index, cx);
+                                    }))
+                            )
+                    )
+            }
+            TabType::TableStructure(table_structure_tab) => {
+                let label = table_structure_tab.read(cx).title.clone();
+                let tab_index = ix;
+
+                Tab::new()
+                    .label(label)
+                    .suffix(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .pr_1()
+                            .child(Icon::new(IconName::Sheet).text_color(cx.theme().blue))
+                            .child(
+                                Button::new(("close-table-structure-tab", ix))
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(IconName::Close)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.close_tab(tab_index, cx);
+                                    }))
+                            )
+                    )
+            }
+        }
+    }
+
+    fn render_row_operations_bar(&self, query_tab: &QueryTab, cx: &mut Context<Self>) -> impl IntoElement {
+        h_flex()
+            .p_2()
+            .gap_2()
+            .border_t_1()
+            .bg(cx.theme().title_bar)
+            .border_color(cx.theme().border)
+            .flex_wrap()
+            .child(
+                Button::new("add-row")
+                    .outline()
+                    .small()
+                    .icon(IconName::Plus)
+                    .label("Add")
+                    .on_click(cx.listener(|this, _, _window, cx| {
+                        this.with_active_results_panel(cx, |panel, cx| {
+                            panel.add_new_row(cx);
+                        });
+                    })),
+            )
+            .child(
+                Button::new("duplicate-row")
+                    .outline()
+                    .small()
+                    .icon(IconName::Copy)
+                    .label("Duplicate")
+                    .on_click(cx.listener(|this, _, _window, cx| {
+                        this.with_active_results_panel(cx, |panel, cx| {
+                            panel.duplicate_row(cx);
+                        });
+                    }))
+            )
+            .child(
+                Button::new("delete-row")
+                    .outline()
+                    .small()
+                    .icon(IconName::Delete)
+                    .label("Delete")
+                    .on_click(cx.listener(|this, _, _window, cx| {
+                        this.with_active_results_panel(cx, |panel, cx| {
+                            panel.delete_row(cx);
+                        });
+                    }))
+            )
+            .child(
+                Button::new("commit-changes")
+                    .outline()
+                    .small()
+                    .icon(IconName::Check)
+                    .label("Commit")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
+                            query_tab.results_panel.update(cx, |panel, cx| {
+                                panel.commit_changes_with_sql_log(window, &query_tab.sql_log, cx);
+                            });
+                        }
+                    })),
+            )
+            .child(
+                Button::new("rollback-changes")
+                    .outline()
+                    .small()
+                    .icon(IconName::CircleX)
+                    .label("Rollback")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.with_active_results_panel(cx, |panel, cx| {
+                            panel.rollback_changes(window, cx);
+                        });
+                    })),
+            )
+            .child(div().flex_1())
+            .child(
+                Button::new("toggle-chat")
+                    .outline()
+                    .small()
+                    .icon(IconName::Bot)
+                    .when(query_tab.chat_enabled, |btn| {
+                        btn.primary()
+                    })
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_chat_for_active_tab(window, cx);
+                    }))
+            )
+    }
+
+    fn render_query_tab_content(&self, query_tab: &QueryTab, cx: &mut Context<Self>) -> impl IntoElement {
+        h_resizable("editor-split")
+            .with_state(&self.editor_chat_resize_state)
+            .child(
+                resizable_panel().child(
+                    v_resizable("editor-results-split")
+                        .with_state(&self.editor_results_resize_state)
+                        .child(
+                            resizable_panel().size(200.).child(
+                                v_flex()
+                                    .h_full()
+                                    .w_full()
+                                    .overflow_hidden()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_h_0()
+                                            .relative()
+                                            .child(
+                                                Input::new(&query_tab.editor)
+                                                    .bordered(false)
+                                                    .h_full()
+                                                    .rounded_none()
+                                                    .font_family(cx.theme().mono_font_family.clone())
+                                                    .text_size(px(14.))
+                                                    .focus_bordered(false)
+                                            )
+                                    )
+                            )
+                        ).child(
+                            resizable_panel().size(200.).child(
+                                v_flex()
+                                    .h_full()
+                                    .w_full()
+                                    .min_w_0()
+                                    .child(
+                                        h_flex()
+                                            .p_2()
+                                            .gap_2()
+                                            .border_t_1()
+                                            .border_color(cx.theme().border)
+                                            .bg(cx.theme().title_bar)
+                                            .justify_end()
+                                            .child(
+                                                Button::new("format-query")
+                                                    .outline()
+                                                    .small()
+                                                    .icon(IconName::WandSparkles)
+                                                    .label("Format")
+                                                    .tooltip(format!("Format ({})", self.format_query_keystroke))
+                                                    .on_click(cx.listener(|panel, _, window, cx| panel.format_current_query(window, cx)))
+                                            )
+                                            .child(
+                                                Button::new("run-query")
+                                                    .outline()
+                                                    .small()
+                                                    .icon(IconName::Play)
+                                                    .label("Run Current")
+                                                    .loading(self.loading)
+                                                    .loading_icon(IconName::LoaderCircle)
+                                                    .tooltip(format!("Run Current ({})", self.run_query_keystroke))
+                                                    .on_click(cx.listener(|panel, _, window, cx| panel.on_run_query(window, cx))),
+                                            )
+                                    )
+                                    .child(
+                                        v_flex()
+                                            .flex_grow()
+                                            .min_h(px(200.))
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .child(query_tab.results_panel.clone())
+                                            )
+                                            .child(query_tab.sql_log.clone())
+                                    )
+                                    .child(self.render_row_operations_bar(query_tab, cx)),
+                            ),
+                    ),
+                ),
+            )
+            .when(
+                query_tab.chat_enabled && query_tab.chat_panel.is_some(),
+                |this| {
+                    this.child(
+                        resizable_panel().size_range(px(500.)..gpui::Pixels::MAX).child(
+                            div()
+                                .border_l_1()
+                                .border_color(cx.theme().border)
+                                .size_full()
+                                .min_h_0()
+                                .child(
+                                    query_tab.chat_panel.as_ref().unwrap().clone(),
+                                ),
+                        ),
+                    )
+                }
+            )
+    }
 }
 
 impl Focusable for EditorPanel {
@@ -768,7 +1050,6 @@ impl Focusable for EditorPanel {
     }
 }
 
-impl EventEmitter<AppEvent> for EditorPanel {}
 
 impl Render for EditorPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -793,7 +1074,6 @@ impl Render for EditorPanel {
                 this.format_current_query(window, cx);
             }))
             .child(
-                // Tab bar
                 TabBar::new("editor-tabs")
                     .menu(true)
                     .w_full()
@@ -808,134 +1088,19 @@ impl Render for EditorPanel {
                             } else {
                                 Icon::new(IconName::PanelLeftClose).size_4()
                             })
-                            .on_click(cx.listener(|_, _, _, cx| {
-                                cx.emit(AppEvent::ToggleSidebar);
+                            .on_click(cx.listener(|_, _, window, cx| {
+                                window.dispatch_action(
+                                    Box::new(crate::app::ToggleSidebar),
+                                    cx,
+                                );
                             }))
                     )
-                    .children(self.tabs.iter().enumerate().map(|(ix, tab)| {
-                        match tab {
-                            TabType::Query(query_tab) => {
-                                let show_close_button = self.tabs.len() > 1;
-                                let tab_index = ix;
-
-                                Tab::new()
-                                    .label(& query_tab.title)
-                                    .suffix(
-                                        h_flex()
-                                            .gap_1()
-                                            .pr_1()
-                                            .child(
-                                                div()
-                                                    .pr_1()
-                                                    .text_xs()
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .child(
-                                                        query_tab.connection_name.clone()
-                                                            .unwrap_or_else(|| "No Connection".to_string())
-                                                    )
-                                            )
-                                            .when_some(query_tab.environment_type, |this, env_type| {
-                                                this.child(
-                                                    div()
-                                                        .text_size(rems(0.55))
-                                                        .font_family(cx.theme().mono_font_family.clone())
-                                                        .px(px(6.))
-                                                        .pt_0p5()
-                                                        .rounded_md()
-                                                        .border_1()
-                                                        .border_color(env_type.get_color(cx))
-                                                        .text_color(env_type.get_color(cx))
-                                                        .child(env_type.display_name())
-                                                )
-                                            })
-                                            .when(show_close_button, |this| {
-                                                this.child(
-                                                    Button::new(("close-tab", ix))
-                                                        .ghost()
-                                                        .xsmall()
-                                                        .icon(IconName::Close)
-                                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                                            this.close_tab(tab_index, cx);
-                                                        }))
-                                                )
-                                            })
-                                            .into_any_element()
-                                    )
-                            }
-                            TabType::Snippet(snippet_editor) => {
-                                let label = snippet_editor.read(cx).get_title();
-                                let tab_index = ix;
-
-                                Tab::new()
-                                    .label(label)
-                                    .suffix(
-                                        h_flex()
-                                            .gap_2()
-                                            .items_center()
-                                            .pr_1()
-                                            .child(Icon::new(IconName::File).text_color(cx.theme().green))
-                                            .child(
-                                                Button::new(("close-snippet-tab", ix))
-                                                    .ghost()
-                                                    .xsmall()
-                                                    .icon(IconName::Close)
-                                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                                        this.close_tab(tab_index, cx);
-                                                    }))
-                                            )
-                                    )
-                            }
-                            TabType::Settings(settings_tab) => {
-                                let label = settings_tab.title.clone();
-                                let tab_index = ix;
-
-                                Tab::new()
-                                    .label(label)
-                                    .suffix(
-                                        h_flex()
-                                            .gap_2()
-                                            .items_center()
-                                            .pr_1()
-                                            .child(Icon::new(IconName::Settings))
-                                            .child(
-                                                Button::new(("close-settings-tab", ix))
-                                                    .ghost()
-                                                    .xsmall()
-                                                    .icon(IconName::Close)
-                                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                                        this.close_tab(tab_index, cx);
-                                                    }))
-                                            )
-                                    )
-                            }
-                            TabType::TableStructure(table_structure_tab) => {
-                                let label = table_structure_tab.read(cx).title.clone();
-                                let tab_index = ix;
-
-                                Tab::new()
-                                    .label(label)
-                                    .suffix(
-                                        h_flex()
-                                            .gap_2()
-                                            .items_center()
-                                            .pr_1()
-                                            .child(Icon::new(IconName::Sheet).text_color(cx.theme().blue))
-                                            .child(
-                                                Button::new(("close-table-structure-tab", ix))
-                                                    .ghost()
-                                                    .xsmall()
-                                                    .icon(IconName::Close)
-                                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                                        this.close_tab(tab_index, cx);
-                                                    }))
-                                            )
-                                    )
-                            }
-                        }
-                    }))
+                    .children(
+                        self.tabs.iter().enumerate()
+                            .map(|(ix, tab)| self.render_tab_bar_item(ix, tab, cx))
+                    )
                     .track_scroll(&self.tabbar_scroll_handle)
             )
-            // Render the active tab's complete view
             .child(
                 div()
                     .flex_1()
@@ -943,214 +1108,9 @@ impl Render for EditorPanel {
                     .when_some(current_tab, |this, tab| {
                 match tab {
                     TabType::Query(query_tab) => {
-                        // Query tab: Layout with optional chat panel
-                        this.child(
-                            h_resizable("editor-split")
-                                .with_state(&self.editor_chat_resize_state)
-                                // Left side: Always show the main content (Editor + Button bar + Results)
-                                .child(
-                                    resizable_panel().child(
-                                        v_resizable("editor-results-split")
-                                            .with_state(&self.editor_results_resize_state)
-                                            .child(
-                                                resizable_panel().size(200.).child(
-                                                    v_flex()
-                                                        .h_full()
-                                                        .w_full()
-                                                        .overflow_hidden()
-                                                        .min_w_0()
-                                                        // Editor
-                                                        .child(
-                                                            div()
-                                                                .flex_1()
-                                                                .min_h_0()
-                                                                .relative() // Make container relative for absolute popup positioning
-                                                                .child(
-                                                                    Input::new(&query_tab.editor)
-                                                                        .bordered(false)
-                                                                        .h_full()
-                                                                        .rounded_none()
-                                                                        .font_family(cx.theme().mono_font_family.clone())
-                                                                        .text_size(px(14.))
-                                                                        .focus_bordered(false)
-                                                                )
-                                                        )
-                                                )
-                                            ).child(
-                                                resizable_panel().size(200.).child(
-                                                    v_flex()
-                                                        .h_full()
-                                                        .w_full()
-                                                        .min_w_0()
-                                                        // Button bar (between editor and results)
-                                                        .child(
-                                                            h_flex()
-                                                                .p_2()
-                                                                .gap_2()
-                                                                .border_t_1()
-                                                                .border_color(cx.theme().border)
-                                                                .bg(cx.theme().title_bar)
-                                                                .justify_end()
-                                                                // Format button (left side)
-                                                                .child(
-                                                                    Button::new("format-query")
-                                                                        .outline()
-                                                                        .small()
-                                                                        .icon(IconName::WandSparkles)
-                                                                        .label("Format")
-                                                                        .tooltip(format!("Format ({})", self.format_query_keystroke))
-                                                                        .on_click(cx.listener(|panel, _, window, cx| panel.format_current_query(window, cx)))
-                                                                )
-                                                                // Run button (right side)
-                                                                .child(
-                                                                    Button::new("run-query")
-                                                                        .outline()
-                                                                        .small()
-                                                                        .icon(IconName::Play)
-                                                                        .label("Run Current")
-                                                                        .loading(self.loading)
-                                                                        .loading_icon(IconName::LoaderCircle)
-                                                                        .tooltip(format!("Run Current ({})", self.run_query_keystroke))
-                                                                        .on_click(cx.listener(|panel, _, window, cx| panel.on_run_query(window, cx))),
-                                                                )
-                                                        )
-                                                        // Results section: Results on top, SQL Log on bottom
-                                                        .child(
-                                                            v_flex()
-                                                                .flex_grow()
-                                                                .min_h(px(200.))
-                                                                // Results panel (top)
-                                                                .child(
-                                                                    div()
-                                                                        .flex_1()
-                                                                        .child(query_tab.results_panel.clone())
-                                                                )
-                                                                // SQL Log panel (bottom)
-                                                                .child(query_tab.sql_log.clone())
-                                                        )
-                                                        // Row operation buttons
-                                                        .child(
-                                                            h_flex()
-                                                                .p_2()
-                                                                .gap_2()
-                                                                .border_t_1()
-                                                                .bg(cx.theme().title_bar)
-                                                                .border_color(cx.theme().border)
-                                                                .flex_wrap()
-                                                                .child(
-                                                                    Button::new("add-row")
-                                                                        .outline()
-                                                                        .small()
-                                                                        .icon(IconName::Plus)
-                                                                        .label("Add")
-                                                                        .on_click(cx.listener(|this, _, _window, cx| {
-                                                                            // Add a new row with empty values
-                                                                            if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
-                                                                                query_tab.results_panel.update(cx, |results_panel, cx| {
-                                                                                    results_panel.add_new_row(cx);
-                                                                                });
-                                                                            }
-                                                                        })),
-                                                                )
-                                                                .child(
-                                                                    Button::new("duplicate-row")
-                                                                        .outline()
-                                                                        .small()
-                                                                        .icon(IconName::Copy)
-                                                                        .label("Duplicate")
-                                                                        .on_click(cx.listener(|this, _, _window, cx| {
-                                                                            if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
-                                                                                query_tab.results_panel.update(cx, |results_panel, cx| {
-                                                                                    results_panel.duplicate_row(cx);
-                                                                                });
-                                                                            }
-                                                                        }))
-                                                                )
-                                                                .child(
-                                                                    Button::new("delete-row")
-                                                                        .outline()
-                                                                        .small()
-                                                                        .icon(IconName::Delete)
-                                                                        .label("Delete")
-                                                                        .on_click(cx.listener(|this, _, _window, cx| {
-                                                                            if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
-                                                                                query_tab.results_panel.update(cx, |results_panel, cx| {
-                                                                                    results_panel.delete_row(cx);
-                                                                                });
-                                                                            }
-                                                                        }))
-                                                                )
-                                                                // Commit and rollback buttons (always available)
-                                                                .child(
-                                                                    Button::new("commit-changes")
-                                                                        .outline()
-                                                                        .small()
-                                                                        .icon(IconName::Check)
-                                                                        .label("Commit")
-                                                                        .on_click(cx.listener(|this, _, window, cx| {
-                                                                            if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
-                                                                                // Execute the actual commit in the results panel with SQL logging
-                                                                                query_tab.results_panel.update(cx, |panel, cx| {
-                                                                                    panel.commit_changes_with_sql_log(window, &query_tab.sql_log, cx);
-                                                                                });
-                                                                            }
-                                                                        })),
-                                                                )
-                                                                .child(
-                                                                    Button::new("rollback-changes")
-                                                                        .outline()
-                                                                        .small()
-                                                                        .icon(IconName::CircleX)
-                                                                        .label("Rollback")
-                                                                        .on_click(cx.listener(|this, _, _window, cx| {
-                                                                            if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
-                                                                                query_tab.results_panel.update(cx, |panel, cx| {
-                                                                                    panel.rollback_changes(_window, cx);
-                                                                                });
-                                                                            }
-                                                                        })),
-                                                                )
-                                                                .child(div().flex_1())
-                                                                // Chat toggle button
-                                                                .child(
-                                                                    Button::new("toggle-chat")
-                                                                        .outline()
-                                                                        .small()
-                                                                        .icon(IconName::Bot)
-                                                                        .when(query_tab.chat_enabled, |btn| {
-                                                                            btn.primary()
-                                                                        })
-                                                                        .on_click(cx.listener(|this, _, _window, cx| {
-                                                                            this.toggle_chat_for_active_tab(_window, cx);
-                                                                        }))
-                                                                ),
-                                                            ),
-                                                        ),
-                                        ),
-                                    ),
-                                )
-                                // Right side: Chat panel (only when enabled)
-                                .when(
-                                    query_tab.chat_enabled && query_tab.chat_panel.is_some(),
-                                    |this| {
-                                        this.child(
-                                            resizable_panel().size_range(px(500.)..gpui::Pixels::MAX).child(
-                                                div()
-                                                    .border_l_1()
-                                                    .border_color(cx.theme().border)
-                                                    .size_full()
-                                                    .min_h_0()
-                                                    .child(
-                                                        query_tab.chat_panel.as_ref().unwrap().clone(),
-                                                    ),
-                                            ),
-                                        )
-                                    }
-                                )
-                        )
+                        this.child(self.render_query_tab_content(query_tab, cx))
                     }
                     TabType::Settings(settings_tab) => {
-                        // Settings tab: Show the new settings view
                         this.child(
                             div()
                                 .flex_1()
@@ -1160,7 +1120,6 @@ impl Render for EditorPanel {
                         )
                     }
                     TabType::Snippet(snippet_editor) => {
-                        // Snippet tab: Show the snippet editor
                         this.child(
                             div()
                                 .flex_1()
@@ -1170,7 +1129,6 @@ impl Render for EditorPanel {
                         )
                     }
                     TabType::TableStructure(table_structure_tab) => {
-                        // Table structure tab: Show column and index information
                         this.child(
                             div()
                                 .flex_1()

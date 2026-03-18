@@ -1,5 +1,5 @@
 use gpui::{
-    Action, App, AppContext, BorrowAppContext, Context, Entity, EventEmitter, FocusHandle,
+    Action, App, AppContext, BorrowAppContext, Context, Entity, FocusHandle,
     Focusable, InteractiveElement, IntoElement, Menu, MenuItem, ParentElement, Render, Styled,
     Subscription, Task, Window, actions, div, prelude::FluentBuilder, px, svg,
 };
@@ -19,13 +19,12 @@ use tracing::{debug, error, info};
 
 use crate::{
     app_database::{AppDatabase, ConnectionData},
-    app_events::AppEvent,
     app_settings::AppSettings,
     connection_modal::NewConnectionModal,
-    connections::ConnectionsPanel,
+    connections::{ConnectionsPanel, ConnectionsPanelEvent},
     editor::{EditorPanel, TabCreationParams},
     result_ext::ResultExt,
-    snippets_panel::{RefreshSnippets, SnippetsPanel},
+    snippets_panel::{RefreshSnippets, SnippetsPanel, SnippetsPanelEvent},
 };
 
 actions!(
@@ -125,7 +124,30 @@ pub struct ExecuteSubstitutedQuery {
     pub database_name: String,
 }
 
-// Action for editing an existing connection
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct CreateNewQueryTab {
+    pub connection_id: i64,
+    pub connection_name: String,
+    pub db_type: database::DatabaseType,
+    pub database_name: String,
+    pub schema_name: Option<String>,
+    pub table_name: Option<String>,
+    pub environment_type: Option<crate::app_database::EnvironmentType>,
+}
+
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct OpenTableStructure {
+    pub connection_id: i64,
+    pub connection_name: String,
+    pub db_type: database::DatabaseType,
+    pub database_name: String,
+    pub schema_name: Option<String>,
+    pub table_name: String,
+    pub environment_type: Option<crate::app_database::EnvironmentType>,
+}
+
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
 pub struct EditConnection {
@@ -254,221 +276,29 @@ impl BlancoApp {
         // Set up event subscriptions using subscribe_in pattern
         let mut subscriptions = Vec::new();
 
-        // Subscribe to sidebar events with window access for tab restoration
-        let _editor_panel_clone = editor_panel.clone();
+        // Subscribe to sidebar events
         let subscription =
             cx.subscribe_in(&sidebar, window, move |app, _sidebar, event, window, cx| {
-                if let AppEvent::EditConnection {
-                    connection_id: _,
-                    connection_data,
-                } = event
-                {
-                    app.open_edit_connection_modal(*connection_data.clone(), window, cx);
-                } else if let AppEvent::CreateNewQueryTab {
-                    connection_id,
-                    connection_name,
-                    db_type,
-                    database_name,
-                    schema_name,
-                    table_name,
-                    environment_type,
-                } = event
-                {
-                    tracing::info!(
-                        "CreateNewQueryTab called: {} (database: {:?}, schema: {:?}, table: {:?})",
-                        connection_id,
-                        database_name,
-                        schema_name,
-                        table_name,
-                    );
-
-                    // Generate appropriate title based on provided parameters
-                    let title = match (&schema_name, &table_name) {
-                        (None, None) => database_name.clone(),
-                        (Some(schema), None) => format!("{}.{}", database_name, schema),
-                        (Some(schema), Some(table)) => {
-                            format!("{}.{}.{}", database_name, schema, table)
-                        }
-                        (None, Some(table)) => table.to_string(),
-                    };
-
-                    // Generate content for table queries if not provided
-                    let content = table_name.as_ref().map(|table| match &schema_name {
-                        Some(schema) => format!("SELECT * FROM {}.{} LIMIT 100;", schema, table),
-                        None => format!("SELECT * FROM {} LIMIT 100;", table),
-                    });
-
-                    // Create a new query tab with the specified parameters
-                    app.editor_panel.update(cx, |panel, cx| {
-                        panel.create_and_add_tab_with_connection(
-                            window,
-                            TabCreationParams {
-                                title,
-                                content,
-                                db_id: None,
-                                connection_id: *connection_id,
-                                db_type: *db_type,
-                                connection_name: Some(connection_name.clone()),
-                                database_name: database_name.clone(),
-                                schema_name: schema_name.clone(),
-                                environment_type: *environment_type,
-                            },
-                            cx,
-                        );
-                    });
-                    cx.notify();
-                } else if let AppEvent::OpenTableStructure {
-                    connection_id,
-                    connection_name,
-                    db_type,
-                    database_name,
-                    schema_name,
-                    table_name,
-                    environment_type,
-                } = event
-                {
-                    tracing::info!(
-                        "OpenTableStructure called: {} (database: {:?}, schema: {:?}, table: {:?})",
-                        connection_id,
-                        database_name,
-                        schema_name,
-                        table_name,
-                    );
-
-                    // Create a new table structure tab
-                    app.editor_panel.update(cx, |panel, cx| {
-                        panel.create_table_structure_tab(
-                            crate::editor::TableStructureParams {
-                                connection_id: *connection_id,
-                                connection_name: connection_name.clone(),
-                                db_type: *db_type,
-                                database_name: database_name.clone(),
-                                schema_name: schema_name.clone(),
-                                table_name: table_name.clone(),
-                                environment_type: *environment_type,
-                            },
-                            window,
-                            cx,
-                        );
-                    });
-
-                    // Load column and index data asynchronously
-                    let db_service = database::DatabaseService::global(cx).clone();
-                    let connection_id = *connection_id;
-                    let database_name = database_name.clone();
-                    let schema_name = schema_name.clone();
-                    let table_name = table_name.clone();
-                    let editor_panel = app.editor_panel.clone();
-
-                    cx.spawn_in(window, async move |_, window| {
-                        // Get connection and fetch column/index data
-                        use database::DatabaseServiceTrait;
-                        let columns_result = db_service
-                            .get_or_create_connection_by_id(connection_id, Some(&database_name))
-                            .await;
-
-                        if let Ok(connection) = columns_result {
-                            let columns = connection
-                                .get_columns_for_table(&table_name, schema_name.as_deref())
-                                .await
-                                .unwrap_or_default();
-                            let indexes = connection
-                                .get_indexes_for_table(&table_name, schema_name.as_deref())
-                                .await
-                                .unwrap_or_default();
-
-                            window
-                                .update(|window, cx| {
-                                    editor_panel.update(cx, |panel, cx| {
-                                        panel.update_last_table_structure_tab(
-                                            columns, indexes, window, cx,
-                                        );
-                                    });
-                                })
-                                .log_err();
-                        }
-                    })
-                    .detach();
-
-                    cx.notify();
+                match event {
+                    ConnectionsPanelEvent::EditConnection {
+                        connection_data, ..
+                    } => {
+                        app.open_edit_connection_modal(*connection_data.clone(), window, cx);
+                    }
                 }
             });
         subscriptions.push(subscription);
 
-        // Subscribe to editor panel events to update other components
-        let editor_panel_for_subscription = editor_panel.clone();
-
-        let subscription = cx.subscribe_in(&editor_panel, window, move |app, _editor_panel, event, window, cx| {
-            let editor_panel_for_events = editor_panel_for_subscription.clone();
-            match event {
-                AppEvent::TableOperationCompleted { table_name, success, rows_affected, operations_executed, .. } => {
-                    if *success {
-                        tracing::info!(
-                            "Table operations completed successfully on '{}': {} operations, {} rows affected",
-                            table_name, operations_executed, rows_affected.unwrap_or(0)
-                        );
-                    } else {
-                        tracing::info!(
-                            "Table operations failed on '{}': {} operations attempted",
-                            table_name, operations_executed
-                        );
-                    }
-                }
-                AppEvent::ToggleSidebar => {
-                        app.sidebar_collapsed = !app.sidebar_collapsed;
-
-                        // Update editor panel's sidebar state
-                        editor_panel_for_events.update(cx, |panel, cx| {
-                            panel.set_sidebar_collapsed(app.sidebar_collapsed, cx);
-                        });
-                }
-                AppEvent::EditorSettingChanged { setting, value } => {
-                    let value_bool = value.parse::<bool>().unwrap_or(false);
-                    match setting.as_str() {
-                        "word_wrap" => {
-                            editor_panel_for_events.update(cx, |panel, cx| {
-                                panel.set_all_editors_soft_wrap(value_bool, window, cx);
-                            });
-                        }
-                        "show_whitespace" => {
-                            editor_panel_for_events.update(cx, |panel, cx| {
-                                panel.set_all_editors_show_whitespace(value_bool, window, cx);
-                            });
-                        }
-                        _ => {}
-                    }
-                }
-                _ => {}
-            }
-        });
-        subscriptions.push(subscription);
 
         // Subscribe to snippets panel events
-        let editor_panel_for_snippets = editor_panel.clone();
-
-        let snippets_panel_for_refresh = snippets_panel.clone();
         let subscription = cx.subscribe_in(
             &snippets_panel,
             window,
-            move |app, _snippets_panel, event, window, cx| {
-                let _editor_panel = editor_panel_for_snippets.clone();
-                let _snippets_panel = snippets_panel_for_refresh.clone();
+            move |_app, _snippets_panel, event, _window, _cx| {
                 match event {
-                    AppEvent::OpenSnippetEditor { snippet_id } => {
-                        if let Some(id) = snippet_id {
-                            app.editor_panel.update(cx, |panel, cx| {
-                                panel.open_snippet_tab(*id, window, cx);
-                            });
-                        } else {
-                            app.editor_panel.update(cx, |panel, cx| {
-                                panel.create_snippet_tab(window, cx);
-                            });
-                        }
-                    }
-                    AppEvent::SnippetDeleted { .. } => {
+                    SnippetsPanelEvent::SnippetDeleted { .. } => {
                         // Snippets panel already refreshed itself
                     }
-                    _ => {}
                 }
             },
         );
@@ -518,6 +348,23 @@ impl BlancoApp {
         });
     }
 
+    fn on_open_snippet_editor(
+        &mut self,
+        action: &OpenSnippetEditor,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(id) = action.snippet_id {
+            self.editor_panel.update(cx, |panel, cx| {
+                panel.open_snippet_tab(id, window, cx);
+            });
+        } else {
+            self.editor_panel.update(cx, |panel, cx| {
+                panel.create_snippet_tab(window, cx);
+            });
+        }
+    }
+
     fn on_refresh_snippets(
         &mut self,
         _: &RefreshSnippets,
@@ -541,6 +388,121 @@ impl BlancoApp {
         });
     }
 
+    fn on_create_new_query_tab(
+        &mut self,
+        action: &CreateNewQueryTab,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        tracing::info!(
+            "CreateNewQueryTab action: {} (database: {:?}, schema: {:?}, table: {:?})",
+            action.connection_id,
+            action.database_name,
+            action.schema_name,
+            action.table_name,
+        );
+
+        let title = match (&action.schema_name, &action.table_name) {
+            (None, None) => action.database_name.clone(),
+            (Some(schema), None) => format!("{}.{}", action.database_name, schema),
+            (Some(schema), Some(table)) => {
+                format!("{}.{}.{}", action.database_name, schema, table)
+            }
+            (None, Some(table)) => table.to_string(),
+        };
+
+        let content = action.table_name.as_ref().map(|table| match &action.schema_name {
+            Some(schema) => format!("SELECT * FROM {}.{} LIMIT 100;", schema, table),
+            None => format!("SELECT * FROM {} LIMIT 100;", table),
+        });
+
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.create_and_add_tab_with_connection(
+                _window,
+                TabCreationParams {
+                    title,
+                    content,
+                    db_id: None,
+                    connection_id: action.connection_id,
+                    db_type: action.db_type,
+                    connection_name: Some(action.connection_name.clone()),
+                    database_name: action.database_name.clone(),
+                    schema_name: action.schema_name.clone(),
+                    environment_type: action.environment_type,
+                },
+                cx,
+            );
+        });
+        cx.notify();
+    }
+
+    fn on_open_table_structure(
+        &mut self,
+        action: &OpenTableStructure,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        tracing::info!(
+            "OpenTableStructure action: {} (database: {:?}, schema: {:?}, table: {:?})",
+            action.connection_id,
+            action.database_name,
+            action.schema_name,
+            action.table_name,
+        );
+
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.create_table_structure_tab(
+                crate::editor::TableStructureParams {
+                    connection_id: action.connection_id,
+                    connection_name: action.connection_name.clone(),
+                    db_type: action.db_type,
+                    database_name: action.database_name.clone(),
+                    schema_name: action.schema_name.clone(),
+                    table_name: action.table_name.clone(),
+                    environment_type: action.environment_type,
+                },
+                window,
+                cx,
+            );
+        });
+
+        let db_service = database::DatabaseService::global(cx).clone();
+        let connection_id = action.connection_id;
+        let database_name = action.database_name.clone();
+        let schema_name = action.schema_name.clone();
+        let table_name = action.table_name.clone();
+        let editor_panel = self.editor_panel.clone();
+
+        cx.spawn_in(window, async move |_, window| {
+            use database::DatabaseServiceTrait;
+            let columns_result = db_service
+                .get_or_create_connection_by_id(connection_id, Some(&database_name))
+                .await;
+
+            if let Ok(connection) = columns_result {
+                let columns = connection
+                    .get_columns_for_table(&table_name, schema_name.as_deref())
+                    .await
+                    .unwrap_or_default();
+                let indexes = connection
+                    .get_indexes_for_table(&table_name, schema_name.as_deref())
+                    .await
+                    .unwrap_or_default();
+
+                window
+                    .update(|window, cx| {
+                        editor_panel.update(cx, |panel, cx| {
+                            panel.update_last_table_structure_tab(columns, indexes, window, cx);
+                        });
+                    })
+                    .log_err();
+            }
+        })
+        .detach();
+
+        cx.notify();
+    }
+
     fn on_new_connection_modal(
         &mut self,
         _: &OpenNewConnectionModal,
@@ -551,10 +513,7 @@ impl BlancoApp {
         let modal_content = cx.new(|cx| NewConnectionModal::new(window, cx));
         let content_for_focus = modal_content.clone();
 
-        // Capture a weak reference to the app entity for event emission
-        // The app implements EventEmitter<AppEvent>, so it can emit events
-        let app_entity = cx.entity().downgrade();
-
+        let sidebar = self.sidebar.clone();
         window.open_dialog(cx, move |modal, _window, _cx| {
             let content_clone = modal_content.clone();
 
@@ -592,22 +551,23 @@ impl BlancoApp {
                 )
                 .on_ok({
                     let content = content_clone.clone();
-                    let app_entity_ref = app_entity.clone();
+                    let sidebar = sidebar.clone();
                     move |_, window, cx| {
                         if let Some(conn_data) = content.read(cx).get_connection_data(cx) {
-                            // Capture connection data for the event
-                            let conn_type = conn_data.db_type.to_string();
-                            let db_name = conn_data.database_name.clone();
-
-                            // Start the async save operation
                             let app_database = AppDatabase::global(cx).clone();
-                            cx.spawn(async move |_cx| {
-                                match app_database.save_connection(&conn_data.clone()).await {
+                            let sidebar = sidebar.clone();
+                            cx.spawn(async move |cx| {
+                                match app_database.save_connection(&conn_data).await {
                                     Ok(connection_id) => {
                                         tracing::info!(
                                             "Connection saved with ID: {}",
                                             connection_id
                                         );
+                                        cx.update(|cx| {
+                                            sidebar.update(cx, |panel, cx| {
+                                                panel.reload_connections(cx);
+                                            });
+                                        });
                                     }
                                     Err(e) => {
                                         tracing::error!("Failed to save connection: {}", e);
@@ -615,18 +575,6 @@ impl BlancoApp {
                                 }
                             })
                             .detach();
-
-                            // Emit the event immediately after starting the save
-                            // We'll emit optimistically since the modal was validated
-                            if let Some(app) = app_entity_ref.upgrade() {
-                                app.update(cx, |_app, cx| {
-                                    cx.emit(AppEvent::ConnectionEstablished {
-                                        connection_id: None, // We don't know the ID yet
-                                        connection_type: conn_type,
-                                        database_name: db_name,
-                                    });
-                                });
-                            }
 
                             window.push_notification(
                                 (NotificationType::Success, "Connection saved successfully"),
@@ -666,9 +614,8 @@ impl BlancoApp {
         });
         let content_for_focus = modal_content.clone();
 
-        // Capture a weak reference to the app entity for event emission
-        let app_entity = cx.entity().downgrade();
         let connection_data_clone = connection_data.clone();
+        let sidebar = self.sidebar.clone();
 
         window.open_dialog(cx, move |modal, _window, _cx| {
             let content_clone = modal_content.clone();
@@ -707,27 +654,27 @@ impl BlancoApp {
                 )
                 .on_ok({
                     let content = content_clone.clone();
-                    let app_entity_ref = app_entity.clone();
                     let conn_data_ref = connection_data_clone.clone();
+                    let sidebar = sidebar.clone();
                     move |_, window, cx| {
                         if let Some(mut conn_data) = content.read(cx).get_connection_data(cx) {
-                            // Preserve the original connection ID
                             let original_id = conn_data_ref.id;
                             conn_data.id = original_id;
 
-                            // Capture connection data for the event
-                            let conn_type = conn_data.db_type.to_string();
-                            let db_name = conn_data.database_name.clone();
-
-                            // Start the async save operation
                             let app_database = AppDatabase::global(cx).clone();
-                            cx.spawn(async move |_cx| {
-                                match app_database.save_connection(&conn_data.clone()).await {
+                            let sidebar = sidebar.clone();
+                            cx.spawn(async move |cx| {
+                                match app_database.save_connection(&conn_data).await {
                                     Ok(connection_id) => {
                                         tracing::info!(
                                             "Connection updated with ID: {}",
                                             connection_id
                                         );
+                                        cx.update(|cx| {
+                                            sidebar.update(cx, |panel, cx| {
+                                                panel.reload_connections(cx);
+                                            });
+                                        });
                                     }
                                     Err(e) => {
                                         tracing::error!("Failed to update connection: {}", e);
@@ -735,17 +682,6 @@ impl BlancoApp {
                                 }
                             })
                             .detach();
-
-                            // Emit the event immediately after starting the save
-                            if let Some(app) = app_entity_ref.upgrade() {
-                                app.update(cx, |_app, cx| {
-                                    cx.emit(AppEvent::ConnectionEstablished {
-                                        connection_id: conn_data_ref.id,
-                                        connection_type: conn_type,
-                                        database_name: db_name,
-                                    });
-                                });
-                            }
 
                             window.push_notification(
                                 (NotificationType::Success, "Connection updated successfully"),
@@ -871,7 +807,6 @@ impl BlancoApp {
     }
 }
 
-impl EventEmitter<AppEvent> for BlancoApp {}
 
 impl Focusable for BlancoApp {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -894,12 +829,15 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_about))
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::on_settings))
+            .on_action(cx.listener(Self::on_create_new_query_tab))
+            .on_action(cx.listener(Self::on_open_table_structure))
             .on_action(cx.listener(Self::on_new_connection_modal))
             .on_action(cx.listener(Self::on_new_snippet))
             .on_action(cx.listener(Self::on_commit_changes))
             .on_action(cx.listener(Self::on_rollback_changes))
             .on_action(cx.listener(Self::on_rename_tab))
             .on_action(cx.listener(Self::on_database_connected))
+            .on_action(cx.listener(Self::on_open_snippet_editor))
             .on_action(cx.listener(Self::on_refresh_snippets))
             .on_action(cx.listener(Self::on_toggle_render_whitespace))
             .on_action(cx.listener(Self::on_toggle_word_wrap))

@@ -2,10 +2,10 @@ use chrono::Utc;
 use database::DatabaseService;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
-    Styled, Subscription, Task, Window, div, prelude::FluentBuilder, px,
+    Styled, Subscription, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    ActiveTheme, IndexPath,
+    ActiveTheme, IndexPath, WindowExt,
     button::Button,
     h_flex,
     input::{Input, InputState},
@@ -57,7 +57,6 @@ pub struct ExportModal {
     directory_input: Entity<InputState>,
     filename_input: Entity<InputState>,
     options: ExportOptions,
-    export_task: Option<Task<()>>,
     is_exporting: bool,
     export_progress: f32,
     exported_rows: usize,
@@ -114,7 +113,6 @@ impl ExportModal {
             directory_input,
             filename_input,
             options: ExportOptions::default(),
-            export_task: None,
             is_exporting: false,
             export_progress: 0.0,
             exported_rows: 0,
@@ -123,6 +121,10 @@ impl ExportModal {
             _subscriptions: vec![subscription],
             format_changed: AtomicBool::new(false),
         }
+    }
+
+    pub fn is_exporting(&self) -> bool {
+        self.is_exporting
     }
 
     fn get_selected_format(&self, cx: &App) -> ExportFormat {
@@ -187,7 +189,7 @@ impl ExportModal {
         .detach();
     }
 
-    pub fn start_export(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub fn start_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_exporting {
             return;
         }
@@ -198,7 +200,6 @@ impl ExportModal {
                 let format = self.get_selected_format(cx);
                 let options = self.options.clone();
 
-                // Start the export task
                 self.is_exporting = true;
                 self.is_cancelled = false;
                 self.export_progress = 0.0;
@@ -210,7 +211,6 @@ impl ExportModal {
                 let schema_name = self.schema_name.clone();
                 let table_name_param = self.table_name.clone();
 
-                // Build the table name for the query
                 let table_name_for_query = if let Some(schema) = &schema_name {
                     format!("{}.{}", schema, table_name_param)
                 } else {
@@ -219,75 +219,85 @@ impl ExportModal {
 
                 let select_query = format!("SELECT * FROM {}", table_name_for_query);
 
-                // Get database service before entering async context
                 let db_service = DatabaseService::global(cx).clone();
 
-                // Start async export
-                let export_task = cx.spawn(async move |_entity, _cx| {
-                    // Get connection
-                    let connection = match db_service
-                        .get_or_create_connection(connection_id, None)
-                        .await
-                    {
-                        Ok(conn) => conn,
-                        Err(e) => {
-                            tracing::error!("Failed to get connection for export: {}", e);
-                            return;
-                        }
-                    };
+                cx.spawn_in(window, async move |entity, mut window| {
+                    let result = window
+                        .background_spawn(async move {
+                            let connection = db_service
+                                .get_or_create_connection(connection_id, None)
+                                .await?;
 
-                    // Get transformer
-                    let transformer: Box<dyn crate::transformers::DataTransformer> = match format {
-                        ExportFormat::Csv => Box::new(crate::transformers::CsvTransformer),
-                        ExportFormat::Json => Box::new(crate::transformers::JsonTransformer::new()),
-                        ExportFormat::Sql => {
-                            let table_name_for_sql = if let Some(schema) = &schema_name {
-                                format!("{}.{}", schema, table_name_param)
-                            } else {
-                                table_name_param.clone()
-                            };
-                            Box::new(crate::transformers::SqlTransformer::with_table_name(
-                                table_name_for_sql,
-                            ))
-                        }
-                    };
+                            let transformer: Box<dyn crate::transformers::DataTransformer> =
+                                match format {
+                                    ExportFormat::Csv => {
+                                        Box::new(crate::transformers::CsvTransformer)
+                                    }
+                                    ExportFormat::Json => {
+                                        Box::new(crate::transformers::JsonTransformer::new())
+                                    }
+                                    ExportFormat::Sql => {
+                                        let table_name_for_sql =
+                                            if let Some(schema) = &schema_name {
+                                                format!("{}.{}", schema, table_name_param)
+                                            } else {
+                                                table_name_param.clone()
+                                            };
+                                        Box::new(
+                                            crate::transformers::SqlTransformer::with_table_name(
+                                                table_name_for_sql,
+                                            ),
+                                        )
+                                    }
+                                };
 
-                    // Create export service
-                    let export_service = super::service::ExportService::new();
+                            let export_service = super::service::ExportService::new();
 
-                    // Execute streaming export
-                    match export_service
-                        .export_data_streaming_with_transformer(
-                            connection.as_ref(),
-                            &select_query,
-                            Some(database_name.as_str()),
-                            transformer.as_ref(),
-                            &file_path,
-                            &options,
-                            move |progress| {
-                                tracing::info!(
-                                    "Export progress: {}/{} rows",
-                                    progress.exported_rows,
-                                    progress.total_rows
-                                );
-                            },
-                        )
-                        .await
-                    {
-                        Ok(_) => {
+                            export_service
+                                .export_data_streaming_with_transformer(
+                                    connection.as_ref(),
+                                    &select_query,
+                                    Some(database_name.as_str()),
+                                    transformer.as_ref(),
+                                    &file_path,
+                                    &options,
+                                    move |progress| {
+                                        tracing::info!(
+                                            "Export progress: {}/{} rows",
+                                            progress.exported_rows,
+                                            progress.total_rows
+                                        );
+                                    },
+                                )
+                                .await?;
+
                             tracing::info!(
                                 "Export completed successfully: {} -> {}",
                                 table_name_for_query,
                                 file_path.display()
                             );
-                        }
-                        Err(e) => {
-                            tracing::error!("Export failed: {}", e);
-                        }
-                    }
-                });
+                            Ok::<(), anyhow::Error>(())
+                        })
+                        .await;
 
-                self.export_task = Some(export_task);
+                    if let Err(e) = &result {
+                        tracing::error!("Export failed: {}", e);
+                    }
+
+                    entity
+                        .update_in(window, |modal, _, cx| {
+                            modal.is_exporting = false;
+                            cx.notify();
+                        })
+                        .ok();
+
+                    window
+                        .update(|window, cx| {
+                            window.close_dialog(cx);
+                        })
+                        .ok();
+                })
+                .detach();
             }
             Err(error) => {
                 tracing::error!("Export error: {}", error);

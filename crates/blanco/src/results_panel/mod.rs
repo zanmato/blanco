@@ -3,14 +3,14 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
+    App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement,
     IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, WindowExt as _,
     input::{InputEvent, InputState},
     notification::NotificationType,
-    table::{DataTable, TableDelegate, TableEvent, TableState},
+    table::{DataTable, TableEvent, TableState},
     v_flex,
 };
 
@@ -19,7 +19,6 @@ use blanco_core::connection_trait::ColumnType;
 use database::DatabaseService;
 
 use crate::app::{AddRow, DeleteRow, DuplicateRow, SetCellNull};
-use crate::app_events::AppEvent;
 use crate::result_ext::ResultExt;
 use crate::transformers::CopyHandler;
 
@@ -100,19 +99,15 @@ impl ResultsPanel {
         });
 
         // Subscribe to table events
-        let table_state_for_sub = table_state.clone();
         let _table_event_subscription = cx.subscribe_in(
             &table_state,
             window,
-            move |_panel, _table_state, event: &TableEvent, _window, cx| {
+            move |panel, _table_state, event: &TableEvent, window, cx| {
                 if let TableEvent::DoubleClickedCell(row_ix, col_ix) = event {
-                    // Clear selection and set pending edit cell
-                    table_state_for_sub.update(cx, |state, cx| {
+                    panel.table_state.update(cx, |state, _cx| {
                         state.delegate_mut().clear_selection();
-                        state.delegate_mut().set_pending_edit_cell(*row_ix, *col_ix);
-                        state.refresh(cx);
                     });
-                    cx.notify();
+                    panel.start_cell_edit(*row_ix, *col_ix, window, cx);
                 }
             },
         );
@@ -755,17 +750,6 @@ impl ResultsPanel {
                     }
                 }).log_err();
 
-                // Emit table operation completed event
-                entity.update(cx, |_, cx| {
-                    cx.emit(AppEvent::TableOperationCompleted {
-                        table_name: response.table_name,
-                        connection_id: response.connection_id,
-                        success: true,
-                        rows_affected: response.rows_affected,
-                        error_message: None,
-                        operations_executed: response.operations_executed,
-                    });
-                }).log_err();
             } else {
                 // Handle failed operations - show error but keep edits for retry
                 if let Some(sql_log) = sql_log_response_entity {
@@ -787,17 +771,6 @@ impl ResultsPanel {
                     });
                 }
 
-                // Emit table operation completed event with failure
-                entity.update(cx, |_, cx| {
-                    cx.emit(AppEvent::TableOperationCompleted {
-                        table_name: response.table_name,
-                        connection_id: response.connection_id,
-                        success: false,
-                        rows_affected: None,
-                        error_message: response.error_message,
-                        operations_executed: response.operations_executed,
-                    });
-                }).log_err();
             }
         })
         .detach();
@@ -819,8 +792,6 @@ impl ResultsPanel {
             .table_name
             .clone()
             .unwrap_or_else(|| "unknown".to_string());
-        let connection_id = self.table_state.read(cx).delegate().connection_id;
-
         tracing::info!(
             "Rollback Changes: Rolling back {} changes on table {}",
             changes.len(),
@@ -866,14 +837,7 @@ impl ResultsPanel {
         // Clear all changes
         self.clear_changes(cx);
 
-        // Emit rollback event
         let changes_count = changes.len();
-        cx.emit(AppEvent::TableChangesRollback {
-            table_name: table_name.clone(),
-            connection_id,
-            changes_count,
-        });
-
         tracing::info!(
             "Rollback Changes: Successfully rolled back {} changes",
             changes_count
@@ -1406,7 +1370,6 @@ impl ResultsPanel {
     }
 }
 
-impl EventEmitter<AppEvent> for ResultsPanel {}
 impl Focusable for ResultsPanel {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -1414,22 +1377,7 @@ impl Focusable for ResultsPanel {
 }
 
 impl Render for ResultsPanel {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Check for pending inline edits
-        if let Some((row, col)) = self.table_state.read(cx).delegate().pending_edit_cell {
-            // Clear the pending edit and start editing
-            self.table_state.update(cx, |state, _cx| {
-                state.delegate_mut().pending_edit_cell = None;
-            });
-
-            self.start_cell_edit(row, col, window, cx);
-        }
-
-        let _row_count = self.table_state.read(cx).delegate().rows_count(cx);
-        let _has_unsaved_changes = self.has_unsaved_changes(cx);
-        let _table_name = self.get_table_name(cx);
-        let _is_editable = self.table_state.read(cx).delegate().is_editable();
-
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .size_full()
             .border_t_1()

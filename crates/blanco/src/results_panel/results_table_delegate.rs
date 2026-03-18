@@ -40,7 +40,6 @@ pub struct ResultsTableDelegate {
     pub edit_state: CellEditState,
     pub table_name: Option<String>,
     pub primary_key_column: Option<String>,
-    pub pending_edit_cell: Option<(usize, usize)>,
     pub connection_id: i64,
     pub database_name: SharedString,
     pub original_query: Option<String>,
@@ -296,7 +295,6 @@ impl ResultsTableDelegate {
         // Clear previous edit state
         self.edit_state.clear_all();
         self.clear_selection();
-        self.pending_edit_cell = None;
         self.rows.clear();
         self.rows.shrink_to_fit();
 
@@ -473,10 +471,6 @@ impl ResultsTableDelegate {
                 .or_insert_with(|| cell_value.clone());
             self.edit_state.editing_cell = Some((row, col));
         }
-    }
-
-    pub fn set_pending_edit_cell(&mut self, row: usize, col: usize) {
-        self.pending_edit_cell = Some((row, col));
     }
 
     pub fn update_cell_value(&mut self, row: usize, col: usize, new_value: Option<String>) {

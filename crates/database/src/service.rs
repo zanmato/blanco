@@ -438,6 +438,73 @@ impl DatabaseService {
         Ok(tunnel_info)
     }
 
+    /// Test a connection without caching it. Creates a temporary connection
+    /// (and SSH tunnel if needed), verifies it works, then drops everything.
+    pub async fn test_connection(&self, config: &ConnectionConfig) -> Result<()> {
+        let mut connection_host = None;
+        let mut connection_port = None;
+        let mut temp_tunnel: Option<SshTunnel> = None;
+
+        if config.requires_ssh_tunnel() {
+            let remote_host = &config.host;
+            let remote_port = config.port;
+            let local_port = self.assign_local_port();
+
+            let ssh_config = SshTunnelConfig {
+                ssh_host: config
+                    .ssh_host
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("SSH host is required"))?
+                    .clone(),
+                ssh_port: config.ssh_port(),
+                ssh_user: config
+                    .ssh_user
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("SSH user is required"))?
+                    .clone(),
+                ssh_password: config.ssh_password.clone(),
+                ssh_private_key_path: config.ssh_private_key_path.clone(),
+                ssh_private_key_password: config.ssh_private_key_password.clone(),
+                remote_host: remote_host.to_string(),
+                remote_port,
+                local_port,
+            };
+
+            let runtime_handle = self.runtime_handle.clone();
+            let runtime_handle_inner = runtime_handle.clone();
+            let tunnel = runtime_handle
+                .spawn(async move {
+                    let mut tunnel =
+                        SshTunnel::create(ssh_config, runtime_handle_inner.clone()).await?;
+                    tunnel.connect().await?;
+                    Result::<SshTunnel, anyhow::Error>::Ok(tunnel)
+                })
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to create SSH tunnel: {}", e))??;
+
+            connection_host = Some("localhost");
+            connection_port = Some(local_port);
+            temp_tunnel = Some(tunnel);
+        }
+
+        let connection_string =
+            config.connection_string(None, connection_host, connection_port);
+
+        let factory = self
+            .connection_factories
+            .get(&config.db_type.to_string())
+            .ok_or_else(|| {
+                anyhow::anyhow!("No factory found for connection type: {}", config.db_type)
+            })?;
+
+        let result = factory.create_connection(&connection_string).await;
+
+        // Clean up temporary tunnel
+        drop(temp_tunnel);
+
+        result.map(|_| ())
+    }
+
     /// Assign a local port for SSH tunnel
     fn assign_local_port(&self) -> u16 {
         // Simple port assignment starting from 15432

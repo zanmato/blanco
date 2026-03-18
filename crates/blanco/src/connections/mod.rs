@@ -5,7 +5,6 @@ pub use data_loading::{DatabaseItemType, DatabaseMetadata};
 pub use delegate::ConnectionsTreeDelegate;
 
 use crate::app_database::{AppDatabase, ConnectionData, EnvironmentType};
-use crate::app_events::{AppEvent, TreeItemType};
 use crate::result_ext::ResultExt;
 use blanco_core::DatabaseService as DatabaseServiceTrait;
 use blanco_ui::IconName;
@@ -21,6 +20,14 @@ use gpui_component::{
     dialog::{DialogAction, DialogClose, DialogFooter},
     label::Label,
 };
+
+#[derive(Clone, Debug)]
+pub enum ConnectionsPanelEvent {
+    EditConnection {
+        connection_id: i64,
+        connection_data: Box<ConnectionData>,
+    },
+}
 
 /// Icon and color combination for tree items
 #[derive(Clone)]
@@ -74,22 +81,21 @@ pub struct TreeItemMetadata {
     pub loading: bool, // Whether this item is currently loading
 }
 
-/// Trait to convert metadata into CreateNewQueryTab events
+/// Trait to convert metadata into CreateNewQueryTab actions
 pub trait CreateNewQueryTabParams {
-    /// Convert this metadata into a CreateNewQueryTab event, if applicable
-    fn create_new_query_tab_event(&self) -> Option<crate::app_events::AppEvent>;
+    fn create_new_query_tab_action(&self) -> Option<crate::app::CreateNewQueryTab>;
 }
 
 impl CreateNewQueryTabParams for TreeItemMetadata {
-    fn create_new_query_tab_event(&self) -> Option<crate::app_events::AppEvent> {
+    fn create_new_query_tab_action(&self) -> Option<crate::app::CreateNewQueryTab> {
         match self.kind {
-            TreeItemKind::Connection => None, // Connections don't create queries directly
+            TreeItemKind::Connection => None,
             TreeItemKind::Database
             | TreeItemKind::Schema
             | TreeItemKind::Table
             | TreeItemKind::View
             | TreeItemKind::MaterializedView => {
-                Some(crate::app_events::AppEvent::CreateNewQueryTab {
+                Some(crate::app::CreateNewQueryTab {
                     connection_id: self.connection_id,
                     connection_name: self.connection_name.clone(),
                     db_type: self.db_type,
@@ -145,6 +151,25 @@ impl ConnectionsPanel {
         .detach();
 
         panel
+    }
+
+    pub fn reload_connections(&mut self, cx: &mut Context<Self>) {
+        let app_database = AppDatabase::global(cx).clone();
+        cx.spawn(async move |this_handle, cx| {
+            let connections = app_database.load_connections().await;
+            this_handle.update(cx, |this, cx| {
+                match connections {
+                    Ok(connections) => {
+                        this.connections = connections;
+                        this.update_tree_items(cx);
+                        cx.notify();
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to reload connections: {}", e);
+                    }
+                }
+            }).log_err();
+        }).detach();
     }
 
     /// Update tree items from connections data and update connection status directly
@@ -503,11 +528,6 @@ impl ConnectionsPanel {
                         tracing::debug!("Toggling expansion for connection {}", connection_id);
                         self.toggle_connection_expansion(connection_id, window, cx);
                     }
-                    cx.emit(AppEvent::TreeItemExpanded {
-                        item_id: item_id.to_string(),
-                        item_type: TreeItemType::Connection,
-                        connection_id: Some(connection_id),
-                    });
                 }
                 TreeItemKind::Database => {
                     if let Some(database_name) = &metadata.database_name
@@ -534,11 +554,6 @@ impl ConnectionsPanel {
                             );
                         }
                     }
-                    cx.emit(AppEvent::TreeItemExpanded {
-                        item_id: item_id.to_string(),
-                        item_type: TreeItemType::Database,
-                        connection_id: Some(connection_id),
-                    });
                 }
                 TreeItemKind::Schema => {
                     if let (Some(database_name), Some(schema_name)) =
@@ -579,22 +594,8 @@ impl ConnectionsPanel {
                             );
                         }
                     }
-                    cx.emit(AppEvent::TreeItemExpanded {
-                        item_id: item_id.to_string(),
-                        item_type: TreeItemType::Schema,
-                        connection_id: Some(connection_id),
-                    });
                 }
-                TreeItemKind::Table | TreeItemKind::View | TreeItemKind::MaterializedView => {
-                    cx.emit(AppEvent::TreeItemSelected {
-                        item_id: item_id.to_string(),
-                        item_type: TreeItemType::Table,
-                        connection_id: Some(connection_id),
-                        database_name: metadata.database_name,
-                        schema_name: metadata.schema_name,
-                        table_name: metadata.table_name,
-                    });
-                }
+                TreeItemKind::Table | TreeItemKind::View | TreeItemKind::MaterializedView => {}
             }
         }
     }
@@ -691,13 +692,6 @@ impl ConnectionsPanel {
                 this.loaded_connections.remove(&connection_id);
                 this.expanded_connections.remove(&connection_id);
                 this.update_tree_items(cx);
-
-                // Emit connection lost event for any listeners
-                cx.emit(AppEvent::ConnectionLost {
-                    connection_id: Some(connection_id),
-                    error: "Disconnected by user".to_string(),
-                });
-
                 cx.notify();
             }).log_err();
         })
@@ -736,13 +730,6 @@ impl ConnectionsPanel {
             // Update the UI
             this_handle.update(cx, |this, cx| {
                 this.update_tree_items(cx);
-
-                // Emit connection lost event for the specific database
-                cx.emit(AppEvent::ConnectionLost {
-                    connection_id: Some(connection_id),
-                    error: format!("Database '{}' disconnected by user", database_name),
-                });
-
                 cx.notify();
             }).log_err();
         })
@@ -804,7 +791,8 @@ impl ConnectionsPanel {
                 )
             });
 
-            window.open_dialog(cx, move |dialog, _window, _cx| {
+            window.open_dialog(cx, move |dialog, _window, cx| {
+                let is_exporting = modal_content.read(cx).is_exporting();
                 let modal_clone = modal_content.clone();
                 dialog
                     .title("Export Table Data")
@@ -817,20 +805,18 @@ impl ConnectionsPanel {
                                     .child(Button::new("export-cancel").label("Cancel").outline()),
                             )
                             .child(
-                                DialogAction::new().child(
-                                    Button::new("export-submit")
-                                        .primary()
-                                        .label("Export")
-                                        .on_click({
-                                            let modal_for_button = modal_clone.clone();
-                                            move |_, window, cx| {
-                                                modal_for_button.update(cx, |modal, cx| {
-                                                    modal.start_export(window, cx);
-                                                });
-                                                window.close_dialog(cx);
-                                            }
-                                        }),
-                                ),
+                                Button::new("export-submit")
+                                    .primary()
+                                    .label("Export")
+                                    .loading(is_exporting)
+                                    .on_click({
+                                        let modal_for_button = modal_clone.clone();
+                                        move |_, window, cx| {
+                                            modal_for_button.update(cx, |modal, cx| {
+                                                modal.start_export(window, cx);
+                                            });
+                                        }
+                                    }),
                             ),
                     )
             })
@@ -915,8 +901,7 @@ impl ConnectionsPanel {
             .cloned();
 
         if let Some(conn_data) = connection_data {
-            // Emit an event to open the edit modal
-            cx.emit(AppEvent::EditConnection {
+            cx.emit(ConnectionsPanelEvent::EditConnection {
                 connection_id,
                 connection_data: Box::new(conn_data),
             });
@@ -939,7 +924,7 @@ impl Render for ConnectionsPanel {
     }
 }
 
-impl EventEmitter<AppEvent> for ConnectionsPanel {}
+impl EventEmitter<ConnectionsPanelEvent> for ConnectionsPanel {}
 
 // Add display_name method to ConnectionData
 impl ConnectionData {

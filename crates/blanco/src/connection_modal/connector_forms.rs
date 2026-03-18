@@ -76,44 +76,6 @@ impl SqliteForm {
         Some(connection)
     }
 
-    pub fn test_connection(&self, cx: &App) -> TestResult {
-        let file_path = self.file_path_input.read(cx).value();
-
-        if file_path.is_empty() {
-            return TestResult {
-                success: false,
-                message: "Please enter a file path".to_string(),
-            };
-        }
-
-        // Check if the file exists or the parent directory exists (so we can create it)
-        let file_path_str = file_path.to_string();
-        let path = std::path::Path::new(&file_path_str);
-
-        if path.exists() {
-            TestResult {
-                success: true,
-                message: "Database file exists and is accessible".to_string(),
-            }
-        } else if let Some(parent) = path.parent() {
-            if parent.exists() || parent.to_str() == Some("") {
-                TestResult {
-                    success: true,
-                    message: "Database will be created at this location".to_string(),
-                }
-            } else {
-                TestResult {
-                    success: false,
-                    message: format!("Parent directory does not exist: {}", parent.display()),
-                }
-            }
-        } else {
-            TestResult {
-                success: false,
-                message: "Invalid file path".to_string(),
-            }
-        }
-    }
 }
 
 /// PostgreSQL connector form
@@ -374,39 +336,6 @@ impl PostgresForm {
         }
     }
 
-    pub fn test_connection(&self, cx: &App) -> TestResult {
-        // Validate fields first
-        if let Some(error) = self.validate(cx) {
-            return TestResult {
-                success: false,
-                message: error,
-            };
-        }
-
-        // Build connection string for testing
-        let host = self.host_input.read(cx).value();
-        let port = self.port_input.read(cx).value();
-        let database = self.database_input.read(cx).value();
-        let username = self.username_input.read(cx).value();
-        let password = self.password_input.read(cx).value();
-
-        let password_part = if password.is_empty() {
-            String::new()
-        } else {
-            format!(":{}", password)
-        };
-
-        let _connection_string = format!(
-            "postgresql://{}{}@{}:{}/{}",
-            username, password_part, host, port, database
-        );
-
-        TestResult {
-            success: true,
-            message: "Connection parameters are valid".to_string(),
-        }
-    }
-
     #[allow(dead_code)]
     pub fn first_input_focus_handle(&self, cx: &App) -> FocusHandle {
         self.host_input.focus_handle(cx)
@@ -575,39 +504,6 @@ impl MysqlForm {
         }
 
         None
-    }
-
-    pub fn test_connection(&self, cx: &App) -> TestResult {
-        // Validate fields first
-        if let Some(error) = self.validate(cx) {
-            return TestResult {
-                success: false,
-                message: error,
-            };
-        }
-
-        // Build connection string for testing
-        let host = self.host_input.read(cx).value();
-        let port = self.port_input.read(cx).value();
-        let database = self.database_input.read(cx).value();
-        let username = self.username_input.read(cx).value();
-        let password = self.password_input.read(cx).value();
-
-        let password_part = if password.is_empty() {
-            String::new()
-        } else {
-            format!(":{}", password)
-        };
-
-        let _connection_string = format!(
-            "mysql://{}{}@{}:{}/{}",
-            username, password_part, host, port, database
-        );
-
-        TestResult {
-            success: true,
-            message: "Connection parameters are valid".to_string(),
-        }
     }
 
     #[allow(dead_code)]

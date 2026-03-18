@@ -41,15 +41,12 @@ impl SqlContextParser {
 
     /// Extract current word being typed (for partial matching)
     pub fn extract_current_word(text: &str) -> String {
-        // Iterate backwards from the end to find the word boundary
-        for (idx, ch) in text.chars().rev().enumerate() {
+        for (byte_offset, ch) in text.char_indices().rev() {
             if !(ch.is_alphanumeric() || ch == '_') {
-                // Found end of word, slice from this position
-                let start = text.len() - idx;
+                let start = byte_offset + ch.len_utf8();
                 return text[start..].to_string();
             }
         }
-        // All characters are valid identifier characters
         text.to_string()
     }
 
@@ -223,9 +220,9 @@ impl SqlContextParser {
         let trimmed_end = trimmed_end.trim_end_matches('\t');
 
         // Find the identifier boundary by iterating backwards
-        for (idx, ch) in trimmed_end.chars().rev().enumerate() {
+        for (byte_offset, ch) in trimmed_end.char_indices().rev() {
             if !(ch.is_alphanumeric() || ch == '_') {
-                let start = trimmed_end.len() - idx;
+                let start = byte_offset + ch.len_utf8();
                 let identifier = &trimmed_end[start..];
                 if super::is_valid_identifier(identifier) {
                     return Some(identifier.to_string());

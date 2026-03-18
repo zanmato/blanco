@@ -4,7 +4,6 @@ pub use delegate::{SnippetItemMetadata, SnippetsTreeDelegate};
 
 use crate::app::{NewSnippet, OpenSnippetEditor};
 use crate::app_database::{AppDatabase, SnippetData};
-use crate::app_events::AppEvent;
 use crate::result_ext::ResultExt;
 use blanco_ui::draggable_tree::{DraggableTreeState, TreeItem};
 use gpui::{
@@ -20,7 +19,12 @@ use gpui_component::{
 
 actions!(snippets, [CreateGroup, RefreshSnippets]);
 
-impl EventEmitter<AppEvent> for SnippetsPanel {}
+#[derive(Clone, Debug)]
+pub enum SnippetsPanelEvent {
+    SnippetDeleted { id: i64 },
+}
+
+impl EventEmitter<SnippetsPanelEvent> for SnippetsPanel {}
 
 pub struct SnippetsPanel {
     pub snippets: Vec<SnippetData>,
@@ -130,7 +134,7 @@ impl SnippetsPanel {
     pub fn handle_snippet_double_click(
         &mut self,
         item_id: &str,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if let Some(id_str) = item_id.strip_prefix("snippet:")
@@ -140,9 +144,12 @@ impl SnippetsPanel {
             if snippet.is_group {
                 // The draggable tree handles this automatically
             } else {
-                cx.emit(AppEvent::OpenSnippetEditor {
-                    snippet_id: Some(id),
-                });
+                window.dispatch_action(
+                    Box::new(OpenSnippetEditor {
+                        snippet_id: Some(id),
+                    }),
+                    cx,
+                );
             }
         }
     }
@@ -174,7 +181,7 @@ impl SnippetsPanel {
         });
 
         self.refresh_snippets(cx);
-        cx.emit(AppEvent::SnippetDeleted { id: snippet_id });
+        cx.emit(SnippetsPanelEvent::SnippetDeleted { id: snippet_id });
     }
 
     pub fn handle_drop(
@@ -273,6 +280,25 @@ impl SnippetsPanel {
             Some(cx.new(|cx| InputState::new(window, cx).placeholder("Group name...")));
         cx.notify();
     }
+
+    fn handle_group_key_event(
+        &mut self,
+        event: &KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event.keystroke.key.as_str() {
+            "enter" => {
+                self.create_new_group(cx);
+            }
+            "escape" => {
+                self.creating_group = false;
+                self.group_name_input = None;
+                cx.notify();
+            }
+            _ => {}
+        }
+    }
 }
 
 impl Render for SnippetsPanel {
@@ -287,16 +313,12 @@ impl Render for SnippetsPanel {
             .gap_2()
             .border_t_1()
             .border_color(cx.theme().border)
-            .on_action(cx.listener(|_this, _: &NewSnippet, _window, cx| {
-                cx.emit(AppEvent::OpenSnippetEditor { snippet_id: None });
+            .on_action(cx.listener(|_this, _: &NewSnippet, window, cx| {
+                window.dispatch_action(
+                    Box::new(OpenSnippetEditor { snippet_id: None }),
+                    cx,
+                );
             }))
-            .on_action(
-                cx.listener(|_this, action: &OpenSnippetEditor, _window, cx| {
-                    cx.emit(AppEvent::OpenSnippetEditor {
-                        snippet_id: action.snippet_id,
-                    });
-                }),
-            )
             .on_action(cx.listener(|this, _: &CreateGroup, window, cx| {
                 this.start_creating_group(window, cx);
             }))
@@ -330,22 +352,7 @@ impl Render for SnippetsPanel {
                                 .bg(cx.theme().background)
                                 .child(Input::new(&input))
                                 .when(creating_group, |div| {
-                                    div.on_key_down(cx.listener(
-                                        |this, event: &KeyDownEvent, _window, cx| {
-                                            let key = event.keystroke.key.as_str();
-                                            match key {
-                                                "enter" => {
-                                                    this.create_new_group(cx);
-                                                }
-                                                "escape" => {
-                                                    this.creating_group = false;
-                                                    this.group_name_input = None;
-                                                    cx.notify();
-                                                }
-                                                _ => {}
-                                            }
-                                        },
-                                    ))
+                                    div.on_key_down(cx.listener(Self::handle_group_key_event))
                                 }),
                         )
                     })

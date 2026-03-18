@@ -9,7 +9,6 @@ use ropey::Rope;
 use tracing::{debug, error};
 
 use crate::app_database::{AppDatabase, QueryTabData};
-use crate::app_events::AppEvent;
 use crate::result_ext::ResultExt;
 use crate::sql::extract_statement_info;
 use database::{DatabaseService, DatabaseServiceTrait};
@@ -250,18 +249,9 @@ impl EditorPanel {
                                 );
                             });
 
-                            // Set loading to false and emit success event
                             editor_panel_entity
                                 .update(cx, |editor_panel, cx| {
                                     editor_panel.loading = false;
-                                    cx.emit(AppEvent::QueryExecutionCompleted {
-                                        connection_id: Some(connection_id),
-                                        database_name: Some(database_name.clone()),
-                                        success: true,
-                                        execution_time: start_time.elapsed(),
-                                        rows_affected: Some(rows_affected),
-                                        error_message: None,
-                                    });
                                     cx.notify();
                                 })
                                 .ok();
@@ -281,32 +271,10 @@ impl EditorPanel {
                                 );
                             });
 
-                            // Set loading to false and emit error event
                             editor_panel_entity
                                 .update(cx, |editor_panel, cx| {
                                     editor_panel.loading = false;
                                     cx.notify();
-                                    cx.emit(AppEvent::QueryExecutionCompleted {
-                                        connection_id: Some(connection_id),
-                                        database_name: Some(database_name.clone()),
-                                        success: false,
-                                        execution_time: start_time.elapsed(),
-                                        rows_affected: None,
-                                        error_message: Some(e.to_string()),
-                                    });
-                                })
-                                .ok();
-
-                            editor_panel_entity
-                                .update(cx, |_, cx| {
-                                    cx.emit(AppEvent::ErrorOccurred {
-                                        context: format!(
-                                            "Query execution on connection_id: {}",
-                                            connection_id,
-                                        ),
-                                        error: e.to_string(),
-                                        severity: crate::app_events::ErrorSeverity::Error,
-                                    });
                                 })
                                 .ok();
 

@@ -233,6 +233,14 @@ impl ChatPanel {
     fn on_clear_chat(&mut self, _: &ClearChat, window: &mut Window, cx: &mut Context<Self>) {
         self.clear_chat(window, cx);
     }
+
+    fn editor_background_color(&self, cx: &App) -> gpui::Hsla {
+        cx.theme()
+            .highlight_theme
+            .style
+            .editor_background
+            .unwrap_or(cx.theme().background)
+    }
 }
 
 impl Focusable for ChatPanel {
@@ -342,26 +350,16 @@ impl Render for ChatPanel {
                 // Text input container with no borders
                 div()
                     .relative()
-                    .bg(cx
-                        .theme()
-                        .highlight_theme
-                        .style
-                        .editor_background
-                        .unwrap_or(cx.theme().background))
+                    .bg(self.editor_background_color(cx))
                     .border_t_1()
                     .border_color(cx.theme().border)
-                    .text_size(px(13.0)) // Smaller font size for the input text
+                    .text_size(px(13.0))
                     .child(
                         Input::new(&self.input_state)
                             .disabled(self.loading_state.is_loading())
                             .bordered(false)
                             .p_3()
-                            .bg(cx
-                                .theme()
-                                .highlight_theme
-                                .style
-                                .editor_background
-                                .unwrap_or(cx.theme().background)),
+                            .bg(self.editor_background_color(cx)),
                     )
                     // Tool mode select and send button in a row below the input
                     .child(

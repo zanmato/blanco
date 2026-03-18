@@ -43,4 +43,17 @@ impl AppDatabase {
 
         Ok(db)
     }
+
+    #[cfg(test)]
+    pub async fn new_in_memory() -> Result<Self, sqlx::Error> {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")?
+            .disable_statement_logging();
+
+        let pool = SqlitePool::connect_with(options).await?;
+
+        let db = Self { pool };
+        crate::app_database::init_schema(&db.pool).await?;
+
+        Ok(db)
+    }
 }

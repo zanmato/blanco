@@ -1,7 +1,6 @@
 use database::DatabaseService;
 use gpui::Context;
 
-use crate::app_events::AppEvent;
 use crate::result_ext::ResultExt;
 
 use super::ConnectionsPanel;
@@ -313,14 +312,7 @@ impl ConnectionsPanel {
                                 database.is_expanded = true; // Mark as expanded
                             }
 
-                            // Rebuild tree to show loaded schemas
                             this.update_tree_items(cx);
-
-                            cx.emit(AppEvent::SchemasLoaded {
-                                connection_id: Some(connection_id),
-                                database_name: Some(database_name),
-                                schemas: schemas.clone(),
-                            });
                             cx.notify();
                         }
                     }).log_err();

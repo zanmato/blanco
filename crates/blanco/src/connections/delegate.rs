@@ -10,7 +10,6 @@ use gpui_component::{
     tooltip::Tooltip,
 };
 
-use crate::app_events::AppEvent;
 use crate::connections::{CreateNewQueryTabParams, TreeItemIcon, TreeItemKind, TreeItemMetadata};
 
 use blanco_ui::{
@@ -198,13 +197,12 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                 let connection_id = metadata.connection_id;
                 let database_name = metadata.database_name.clone().unwrap_or_default();
 
-                // Add "New Query" if applicable
-                let mut menu = if let Some(event) = metadata.create_new_query_tab_event() {
+                let mut menu = if let Some(action) = metadata.create_new_query_tab_action() {
                     menu.item(
                         PopupMenuItem::new("New Query").on_click(window.listener_for(
                             &self.parent,
-                            move |_this, _event, _window, cx| {
-                                cx.emit(event.clone());
+                            move |_this, _event, window, cx| {
+                                window.dispatch_action(Box::new(action.clone()), cx);
                             },
                         )),
                     )
@@ -212,7 +210,6 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                     menu
                 };
 
-                // Add "Disconnect" option
                 menu = menu.item(
                     PopupMenuItem::new("Disconnect").on_click(window.listener_for(
                         &self.parent,
@@ -228,8 +225,7 @@ impl TreeDelegate for ConnectionsTreeDelegate {
             | TreeItemKind::Table
             | TreeItemKind::View
             | TreeItemKind::MaterializedView => {
-                // Use the trait to create the query tab event
-                if let Some(event) = metadata.create_new_query_tab_event() {
+                if let Some(action) = metadata.create_new_query_tab_action() {
                     let connection_id = metadata.connection_id;
                     let connection_name = metadata.connection_name.clone();
                     let database_name = metadata.database_name.clone().unwrap_or_default();
@@ -238,7 +234,6 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                     let db_type = metadata.db_type;
                     let environment_type = metadata.environment_type;
 
-                    // Clone values for the "Open Structure" closure
                     let connection_name_for_structure = connection_name.clone();
                     let database_name_for_structure = database_name.clone();
                     let schema_name_for_structure = schema_name.clone();
@@ -248,8 +243,8 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                         .item(
                             PopupMenuItem::new("New Query").on_click(window.listener_for(
                                 &self.parent,
-                                move |_this, _event, _window, cx| {
-                                    cx.emit(event.clone());
+                                move |_this, _event, window, cx| {
+                                    window.dispatch_action(Box::new(action.clone()), cx);
                                 },
                             )),
                         )
@@ -270,7 +265,6 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                             )),
                         );
 
-                    // Add "Open Structure" option for tables, views, and materialized views
                     if matches!(
                         metadata.kind,
                         TreeItemKind::Table | TreeItemKind::View | TreeItemKind::MaterializedView
@@ -278,16 +272,19 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                         menu = menu
                             .separator()
                             .item(PopupMenuItem::new("Open Structure").on_click(
-                                window.listener_for(&self.parent, move |_this, _event, _window, cx| {
-                                    cx.emit(AppEvent::OpenTableStructure {
-                                        connection_id,
-                                        connection_name: connection_name_for_structure.clone(),
-                                        db_type,
-                                        database_name: database_name_for_structure.clone(),
-                                        schema_name: schema_name_for_structure.clone(),
-                                        table_name: table_name_for_structure.clone(),
-                                        environment_type,
-                                    });
+                                window.listener_for(&self.parent, move |_this, _event, window, cx| {
+                                    window.dispatch_action(
+                                        Box::new(crate::app::OpenTableStructure {
+                                            connection_id,
+                                            connection_name: connection_name_for_structure.clone(),
+                                            db_type,
+                                            database_name: database_name_for_structure.clone(),
+                                            schema_name: schema_name_for_structure.clone(),
+                                            table_name: table_name_for_structure.clone(),
+                                            environment_type,
+                                        }),
+                                        cx,
+                                    );
                                 }),
                             ));
                     }
