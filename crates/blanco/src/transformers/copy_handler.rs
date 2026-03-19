@@ -81,6 +81,7 @@ mod tests {
     fn create_test_data() -> SelectedTableData {
         SelectedTableData {
             table_name: Some("users".to_string()),
+            db_type: None,
             columns: vec!["id".to_string(), "name".to_string(), "email".to_string()],
             selected_rows: vec![SelectedRow {
                 row: 1,

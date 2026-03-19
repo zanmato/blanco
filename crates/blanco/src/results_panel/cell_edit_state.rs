@@ -110,13 +110,6 @@ impl CellEditState {
         self.editing_input.clone()
     }
 
-    pub fn has_unsaved_changes(&self) -> bool {
-        !self.edited_values.is_empty()
-            || !self.pending_new_rows.is_empty()
-            || !self.pending_deleted_rows.is_empty()
-            || !self.changes.is_empty()
-    }
-
     pub fn clear_edits(&mut self) {
         self.edited_values.clear();
         self.original_values.clear();

@@ -1,5 +1,6 @@
 use crate::transformers::{DataTransformer, SelectedTableData, TransformError};
 use blanco_core::connection_trait::ColumnType;
+use database::DatabaseType;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Determine if a value should be quoted based on its column type
@@ -18,6 +19,7 @@ fn should_quote_value(column_type: &ColumnType) -> bool {
 
 pub struct SqlTransformer {
     table_name: Option<String>,
+    db_type: DatabaseType,
     first_row: AtomicBool,
 }
 
@@ -25,13 +27,15 @@ impl SqlTransformer {
     pub fn new() -> Self {
         Self {
             table_name: None,
+            db_type: DatabaseType::PostgreSQL,
             first_row: AtomicBool::new(true),
         }
     }
 
-    pub fn with_table_name(table_name: String) -> Self {
+    pub fn with_table_name(table_name: String, db_type: DatabaseType) -> Self {
         Self {
             table_name: Some(table_name),
+            db_type,
             first_row: AtomicBool::new(true),
         }
     }
@@ -46,6 +50,8 @@ impl DataTransformer for SqlTransformer {
         if !data.has_selection() {
             return Err(TransformError::EmptySelection);
         }
+
+        let db_type = data.db_type.unwrap_or(self.db_type);
 
         // Use provided table name or a default generic name
         let table_name = data
@@ -66,12 +72,12 @@ impl DataTransformer for SqlTransformer {
                 if i > 0 {
                     column_list.push_str(", ");
                 }
-                column_list.push_str(&sql_identifier(col));
+                column_list.push_str(&sql_identifier(col, db_type));
             }
 
             // Create the INSERT statement header
             output.push_str("INSERT INTO ");
-            output.push_str(&sql_identifier(&table_name));
+            output.push_str(&sql_identifier(&table_name, db_type));
             output.push_str(" (");
             output.push_str(&column_list);
             output.push_str(")\nVALUES\n");
@@ -122,16 +128,17 @@ impl DataTransformer for SqlTransformer {
         columns: &[String],
         _column_types: &[ColumnType],
     ) -> Result<String, TransformError> {
+        let db_type = self.db_type;
         let column_list = columns
             .iter()
-            .map(|col| sql_identifier(col))
+            .map(|col| sql_identifier(col, db_type))
             .collect::<Vec<_>>()
             .join(", ");
 
         let table_name = self.table_name.as_deref().unwrap_or("exported_data");
         Ok(format!(
             "INSERT INTO {} ({})\nVALUES\n",
-            sql_identifier(table_name),
+            sql_identifier(table_name, db_type),
             column_list
         ))
     }
@@ -217,10 +224,15 @@ fn sql_escape_string_to(value: &str, output: &mut String) {
     }
 }
 
-/// Quote a SQL identifier safely
-fn sql_identifier(name: &str) -> String {
-    // Simple identifier quoting - wrap in double quotes and escape any existing quotes
-    format!("\"{}\"", name.replace('"', "\"\""))
+/// Quote a SQL identifier safely, using the appropriate quoting style for the database.
+/// MySQL uses backticks, PostgreSQL and SQLite use double quotes.
+fn sql_identifier(name: &str, db_type: DatabaseType) -> String {
+    match db_type {
+        DatabaseType::MySQL => format!("`{}`", name.replace('`', "``")),
+        DatabaseType::PostgreSQL | DatabaseType::SQLite => {
+            format!("\"{}\"", name.replace('"', "\"\""))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -250,10 +262,22 @@ mod tests {
     }
 
     #[test]
-    fn test_sql_identifier() {
-        assert_eq!(sql_identifier("simple"), "\"simple\"");
-        assert_eq!(sql_identifier("contains\"quote"), "\"contains\"\"quote\"");
-        assert_eq!(sql_identifier("table name"), "\"table name\"");
+    fn test_sql_identifier_postgres() {
+        assert_eq!(sql_identifier("simple", DatabaseType::PostgreSQL), "\"simple\"");
+        assert_eq!(sql_identifier("contains\"quote", DatabaseType::PostgreSQL), "\"contains\"\"quote\"");
+        assert_eq!(sql_identifier("table name", DatabaseType::PostgreSQL), "\"table name\"");
+    }
+
+    #[test]
+    fn test_sql_identifier_mysql() {
+        assert_eq!(sql_identifier("simple", DatabaseType::MySQL), "`simple`");
+        assert_eq!(sql_identifier("contains`tick", DatabaseType::MySQL), "`contains``tick`");
+        assert_eq!(sql_identifier("table name", DatabaseType::MySQL), "`table name`");
+    }
+
+    #[test]
+    fn test_sql_identifier_sqlite() {
+        assert_eq!(sql_identifier("simple", DatabaseType::SQLite), "\"simple\"");
     }
 
     #[test]

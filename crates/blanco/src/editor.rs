@@ -6,9 +6,9 @@ mod sql_operations;
 mod table_structure;
 
 use gpui::{
-    App, AppContext, ClickEvent, Context, Entity, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, KeybindingKeystroke, Keystroke, ParentElement, Render,
-    Styled, Task, WeakEntity, Window, div, prelude::FluentBuilder, px, rems,
+    App, AppContext, ClickEvent, Context, Entity, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, KeybindingKeystroke, Keystroke, ParentElement, Render, Styled, Task, WeakEntity,
+    Window, div, prelude::FluentBuilder, px, rems,
 };
 use gpui_component::{
     ActiveTheme, Sizable, WindowExt as _,
@@ -26,14 +26,16 @@ use tracing::{debug, error, info};
 use self::rename_form::RenameTabForm;
 use self::snippet_editor::SnippetEditor;
 use self::table_structure::TableStructureTab;
-use crate::agent::{ChatPanel, ChatSessionContext};
+use crate::agent::{ChatPanel, ChatProviderResolver, ChatSessionContext};
 use crate::app::RenameTab;
+use crate::app::ToggleSidebar;
 use crate::app::{ExecuteSubstitutedQuery, FormatQuery};
 use crate::app_database::AppDatabase;
 use crate::app_database::{EnvironmentType, QueryTabData};
 use crate::app_settings::AppSettings;
 use crate::result_ext::ResultExt;
 use crate::results_panel::ResultsPanel;
+use crate::settings::SettingsView;
 use crate::sql::{SqlCompletionProvider, SqlSelectionRangeProvider, SqruffService};
 use blanco_ui::{IconName, SqlLog};
 use database::{DatabaseService, DatabaseServiceTrait};
@@ -55,19 +57,18 @@ pub struct QueryTab {
     pub schema_name: Option<String>,      // Optional schema name for context
     pub environment_type: Option<EnvironmentType>, // Environment type from connection
     pub editor: Entity<InputState>,
-    pub db_id: Option<i64>, // Database ID for persistence
-    pub results_panel: Entity<crate::results_panel::ResultsPanel>, // Each tab has its own results
-    pub sql_log: Entity<SqlLog>, // SQL log for this tab
+    pub db_id: Option<i64>,                  // Database ID for persistence
+    pub results_panel: Entity<ResultsPanel>, // Each tab has its own results
+    pub sql_log: Entity<SqlLog>,             // SQL log for this tab
     // Chat functionality
     pub chat_enabled: bool,
     pub chat_panel: Option<Entity<ChatPanel>>,
     pub sqruff_service: Option<Arc<SqruffService>>,
 }
 
-
 pub struct SettingsTab {
     pub title: String,
-    pub settings_view: Entity<crate::settings::SettingsView>,
+    pub settings_view: Entity<SettingsView>,
 }
 
 pub struct EditorPanel {
@@ -81,7 +82,9 @@ pub struct EditorPanel {
     format_query_keystroke: KeybindingKeystroke,
     editor_chat_resize_state: Entity<ResizableState>,
     editor_results_resize_state: Entity<ResizableState>,
+    results_log_resize_state: Entity<ResizableState>,
     loading: bool,
+    linting_enabled: bool,
     _run_query_task: Task<()>,
     _lint_debounce_task: Task<()>,
 }
@@ -245,7 +248,7 @@ impl EditorPanel {
         }
 
         // Settings are now stored in the global AppDatabase
-        let settings_view = cx.new(crate::settings::SettingsView::new);
+        let settings_view = cx.new(SettingsView::new);
 
         let settings_tab = SettingsTab {
             title: "Settings".to_string(),
@@ -358,6 +361,7 @@ impl EditorPanel {
 
         let editor_chat_resize_state = cx.new(|_| ResizableState::default());
         let editor_results_resize_state = cx.new(|_| ResizableState::default());
+        let results_log_resize_state = cx.new(|_| ResizableState::default());
 
         let mut panel = Self {
             focus_handle: cx.focus_handle(),
@@ -374,20 +378,37 @@ impl EditorPanel {
             ),
             editor_chat_resize_state,
             editor_results_resize_state,
+            results_log_resize_state,
             loading: false,
+            linting_enabled: false,
             _run_query_task: Task::ready(()),
             _lint_debounce_task: Task::ready(()),
         };
 
         panel.restore_saved_tabs_with_connections_sync(saved_tabs, window, cx);
 
+        // Enable linting after a short delay so that initial selection range events
+        // from restored tabs don't trigger linting for every tab on startup.
+        cx.spawn(async move |entity_handle, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(LINT_DEBOUNCE_MS + 200))
+                .await;
+            entity_handle
+                .update(cx, |this, _cx| {
+                    this.linting_enabled = true;
+                })
+                .log_err();
+        })
+        .detach();
+
         // React to AppSettings changes (e.g. from SettingsView)
-        let settings_subscription = cx.observe_global_in::<AppSettings>(window, |this, window, cx| {
-            let word_wrap = AppSettings::global(cx).settings.editor.word_wrap;
-            let show_whitespace = AppSettings::global(cx).settings.editor.show_whitespace;
-            this.set_all_editors_soft_wrap(word_wrap, window, cx);
-            this.set_all_editors_show_whitespace(show_whitespace, window, cx);
-        });
+        let settings_subscription =
+            cx.observe_global_in::<AppSettings>(window, |this, window, cx| {
+                let word_wrap = AppSettings::global(cx).settings.editor.word_wrap;
+                let show_whitespace = AppSettings::global(cx).settings.editor.show_whitespace;
+                this.set_all_editors_soft_wrap(word_wrap, window, cx);
+                this.set_all_editors_show_whitespace(show_whitespace, window, cx);
+            });
         panel._subscriptions.push(settings_subscription);
 
         panel
@@ -426,11 +447,6 @@ impl EditorPanel {
                 let tab_content = tab_data.content.clone();
                 let tab_db_id = tab_data.id;
                 let tab_connection_type = tab_data.connection_type.clone();
-
-                debug!(
-                    "Restoring tab '{}' with connection id: {:?}",
-                    tab_title, tab_data.connection_id,
-                );
 
                 // Convert connection_type string to DatabaseType enum
                 let tab_db_type = tab_connection_type
@@ -477,16 +493,20 @@ impl EditorPanel {
     ) {
         let editor = cx.new(|cx| {
             // Read settings
-            let word_wrap = AppSettings::global(cx).settings.editor.word_wrap;
-            let show_whitespace = AppSettings::global(cx).settings.editor.show_whitespace;
+            let editor_settings = &AppSettings::global(cx).settings.editor;
+            let word_wrap = editor_settings.word_wrap;
+            let show_whitespace = editor_settings.show_whitespace;
+            let folding = editor_settings.folding;
+            let hard_tabs = editor_settings.hard_tabs;
+            let tab_size = editor_settings.tab_size;
 
             let mut editor = InputState::new(window, cx)
                 .code_editor("sql".to_string())
                 .line_number(true)
-                .folding(false)
+                .folding(folding)
                 .tab_size(TabSize {
-                    tab_size: 2,
-                    hard_tabs: false,
+                    tab_size: tab_size as usize,
+                    hard_tabs,
                 })
                 .soft_wrap(word_wrap)
                 .show_whitespaces(show_whitespace);
@@ -524,10 +544,10 @@ impl EditorPanel {
 
         // Subscribe to editor text changes for auto-linting
         let subscription = cx.subscribe_in(&editor, window, |this, _editor, event, window, cx| {
-            // Only lint if the event is a text change
             if let InputEvent::SelectionRangeChange { range } = event {
-                tracing::debug!("Selection range changed, linting current query");
-                this.lint_current_query_debounced(*range, cx);
+                if this.linting_enabled {
+                    this.lint_current_query_debounced(*range, cx);
+                }
             } else if let InputEvent::PressEnter { secondary } = event
                 && *secondary
             {
@@ -560,7 +580,13 @@ impl EditorPanel {
             editor: editor.clone(),
             db_id: params.db_id,
             results_panel: cx.new(|cx| {
-                ResultsPanel::new(params.connection_id, &params.database_name, window, cx)
+                ResultsPanel::new(
+                    params.connection_id,
+                    &params.database_name,
+                    params.db_type,
+                    window,
+                    cx,
+                )
             }),
             sql_log: cx.new(|cx| SqlLog::new(1000, cx.theme().highlight_theme.clone())),
             sqruff_service,
@@ -625,7 +651,7 @@ impl EditorPanel {
 
             if query_tab.chat_enabled && query_tab.chat_panel.is_none() {
                 // Create LLM instance for this connection
-                match crate::agent::ChatProviderResolver::get_llm_for_connection(cx) {
+                match ChatProviderResolver::get_llm_for_connection(cx) {
                     Ok(llm_instance) => {
                         // Build the session context from QueryTab
                         let session_context = ChatSessionContext::new()
@@ -662,7 +688,6 @@ impl EditorPanel {
             cx.notify();
         }
     }
-
 
     /// Create a tab bar click handler closure
     fn tab_bar_click_handler(
@@ -722,7 +747,8 @@ impl EditorPanel {
                             })
                     });
                 };
-            }).log_err();
+            })
+            .log_err();
         }
     }
 
@@ -742,123 +768,121 @@ impl EditorPanel {
                 let show_close_button = self.tabs.len() > 1;
                 let tab_index = ix;
 
-                Tab::new()
-                    .label(&query_tab.title)
-                    .suffix(
-                        h_flex()
-                            .gap_1()
-                            .pr_1()
-                            .child(
+                Tab::new().label(&query_tab.title).suffix(
+                    h_flex()
+                        .gap_1()
+                        .pr_1()
+                        .child(
+                            div()
+                                .pr_1()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(
+                                    query_tab
+                                        .connection_name
+                                        .clone()
+                                        .unwrap_or_else(|| "No Connection".to_string()),
+                                ),
+                        )
+                        .when_some(query_tab.environment_type, |this, env_type| {
+                            this.child(
                                 div()
-                                    .pr_1()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(
-                                        query_tab.connection_name.clone()
-                                            .unwrap_or_else(|| "No Connection".to_string())
-                                    )
+                                    .text_size(rems(0.55))
+                                    .font_family(cx.theme().mono_font_family.clone())
+                                    .px(px(6.))
+                                    .pt_0p5()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(env_type.get_color(cx))
+                                    .text_color(env_type.get_color(cx))
+                                    .child(env_type.display_name()),
                             )
-                            .when_some(query_tab.environment_type, |this, env_type| {
-                                this.child(
-                                    div()
-                                        .text_size(rems(0.55))
-                                        .font_family(cx.theme().mono_font_family.clone())
-                                        .px(px(6.))
-                                        .pt_0p5()
-                                        .rounded_md()
-                                        .border_1()
-                                        .border_color(env_type.get_color(cx))
-                                        .text_color(env_type.get_color(cx))
-                                        .child(env_type.display_name())
-                                )
-                            })
-                            .when(show_close_button, |this| {
-                                this.child(
-                                    Button::new(("close-tab", ix))
-                                        .ghost()
-                                        .xsmall()
-                                        .icon(IconName::Close)
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.close_tab(tab_index, cx);
-                                        }))
-                                )
-                            })
-                            .into_any_element()
-                    )
+                        })
+                        .when(show_close_button, |this| {
+                            this.child(
+                                Button::new(("close-tab", ix))
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(IconName::Close)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.close_tab(tab_index, cx);
+                                    })),
+                            )
+                        })
+                        .into_any_element(),
+                )
             }
             TabType::Snippet(snippet_editor) => {
                 let label = snippet_editor.read(cx).get_title();
                 let tab_index = ix;
 
-                Tab::new()
-                    .label(label)
-                    .suffix(
-                        h_flex()
-                            .gap_2()
-                            .items_center()
-                            .pr_1()
-                            .child(Icon::new(IconName::File).text_color(cx.theme().green))
-                            .child(
-                                Button::new(("close-snippet-tab", ix))
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(IconName::Close)
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.close_tab(tab_index, cx);
-                                    }))
-                            )
-                    )
+                Tab::new().label(label).suffix(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .pr_1()
+                        .child(Icon::new(IconName::File).text_color(cx.theme().green))
+                        .child(
+                            Button::new(("close-snippet-tab", ix))
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::Close)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.close_tab(tab_index, cx);
+                                })),
+                        ),
+                )
             }
             TabType::Settings(settings_tab) => {
                 let label = settings_tab.title.clone();
                 let tab_index = ix;
 
-                Tab::new()
-                    .label(label)
-                    .suffix(
-                        h_flex()
-                            .gap_2()
-                            .items_center()
-                            .pr_1()
-                            .child(Icon::new(IconName::Settings))
-                            .child(
-                                Button::new(("close-settings-tab", ix))
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(IconName::Close)
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.close_tab(tab_index, cx);
-                                    }))
-                            )
-                    )
+                Tab::new().label(label).suffix(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .pr_1()
+                        .child(Icon::new(IconName::Settings))
+                        .child(
+                            Button::new(("close-settings-tab", ix))
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::Close)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.close_tab(tab_index, cx);
+                                })),
+                        ),
+                )
             }
             TabType::TableStructure(table_structure_tab) => {
                 let label = table_structure_tab.read(cx).title.clone();
                 let tab_index = ix;
 
-                Tab::new()
-                    .label(label)
-                    .suffix(
-                        h_flex()
-                            .gap_2()
-                            .items_center()
-                            .pr_1()
-                            .child(Icon::new(IconName::Sheet).text_color(cx.theme().blue))
-                            .child(
-                                Button::new(("close-table-structure-tab", ix))
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(IconName::Close)
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.close_tab(tab_index, cx);
-                                    }))
-                            )
-                    )
+                Tab::new().label(label).suffix(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .pr_1()
+                        .child(Icon::new(IconName::Sheet).text_color(cx.theme().blue))
+                        .child(
+                            Button::new(("close-table-structure-tab", ix))
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::Close)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.close_tab(tab_index, cx);
+                                })),
+                        ),
+                )
             }
         }
     }
 
-    fn render_row_operations_bar(&self, query_tab: &QueryTab, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_row_operations_bar(
+        &self,
+        query_tab: &QueryTab,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         h_flex()
             .p_2()
             .gap_2()
@@ -888,7 +912,7 @@ impl EditorPanel {
                         this.with_active_results_panel(cx, |panel, cx| {
                             panel.duplicate_row(cx);
                         });
-                    }))
+                    })),
             )
             .child(
                 Button::new("delete-row")
@@ -900,7 +924,7 @@ impl EditorPanel {
                         this.with_active_results_panel(cx, |panel, cx| {
                             panel.delete_row(cx);
                         });
-                    }))
+                    })),
             )
             .child(
                 Button::new("commit-changes")
@@ -909,7 +933,9 @@ impl EditorPanel {
                     .icon(IconName::Check)
                     .label("Commit")
                     .on_click(cx.listener(|this, _, window, cx| {
-                        if let Some(TabType::Query(query_tab)) = this.tabs.get_mut(this.active_tab_ix) {
+                        if let Some(TabType::Query(query_tab)) =
+                            this.tabs.get_mut(this.active_tab_ix)
+                        {
                             query_tab.results_panel.update(cx, |panel, cx| {
                                 panel.commit_changes_with_sql_log(window, &query_tab.sql_log, cx);
                             });
@@ -934,16 +960,18 @@ impl EditorPanel {
                     .outline()
                     .small()
                     .icon(IconName::Bot)
-                    .when(query_tab.chat_enabled, |btn| {
-                        btn.primary()
-                    })
+                    .when(query_tab.chat_enabled, |btn| btn.primary())
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.toggle_chat_for_active_tab(window, cx);
-                    }))
+                    })),
             )
     }
 
-    fn render_query_tab_content(&self, query_tab: &QueryTab, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_query_tab_content(
+        &self,
+        query_tab: &QueryTab,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         h_resizable("editor-split")
             .with_state(&self.editor_chat_resize_state)
             .child(
@@ -958,22 +986,20 @@ impl EditorPanel {
                                     .overflow_hidden()
                                     .min_w_0()
                                     .child(
-                                        div()
-                                            .flex_1()
-                                            .min_h_0()
-                                            .relative()
-                                            .child(
-                                                Input::new(&query_tab.editor)
-                                                    .bordered(false)
-                                                    .h_full()
-                                                    .rounded_none()
-                                                    .font_family(cx.theme().mono_font_family.clone())
-                                                    .text_size(px(14.))
-                                                    .focus_bordered(false)
-                                            )
-                                    )
-                            )
-                        ).child(
+                                        div().flex_1().min_h_0().w_full().relative().child(
+                                            Input::new(&query_tab.editor)
+                                                .bordered(false)
+                                                .h_full()
+                                                .w_full()
+                                                .rounded_none()
+                                                .font_family(cx.theme().mono_font_family.clone())
+                                                .text_size(px(14.))
+                                                .focus_bordered(false),
+                                        ),
+                                    ),
+                            ),
+                        )
+                        .child(
                             resizable_panel().size(200.).child(
                                 v_flex()
                                     .h_full()
@@ -993,8 +1019,15 @@ impl EditorPanel {
                                                     .small()
                                                     .icon(IconName::WandSparkles)
                                                     .label("Format")
-                                                    .tooltip(format!("Format ({})", self.format_query_keystroke))
-                                                    .on_click(cx.listener(|panel, _, window, cx| panel.format_current_query(window, cx)))
+                                                    .tooltip(format!(
+                                                        "Format ({})",
+                                                        self.format_query_keystroke
+                                                    ))
+                                                    .on_click(cx.listener(
+                                                        |panel, _, window, cx| {
+                                                            panel.format_current_query(window, cx)
+                                                        },
+                                                    )),
                                             )
                                             .child(
                                                 Button::new("run-query")
@@ -1004,42 +1037,53 @@ impl EditorPanel {
                                                     .label("Run Current")
                                                     .loading(self.loading)
                                                     .loading_icon(IconName::LoaderCircle)
-                                                    .tooltip(format!("Run Current ({})", self.run_query_keystroke))
-                                                    .on_click(cx.listener(|panel, _, window, cx| panel.on_run_query(window, cx))),
-                                            )
+                                                    .tooltip(format!(
+                                                        "Run Current ({})",
+                                                        self.run_query_keystroke
+                                                    ))
+                                                    .on_click(cx.listener(
+                                                        |panel, _, window, cx| {
+                                                            panel.on_run_query(window, cx)
+                                                        },
+                                                    )),
+                                            ),
                                     )
                                     .child(
-                                        v_flex()
-                                            .flex_grow()
-                                            .min_h(px(200.))
-                                            .child(
-                                                div()
-                                                    .flex_1()
-                                                    .child(query_tab.results_panel.clone())
-                                            )
-                                            .child(query_tab.sql_log.clone())
+                                        div().flex_1().min_h_0().overflow_hidden().child(
+                                            v_resizable("results-log-split")
+                                                .with_state(&self.results_log_resize_state)
+                                                .child(
+                                                    resizable_panel()
+                                                        .child(query_tab.results_panel.clone()),
+                                                )
+                                                .child(
+                                                    resizable_panel()
+                                                        .size(120.)
+                                                        .child(query_tab.sql_log.clone()),
+                                                ),
+                                        ),
                                     )
                                     .child(self.render_row_operations_bar(query_tab, cx)),
                             ),
-                    ),
+                        ),
                 ),
             )
             .when(
                 query_tab.chat_enabled && query_tab.chat_panel.is_some(),
                 |this| {
                     this.child(
-                        resizable_panel().size_range(px(500.)..gpui::Pixels::MAX).child(
-                            div()
-                                .border_l_1()
-                                .border_color(cx.theme().border)
-                                .size_full()
-                                .min_h_0()
-                                .child(
-                                    query_tab.chat_panel.as_ref().unwrap().clone(),
-                                ),
-                        ),
+                        resizable_panel()
+                            .size_range(px(500.)..gpui::Pixels::MAX)
+                            .child(
+                                div()
+                                    .border_l_1()
+                                    .border_color(cx.theme().border)
+                                    .size_full()
+                                    .min_h_0()
+                                    .child(query_tab.chat_panel.as_ref().unwrap().clone()),
+                            ),
                     )
-                }
+                },
             )
     }
 }
@@ -1049,7 +1093,6 @@ impl Focusable for EditorPanel {
         self.focus_handle.clone()
     }
 }
-
 
 impl Render for EditorPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1061,15 +1104,17 @@ impl Render for EditorPanel {
             .flex_1()
             .h_full()
             .overflow_hidden()
-            .on_action(cx.listener(|this, action: &ExecuteSubstitutedQuery, window, cx| {
-                this.execute_query(
-                    action.query.clone(),
-                    action.connection_id,
-                    &action.database_name,
-                    window,
-                    cx,
-                );
-            }))
+            .on_action(
+                cx.listener(|this, action: &ExecuteSubstitutedQuery, window, cx| {
+                    this.execute_query(
+                        action.query.clone(),
+                        action.connection_id,
+                        &action.database_name,
+                        window,
+                        cx,
+                    );
+                }),
+            )
             .on_action(cx.listener(|this, _: &FormatQuery, window, cx| {
                 this.format_current_query(window, cx);
             }))
@@ -1089,55 +1134,47 @@ impl Render for EditorPanel {
                                 Icon::new(IconName::PanelLeftClose).size_4()
                             })
                             .on_click(cx.listener(|_, _, window, cx| {
-                                window.dispatch_action(
-                                    Box::new(crate::app::ToggleSidebar),
-                                    cx,
-                                );
-                            }))
+                                window.dispatch_action(Box::new(ToggleSidebar), cx);
+                            })),
                     )
                     .children(
-                        self.tabs.iter().enumerate()
-                            .map(|(ix, tab)| self.render_tab_bar_item(ix, tab, cx))
+                        self.tabs
+                            .iter()
+                            .enumerate()
+                            .map(|(ix, tab)| self.render_tab_bar_item(ix, tab, cx)),
                     )
-                    .track_scroll(&self.tabbar_scroll_handle)
+                    .track_scroll(&self.tabbar_scroll_handle),
             )
             .child(
                 div()
                     .flex_1()
                     .overflow_hidden()
-                    .when_some(current_tab, |this, tab| {
-                match tab {
-                    TabType::Query(query_tab) => {
-                        this.child(self.render_query_tab_content(query_tab, cx))
-                    }
-                    TabType::Settings(settings_tab) => {
-                        this.child(
+                    .when_some(current_tab, |this, tab| match tab {
+                        TabType::Query(query_tab) => {
+                            this.child(self.render_query_tab_content(query_tab, cx))
+                        }
+                        TabType::Settings(settings_tab) => this.child(
                             div()
                                 .flex_1()
                                 .h_full()
                                 .overflow_hidden()
-                                .child(settings_tab.settings_view.clone())
-                        )
-                    }
-                    TabType::Snippet(snippet_editor) => {
-                        this.child(
+                                .child(settings_tab.settings_view.clone()),
+                        ),
+                        TabType::Snippet(snippet_editor) => this.child(
                             div()
                                 .flex_1()
                                 .h_full()
                                 .overflow_hidden()
-                                .child(snippet_editor.clone())
-                        )
-                    }
-                    TabType::TableStructure(table_structure_tab) => {
-                        this.child(
+                                .child(snippet_editor.clone()),
+                        ),
+                        TabType::TableStructure(table_structure_tab) => this.child(
                             div()
                                 .flex_1()
                                 .h_full()
                                 .overflow_hidden()
-                                .child(table_structure_tab.clone())
-                        )
-                    }
-                }
-            }))
+                                .child(table_structure_tab.clone()),
+                        ),
+                    }),
+            )
     }
 }

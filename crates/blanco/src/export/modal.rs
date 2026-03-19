@@ -13,6 +13,7 @@ use gpui_component::{
     select::{Select, SelectEvent, SelectState},
     v_flex,
 };
+use crate::transformers::{CsvTransformer, DataTransformer, JsonTransformer, SqlTransformer};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -53,6 +54,7 @@ pub struct ExportModal {
     database_name: String,
     schema_name: Option<String>,
     table_name: String,
+    db_type: database::DatabaseType,
     format_select: Entity<SelectState<Vec<String>>>,
     directory_input: Entity<InputState>,
     filename_input: Entity<InputState>,
@@ -72,6 +74,7 @@ impl ExportModal {
         database_name: String,
         schema_name: Option<String>,
         table_name: String,
+        db_type: database::DatabaseType,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -109,6 +112,7 @@ impl ExportModal {
             database_name,
             schema_name,
             table_name,
+            db_type,
             format_select,
             directory_input,
             filename_input,
@@ -210,6 +214,7 @@ impl ExportModal {
                 let database_name = self.database_name.clone();
                 let schema_name = self.schema_name.clone();
                 let table_name_param = self.table_name.clone();
+                let db_type = self.db_type;
 
                 let table_name_for_query = if let Some(schema) = &schema_name {
                     format!("{}.{}", schema, table_name_param)
@@ -221,20 +226,20 @@ impl ExportModal {
 
                 let db_service = DatabaseService::global(cx).clone();
 
-                cx.spawn_in(window, async move |entity, mut window| {
+                cx.spawn_in(window, async move |entity, window| {
                     let result = window
                         .background_spawn(async move {
                             let connection = db_service
                                 .get_or_create_connection(connection_id, None)
                                 .await?;
 
-                            let transformer: Box<dyn crate::transformers::DataTransformer> =
+                            let transformer: Box<dyn DataTransformer> =
                                 match format {
                                     ExportFormat::Csv => {
-                                        Box::new(crate::transformers::CsvTransformer)
+                                        Box::new(CsvTransformer)
                                     }
                                     ExportFormat::Json => {
-                                        Box::new(crate::transformers::JsonTransformer::new())
+                                        Box::new(JsonTransformer::new())
                                     }
                                     ExportFormat::Sql => {
                                         let table_name_for_sql =
@@ -244,8 +249,9 @@ impl ExportModal {
                                                 table_name_param.clone()
                                             };
                                         Box::new(
-                                            crate::transformers::SqlTransformer::with_table_name(
+                                            SqlTransformer::with_table_name(
                                                 table_name_for_sql,
+                                                db_type,
                                             ),
                                         )
                                     }

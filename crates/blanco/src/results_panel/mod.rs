@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Window, div, px,
+    App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, Styled, Subscription, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, WindowExt as _,
@@ -18,9 +18,17 @@ use blanco_core::QueryResult;
 use blanco_core::connection_trait::ColumnType;
 use database::DatabaseService;
 
-use crate::app::{AddRow, DeleteRow, DuplicateRow, SetCellNull};
+use crate::app::{
+    AddRow, CopyAsCSV, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, DeleteRow, DuplicateRow, ExportAsCSV,
+    ExportAsJSON, ExportAsMarkdown, ExportAsSQL, SetCellNull,
+};
+use crate::export::service::{ExportResult, ExportService};
 use crate::result_ext::ResultExt;
-use crate::transformers::CopyHandler;
+use crate::time_format;
+use crate::transformers::{
+    CopyHandler, CsvTransformer, DataTransformer, JsonTransformer, MarkdownTransformer,
+    SqlTransformer,
+};
 
 mod cell_edit_state;
 mod foreign_key_popover;
@@ -34,8 +42,6 @@ pub use results_table_delegate::ResultsTableDelegate;
 // Response structure for table operations
 #[derive(Debug, Clone)]
 pub struct TableOperationResponse {
-    pub table_name: String,
-    pub connection_id: i64,
     pub success: bool,
     pub rows_affected: Option<u64>,
     pub error_message: Option<String>,
@@ -66,6 +72,7 @@ pub struct SelectedRow {
 #[derive(Clone, Debug, Default)]
 pub struct SelectedTableData {
     pub table_name: Option<String>,
+    pub db_type: Option<database::DatabaseType>,
     pub columns: Vec<String>,
     pub selected_rows: Vec<SelectedRow>,
 }
@@ -83,13 +90,14 @@ impl ResultsPanel {
     pub fn new(
         connection_id: i64,
         database_name: &str,
+        db_type: database::DatabaseType,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut delegate = ResultsTableDelegate::default();
 
         // Set connection ID on delegate if provided
-        delegate.set_connection_id(connection_id, database_name);
+        delegate.set_connection_id(connection_id, database_name, db_type);
 
         let table_state = cx.new(|cx| {
             TableState::new(delegate, window, cx)
@@ -299,7 +307,11 @@ impl ResultsPanel {
             }
 
             // Get the original value before updating
-            old_value = delegate.rows.get(row).and_then(|r| r.get(col)).and_then(|v| v.clone());
+            old_value = delegate
+                .rows
+                .get(row)
+                .and_then(|r| r.get(col))
+                .and_then(|v| v.clone());
             table_name = delegate.table_name.clone();
 
             // Get primary key value if we have a primary key column
@@ -414,22 +426,6 @@ impl ResultsPanel {
         cx.notify();
     }
 
-    pub fn has_unsaved_changes(&self, cx: &App) -> bool {
-        self.table_state
-            .read(cx)
-            .delegate()
-            .edit_state
-            .has_unsaved_changes()
-    }
-
-    pub fn get_table_name(&self, cx: &App) -> Option<String> {
-        self.table_state
-            .read(cx)
-            .delegate()
-            .get_table_name()
-            .map(|s| s.to_string())
-    }
-
     pub fn get_changes(&self, cx: &App) -> Vec<TableChange> {
         let table_read = self.table_state.read(cx);
         let _delegate = table_read.delegate();
@@ -468,7 +464,10 @@ impl ResultsPanel {
         cx.notify();
     }
 
-    pub fn commit_all_edits(&mut self, cx: &mut Context<Self>) -> Vec<(usize, usize, Option<String>)> {
+    pub fn commit_all_edits(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Vec<(usize, usize, Option<String>)> {
         let mut committed_changes = Vec::new();
 
         self.table_state.update(cx, |state, cx| {
@@ -525,7 +524,9 @@ impl ResultsPanel {
         cx: &mut Context<Self>,
     ) {
         self.table_state.update(cx, |state, cx| {
-            state.delegate_mut().update_cell_value(row, col, Some(new_value));
+            state
+                .delegate_mut()
+                .update_cell_value(row, col, Some(new_value));
             state.refresh(cx);
         });
         cx.notify();
@@ -586,19 +587,8 @@ impl ResultsPanel {
 
         let delegate = self.table_state.read(cx).delegate();
 
-        // Get table name for logging
-        let table_name = delegate
-            .table_name
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string());
-
-        // Create clones for different uses
         let change_operations_for_pipeline = change_operations.clone();
-        let _change_operations_for_logging = change_operations.clone();
-        let table_name_for_logging = table_name.clone();
-        let _table_name_for_event = table_name.clone();
         let connection_id_for_pipeline = delegate.connection_id;
-        let _connection_id_for_event = delegate.connection_id;
         let database_name = delegate.database_name.clone();
 
         tracing::info!("Commit Changes: Starting table operations execution");
@@ -653,8 +643,6 @@ impl ResultsPanel {
                     }
 
                     TableOperationResponse {
-                        table_name: table_name_for_logging.clone(),
-                        connection_id: connection_id_for_pipeline,
                         success,
                         rows_affected: Some(total_rows_affected),
                         error_message,
@@ -666,8 +654,6 @@ impl ResultsPanel {
                 Err(e) => {
                     tracing::error!("Failed to get connection for table operations: {}", e);
                     TableOperationResponse {
-                        table_name: table_name_for_logging.clone(),
-                        connection_id: connection_id_for_pipeline,
                         success: false,
                         rows_affected: None,
                         error_message: Some(format!("Connection error: {}", e)),
@@ -701,55 +687,59 @@ impl ResultsPanel {
             // Handle successful operations
             if response.success {
                 // Clear edits, remove deleted rows, and refresh the table
-                entity.update(cx, |panel, cx| {
-                    panel.table_state.update(cx, |state, cx| {
-                        let delegate = state.delegate_mut();
+                entity
+                    .update(cx, |panel, cx| {
+                        panel.table_state.update(cx, |state, cx| {
+                            let delegate = state.delegate_mut();
 
-                        // Collect deleted row indices and sort in reverse order to remove from bottom up
-                        let mut deleted_rows: Vec<usize> = delegate
-                            .edit_state
-                            .pending_deleted_rows
-                            .iter()
-                            .copied()
-                            .collect();
-                        deleted_rows.sort_by(|a, b| b.cmp(a)); // Reverse sort
+                            // Collect deleted row indices and sort in reverse order to remove from bottom up
+                            let mut deleted_rows: Vec<usize> = delegate
+                                .edit_state
+                                .pending_deleted_rows
+                                .iter()
+                                .copied()
+                                .collect();
+                            deleted_rows.sort_by(|a, b| b.cmp(a)); // Reverse sort
 
-                        // Remove deleted rows from the table
-                        for row_idx in deleted_rows {
-                            if row_idx < delegate.rows.len() {
-                                delegate.rows.remove(row_idx);
+                            // Remove deleted rows from the table
+                            for row_idx in deleted_rows {
+                                if row_idx < delegate.rows.len() {
+                                    delegate.rows.remove(row_idx);
+                                }
                             }
-                        }
 
-                        delegate.edit_state.clear_edits();
-                        state.refresh(cx);
-                    });
+                            delegate.edit_state.clear_edits();
+                            state.refresh(cx);
+                        });
 
-                    // Update SQL log with queries and success message
-                    if let Some(sql_log) = sql_log_response_entity {
-                        sql_log.update(cx, |log, cx| {
-                            // Log each SQL query
-                            for sql_query in &response.sql_queries {
+                        // Update SQL log with queries and success message
+                        if let Some(sql_log) = sql_log_response_entity {
+                            sql_log.update(cx, |log, cx| {
+                                // Log each SQL query
+                                for sql_query in &response.sql_queries {
+                                    log.append_text(
+                                        &blanco_ui::SqlLogMessage::SqlStatement(sql_query.clone()),
+                                        cx,
+                                    );
+                                }
+                                // Log summary comment
+                                let log_message = format!(
+                                    "{}, {} operations, {} rows affected in {}",
+                                    time_format::format_current_timestamp(),
+                                    response.operations_executed,
+                                    response.rows_affected.unwrap_or(0),
+                                    time_format::format_duration(
+                                        response.duration.as_millis() as i64
+                                    )
+                                );
                                 log.append_text(
-                                    &blanco_ui::SqlLogMessage::SqlStatement(sql_query.clone()),
+                                    &blanco_ui::SqlLogMessage::Comment(log_message),
                                     cx,
                                 );
-                            }
-                            // Log summary comment
-                            let log_message = format!(
-                                "{}, {} operations, {} rows affected in {}",
-                                crate::time_format::format_current_timestamp(),
-                                response.operations_executed,
-                                response.rows_affected.unwrap_or(0),
-                                crate::time_format::format_duration(
-                                    response.duration.as_millis() as i64
-                                )
-                            );
-                            log.append_text(&blanco_ui::SqlLogMessage::Comment(log_message), cx);
-                        });
-                    }
-                }).log_err();
-
+                            });
+                        }
+                    })
+                    .log_err();
             } else {
                 // Handle failed operations - show error but keep edits for retry
                 if let Some(sql_log) = sql_log_response_entity {
@@ -770,7 +760,6 @@ impl ResultsPanel {
                         log.append_text(&blanco_ui::SqlLogMessage::Comment(error_msg), cx);
                     });
                 }
-
             }
         })
         .detach();
@@ -1033,17 +1022,21 @@ impl ResultsPanel {
 
     fn on_copy_as_csv(
         &mut self,
-        _action: &crate::app::CopyAsCSV,
+        _action: &CopyAsCSV,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let table_state = self.table_state.read(cx);
-        let selected_rows = table_state.selected_rows().clone();
+        let mut selected_rows = table_state.selected_rows().clone();
         let delegate = table_state.delegate();
 
         if selected_rows.is_empty() {
-            tracing::error!("Failed to copy as CSV: No rows selected for copying");
-            return;
+            if let Some(cell) = table_state.selected_cell() {
+                selected_rows.insert(cell.0);
+            } else {
+                tracing::error!("Failed to copy as CSV: No rows selected for copying");
+                return;
+            }
         }
 
         let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
@@ -1053,17 +1046,21 @@ impl ResultsPanel {
 
     fn on_copy_as_json(
         &mut self,
-        _action: &crate::app::CopyAsJSON,
+        _action: &CopyAsJSON,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let table_state = self.table_state.read(cx);
-        let selected_rows = table_state.selected_rows().clone();
+        let mut selected_rows = table_state.selected_rows().clone();
         let delegate = table_state.delegate();
 
         if selected_rows.is_empty() {
-            tracing::error!("Failed to copy as JSON: No rows selected for copying");
-            return;
+            if let Some(cell) = table_state.selected_cell() {
+                selected_rows.insert(cell.0);
+            } else {
+                tracing::error!("Failed to copy as JSON: No rows selected for copying");
+                return;
+            }
         }
 
         let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
@@ -1073,17 +1070,21 @@ impl ResultsPanel {
 
     fn on_copy_as_sql(
         &mut self,
-        _action: &crate::app::CopyAsSQL,
+        _action: &CopyAsSQL,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let table_state = self.table_state.read(cx);
-        let selected_rows = table_state.selected_rows().clone();
+        let mut selected_rows = table_state.selected_rows().clone();
         let delegate = table_state.delegate();
 
         if selected_rows.is_empty() {
-            tracing::error!("Failed to copy as SQL: No rows selected for copying");
-            return;
+            if let Some(cell) = table_state.selected_cell() {
+                selected_rows.insert(cell.0);
+            } else {
+                tracing::error!("Failed to copy as SQL: No rows selected for copying");
+                return;
+            }
         }
 
         let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
@@ -1093,17 +1094,21 @@ impl ResultsPanel {
 
     fn on_copy_as_markdown(
         &mut self,
-        _action: &crate::app::CopyAsMarkdown,
+        _action: &CopyAsMarkdown,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let table_state = self.table_state.read(cx);
-        let selected_rows = table_state.selected_rows().clone();
+        let mut selected_rows = table_state.selected_rows().clone();
         let delegate = table_state.delegate();
 
         if selected_rows.is_empty() {
-            tracing::error!("Failed to copy as Markdown: No rows selected for copying");
-            return;
+            if let Some(cell) = table_state.selected_cell() {
+                selected_rows.insert(cell.0);
+            } else {
+                tracing::error!("Failed to copy as Markdown: No rows selected for copying");
+                return;
+            }
         }
 
         let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
@@ -1162,7 +1167,7 @@ impl ResultsPanel {
 
     fn on_export_as_csv(
         &mut self,
-        _action: &crate::app::ExportAsCSV,
+        _action: &ExportAsCSV,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1171,7 +1176,7 @@ impl ResultsPanel {
 
     fn on_export_as_json(
         &mut self,
-        _action: &crate::app::ExportAsJSON,
+        _action: &ExportAsJSON,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1180,7 +1185,7 @@ impl ResultsPanel {
 
     fn on_export_as_sql(
         &mut self,
-        _action: &crate::app::ExportAsSQL,
+        _action: &ExportAsSQL,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1189,7 +1194,7 @@ impl ResultsPanel {
 
     fn on_export_as_markdown(
         &mut self,
-        _action: &crate::app::ExportAsMarkdown,
+        _action: &ExportAsMarkdown,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1237,6 +1242,9 @@ impl ResultsPanel {
 
         let format_owned = format.to_string();
         let table_name_for_sql = table_name.clone();
+        let db_type = selected_data
+            .db_type
+            .unwrap_or(database::DatabaseType::PostgreSQL);
 
         cx.spawn_in(window, async move |entity, cx| {
             // Await the path result - it's Result<Result<Option<PathBuf>>, Canceled>
@@ -1255,22 +1263,22 @@ impl ResultsPanel {
             };
 
             // Get transformer
-            let transformer: Box<dyn crate::transformers::DataTransformer> =
-                match format_owned.as_str() {
-                    "csv" => Box::new(crate::transformers::CsvTransformer),
-                    "json" => Box::new(crate::transformers::JsonTransformer::new()),
-                    "sql" => Box::new(crate::transformers::SqlTransformer::with_table_name(
-                        table_name_for_sql.clone(),
-                    )),
-                    "markdown" => Box::new(crate::transformers::MarkdownTransformer),
-                    _ => {
-                        tracing::error!("Unknown format: {}", format_owned);
-                        return;
-                    }
-                };
+            let transformer: Box<dyn DataTransformer> = match format_owned.as_str() {
+                "csv" => Box::new(CsvTransformer),
+                "json" => Box::new(JsonTransformer::new()),
+                "sql" => Box::new(SqlTransformer::with_table_name(
+                    table_name_for_sql.clone(),
+                    db_type,
+                )),
+                "markdown" => Box::new(MarkdownTransformer),
+                _ => {
+                    tracing::error!("Unknown format: {}", format_owned);
+                    return;
+                }
+            };
 
             // Create export service
-            let export_service = crate::export::service::ExportService::new();
+            let export_service = ExportService::new();
 
             // Execute export
             match export_service
@@ -1279,7 +1287,7 @@ impl ResultsPanel {
             {
                 Ok(result) => {
                     match result {
-                        crate::export::service::ExportResult::Success {
+                        ExportResult::Success {
                             file_path,
                             rows_exported,
                             ..
@@ -1291,35 +1299,39 @@ impl ResultsPanel {
                                 rows_exported
                             );
                             // Show success notification via entity update
-                            entity.update_in(cx, |_panel, window, cx| {
-                                window.push_notification(
-                                    (
-                                        NotificationType::Success,
-                                        SharedString::from(format!(
-                                            "Exported {} rows to {}",
-                                            rows_exported, file_path
-                                        )),
-                                    ),
-                                    cx,
-                                );
-                            }).log_err();
+                            entity
+                                .update_in(cx, |_panel, window, cx| {
+                                    window.push_notification(
+                                        (
+                                            NotificationType::Success,
+                                            SharedString::from(format!(
+                                                "Exported {} rows to {}",
+                                                rows_exported, file_path
+                                            )),
+                                        ),
+                                        cx,
+                                    );
+                                })
+                                .log_err();
                         }
-                        crate::export::service::ExportResult::Cancelled => {
+                        ExportResult::Cancelled => {
                             tracing::info!("Export cancelled by user");
                         }
                     }
                 }
                 Err(e) => {
                     tracing::error!("Export failed: {}", e);
-                    entity.update_in(cx, |_panel, window, cx| {
-                        window.push_notification(
-                            (
-                                NotificationType::Error,
-                                SharedString::from(format!("Export failed: {}", e)),
-                            ),
-                            cx,
-                        );
-                    }).log_err();
+                    entity
+                        .update_in(cx, |_panel, window, cx| {
+                            window.push_notification(
+                                (
+                                    NotificationType::Error,
+                                    SharedString::from(format!("Export failed: {}", e)),
+                                ),
+                                cx,
+                            );
+                        })
+                        .log_err();
                 }
             }
         })
@@ -1359,6 +1371,7 @@ impl ResultsPanel {
 
         SelectedTableData {
             table_name: delegate.table_name.clone(),
+            db_type: delegate.db_type,
             columns: delegate
                 .columns
                 .iter()

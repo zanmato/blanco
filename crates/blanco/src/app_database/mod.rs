@@ -30,7 +30,7 @@ impl AppDatabase {
 
 impl AppDatabase {
     pub async fn new() -> Result<Self, sqlx::Error> {
-        let db_path = crate::app_database::app_db_path();
+        let db_path = app_db_path();
 
         let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
             .create_if_missing(true)
@@ -39,7 +39,7 @@ impl AppDatabase {
         let pool = SqlitePool::connect_with(options).await?;
 
         let db = Self { pool };
-        crate::app_database::init_schema(&db.pool).await?;
+        init_schema(&db.pool).await?;
 
         Ok(db)
     }
@@ -52,7 +52,7 @@ impl AppDatabase {
         let pool = SqlitePool::connect_with(options).await?;
 
         let db = Self { pool };
-        crate::app_database::init_schema(&db.pool).await?;
+        init_schema(&db.pool).await?;
 
         Ok(db)
     }

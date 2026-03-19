@@ -4,7 +4,9 @@ mod delegate;
 pub use data_loading::{DatabaseItemType, DatabaseMetadata};
 pub use delegate::ConnectionsTreeDelegate;
 
+use crate::app::CreateNewQueryTab;
 use crate::app_database::{AppDatabase, ConnectionData, EnvironmentType};
+use crate::export::modal::ExportModal;
 use crate::result_ext::ResultExt;
 use blanco_core::DatabaseService as DatabaseServiceTrait;
 use blanco_ui::IconName;
@@ -24,7 +26,6 @@ use gpui_component::{
 #[derive(Clone, Debug)]
 pub enum ConnectionsPanelEvent {
     EditConnection {
-        connection_id: i64,
         connection_data: Box<ConnectionData>,
     },
 }
@@ -83,11 +84,11 @@ pub struct TreeItemMetadata {
 
 /// Trait to convert metadata into CreateNewQueryTab actions
 pub trait CreateNewQueryTabParams {
-    fn create_new_query_tab_action(&self) -> Option<crate::app::CreateNewQueryTab>;
+    fn create_new_query_tab_action(&self) -> Option<CreateNewQueryTab>;
 }
 
 impl CreateNewQueryTabParams for TreeItemMetadata {
-    fn create_new_query_tab_action(&self) -> Option<crate::app::CreateNewQueryTab> {
+    fn create_new_query_tab_action(&self) -> Option<CreateNewQueryTab> {
         match self.kind {
             TreeItemKind::Connection => None,
             TreeItemKind::Database
@@ -95,7 +96,7 @@ impl CreateNewQueryTabParams for TreeItemMetadata {
             | TreeItemKind::Table
             | TreeItemKind::View
             | TreeItemKind::MaterializedView => {
-                Some(crate::app::CreateNewQueryTab {
+                Some(CreateNewQueryTab {
                     connection_id: self.connection_id,
                     connection_name: self.connection_name.clone(),
                     db_type: self.db_type,
@@ -674,6 +675,19 @@ impl ConnectionsPanel {
         }
     }
 
+    /// Refresh a connection by clearing cached metadata and reloading from the server
+    pub fn refresh_connection(&mut self, connection_id: i64, cx: &mut Context<Self>) {
+        tracing::info!("Refreshing connection {}", connection_id);
+
+        self.set_item_loading(&format!("connection:{}", connection_id), true, cx);
+        self.loaded_connections.remove(&connection_id);
+        self.database_metadata.remove(&connection_id);
+        self.update_tree_items(cx);
+        cx.notify();
+
+        self.load_connection_children(connection_id, true, cx);
+    }
+
     /// Disconnect and remove a connection
     pub fn disconnect_connection(&mut self, connection_id: i64, cx: &mut Context<Self>) {
         tracing::info!("Disconnecting connection {}", connection_id);
@@ -775,17 +789,19 @@ impl ConnectionsPanel {
         database_name: String,
         schema_name: Option<String>,
         table_name: Option<String>,
+        db_type: database::DatabaseType,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if let Some(table_name) = table_name {
             // Create the export modal content
             let modal_content = cx.new(|cx| {
-                crate::export::modal::ExportModal::new(
+                ExportModal::new(
                     connection_id,
                     database_name,
                     schema_name,
                     table_name,
+                    db_type,
                     window,
                     cx,
                 )
@@ -902,7 +918,6 @@ impl ConnectionsPanel {
 
         if let Some(conn_data) = connection_data {
             cx.emit(ConnectionsPanelEvent::EditConnection {
-                connection_id,
                 connection_data: Box::new(conn_data),
             });
         } else {

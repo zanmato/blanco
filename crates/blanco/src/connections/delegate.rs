@@ -10,7 +10,10 @@ use gpui_component::{
     tooltip::Tooltip,
 };
 
-use crate::connections::{CreateNewQueryTabParams, TreeItemIcon, TreeItemKind, TreeItemMetadata};
+use crate::app::OpenTableStructure;
+use crate::connections::{
+    ConnectionsPanel, CreateNewQueryTabParams, TreeItemIcon, TreeItemKind, TreeItemMetadata,
+};
 
 use blanco_ui::{
     IconName,
@@ -19,11 +22,11 @@ use blanco_ui::{
 
 /// Delegate for handling the connections tree rendering and data loading
 pub struct ConnectionsTreeDelegate {
-    parent: Entity<crate::connections::ConnectionsPanel>,
+    parent: Entity<ConnectionsPanel>,
 }
 
 impl ConnectionsTreeDelegate {
-    pub fn new(parent: &Entity<crate::connections::ConnectionsPanel>) -> Self {
+    pub fn new(parent: &Entity<ConnectionsPanel>) -> Self {
         Self {
             parent: parent.clone(),
         }
@@ -165,7 +168,12 @@ impl TreeDelegate for ConnectionsTreeDelegate {
             TreeItemKind::Connection => {
                 let connection_id = metadata.connection_id;
                 let connection_name = metadata.connection_name.clone();
-                menu.item(PopupMenuItem::new("Refresh"))
+                menu.item(PopupMenuItem::new("Refresh").on_click(window.listener_for(
+                        &self.parent,
+                        move |this, _event, _window, cx| {
+                            this.refresh_connection(connection_id, cx);
+                        },
+                    )))
                     .item(PopupMenuItem::new("Edit").on_click(window.listener_for(
                         &self.parent,
                         move |this, _event, _window, cx| {
@@ -258,6 +266,7 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                                         database_name.clone(),
                                         schema_name.clone(),
                                         table_name.clone(),
+                                        db_type,
                                         window,
                                         cx,
                                     );
@@ -274,7 +283,7 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                             .item(PopupMenuItem::new("Open Structure").on_click(
                                 window.listener_for(&self.parent, move |_this, _event, window, cx| {
                                     window.dispatch_action(
-                                        Box::new(crate::app::OpenTableStructure {
+                                        Box::new(OpenTableStructure {
                                             connection_id,
                                             connection_name: connection_name_for_structure.clone(),
                                             db_type,

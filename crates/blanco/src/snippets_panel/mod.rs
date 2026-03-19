@@ -21,7 +21,7 @@ actions!(snippets, [CreateGroup, RefreshSnippets]);
 
 #[derive(Clone, Debug)]
 pub enum SnippetsPanelEvent {
-    SnippetDeleted { id: i64 },
+    SnippetDeleted,
 }
 
 impl EventEmitter<SnippetsPanelEvent> for SnippetsPanel {}
@@ -181,7 +181,7 @@ impl SnippetsPanel {
         });
 
         self.refresh_snippets(cx);
-        cx.emit(SnippetsPanelEvent::SnippetDeleted { id: snippet_id });
+        cx.emit(SnippetsPanelEvent::SnippetDeleted);
     }
 
     pub fn handle_drop(

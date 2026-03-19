@@ -1,5 +1,5 @@
 use crate::app::NewSnippet;
-use crate::snippets_panel::CreateGroup;
+use crate::snippets_panel::{CreateGroup, SnippetsPanel};
 use gpui::ClickEvent;
 use gpui::{
     App, Entity, InteractiveElement, ParentElement, Styled, Window, div,
@@ -25,11 +25,11 @@ pub struct SnippetItemMetadata {
 
 /// Delegate for handling the snippets tree rendering and drag and drop
 pub struct SnippetsTreeDelegate {
-    parent: Entity<crate::snippets_panel::SnippetsPanel>,
+    parent: Entity<SnippetsPanel>,
 }
 
 impl SnippetsTreeDelegate {
-    pub fn new(parent: &Entity<crate::snippets_panel::SnippetsPanel>) -> Self {
+    pub fn new(parent: &Entity<SnippetsPanel>) -> Self {
         Self {
             parent: parent.clone(),
         }

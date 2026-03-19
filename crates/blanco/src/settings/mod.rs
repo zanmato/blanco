@@ -32,6 +32,15 @@ impl Settings {
                 "editor.show_whitespace" => {
                     settings.editor.show_whitespace = value.parse().unwrap_or_default();
                 }
+                "editor.folding" => {
+                    settings.editor.folding = value.parse().unwrap_or(true);
+                }
+                "editor.hard_tabs" => {
+                    settings.editor.hard_tabs = value.parse().unwrap_or_default();
+                }
+                "editor.tab_size" => {
+                    settings.editor.tab_size = value.parse().unwrap_or(2);
+                }
                 "database.default_connection_timeout_seconds" => {
                     settings.database.default_connection_timeout_seconds =
                         value.parse().unwrap_or_default();
@@ -91,6 +100,9 @@ pub struct EditorSettings {
     pub font_family: String,
     pub word_wrap: bool,
     pub show_whitespace: bool,
+    pub folding: bool,
+    pub hard_tabs: bool,
+    pub tab_size: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,6 +145,9 @@ impl Default for EditorSettings {
             font_family: "Fira Code".to_string(),
             word_wrap: false,
             show_whitespace: false,
+            folding: true,
+            hard_tabs: false,
+            tab_size: 2,
         }
     }
 }

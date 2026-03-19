@@ -1,3 +1,4 @@
+use crate::app_database::AppDatabase;
 use crate::app_settings::AppSettings;
 use crate::settings::Settings;
 use gpui::{App, Context, FocusHandle, Focusable, IntoElement, Render, SharedString, Task, Window};
@@ -46,7 +47,7 @@ impl SettingsView {
             );
         }
 
-        let db = crate::app_database::AppDatabase::global(cx).clone();
+        let db = AppDatabase::global(cx).clone();
         let key_clone = key.clone();
         let task = cx.spawn(async move |_, cx| {
             cx.background_executor()
@@ -128,6 +129,80 @@ impl SettingsView {
                         .default_value(default_settings.editor.show_whitespace),
                     )
                     .description("Show whitespace characters in the SQL editor."),
+                    SettingItem::new(
+                        "Folding",
+                        SettingField::switch(
+                            move |cx: &App| AppSettings::global(cx).settings.editor.folding,
+                            {
+                                let view_handle = view_handle.clone();
+                                move |val: bool, cx: &mut App| {
+                                    AppSettings::global_mut(cx).settings.editor.folding = val;
+
+                                    let key = "editor.folding".to_string();
+                                    let value = val.to_string();
+                                    if let Some(view) = view_handle.upgrade() {
+                                        view.update(cx, |view, cx| {
+                                            view.save_setting_debounced(key, value, false, cx);
+                                        });
+                                    }
+                                }
+                            },
+                        )
+                        .default_value(default_settings.editor.folding),
+                    )
+                    .description("Enable code folding in the SQL editor."),
+                    SettingItem::new(
+                        "Hard Tabs",
+                        SettingField::switch(
+                            move |cx: &App| AppSettings::global(cx).settings.editor.hard_tabs,
+                            {
+                                let view_handle = view_handle.clone();
+                                move |val: bool, cx: &mut App| {
+                                    AppSettings::global_mut(cx).settings.editor.hard_tabs = val;
+
+                                    let key = "editor.hard_tabs".to_string();
+                                    let value = val.to_string();
+                                    if let Some(view) = view_handle.upgrade() {
+                                        view.update(cx, |view, cx| {
+                                            view.save_setting_debounced(key, value, false, cx);
+                                        });
+                                    }
+                                }
+                            },
+                        )
+                        .default_value(default_settings.editor.hard_tabs),
+                    )
+                    .description("Use tab characters instead of spaces for indentation."),
+                    SettingItem::new(
+                        "Tab Size",
+                        SettingField::number_input(
+                            NumberFieldOptions {
+                                min: 1.0,
+                                max: 8.0,
+                                step: 1.0,
+                            },
+                            move |cx: &App| {
+                                AppSettings::global(cx).settings.editor.tab_size as f64
+                            },
+                            {
+                                let view_handle = view_handle.clone();
+                                move |val: f64, cx: &mut App| {
+                                    AppSettings::global_mut(cx).settings.editor.tab_size =
+                                        val as u32;
+
+                                    let key = "editor.tab_size".to_string();
+                                    let value = val.to_string();
+                                    if let Some(view) = view_handle.upgrade() {
+                                        view.update(cx, |view, cx| {
+                                            view.save_setting_debounced(key, value, false, cx);
+                                        });
+                                    }
+                                }
+                            },
+                        )
+                        .default_value(default_settings.editor.tab_size as f64),
+                    )
+                    .description("Number of spaces per tab stop (1-8)."),
                 ]),
             ]),
             // Database Settings Page

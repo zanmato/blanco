@@ -79,8 +79,8 @@ impl NewConnectionModal {
         let initial_env_index = connection_data
             .as_ref()
             .map(|c| match c.environment_type {
-                crate::app_database::EnvironmentType::Test => 1,
-                crate::app_database::EnvironmentType::Prod => 2,
+                EnvironmentType::Test => 1,
+                EnvironmentType::Prod => 2,
                 _ => 0,
             })
             .or(Some(0));
@@ -499,10 +499,6 @@ impl NewConnectionModal {
             Some(())
         })
         .detach();
-    }
-
-    pub fn is_testing(&self) -> bool {
-        self.is_testing
     }
 
     pub fn test_connection(&mut self, _window: &mut Window, cx: &mut Context<Self>) {

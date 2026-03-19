@@ -296,17 +296,15 @@ impl ConnectionData {
                     self.password.clone(),
                 );
 
-                if let Some(ssh_host) = &self.ssh_host {
-                    if let Some(ssh_user) = &self.ssh_user {
-                        config = config.with_ssh_config(
-                            ssh_host.clone(),
-                            ssh_user.clone(),
-                            self.ssh_password.clone(),
-                            self.ssh_private_key_path.clone(),
-                            self.ssh_private_key_password.clone(),
-                            self.ssh_port,
-                        );
-                    }
+                if let (Some(ssh_host), Some(ssh_user)) = (&self.ssh_host, &self.ssh_user) {
+                    config = config.with_ssh_config(
+                        ssh_host.clone(),
+                        ssh_user.clone(),
+                        self.ssh_password.clone(),
+                        self.ssh_private_key_path.clone(),
+                        self.ssh_private_key_password.clone(),
+                        self.ssh_port,
+                    );
                 }
 
                 config = config.with_ssl_config(

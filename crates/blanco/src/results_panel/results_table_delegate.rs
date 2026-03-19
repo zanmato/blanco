@@ -26,7 +26,11 @@ use super::cell_edit_state::{
     CellEditState, ChangeType, TableChange, compare_numeric, format_value_for_display,
 };
 use super::foreign_key_popover::ForeignKeyPopover;
-use crate::app::{AddRow, DeleteRow, DuplicateRow, SetCellNull};
+use crate::app::{
+    AddRow, CopyAsCSV, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, DeleteRow, DuplicateRow,
+    ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, SetCellNull,
+};
+use crate::results_panel::ResultsPanel;
 use crate::results_panel::table_operations::{
     ColumnChange, OperationType, RowIdentifier, TableChangeOperation,
 };
@@ -42,6 +46,7 @@ pub struct ResultsTableDelegate {
     pub primary_key_column: Option<String>,
     pub connection_id: i64,
     pub database_name: SharedString,
+    pub db_type: Option<database::DatabaseType>,
     pub original_query: Option<String>,
     /// Column metadata for tooltips and rendering
     table_columns: Vec<blanco_core::connection_trait::ColumnInfo>,
@@ -138,9 +143,15 @@ impl ResultsTableDelegate {
     }
 
     /// Set the connection ID for database operations
-    pub fn set_connection_id(&mut self, connection_id: i64, database_name: &str) {
+    pub fn set_connection_id(
+        &mut self,
+        connection_id: i64,
+        database_name: &str,
+        db_type: database::DatabaseType,
+    ) {
         self.connection_id = connection_id;
         self.database_name = database_name.to_string().into();
+        self.db_type = Some(db_type);
     }
 
     /// Set the original SQL query for alias resolution
@@ -580,10 +591,6 @@ impl ResultsTableDelegate {
         self.edit_state.edited_values.remove(&(row, col));
     }
 
-    pub fn get_table_name(&self) -> Option<&str> {
-        self.table_name.as_deref()
-    }
-
     pub fn is_editable(&self) -> bool {
         self.table_name.is_some() && self.primary_key_column.is_some()
     }
@@ -612,7 +619,7 @@ impl ResultsTableDelegate {
         state.delegate_mut().edit_state.editing_input = Some(new_input.clone());
 
         // Re-subscribe to input events (blur/change)
-        crate::results_panel::ResultsPanel::subscribe_to_input_events(
+        ResultsPanel::subscribe_to_input_events(
             state, &new_input, cell.1, cell.0, cx,
         );
 
@@ -920,7 +927,7 @@ impl TableDelegate for ResultsTableDelegate {
                                                     Some(new_input.clone());
 
                                                 // Re-subscribe to input events (blur/change)
-                                                crate::results_panel::ResultsPanel::subscribe_to_input_events(
+                                                ResultsPanel::subscribe_to_input_events(
                                                     table, &new_input, row_ix, col_ix, cx,
                                                 );
 
@@ -1191,44 +1198,44 @@ impl TableDelegate for ResultsTableDelegate {
         menu.menu_with_icon(
             "Copy as CSV",
             Icon::new(IconName::Sheet),
-            Box::new(crate::app::CopyAsCSV),
+            Box::new(CopyAsCSV),
         )
         .menu_with_icon(
             "Copy as JSON",
             Icon::new(IconName::Braces),
-            Box::new(crate::app::CopyAsJSON),
+            Box::new(CopyAsJSON),
         )
         .menu_with_icon(
             "Copy as SQL",
             Icon::new(IconName::Database),
-            Box::new(crate::app::CopyAsSQL),
+            Box::new(CopyAsSQL),
         )
         .menu_with_icon(
             "Copy as Markdown",
             Icon::new(IconName::Markdown),
-            Box::new(crate::app::CopyAsMarkdown),
+            Box::new(CopyAsMarkdown),
         )
         .separator()
         // Export operations
         .menu_with_icon(
             "Export as CSV",
             Icon::new(IconName::File),
-            Box::new(crate::app::ExportAsCSV),
+            Box::new(ExportAsCSV),
         )
         .menu_with_icon(
             "Export as JSON",
             Icon::new(IconName::File),
-            Box::new(crate::app::ExportAsJSON),
+            Box::new(ExportAsJSON),
         )
         .menu_with_icon(
             "Export as SQL",
             Icon::new(IconName::File),
-            Box::new(crate::app::ExportAsSQL),
+            Box::new(ExportAsSQL),
         )
         .menu_with_icon(
             "Export as Markdown",
             Icon::new(IconName::File),
-            Box::new(crate::app::ExportAsMarkdown),
+            Box::new(ExportAsMarkdown),
         )
         .separator()
         // Row operations
@@ -1270,8 +1277,6 @@ mod tests {
         // Test initial state
         assert!(edit_state.is_editing(0, 0));
         assert!(!edit_state.is_edited(0, 0));
-        assert!(!edit_state.has_unsaved_changes());
-
         // Test starting editing with string value
         edit_state
             .original_values
@@ -1297,7 +1302,6 @@ mod tests {
         // Test clearing editing state
         edit_state.editing_cell = None;
         assert!(!edit_state.is_editing(0, 0));
-        assert!(edit_state.has_unsaved_changes());
     }
 
     #[test]
@@ -1332,7 +1336,6 @@ mod tests {
 
         assert!(!edit_state.is_editing(0, 0));
         assert!(!edit_state.is_edited(0, 0));
-        assert!(!edit_state.has_unsaved_changes());
         assert!(edit_state.pending_new_rows.is_empty());
     }
 

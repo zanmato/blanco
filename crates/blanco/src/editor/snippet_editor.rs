@@ -12,6 +12,7 @@ use gpui_component::{
 };
 
 use crate::app_database::{AppDatabase, SnippetData};
+use crate::app_settings::AppSettings;
 use crate::result_ext::ResultExt;
 use crate::snippets_panel::RefreshSnippets;
 
@@ -27,12 +28,17 @@ impl SnippetEditor {
         let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Snippet name..."));
 
         let editor = cx.new(|cx| {
+            let editor_settings = &AppSettings::global(cx).settings.editor;
+            let folding = editor_settings.folding;
+            let tab_size = editor_settings.tab_size;
+            let hard_tabs = editor_settings.hard_tabs;
             InputState::new(window, cx)
                 .code_editor("sql".to_string())
                 .line_number(true)
+                .folding(folding)
                 .tab_size(TabSize {
-                    tab_size: 2,
-                    hard_tabs: false,
+                    tab_size: tab_size as usize,
+                    hard_tabs,
                 })
                 .soft_wrap(true)
         });

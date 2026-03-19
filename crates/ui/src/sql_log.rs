@@ -4,7 +4,7 @@ use gpui::{
 };
 use gpui_component::ActiveTheme;
 use gpui_component::highlighter::{HighlightTheme, SyntaxHighlighter};
-use gpui_component::scroll::Scrollbar;
+use gpui_component::scroll::ScrollableElement as _;
 use std::sync::Arc;
 
 pub enum SqlLogMessage {
@@ -105,12 +105,9 @@ impl SqlLog {
 
 impl Render for SqlLog {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Create a container with syntax-highlighted entries
         div()
+            .relative()
             .size_full()
-            .flex_1()
-            .max_h(px(160.))
-            .min_h_0()
             .bg(cx
                 .theme()
                 .highlight_theme
@@ -120,10 +117,10 @@ impl Render for SqlLog {
             .child(
                 div()
                     .id("sql-log")
-                    .p_4()
                     .size_full()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll_handle)
+                    .p_4()
                     .font_family(cx.theme().mono_font_family.clone())
                     .text_size(px(12.))
                     .text_color(cx.theme().foreground)
@@ -136,17 +133,11 @@ impl Render for SqlLog {
                         let highlights = entry.highlighter.styles(&range, &self.theme);
                         div()
                             .mb_1()
-                            .child(StyledText::new(entry.text.clone()).with_highlights(highlights))
+                            .child(
+                                StyledText::new(entry.text.clone()).with_highlights(highlights),
+                            )
                     })),
             )
-            .child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .right_0()
-                    .bottom_0()
-                    .child(Scrollbar::vertical(&self.scroll_handle)),
-            )
+            .vertical_scrollbar(&self.scroll_handle)
     }
 }

@@ -25,7 +25,7 @@ impl DataTransformer for MarkdownTransformer {
         // Add table name as a header if available
         if let Some(table_name) = &data.table_name {
             output.push_str("# Table: ");
-            output.push_str(table_name);
+            output.push_str(&escape_markdown(table_name));
             output.push_str("\n\n");
         }
 
@@ -47,34 +47,39 @@ impl DataTransformer for MarkdownTransformer {
             max_col = data.columns.len().saturating_sub(1);
         }
 
-        // Build column list and widths for formatting
-        let mut columns: Vec<(usize, String)> = Vec::new();
+        // Build column list with escaped names, and compute widths
+        let mut columns: Vec<(usize, String, String)> = Vec::new(); // (index, original, escaped)
         let mut column_widths: Vec<usize> = Vec::new();
 
         for col_idx in min_col..=max_col {
             if let Some(col_name) = data.columns.get(col_idx) {
-                columns.push((col_idx, col_name.clone()));
-                let mut max_width = col_name.len();
+                let escaped_name = escape_markdown(col_name);
+                let mut max_width = escaped_name.len();
 
-                // Consider selected rows for this column - direct iteration
+                // Consider selected rows for this column, using escaped cell lengths
                 for row in &data.selected_rows {
                     for cell in &row.cells {
                         if cell.col == col_idx {
-                            max_width = max_width.max(cell.value.as_ref().map_or(4, |v| v.len()));
-                            break; // Found the cell for this column, move to next row
+                            let cell_len = cell
+                                .value
+                                .as_ref()
+                                .map_or(4, |v| escape_markdown(v).len());
+                            max_width = max_width.max(cell_len);
+                            break;
                         }
                     }
                 }
 
+                columns.push((col_idx, col_name.clone(), escaped_name));
                 column_widths.push(max_width.max(3)); // Minimum width
             }
         }
 
         // Create table header
         output.push('|');
-        for (i, (_, col_name)) in columns.iter().enumerate() {
+        for (i, (_, _, escaped_name)) in columns.iter().enumerate() {
             output.push(' ');
-            format_cell_to(col_name, column_widths[i], &mut output);
+            format_cell_to(escaped_name, column_widths[i], &mut output);
             output.push_str(" |");
         }
         output.push('\n');
@@ -94,17 +99,16 @@ impl DataTransformer for MarkdownTransformer {
         if !data.selected_rows.is_empty() {
             for row in &data.selected_rows {
                 output.push('|');
-                for (i, &(col_idx, _)) in columns.iter().enumerate() {
+                for (i, (col_idx, _, _)) in columns.iter().enumerate() {
                     output.push(' ');
-                    // Find cell by column index - direct iteration
                     let mut cell_found = false;
                     for cell in &row.cells {
-                        if cell.col == col_idx {
-                            format_cell_to(
-                                cell.value.as_deref().unwrap_or("NULL"),
-                                column_widths[i],
-                                &mut output,
-                            );
+                        if cell.col == *col_idx {
+                            let display = cell
+                                .value
+                                .as_ref()
+                                .map_or_else(|| "NULL".to_string(), |v| escape_markdown(v));
+                            format_cell_to(&display, column_widths[i], &mut output);
                             cell_found = true;
                             break;
                         }
@@ -133,7 +137,10 @@ impl DataTransformer for MarkdownTransformer {
         output.push('|');
         for value in row_data {
             output.push(' ');
-            output.push_str(value.as_deref().unwrap_or("NULL"));
+            let display = value
+                .as_ref()
+                .map_or_else(|| "NULL".to_string(), |v| escape_markdown(v));
+            output.push_str(&display);
             output.push_str(" |");
         }
         output.push('\n');
@@ -146,8 +153,26 @@ impl DataTransformer for MarkdownTransformer {
     }
 }
 
+/// Returns true if the value contains characters that have special meaning
+/// in markdown and would alter the rendered output.
+fn needs_escaping(value: &str) -> bool {
+    value
+        .bytes()
+        .any(|b| matches!(b, b'*' | b'_' | b'~' | b'`' | b'[' | b']' | b'|' | b'\\'))
+}
+
+/// Escapes a value for use in a markdown table cell by wrapping it in
+/// backticks if it contains any markdown special characters.
+fn escape_markdown(value: &str) -> String {
+    if needs_escaping(value) {
+        format!("`{}`", value)
+    } else {
+        value.to_string()
+    }
+}
+
 /// Format a cell value with proper padding. Writes directly to buffer.
-/// This avoids allocating a new String for each cell
+/// This avoids allocating a new String for each cell.
 fn format_cell_to(value: &str, width: usize, output: &mut String) {
     output.push_str(value);
     let padding = width.saturating_sub(value.len());

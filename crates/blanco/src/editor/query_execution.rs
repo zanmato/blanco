@@ -11,6 +11,8 @@ use tracing::{debug, error};
 use crate::app_database::{AppDatabase, QueryTabData};
 use crate::result_ext::ResultExt;
 use crate::sql::extract_statement_info;
+use crate::sql::statement_parser::QueryParameter;
+use crate::time_format;
 use database::{DatabaseService, DatabaseServiceTrait};
 
 use super::parameter_form::ParameterForm;
@@ -239,9 +241,9 @@ impl EditorPanel {
                             sql_log_clone.update(cx, |sql_log, cx| {
                                 let log_message = format!(
                                     "{}, {} rows in {}",
-                                    crate::time_format::format_current_timestamp(),
+                                    time_format::format_current_timestamp(),
                                     rows_affected,
-                                    crate::time_format::format_duration(duration_ms)
+                                    time_format::format_duration(duration_ms)
                                 );
                                 sql_log.append_text(
                                     &blanco_ui::SqlLogMessage::Comment(log_message),
@@ -293,7 +295,7 @@ impl EditorPanel {
     fn show_parameter_modal(
         &mut self,
         query: String,
-        params: Vec<crate::sql::statement_parser::QueryParameter>,
+        params: Vec<QueryParameter>,
         connection_id: i64,
         database_name: String,
         window: &mut Window,

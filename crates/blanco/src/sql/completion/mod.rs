@@ -2,10 +2,10 @@ mod cache;
 mod context;
 mod fetch;
 
+use blanco_core::connection_trait::QueryableEntity;
 pub use cache::{CacheEntry, MetadataCache};
 pub use context::{ParsedSqlContext, SqlContextParser};
 pub use fetch::{fetch_columns, fetch_queryable_entities};
-use blanco_core::connection_trait::QueryableEntity;
 
 use anyhow::Result;
 use database::DatabaseServiceTrait;
@@ -129,10 +129,6 @@ impl SqlCompletionProvider {
         // Use aliases from full text for better resolution
         let table_aliases = &full_context.table_aliases;
 
-        tracing::debug!(
-            "SQL Completion: Using full text for alias extraction: '{}'",
-            full_text
-        );
         tracing::debug!(
             "SQL Completion: Extracted aliases from full text: {:?}",
             table_aliases

@@ -18,11 +18,11 @@ use smol::channel;
 use tracing::{debug, error, info};
 
 use crate::{
-    app_database::{AppDatabase, ConnectionData},
+    app_database::{AppDatabase, ConnectionData, EnvironmentType},
     app_settings::AppSettings,
     connection_modal::NewConnectionModal,
     connections::{ConnectionsPanel, ConnectionsPanelEvent},
-    editor::{EditorPanel, TabCreationParams},
+    editor::{EditorPanel, TabCreationParams, TableStructureParams},
     result_ext::ResultExt,
     snippets_panel::{RefreshSnippets, SnippetsPanel, SnippetsPanelEvent},
 };
@@ -133,7 +133,7 @@ pub struct CreateNewQueryTab {
     pub database_name: String,
     pub schema_name: Option<String>,
     pub table_name: Option<String>,
-    pub environment_type: Option<crate::app_database::EnvironmentType>,
+    pub environment_type: Option<EnvironmentType>,
 }
 
 #[derive(Action, Clone, PartialEq, Eq)]
@@ -145,7 +145,7 @@ pub struct OpenTableStructure {
     pub database_name: String,
     pub schema_name: Option<String>,
     pub table_name: String,
-    pub environment_type: Option<crate::app_database::EnvironmentType>,
+    pub environment_type: Option<EnvironmentType>,
 }
 
 #[derive(Action, Clone, PartialEq, Eq)]
@@ -296,7 +296,7 @@ impl BlancoApp {
             window,
             move |_app, _snippets_panel, event, _window, _cx| {
                 match event {
-                    SnippetsPanelEvent::SnippetDeleted { .. } => {
+                    SnippetsPanelEvent::SnippetDeleted => {
                         // Snippets panel already refreshed itself
                     }
                 }
@@ -452,7 +452,7 @@ impl BlancoApp {
 
         self.editor_panel.update(cx, |panel, cx| {
             panel.create_table_structure_tab(
-                crate::editor::TableStructureParams {
+                TableStructureParams {
                     connection_id: action.connection_id,
                     connection_name: action.connection_name.clone(),
                     db_type: action.db_type,
@@ -555,6 +555,7 @@ impl BlancoApp {
                     move |_, window, cx| {
                         if let Some(conn_data) = content.read(cx).get_connection_data(cx) {
                             let app_database = AppDatabase::global(cx).clone();
+                            let db_service = database::DatabaseService::global(cx).clone();
                             let sidebar = sidebar.clone();
                             cx.spawn(async move |cx| {
                                 match app_database.save_connection(&conn_data).await {
@@ -563,6 +564,13 @@ impl BlancoApp {
                                             "Connection saved with ID: {}",
                                             connection_id
                                         );
+                                        let mut conn_data_with_id = conn_data;
+                                        conn_data_with_id.id = Some(connection_id);
+                                        if let Some(config) =
+                                            conn_data_with_id.to_connection_config()
+                                        {
+                                            db_service.add_connection_config(config).await;
+                                        }
                                         cx.update(|cx| {
                                             sidebar.update(cx, |panel, cx| {
                                                 panel.reload_connections(cx);
@@ -662,6 +670,7 @@ impl BlancoApp {
                             conn_data.id = original_id;
 
                             let app_database = AppDatabase::global(cx).clone();
+                            let db_service = database::DatabaseService::global(cx).clone();
                             let sidebar = sidebar.clone();
                             cx.spawn(async move |cx| {
                                 match app_database.save_connection(&conn_data).await {
@@ -670,6 +679,13 @@ impl BlancoApp {
                                             "Connection updated with ID: {}",
                                             connection_id
                                         );
+                                        let mut conn_data_with_id = conn_data;
+                                        conn_data_with_id.id = Some(connection_id);
+                                        if let Some(config) =
+                                            conn_data_with_id.to_connection_config()
+                                        {
+                                            db_service.add_connection_config(config).await;
+                                        }
                                         cx.update(|cx| {
                                             sidebar.update(cx, |panel, cx| {
                                                 panel.reload_connections(cx);

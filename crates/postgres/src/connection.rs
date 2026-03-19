@@ -585,11 +585,8 @@ impl PostgresConnection {
         column_index: usize,
         _column_type: &str,
     ) -> Option<String> {
-        if let Ok(val) = row.try_get::<Option<String>, _>(column_index) {
-            val
-        } else {
-            None
-        }
+        row.try_get::<Option<String>, _>(column_index)
+            .unwrap_or_default()
     }
 
     /// Handle boolean types

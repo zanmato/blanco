@@ -4,12 +4,14 @@ use gpui::{Context, EventEmitter, Task, WeakEntity, Window};
 use smol::channel::Sender;
 use std::sync::Arc;
 
-use super::chat_types::{ChatCommand, ChatEvent, ChatMessage, LoadingState, MessageRole};
-use super::tool_handlers::ToolMode;
+use super::chat_types::{
+    ChatCommand, ChatEvent, ChatMessage, LoadingState, MessageRole, ToolCallData,
+};
+use super::tool_handlers::{AgentToolRegistry, ToolMode};
 use crate::result_ext::ResultExt;
 use database::DatabaseService;
 use gpui_component::input::InputState;
-use llm::{chat::ChatMessage as LlmChatMessage, chat::Tool, FunctionCall, LLMProvider, ToolCall};
+use llm::{FunctionCall, LLMProvider, ToolCall, chat::ChatMessage as LlmChatMessage, chat::Tool};
 
 /// Context for creating a ChatSession with database/editor access
 pub struct ChatSessionContext {
@@ -157,9 +159,7 @@ impl ChatSession {
     }
 
     pub fn set_tool_mode(&mut self, mode: ToolMode, cx: &mut Context<Self>) {
-        self.tool_registry = Some(Arc::new(
-            crate::agent::tool_handlers::AgentToolRegistry::with_mode(mode),
-        ));
+        self.tool_registry = Some(Arc::new(AgentToolRegistry::with_mode(mode)));
         cx.notify();
     }
 
@@ -229,9 +229,11 @@ impl ChatSession {
             let (tx, rx) = smol::channel::unbounded::<ChatMessage>();
 
             // Set initial loading state to connecting
-            chat_session_handle.update(async_cx, |session, cx| {
-                session.set_loading_state(LoadingState::Connecting, cx);
-            }).log_err();
+            chat_session_handle
+                .update(async_cx, |session, cx| {
+                    session.set_loading_state(LoadingState::Connecting, cx);
+                })
+                .log_err();
 
             // Spawn a task to listen for UI updates
             let handle_clone = chat_session_handle.clone();
@@ -270,10 +272,12 @@ impl ChatSession {
                 Err(e) => LoadingState::Error(e.to_string()),
             };
 
-            chat_session_handle.update(async_cx, |session, cx| {
-                session.set_loading_state(final_state, cx);
-                session.current_message_task = None;
-            }).log_err();
+            chat_session_handle
+                .update(async_cx, |session, cx| {
+                    session.set_loading_state(final_state, cx);
+                    session.current_message_task = None;
+                })
+                .log_err();
 
             response
         })
@@ -311,9 +315,11 @@ impl ChatSession {
             tracing::debug!("Starting message loop iteration {}", loop_count);
 
             // Set loading state to streaming when making request
-            chat_session_handle.update(async_cx, |session, cx| {
-                session.set_loading_state(LoadingState::Streaming, cx);
-            }).log_err();
+            chat_session_handle
+                .update(async_cx, |session, cx| {
+                    session.set_loading_state(LoadingState::Streaming, cx);
+                })
+                .log_err();
 
             // Get tools from session's tool registry
             let tools: Vec<Tool> = chat_session_handle
@@ -359,9 +365,11 @@ impl ChatSession {
                     );
 
                     // Set loading state to processing tools
-                    chat_session_handle.update(async_cx, |session, cx| {
-                        session.set_loading_state(LoadingState::ProcessingTools, cx);
-                    }).log_err();
+                    chat_session_handle
+                        .update(async_cx, |session, cx| {
+                            session.set_loading_state(LoadingState::ProcessingTools, cx);
+                        })
+                        .log_err();
 
                     // Process tool calls with real-time UI updates
                     request_messages = Self::process_tool_calls_with_realtime_ui(
@@ -423,16 +431,14 @@ impl ChatSession {
         let mut failed_tool_calls = 0;
 
         // Create tool call data for UI display
-        let mut tool_call_data: Vec<crate::agent::chat_types::ToolCallData> = tool_calls
+        let mut tool_call_data: Vec<ToolCallData> = tool_calls
             .iter()
-            .map(|tc| {
-                crate::agent::chat_types::ToolCallData {
-                    id: tc.id.clone(),
-                    tool_name: tc.function.name.clone(),
-                    arguments: tc.function.arguments.clone(),
-                    result: None,  // Will be filled after execution
-                    summary: None, // Will be filled after execution
-                }
+            .map(|tc| ToolCallData {
+                id: tc.id.clone(),
+                tool_name: tc.function.name.clone(),
+                arguments: tc.function.arguments.clone(),
+                result: None,
+                summary: None,
             })
             .collect();
 
@@ -527,7 +533,10 @@ impl ChatSession {
                             .to_string(),
                     },
                 };
-                (error_result, "Error: No tool registry available".to_string())
+                (
+                    error_result,
+                    "Error: No tool registry available".to_string(),
+                )
             };
 
             // Update tool call data with result and summary
@@ -538,11 +547,8 @@ impl ChatSession {
 
             // Create and immediately emit tool result message for UI
             // Use the summary as the display content instead of raw JSON
-            let tool_ui_message = ChatMessage::tool(
-                summary.clone(),
-                result.id.clone(),
-                model_name.to_string(),
-            );
+            let tool_ui_message =
+                ChatMessage::tool(summary.clone(), result.id.clone(), model_name.to_string());
             let _ = ui_sender.send(tool_ui_message).await;
 
             // Add tool result as a message to conversation (using user role for tool results)
