@@ -39,7 +39,6 @@ pub trait DataTransformer: Send + Sync {
         columns: &[String],
         _column_types: &[ColumnType],
     ) -> Result<String, TransformError> {
-        // Default implementation - transformers can override this
         self.transform_header_row(columns)
     }
 
@@ -92,9 +91,7 @@ impl TransformerRegistry {
     }
 
     pub fn get_transformer(&self, format_name: &str) -> Option<Arc<dyn DataTransformer>> {
-        self.transformers
-            .get(&format_name.to_lowercase())
-            .cloned()
+        self.transformers.get(&format_name.to_lowercase()).cloned()
     }
 
     pub fn transform_data(

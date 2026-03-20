@@ -86,7 +86,7 @@ impl SqlContextParser {
         // Simple approach: find the last occurrence of each keyword
         for keyword in KEYWORDS {
             if let Some(pos) = text_upper.rfind(keyword) {
-                // Simple boundary check - ensure it's not part of a larger word
+                // Ensure it's not part of a larger word
                 let is_word_boundary = (pos == 0
                     || !text.chars().nth(pos - 1).unwrap_or(' ').is_alphanumeric())
                     && (pos + keyword.len() >= text.len()
@@ -112,8 +112,8 @@ impl SqlContextParser {
             "WHERE", "ON", "SET", "VALUES", "ORDER", "GROUP", "HAVING", "LIMIT", "UNION",
         ];
         const ALIAS_STOP_KEYWORDS: &[&str] = &[
-            "WHERE", "JOIN", "INNER", "LEFT", "RIGHT", "ON", "SET", "VALUES", "ORDER",
-            "GROUP", "HAVING", "LIMIT", "UNION", "AS",
+            "WHERE", "JOIN", "INNER", "LEFT", "RIGHT", "ON", "SET", "VALUES", "ORDER", "GROUP",
+            "HAVING", "LIMIT", "UNION", "AS",
         ];
 
         let mut aliases = Vec::new();
@@ -155,8 +155,7 @@ impl SqlContextParser {
                                     alias: alias.trim_end_matches(';').to_string(),
                                 });
                                 i = table_name_idx + 2;
-                            } else if !ALIAS_STOP_KEYWORDS.contains(&next_word_upper.as_str())
-                            {
+                            } else if !ALIAS_STOP_KEYWORDS.contains(&next_word_upper.as_str()) {
                                 // table_name alias
                                 let alias = words[table_name_idx + 1];
                                 aliases.push(TableAlias {
@@ -318,10 +317,16 @@ mod tests {
 
     #[test]
     fn test_extract_current_word() {
-        assert_eq!(SqlContextParser::extract_current_word("SELECT * FROM"), "FROM");
+        assert_eq!(
+            SqlContextParser::extract_current_word("SELECT * FROM"),
+            "FROM"
+        );
         assert_eq!(SqlContextParser::extract_current_word("SELECT * F"), "F");
         assert_eq!(SqlContextParser::extract_current_word("SELECT * "), "");
-        assert_eq!(SqlContextParser::extract_current_word("user_name"), "user_name");
+        assert_eq!(
+            SqlContextParser::extract_current_word("user_name"),
+            "user_name"
+        );
         assert_eq!(SqlContextParser::extract_current_word("123"), "123");
     }
 
@@ -340,8 +345,9 @@ mod tests {
         assert_eq!(aliases[0].alias, "u");
 
         // Test multiple tables
-        let aliases =
-            SqlContextParser::extract_table_aliases("FROM users u JOIN orders o ON u.id = o.user_id");
+        let aliases = SqlContextParser::extract_table_aliases(
+            "FROM users u JOIN orders o ON u.id = o.user_id",
+        );
         assert_eq!(aliases.len(), 2);
         assert_eq!(aliases[0].table_name, "users");
         assert_eq!(aliases[0].alias, "u");
@@ -349,7 +355,8 @@ mod tests {
         assert_eq!(aliases[1].alias, "o");
 
         // Test with JOIN keywords
-        let aliases = SqlContextParser::extract_table_aliases("SELECT * FROM users u INNER JOIN orders o");
+        let aliases =
+            SqlContextParser::extract_table_aliases("SELECT * FROM users u INNER JOIN orders o");
         assert_eq!(aliases.len(), 2);
     }
 

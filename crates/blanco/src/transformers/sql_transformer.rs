@@ -66,7 +66,7 @@ impl DataTransformer for SqlTransformer {
 
         // Handle selected rows first
         if !data.selected_rows.is_empty() {
-            // Generate column list once - write directly to avoid intermediate Vec
+            // Generate column list once
             let mut column_list = String::with_capacity(data.columns.len() * 20);
             for (i, col) in data.columns.iter().enumerate() {
                 if i > 0 {
@@ -159,7 +159,6 @@ impl DataTransformer for SqlTransformer {
             .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed)
             .is_err()
         {
-            // This is not the first row - add separator
             output.push_str(",\n");
         }
 
@@ -205,16 +204,15 @@ impl DataTransformer for SqlTransformer {
     }
 }
 
-/// Escape a string for SQL (single quotes) - writes directly to buffer
+/// Escape a string for SQL (single quotes)
 /// This avoids allocating a new String for each cell value
 fn sql_escape_string_to(value: &str, output: &mut String) {
-    // Check if we need to escape at all - fast path for common case
+    // Check if we need to escape at all
     if !value.contains('\'') {
         output.push_str(value);
         return;
     }
 
-    // Slow path - escape quotes
     for c in value.chars() {
         if c == '\'' {
             output.push_str("''");
@@ -263,16 +261,31 @@ mod tests {
 
     #[test]
     fn test_sql_identifier_postgres() {
-        assert_eq!(sql_identifier("simple", DatabaseType::PostgreSQL), "\"simple\"");
-        assert_eq!(sql_identifier("contains\"quote", DatabaseType::PostgreSQL), "\"contains\"\"quote\"");
-        assert_eq!(sql_identifier("table name", DatabaseType::PostgreSQL), "\"table name\"");
+        assert_eq!(
+            sql_identifier("simple", DatabaseType::PostgreSQL),
+            "\"simple\""
+        );
+        assert_eq!(
+            sql_identifier("contains\"quote", DatabaseType::PostgreSQL),
+            "\"contains\"\"quote\""
+        );
+        assert_eq!(
+            sql_identifier("table name", DatabaseType::PostgreSQL),
+            "\"table name\""
+        );
     }
 
     #[test]
     fn test_sql_identifier_mysql() {
         assert_eq!(sql_identifier("simple", DatabaseType::MySQL), "`simple`");
-        assert_eq!(sql_identifier("contains`tick", DatabaseType::MySQL), "`contains``tick`");
-        assert_eq!(sql_identifier("table name", DatabaseType::MySQL), "`table name`");
+        assert_eq!(
+            sql_identifier("contains`tick", DatabaseType::MySQL),
+            "`contains``tick`"
+        );
+        assert_eq!(
+            sql_identifier("table name", DatabaseType::MySQL),
+            "`table name`"
+        );
     }
 
     #[test]
@@ -301,23 +314,38 @@ mod tests {
         assert_eq!(format_sql_value("42", Some(&ColumnType::Integer)), "42");
         assert_eq!(format_sql_value("0", Some(&ColumnType::Integer)), "0");
         assert_eq!(format_sql_value("-123", Some(&ColumnType::Integer)), "-123");
-        assert_eq!(format_sql_value("42", Some(&ColumnType::UnsignedInteger)), "42");
+        assert_eq!(
+            format_sql_value("42", Some(&ColumnType::UnsignedInteger)),
+            "42"
+        );
         assert_eq!(format_sql_value("3.14", Some(&ColumnType::Numeric)), "3.14");
         assert_eq!(format_sql_value("0.0", Some(&ColumnType::Numeric)), "0.0");
-        assert_eq!(format_sql_value("-99.99", Some(&ColumnType::Numeric)), "-99.99");
+        assert_eq!(
+            format_sql_value("-99.99", Some(&ColumnType::Numeric)),
+            "-99.99"
+        );
     }
 
     #[test]
     fn test_format_sql_value_boolean() {
         assert_eq!(format_sql_value("true", Some(&ColumnType::Boolean)), "true");
-        assert_eq!(format_sql_value("false", Some(&ColumnType::Boolean)), "false");
+        assert_eq!(
+            format_sql_value("false", Some(&ColumnType::Boolean)),
+            "false"
+        );
         assert_eq!(format_sql_value("TRUE", Some(&ColumnType::Boolean)), "TRUE");
-        assert_eq!(format_sql_value("FALSE", Some(&ColumnType::Boolean)), "FALSE");
+        assert_eq!(
+            format_sql_value("FALSE", Some(&ColumnType::Boolean)),
+            "FALSE"
+        );
     }
 
     #[test]
     fn test_format_sql_value_text() {
-        assert_eq!(format_sql_value("hello", Some(&ColumnType::Text)), "'hello'");
+        assert_eq!(
+            format_sql_value("hello", Some(&ColumnType::Text)),
+            "'hello'"
+        );
         assert_eq!(format_sql_value("it's", Some(&ColumnType::Text)), "'it''s'");
         assert_eq!(format_sql_value("", Some(&ColumnType::Text)), "''");
         assert_eq!(
@@ -325,14 +353,20 @@ mod tests {
             "'2024-01-15'"
         );
         assert_eq!(
-            format_sql_value("550e8400-e29b-41d4-a716-446655440000", Some(&ColumnType::Uuid)),
+            format_sql_value(
+                "550e8400-e29b-41d4-a716-446655440000",
+                Some(&ColumnType::Uuid)
+            ),
             "'550e8400-e29b-41d4-a716-446655440000'"
         );
         assert_eq!(
             format_sql_value("{\"key\": \"value\"}", Some(&ColumnType::Json)),
             "'{\"key\": \"value\"}'"
         );
-        assert_eq!(format_sql_value("value", Some(&ColumnType::Unknown)), "'value'");
+        assert_eq!(
+            format_sql_value("value", Some(&ColumnType::Unknown)),
+            "'value'"
+        );
     }
 
     #[test]

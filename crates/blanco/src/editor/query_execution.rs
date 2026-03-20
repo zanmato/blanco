@@ -16,7 +16,7 @@ use crate::time_format;
 use database::{DatabaseService, DatabaseServiceTrait};
 
 use super::parameter_form::ParameterForm;
-use super::{EditorPanel, TabType, SQL_QUERY_LOG_MAX_LENGTH};
+use super::{EditorPanel, SQL_QUERY_LOG_MAX_LENGTH, TabType};
 
 impl EditorPanel {
     /// Handler for Run Query button/keyboard
@@ -138,13 +138,15 @@ impl EditorPanel {
                     }
                 };
 
-                entity_handle.update(cx, |editor_panel: &mut EditorPanel, _| {
-                    if let Some(tab) = editor_panel.tabs.get_mut(editor_panel.active_tab_ix)
-                        && let TabType::Query(query_tab) = tab
-                    {
-                        query_tab.db_id = Some(tab_db_id);
-                    }
-                }).log_err();
+                entity_handle
+                    .update(cx, |editor_panel: &mut EditorPanel, _| {
+                        if let Some(tab) = editor_panel.tabs.get_mut(editor_panel.active_tab_ix)
+                            && let TabType::Query(query_tab) = tab
+                        {
+                            query_tab.db_id = Some(tab_db_id);
+                        }
+                    })
+                    .log_err();
             })
             .detach();
 
@@ -206,7 +208,6 @@ impl EditorPanel {
                         result.is_error = false;
                         result.connection_id = Some(connection_id);
 
-                        // Extract table metadata and get columns - still need connection for this
                         if let Ok(connection) = db_service
                             .get_or_create_connection_by_id(connection_id, Some(&database_name))
                             .await
@@ -231,60 +232,64 @@ impl EditorPanel {
                         let rows_affected =
                             std::cmp::max(result.rows_affected, result.row_count() as u64);
 
-                        window.update(move |window, cx| {
-                            // Update results panel
-                            results_panel_clone.update(cx, |panel, cx| {
-                                panel.set_query_result(result, Some(connection_id), window, cx);
-                            });
+                        window
+                            .update(move |window, cx| {
+                                // Update results panel
+                                results_panel_clone.update(cx, |panel, cx| {
+                                    panel.set_query_result(result, Some(connection_id), window, cx);
+                                });
 
-                            // Log execution result to SQL log
-                            sql_log_clone.update(cx, |sql_log, cx| {
-                                let log_message = format!(
-                                    "{}, {} rows in {}",
-                                    time_format::format_current_timestamp(),
-                                    rows_affected,
-                                    time_format::format_duration(duration_ms)
-                                );
-                                sql_log.append_text(
-                                    &blanco_ui::SqlLogMessage::Comment(log_message),
-                                    cx,
-                                );
-                            });
+                                // Log execution result to SQL log
+                                sql_log_clone.update(cx, |sql_log, cx| {
+                                    let log_message = format!(
+                                        "{}, {} rows in {}",
+                                        time_format::format_current_timestamp(),
+                                        rows_affected,
+                                        time_format::format_duration(duration_ms)
+                                    );
+                                    sql_log.append_text(
+                                        &blanco_ui::SqlLogMessage::Comment(log_message),
+                                        cx,
+                                    );
+                                });
 
-                            editor_panel_entity
-                                .update(cx, |editor_panel, cx| {
-                                    editor_panel.loading = false;
-                                    cx.notify();
-                                })
-                                .ok();
-                        }).log_err();
+                                editor_panel_entity
+                                    .update(cx, |editor_panel, cx| {
+                                        editor_panel.loading = false;
+                                        cx.notify();
+                                    })
+                                    .ok();
+                            })
+                            .log_err();
                     }
                     Err(e) => {
                         tracing::error!("Query execution failed: {}", e);
 
-                        window.update(|window, cx| {
-                            // Log execution error to SQL log
-                            let _error_duration = start_time.elapsed().as_millis() as i64;
-                            sql_log_clone.update(cx, |sql_log, cx| {
-                                let log_message = format!("query execution failed: {}", e);
-                                sql_log.append_text(
-                                    &blanco_ui::SqlLogMessage::Comment(log_message),
+                        window
+                            .update(|window, cx| {
+                                // Log execution error to SQL log
+                                let _error_duration = start_time.elapsed().as_millis() as i64;
+                                sql_log_clone.update(cx, |sql_log, cx| {
+                                    let log_message = format!("query execution failed: {}", e);
+                                    sql_log.append_text(
+                                        &blanco_ui::SqlLogMessage::Comment(log_message),
+                                        cx,
+                                    );
+                                });
+
+                                editor_panel_entity
+                                    .update(cx, |editor_panel, cx| {
+                                        editor_panel.loading = false;
+                                        cx.notify();
+                                    })
+                                    .ok();
+
+                                window.push_notification(
+                                    (NotificationType::Error, SharedString::from(e.to_string())),
                                     cx,
                                 );
-                            });
-
-                            editor_panel_entity
-                                .update(cx, |editor_panel, cx| {
-                                    editor_panel.loading = false;
-                                    cx.notify();
-                                })
-                                .ok();
-
-                            window.push_notification(
-                                (NotificationType::Error, SharedString::from(e.to_string())),
-                                cx,
-                            );
-                        }).log_err();
+                            })
+                            .log_err();
                     }
                 }
             });

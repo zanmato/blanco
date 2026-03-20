@@ -1,8 +1,8 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
-    ColumnInfo, Connection, QueryResult,
-    connection_trait::ColumnType, connection_trait::ForeignKeyInfo, connection_trait::IndexInfo,
+    ColumnInfo, Connection, QueryResult, connection_trait::ColumnType,
+    connection_trait::ForeignKeyInfo, connection_trait::IndexInfo,
 };
 use futures::{Stream, StreamExt};
 use smol::lock::RwLock;
@@ -397,133 +397,128 @@ impl PostgresConnection {
             Some("text") | Some("varchar") | Some("char") | Some("BPCHAR") | Some("TEXT")
             | Some("VARCHAR") | Some("CHAR") | Some("NAME") => {
                 if let Ok(array_val) = row.try_get::<Option<Vec<String>>, _>(column_index) {
-                    return array_val
-                        .map(|v| {
-                            let result = format!(
-                                "{{{}}}",
-                                v.iter()
-                                    .map(|x| format!("\"{}\"", x))
-                                    .collect::<Vec<_>>()
-                                    .join(",")
-                            );
-                            result
-                        })
-                        ;
+                    return array_val.map(|v| {
+                        let result = format!(
+                            "{{{}}}",
+                            v.iter()
+                                .map(|x| format!("\"{}\"", x))
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        );
+                        result
+                    });
                 }
             }
             Some("int4") | Some("integer") | Some("int") | Some("INT4") => {
                 if let Ok(array_val) = row.try_get::<Option<Vec<i32>>, _>(column_index) {
-                    return array_val
-                        .map(|v| {
-                            let result = format!(
-                                "{{{}}}",
-                                v.iter()
-                                    .map(|x| x.to_string())
-                                    .collect::<Vec<_>>()
-                                    .join(",")
-                            );
-                            tracing::debug!(
-                                "Successfully converted array to Vec<i32> for column type '{}': {}",
-                                column_type,
-                                result
-                            );
+                    return array_val.map(|v| {
+                        let result = format!(
+                            "{{{}}}",
+                            v.iter()
+                                .map(|x| x.to_string())
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        );
+                        tracing::debug!(
+                            "Successfully converted array to Vec<i32> for column type '{}': {}",
+                            column_type,
                             result
-                        })
-                        ;
+                        );
+                        result
+                    });
                 }
             }
             Some("int8") | Some("bigint") | Some("INT8") => {
                 if let Ok(array_val) = row.try_get::<Option<Vec<i64>>, _>(column_index) {
-                    return array_val
-                        .map(|v| {
-                            let result = format!(
-                                "{{{}}}",
-                                v.iter()
-                                    .map(|x| x.to_string())
-                                    .collect::<Vec<_>>()
-                                    .join(",")
-                            );
-                            tracing::debug!(
-                                "Successfully converted array to Vec<i64> for column type '{}': {}",
-                                column_type,
-                                result
-                            );
+                    return array_val.map(|v| {
+                        let result = format!(
+                            "{{{}}}",
+                            v.iter()
+                                .map(|x| x.to_string())
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        );
+                        tracing::debug!(
+                            "Successfully converted array to Vec<i64> for column type '{}': {}",
+                            column_type,
                             result
-                        })
-                        ;
+                        );
+                        result
+                    });
                 }
             }
             Some("int2") | Some("smallint") | Some("INT2") => {
                 if let Ok(array_val) = row.try_get::<Option<Vec<i16>>, _>(column_index) {
-                    return array_val
-                        .map(|v| {
-                            let result = format!(
-                                "{{{}}}",
-                                v.iter()
-                                    .map(|x| x.to_string())
-                                    .collect::<Vec<_>>()
-                                    .join(",")
-                            );
-                            tracing::debug!(
-                                "Successfully converted array to Vec<i16> for column type '{}': {}",
-                                column_type,
-                                result
-                            );
+                    return array_val.map(|v| {
+                        let result = format!(
+                            "{{{}}}",
+                            v.iter()
+                                .map(|x| x.to_string())
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        );
+                        tracing::debug!(
+                            "Successfully converted array to Vec<i16> for column type '{}': {}",
+                            column_type,
                             result
-                        })
-                        ;
+                        );
+                        result
+                    });
                 }
             }
             Some("float4") | Some("real") | Some("FLOAT4") => {
                 if let Ok(array_val) = row.try_get::<Option<Vec<f32>>, _>(column_index) {
-                    return array_val
-                        .map(|v| {
-                            let result = format!(
-                                "{{{}}}",
-                                v.iter()
-                                    .map(|x| x.to_string())
-                                    .collect::<Vec<_>>()
-                                    .join(",")
-                            );
-                            tracing::debug!(
-                                "Successfully converted array to Vec<f32> for column type '{}': {}",
-                                column_type,
-                                result
-                            );
+                    return array_val.map(|v| {
+                        let result = format!(
+                            "{{{}}}",
+                            v.iter()
+                                .map(|x| x.to_string())
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        );
+                        tracing::debug!(
+                            "Successfully converted array to Vec<f32> for column type '{}': {}",
+                            column_type,
                             result
-                        })
-                        ;
+                        );
+                        result
+                    });
                 }
             }
             Some("float8") | Some("double precision") | Some("FLOAT8") => {
                 if let Ok(array_val) = row.try_get::<Option<Vec<f64>>, _>(column_index) {
-                    return array_val
-                        .map(|v| {
-                            let result = format!(
-                                "{{{}}}",
-                                v.iter()
-                                    .map(|x| x.to_string())
-                                    .collect::<Vec<_>>()
-                                    .join(",")
-                            );
-                            tracing::debug!(
-                                "Successfully converted array to Vec<f64> for column type '{}': {}",
-                                column_type,
-                                result
-                            );
+                    return array_val.map(|v| {
+                        let result = format!(
+                            "{{{}}}",
+                            v.iter()
+                                .map(|x| x.to_string())
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        );
+                        tracing::debug!(
+                            "Successfully converted array to Vec<f64> for column type '{}': {}",
+                            column_type,
                             result
-                        })
-                        ;
+                        );
+                        result
+                    });
                 }
             }
             Some("bool") | Some("boolean") | Some("BOOL") => {
                 if let Ok(array_val) = row.try_get::<Option<Vec<bool>>, _>(column_index) {
                     return array_val.map(|v| {
-                        let result = format!("{{{}}}", v.iter()
-                            .map(|x| x.to_string())
-                            .collect::<Vec<_>>()
-                            .join(","));
-                        tracing::debug!("Successfully converted array to Vec<bool> for column type '{}': {}", column_type, result);
+                        let result = format!(
+                            "{{{}}}",
+                            v.iter()
+                                .map(|x| x.to_string())
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        );
+                        tracing::debug!(
+                            "Successfully converted array to Vec<bool> for column type '{}': {}",
+                            column_type,
+                            result
+                        );
                         result
                     });
                 }
@@ -543,16 +538,14 @@ impl PostgresConnection {
             _ => {
                 // Fallback: try to get as string and parse as PostgreSQL array format
                 if let Ok(array_val) = row.try_get::<Option<String>, _>(column_index) {
-                    return array_val
-                        .map(|v| {
-                            tracing::debug!(
-                                "Successfully converted array '{}' to String for column type '{}'",
-                                v,
-                                column_type
-                            );
-                            v
-                        })
-                        ;
+                    return array_val.map(|v| {
+                        tracing::debug!(
+                            "Successfully converted array '{}' to String for column type '{}'",
+                            v,
+                            column_type
+                        );
+                        v
+                    });
                 }
             }
         }
@@ -614,43 +607,31 @@ impl PostgresConnection {
             // 16-bit integers
             "smallint" | "int2" | "smallserial" => {
                 if let Ok(val) = row.try_get::<Option<i16>, _>(column_index) {
-                    return val
-                        .map(|v| v.to_string())
-                        ;
+                    return val.map(|v| v.to_string());
                 }
             }
             // 32-bit integers
             "integer" | "int" | "int4" | "serial" => {
                 if let Ok(val) = row.try_get::<Option<i32>, _>(column_index) {
-                    return val
-                        .map(|v| v.to_string())
-                        ;
+                    return val.map(|v| v.to_string());
                 }
             }
             // 64-bit integers
             "bigint" | "int8" | "bigserial" => {
                 if let Ok(val) = row.try_get::<Option<i64>, _>(column_index) {
-                    return val
-                        .map(|v| v.to_string())
-                        ;
+                    return val.map(|v| v.to_string());
                 }
             }
             _ => {
                 // Fallback: try sizes in order
                 if let Ok(val) = row.try_get::<Option<i16>, _>(column_index) {
-                    return val
-                        .map(|v| v.to_string())
-                        ;
+                    return val.map(|v| v.to_string());
                 }
                 if let Ok(val) = row.try_get::<Option<i32>, _>(column_index) {
-                    return val
-                        .map(|v| v.to_string())
-                        ;
+                    return val.map(|v| v.to_string());
                 }
                 if let Ok(val) = row.try_get::<Option<i64>, _>(column_index) {
-                    return val
-                        .map(|v| v.to_string())
-                        ;
+                    return val.map(|v| v.to_string());
                 }
             }
         }
@@ -668,38 +649,28 @@ impl PostgresConnection {
             // 32-bit float
             "real" | "float4" => {
                 if let Ok(val) = row.try_get::<Option<f32>, _>(column_index) {
-                    return val
-                        .map(|v| v.to_string())
-                        ;
+                    return val.map(|v| v.to_string());
                 }
             }
             // 64-bit float
             "double precision" | "float8" => {
                 if let Ok(val) = row.try_get::<Option<f64>, _>(column_index) {
-                    return val
-                        .map(|v| v.to_string())
-                        ;
+                    return val.map(|v| v.to_string());
                 }
             }
             // Decimal/numeric types
             "numeric" | "decimal" | "money" => {
                 if let Ok(val) = row.try_get::<Option<rust_decimal::Decimal>, _>(column_index) {
-                    return val
-                        .map(|v| v.to_string())
-                        ;
+                    return val.map(|v| v.to_string());
                 }
             }
             _ => {
                 // Fallback: try types in order
                 if let Ok(val) = row.try_get::<Option<rust_decimal::Decimal>, _>(column_index) {
-                    return val
-                        .map(|v| v.to_string())
-                        ;
+                    return val.map(|v| v.to_string());
                 }
                 if let Ok(val) = row.try_get::<Option<f64>, _>(column_index) {
-                    return val
-                        .map(|v| v.to_string())
-                        ;
+                    return val.map(|v| v.to_string());
                 }
             }
         }
@@ -719,41 +690,31 @@ impl PostgresConnection {
                 if let Ok(val) =
                     row.try_get::<Option<chrono::DateTime<chrono::Local>>, _>(column_index)
                 {
-                    return val
-                        .map(|v| v.to_rfc3339())
-                        ;
+                    return val.map(|v| v.to_rfc3339());
                 }
             }
             // Timestamp without timezone
             "timestamp" => {
                 if let Ok(val) = row.try_get::<Option<chrono::NaiveDateTime>, _>(column_index) {
-                    return val
-                        .map(|v| v.format("%Y-%m-%d %H:%M:%S").to_string())
-                        ;
+                    return val.map(|v| v.format("%Y-%m-%d %H:%M:%S").to_string());
                 }
             }
             // Date
             "date" => {
                 if let Ok(val) = row.try_get::<Option<chrono::NaiveDate>, _>(column_index) {
-                    return val
-                        .map(|v| v.format("%Y-%m-%d").to_string())
-                        ;
+                    return val.map(|v| v.format("%Y-%m-%d").to_string());
                 }
             }
             // Time without timezone
             "time" => {
                 if let Ok(val) = row.try_get::<Option<chrono::NaiveTime>, _>(column_index) {
-                    return val
-                        .map(|v| v.format("%H:%M:%S").to_string())
-                        ;
+                    return val.map(|v| v.format("%H:%M:%S").to_string());
                 }
             }
             // Time with timezone
             "timetz" => {
                 if let Ok(val) = row.try_get::<Option<chrono::NaiveTime>, _>(column_index) {
-                    return val
-                        .map(|v| v.format("%H:%M:%S").to_string())
-                        ;
+                    return val.map(|v| v.format("%H:%M:%S").to_string());
                 }
             }
             // Interval
@@ -775,15 +736,13 @@ impl PostgresConnection {
         _column_type: &str,
     ) -> Option<String> {
         if let Ok(val) = row.try_get::<Option<serde_json::Value>, _>(column_index) {
-            return val
-                .map(|v| {
-                    if v.is_string() {
-                        v.as_str().unwrap_or("").to_string()
-                    } else {
-                        v.to_string()
-                    }
-                })
-                ;
+            return val.map(|v| {
+                if v.is_string() {
+                    v.as_str().unwrap_or("").to_string()
+                } else {
+                    v.to_string()
+                }
+            });
         }
         // Fallback to string representation
         self.try_string_conversion(row, column_index, "json")
@@ -806,9 +765,7 @@ impl PostgresConnection {
             "regclass" => {
                 // Try i32 conversion for regclass (OID)
                 if let Ok(oid_val) = row.try_get::<Option<i32>, _>(column_index) {
-                    return oid_val
-                        .map(|oid| format!("OID:{}", oid))
-                        ;
+                    return oid_val.map(|oid| format!("OID:{}", oid));
                 }
                 // Try non-optional i32
                 if let Ok(oid_val) = row.try_get::<i32, _>(column_index) {
@@ -933,36 +890,17 @@ impl PostgresConnection {
 
         // 2. Route based on PostgreSQL type (column-type-first approach)
         match column_type {
-            // Array types - priority handling
             ColumnType::Array => self.handle_array_type(row, column_index, raw_type),
-
-            // Integer types
             ColumnType::Integer | ColumnType::UnsignedInteger => {
                 self.handle_integer_type(row, column_index, raw_type)
             }
-
-            // Numeric types
             ColumnType::Numeric => self.handle_numeric_type(row, column_index, raw_type),
-
-            // Boolean type
             ColumnType::Boolean => self.handle_bool_type(row, column_index, raw_type),
-
-            // Text type
             ColumnType::Text => self.handle_string_type(row, column_index, raw_type),
-
-            // DateTime types
             ColumnType::DateTime => self.handle_timestamp_type(row, column_index, raw_type),
-
-            // UUID type
             ColumnType::Uuid => self.handle_uuid_type(row, column_index, raw_type),
-
-            // JSON types
             ColumnType::Json => self.handle_json_type(row, column_index, raw_type),
-
-            // Binary type
             ColumnType::Binary => self.handle_unknown_type(row, column_index, raw_type),
-
-            // Unknown/custom types - use optimized raw value access
             ColumnType::Unknown => {
                 tracing::warn!("Unknown column type falling back to raw value access");
                 self.handle_unknown_type(row, column_index, raw_type)
@@ -1025,9 +963,10 @@ impl PostgresConnection {
         for row in rows {
             if let Ok(Some(oid_text)) = row.try_get::<Option<String>, _>(0)
                 && let Ok(oid_val) = oid_text.parse::<i32>()
-                    && let Ok(Some(name)) = row.try_get::<Option<String>, _>(1) {
-                        oid_to_name.insert(oid_val, name);
-                    }
+                && let Ok(Some(name)) = row.try_get::<Option<String>, _>(1)
+            {
+                oid_to_name.insert(oid_val, name);
+            }
         }
 
         Ok(oid_to_name)
@@ -1146,22 +1085,23 @@ impl PostgresConnection {
                     for (col_idx, col_type) in column_types.iter().enumerate() {
                         if *col_type == ColumnType::Unknown
                             && let Ok(raw_value) = row.try_get_raw(col_idx)
-                                && !raw_value.is_null() {
-                                    match raw_value.as_bytes() {
-                                        Ok(bytes) => {
-                                            // PostgreSQL OIDs are 4-byte integers in network byte order (big-endian)
-                                            if bytes.len() >= 4 {
-                                                let oid = i32::from_be_bytes([
-                                                    bytes[0], bytes[1], bytes[2], bytes[3],
-                                                ]);
-                                                oids_to_resolve.push((row_idx, col_idx, oid));
-                                            }
-                                        }
-                                        Err(_) => {
-                                            // If we can't get bytes, we can't resolve this OID
-                                        }
+                            && !raw_value.is_null()
+                        {
+                            match raw_value.as_bytes() {
+                                Ok(bytes) => {
+                                    // PostgreSQL OIDs are 4-byte integers in network byte order (big-endian)
+                                    if bytes.len() >= 4 {
+                                        let oid = i32::from_be_bytes([
+                                            bytes[0], bytes[1], bytes[2], bytes[3],
+                                        ]);
+                                        oids_to_resolve.push((row_idx, col_idx, oid));
                                     }
                                 }
+                                Err(_) => {
+                                    // If we can't get bytes, we can't resolve this OID
+                                }
+                            }
+                        }
                     }
 
                     rows.push(row_data);
@@ -1617,7 +1557,6 @@ impl Connection for PostgresConnection {
         Ok((columns, column_types, Box::new(all_rows_stream)))
     }
 
-
     async fn get_database_schema_paginated(
         &self,
         database_name: Option<&str>,
@@ -1674,16 +1613,17 @@ impl Connection for PostgresConnection {
             .filter(|n| *n >= 0);
 
         if let Some(count) = row_count
-            && count <= ROW_ESTIMATE_THRESHOLD {
-                // Small table: fetch all rows with referenced row first
-                let query = format!(
-                    "SELECT * FROM {} ORDER BY {} = '{}' DESC LIMIT {}",
-                    table_name, column_name, reference_value, LIMIT_THRESHOLD
-                );
-                return self
-                    .execute_query(&query, self.initial_database.as_deref(), None)
-                    .await;
-            }
+            && count <= ROW_ESTIMATE_THRESHOLD
+        {
+            // Small table: fetch all rows with referenced row first
+            let query = format!(
+                "SELECT * FROM {} ORDER BY {} = '{}' DESC LIMIT {}",
+                table_name, column_name, reference_value, LIMIT_THRESHOLD
+            );
+            return self
+                .execute_query(&query, self.initial_database.as_deref(), None)
+                .await;
+        }
 
         // Large table or estimate unavailable: fetch only referenced row
         let query = format!(

@@ -2,9 +2,8 @@ use std::ops::Range;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, Context, Focusable, FontWeight, InteractiveElement, IntoElement,
-    MouseButton, ParentElement, SharedString, StatefulInteractiveElement, Styled, TextRun, Window,
-    div, px,
+    App, AppContext, Context, Focusable, FontWeight, InteractiveElement, IntoElement, MouseButton,
+    ParentElement, SharedString, StatefulInteractiveElement, Styled, TextRun, Window, div, px,
 };
 use gpui_component::popover::{Popover, PopoverState};
 use gpui_component::{
@@ -27,8 +26,8 @@ use super::cell_edit_state::{
 };
 use super::foreign_key_popover::ForeignKeyPopover;
 use crate::app::{
-    AddRow, CopyAsCSV, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, DeleteRow, DuplicateRow,
-    ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, SetCellNull,
+    AddRow, CopyAsCSV, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, DeleteRow, DuplicateRow, ExportAsCSV,
+    ExportAsJSON, ExportAsMarkdown, ExportAsSQL, SetCellNull,
 };
 use crate::results_panel::ResultsPanel;
 use crate::results_panel::table_operations::{
@@ -100,7 +99,11 @@ impl ResultsTableDelegate {
     }
 
     /// Get column values for INSERT operations, excluding row number and primary key (for new rows)
-    pub fn get_insert_values(&self, row_index: usize, exclude_primary_key: bool) -> Vec<Option<String>> {
+    pub fn get_insert_values(
+        &self,
+        row_index: usize,
+        exclude_primary_key: bool,
+    ) -> Vec<Option<String>> {
         let pk_index = if exclude_primary_key {
             self.get_primary_key_column_index()
         } else {
@@ -197,7 +200,6 @@ impl ResultsTableDelegate {
                     delete_operations.push(operation);
                 }
                 ChangeType::UpdateCell => {
-                    // Get primary key information - always use delegate's primary key column
                     let (pk_column, pk_value) = if let Some(ref pk_column) = self.primary_key_column
                     {
                         if let Some(pk_val) = &change.primary_key_value {
@@ -261,12 +263,10 @@ impl ResultsTableDelegate {
                     let column_changes: Vec<ColumnChange> = column_names
                         .into_iter()
                         .zip(row_values.iter())
-                        .map(|(column_name, value)| {
-                            ColumnChange {
-                                column_name,
-                                old_value: None,
-                                new_value: value.clone(),
-                            }
+                        .map(|(column_name, value)| ColumnChange {
+                            column_name,
+                            old_value: None,
+                            new_value: value.clone(),
                         })
                         .collect();
 
@@ -503,7 +503,12 @@ impl ResultsTableDelegate {
         }
 
         if let Some(new_value) = self.edit_state.edited_values.get(&(row, col)).cloned() {
-            tracing::info!("Found edited value: '{:?}' for ({}, {})", new_value, row, col);
+            tracing::info!(
+                "Found edited value: '{:?}' for ({}, {})",
+                new_value,
+                row,
+                col
+            );
 
             // Get the original value
             let original_value = self.edit_state.original_values.get(&(row, col)).cloned();
@@ -524,10 +529,10 @@ impl ResultsTableDelegate {
             // Track the change for SQL generation (but not for new rows)
             // original_value is Option<Option<String>>, the outer Option is whether editing started
             if let (Some(original), Some(table_name)) = (&original_value, &self.table_name) {
-                // Check if this is a new row - if so, don't create UPDATE changes
+                // Check if this is a new row, if so, don't create UPDATE changes
                 // New rows should be handled by INSERT operations only
                 if !self.edit_state.is_new_row(row) {
-                    // Get primary key value - if updating the PK column itself, use the original value
+                    // Get primary key value, if updating the PK column itself, use the original value
                     let primary_key_value = if let Some(pk_column) = &self.primary_key_column {
                         // Find the index of the primary key column
                         if let Some(pk_index) = self
@@ -537,10 +542,16 @@ impl ResultsTableDelegate {
                         {
                             // If we're updating the primary key column itself, get the original value
                             if pk_index == col {
-                                self.edit_state.original_values.get(&(row, col)).and_then(|v| v.clone())
+                                self.edit_state
+                                    .original_values
+                                    .get(&(row, col))
+                                    .and_then(|v| v.clone())
                             } else {
                                 // Otherwise get the current value from the row
-                                self.rows.get(row).and_then(|r| r.get(pk_index)).and_then(|v| v.clone())
+                                self.rows
+                                    .get(row)
+                                    .and_then(|r| r.get(pk_index))
+                                    .and_then(|v| v.clone())
                             }
                         } else {
                             None
@@ -619,9 +630,7 @@ impl ResultsTableDelegate {
         state.delegate_mut().edit_state.editing_input = Some(new_input.clone());
 
         // Re-subscribe to input events (blur/change)
-        ResultsPanel::subscribe_to_input_events(
-            state, &new_input, cell.1, cell.0, cx,
-        );
+        ResultsPanel::subscribe_to_input_events(state, &new_input, cell.1, cell.0, cx);
 
         // Re-focus the input after recreation
         new_input.focus_handle(cx).focus(window, cx);
@@ -758,7 +767,9 @@ impl TableDelegate for ResultsTableDelegate {
         let is_editable = self.is_editable() && !is_row_number_col;
 
         let current_value: Option<String> = if is_edited {
-            self.edit_state.get_edited_value(row_ix, col_ix).and_then(|v| v.clone())
+            self.edit_state
+                .get_edited_value(row_ix, col_ix)
+                .and_then(|v| v.clone())
         } else {
             self.rows
                 .get(row_ix)
@@ -851,24 +862,26 @@ impl TableDelegate for ResultsTableDelegate {
                         .items_center()
                         .p_0()
                         .when(
-                            self.column_types.get(col_ix - 1).is_some_and(|ct| ct.is_numeric()),
-                            |this| this.justify_end()
+                            self.column_types
+                                .get(col_ix - 1)
+                                .is_some_and(|ct| ct.is_numeric()),
+                            |this| this.justify_end(),
                         )
                         .when(
                             self.column_types.get(col_ix - 1) == Some(&ColumnType::Uuid),
-                            |this| this.text_color(cx.theme().blue)
+                            |this| this.text_color(cx.theme().blue),
                         )
                         .when(
                             self.column_types.get(col_ix - 1) == Some(&ColumnType::DateTime),
-                            |this| this.text_color(cx.theme().green)
+                            |this| this.text_color(cx.theme().green),
                         )
                         .when(
                             self.column_types.get(col_ix - 1) == Some(&ColumnType::Json),
-                            |this| this.text_color(cx.theme().yellow)
+                            |this| this.text_color(cx.theme().yellow),
                         )
                         .when(
                             self.column_types.get(col_ix - 1) == Some(&ColumnType::Array),
-                            |this| this.text_color(cx.theme().blue)
+                            |this| this.text_color(cx.theme().blue),
                         )
                         .child(
                             Input::new(&input)
@@ -1355,7 +1368,11 @@ mod tests {
         ];
 
         // Add a row with id=2
-        delegate.rows = vec![vec![Some("1".to_string()), Some("2".to_string()), Some("test".to_string())]];
+        delegate.rows = vec![vec![
+            Some("1".to_string()),
+            Some("2".to_string()),
+            Some("test".to_string()),
+        ]];
 
         // Simulate editing the primary key column (id) from 2 to 4
         let row = 0;

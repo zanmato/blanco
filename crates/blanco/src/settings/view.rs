@@ -181,9 +181,7 @@ impl SettingsView {
                                 max: 8.0,
                                 step: 1.0,
                             },
-                            move |cx: &App| {
-                                AppSettings::global(cx).settings.editor.tab_size as f64
-                            },
+                            move |cx: &App| AppSettings::global(cx).settings.editor.tab_size as f64,
                             {
                                 let view_handle = view_handle.clone();
                                 move |val: f64, cx: &mut App| {
@@ -437,7 +435,6 @@ impl SettingsView {
                                     AppSettings::global_mut(cx).settings.chat.api_key =
                                         api_key.clone();
 
-                                    // API key is secret - save with special handling
                                     let key = "chat.api_key".to_string();
                                     if let Some(view) = view_handle.upgrade() {
                                         view.update(cx, |view, cx| {

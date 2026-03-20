@@ -60,65 +60,60 @@ impl ChatPanel {
         let mut subscriptions = Vec::new();
 
         // Subscribe to session events
-        let subscription = cx.subscribe(&session, |panel, _session, event, cx| {
-            match event {
-                ChatEvent::MessageAdded { message } => {
-                    tracing::info!("Message added! {:?}", message);
-                    let message = message.clone();
-                    let message_state = cx.new(|cx| {
-                        ChatMessageState::new(
-                            panel.messages.len(),
-                            message.content.into(),
-                            message.role.clone(),
-                            cx,
-                        )
-                    });
-                    panel.messages.push(message_state);
-                    panel.scroll_to_bottom(cx);
+        let subscription = cx.subscribe(&session, |panel, _session, event, cx| match event {
+            ChatEvent::MessageAdded { message } => {
+                tracing::info!("Message added! {:?}", message);
+                let message = message.clone();
+                let message_state = cx.new(|cx| {
+                    ChatMessageState::new(
+                        panel.messages.len(),
+                        message.content.into(),
+                        message.role.clone(),
+                        cx,
+                    )
+                });
+                panel.messages.push(message_state);
+                panel.scroll_to_bottom(cx);
 
-                    cx.notify();
-                }
-                ChatEvent::StreamStarted { message_id } => {
-                    // Handle stream start
-                    tracing::debug!("Chat stream started: {}", message_id);
-                    panel.loading_state = LoadingState::Streaming;
-                    cx.notify();
-                }
-                ChatEvent::StreamUpdate {
-                    message_id: _,
-                    content: _,
-                } => {
-                    // Handle stream updates - scroll to show new content
-                    panel.scroll_to_bottom(cx);
-                    cx.notify();
-                }
-                ChatEvent::StreamCompleted {
-                    message_id: _,
-                    final_content: _,
-                } => {
-                    // Handle stream completion
-                    panel.loading_state = LoadingState::Idle;
-                    panel.scroll_to_bottom(cx);
-                    cx.notify();
-                }
-                ChatEvent::Error { message } => {
-                    tracing::error!("Chat error: {}", message);
-                    panel.loading_state = LoadingState::Error(message.clone());
-                    cx.notify();
-                }
-                ChatEvent::SessionStarted { provider, model } => {
-                    tracing::info!("Chat session started: {} ({})", provider, model);
-                    cx.notify();
-                }
-                ChatEvent::SessionCleared => {
-                    panel.messages.clear();
-                    panel.loading_state = LoadingState::Idle;
-                    cx.notify();
-                }
-                ChatEvent::LoadingStateChanged { new_state, .. } => {
-                    panel.loading_state = new_state.clone();
-                    cx.notify();
-                }
+                cx.notify();
+            }
+            ChatEvent::StreamStarted { message_id } => {
+                tracing::debug!("Chat stream started: {}", message_id);
+                panel.loading_state = LoadingState::Streaming;
+                cx.notify();
+            }
+            ChatEvent::StreamUpdate {
+                message_id: _,
+                content: _,
+            } => {
+                panel.scroll_to_bottom(cx);
+                cx.notify();
+            }
+            ChatEvent::StreamCompleted {
+                message_id: _,
+                final_content: _,
+            } => {
+                panel.loading_state = LoadingState::Idle;
+                panel.scroll_to_bottom(cx);
+                cx.notify();
+            }
+            ChatEvent::Error { message } => {
+                tracing::error!("Chat error: {}", message);
+                panel.loading_state = LoadingState::Error(message.clone());
+                cx.notify();
+            }
+            ChatEvent::SessionStarted { provider, model } => {
+                tracing::info!("Chat session started: {} ({})", provider, model);
+                cx.notify();
+            }
+            ChatEvent::SessionCleared => {
+                panel.messages.clear();
+                panel.loading_state = LoadingState::Idle;
+                cx.notify();
+            }
+            ChatEvent::LoadingStateChanged { new_state, .. } => {
+                panel.loading_state = new_state.clone();
+                cx.notify();
             }
         });
 

@@ -86,11 +86,10 @@ impl DataTransformer for JsonTransformer {
             .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed)
             .is_err()
         {
-            // This is not the first row - add separator
             output.push_str(",\n");
         }
 
-        // Add indentation to each line - write directly to buffer
+        // Add indentation to each line
         for (i, line) in json_str.lines().enumerate() {
             if i > 0 {
                 output.push('\n');

@@ -9,7 +9,7 @@ pub use fetch::{fetch_columns, fetch_queryable_entities};
 
 use anyhow::Result;
 use database::DatabaseServiceTrait;
-use gpui::{AppContext, Context, Task, Window};
+use gpui::{AppContext as _, Context, Task, Window};
 use gpui_component::input::{CompletionProvider, InputState, Rope, RopeExt};
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
@@ -221,228 +221,230 @@ impl CompletionProvider for SqlCompletionProvider {
         rope: &Rope,
         offset: usize,
         _trigger: CompletionContext,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<InputState>,
     ) -> Task<Result<CompletionResponse>> {
         // Clone values needed for background task
         let rope_clone = rope.clone();
         let provider_clone = self.clone();
 
-        // Get the background executor before entering the async block
-        // Context is not Send, so we can't move it into the async block
-        let executor = cx.background_executor().clone();
+        let debounce_timer = cx.background_executor().timer(Duration::from_millis(300));
 
-        // Spawn a single background task for all completion logic
-        // This ensures all text processing and context parsing happens off the UI thread
-        cx.background_spawn(async move {
-            // Debounce - wait before doing any work to avoid excessive completion requests
-            executor.timer(Duration::from_millis(100)).await;
+        // Spawn on the foreground thread so the debounce timer is cancelled when
+        // a new completion request replaces this task (via _context_menu_task).
+        // Previously this used background_spawn, which meant each keystroke's timer
+        // ran independently and the "debounce" had no effect.
+        cx.spawn_in(window, async move |_handle, cx| {
+            debounce_timer.await;
 
-            // All synchronous work now happens off the main thread
-            // Find the last semicolon before cursor using the rope (avoids full string conversion)
-            let slice_before_offset = rope_clone.slice(0..offset.min(rope_clone.len()));
-            let text_before_offset = slice_before_offset.to_string();
-            let text_before_cursor_start = if let Some(pos) = text_before_offset.rfind(';') {
-                pos + 1
-            } else {
-                0
-            };
-
-            // Get the text before cursor as a string slice (only this portion, not the full text)
-            let text_before_cursor = rope_clone
-                .slice(text_before_cursor_start..offset.min(rope_clone.len()))
-                .to_string();
-
-            // Parse SQL context once for all completion decisions
-            let context = SqlContextParser::parse(&text_before_cursor);
-
-            // Determine what to show based on parsed context
-            let should_show_columns = context.is_dot_notation || matches!(
-                context.last_keyword.as_deref(),
-                Some("SELECT")
-                    | Some("WHERE")
-                    | Some("SET")
-                    | Some("ORDER BY")
-                    | Some("GROUP BY")
-                    | Some("HAVING")
-            );
-            let should_show_tables = matches!(
-                context.last_keyword.as_deref(),
-                Some("FROM")
-                    | Some("JOIN")
-                    | Some("INNER JOIN")
-                    | Some("LEFT JOIN")
-                    | Some("RIGHT JOIN")
-                    | Some("OUTER JOIN")
-                    | Some("INTO")
-                    | Some("UPDATE")
-            );
-
-            // Calculate positions for text replacement
-            let start_pos = rope_clone
-                .offset_to_position(offset.saturating_sub(context.current_word.len()));
-            let end_pos = rope_clone.offset_to_position(offset);
-
-            // Priority: Column completion > Table completion > Keywords
-            if should_show_columns {
-                // Only convert full rope to string when we need it (for alias resolution)
-                let full_text = rope_clone.to_string();
-                let full_context = SqlContextParser::parse(&full_text);
-
-                // Extract table name and fetch columns using cache with current query context
-                // This ensures we only parse the current query, not previous ones
-                if let Some(table_name) = provider_clone
-                    .extract_table_for_columns_with_full_text(&context, &full_context, &full_text)
-                    .await
-                {
-                    match provider_clone.get_cached_columns(&table_name).await {
-                        Ok(columns) => {
-                            // Filter columns based on current input
-                            let filtered_columns: Vec<String> = if context.current_word.is_empty() {
-                                columns
-                            } else {
-                                columns
-                                    .into_iter()
-                                    .filter(|column| {
-                                        column
-                                            .to_lowercase()
-                                            .starts_with(&context.current_word.to_lowercase())
-                                    })
-                                    .collect()
-                            };
-
-                            // Sort by shortest first to prioritize shorter names
-                            let mut filtered_columns = filtered_columns;
-                            filtered_columns.sort_by_key(|a| a.len());
-
-                            // Convert to LSP completion items
-                            let completion_items = filtered_columns
-                                .into_iter()
-                                .map(|column_name| CompletionItem {
-                                    label: column_name.clone(),
-                                    kind: Some(CompletionItemKind::FIELD),
-                                    text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
-                                        lsp_types::Range::new(start_pos, end_pos),
-                                        column_name.clone(),
-                                    ))),
-                                    detail: Some(format!("Column from {}", table_name)),
-                                    insert_text: Some(column_name),
-                                    ..Default::default()
-                                })
-                                .collect::<Vec<_>>();
-
-                            return Ok(CompletionResponse::Array(completion_items));
-                        }
-                        Err(_) => {
-                            // If error fetching columns, return empty response
-                            return Ok(CompletionResponse::Array(Vec::new()));
-                        }
-                    }
+            // After debounce survived, do actual work on background thread
+            cx.background_spawn(async move {
+                // All synchronous work now happens off the main thread
+                // Find the last semicolon before cursor using the rope (avoids full string conversion)
+                let slice_before_offset = rope_clone.slice(0..offset.min(rope_clone.len()));
+                let text_before_offset = slice_before_offset.to_string();
+                let text_before_cursor_start = if let Some(pos) = text_before_offset.rfind(';') {
+                    pos + 1
                 } else {
-                    // Could not extract table name, return empty response
-                    return Ok(CompletionResponse::Array(Vec::new()));
-                }
-            }
+                    0
+                };
 
-            if should_show_tables {
-                // Fetch tables using cache
-                match provider_clone.get_cached_tables().await {
-                    Ok(entities) => {
-                        // Filter entities based on current input
-                        let mut filtered_entities: Vec<QueryableEntity> =
-                            if context.current_word.is_empty() {
-                                entities.clone()
-                            } else {
-                                entities
+                // Get the text before cursor as a string slice (only this portion, not the full text)
+                let text_before_cursor = rope_clone
+                    .slice(text_before_cursor_start..offset.min(rope_clone.len()))
+                    .to_string();
+
+                // Parse SQL context once for all completion decisions
+                let context = SqlContextParser::parse(&text_before_cursor);
+
+                // Determine what to show based on parsed context
+                let should_show_columns = context.is_dot_notation || matches!(
+                    context.last_keyword.as_deref(),
+                    Some("SELECT")
+                        | Some("WHERE")
+                        | Some("SET")
+                        | Some("ORDER BY")
+                        | Some("GROUP BY")
+                        | Some("HAVING")
+                );
+                let should_show_tables = matches!(
+                    context.last_keyword.as_deref(),
+                    Some("FROM")
+                        | Some("JOIN")
+                        | Some("INNER JOIN")
+                        | Some("LEFT JOIN")
+                        | Some("RIGHT JOIN")
+                        | Some("OUTER JOIN")
+                        | Some("INTO")
+                        | Some("UPDATE")
+                );
+
+                // Calculate positions for text replacement
+                let start_pos = rope_clone
+                    .offset_to_position(offset.saturating_sub(context.current_word.len()));
+                let end_pos = rope_clone.offset_to_position(offset);
+
+                // Priority: Column completion > Table completion > Keywords
+                if should_show_columns {
+                    // Only convert full rope to string when we need it (for alias resolution)
+                    let full_text = rope_clone.to_string();
+                    let full_context = SqlContextParser::parse(&full_text);
+
+                    // Extract table name and fetch columns using cache with current query context
+                    // This ensures we only parse the current query, not previous ones
+                    if let Some(table_name) = provider_clone
+                        .extract_table_for_columns_with_full_text(&context, &full_context, &full_text)
+                        .await
+                    {
+                        match provider_clone.get_cached_columns(&table_name).await {
+                            Ok(columns) => {
+                                // Filter columns based on current input
+                                let filtered_columns: Vec<String> = if context.current_word.is_empty() {
+                                    columns
+                                } else {
+                                    columns
+                                        .into_iter()
+                                        .filter(|column| {
+                                            column
+                                                .to_lowercase()
+                                                .starts_with(&context.current_word.to_lowercase())
+                                        })
+                                        .collect()
+                                };
+
+                                // Sort by shortest first to prioritize shorter names
+                                let mut filtered_columns = filtered_columns;
+                                filtered_columns.sort_by_key(|a| a.len());
+
+                                // Convert to LSP completion items
+                                let completion_items = filtered_columns
                                     .into_iter()
-                                    .filter(|entity| {
-                                        entity
-                                            .name
-                                            .to_lowercase()
-                                            .starts_with(&context.current_word.to_lowercase())
+                                    .map(|column_name| CompletionItem {
+                                        label: column_name.clone(),
+                                        kind: Some(CompletionItemKind::FIELD),
+                                        text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
+                                            lsp_types::Range::new(start_pos, end_pos),
+                                            column_name.clone(),
+                                        ))),
+                                        detail: Some(format!("Column from {}", table_name)),
+                                        insert_text: Some(column_name),
+                                        ..Default::default()
                                     })
-                                    .collect()
-                            };
+                                    .collect::<Vec<_>>();
 
-                        // Sort by shortest first to prioritize shorter names
-                        filtered_entities.sort_by_key(|e| e.name.len());
-
-                        tracing::debug!(
-                            "SQL Completion: Filter logic - context.current_word_is_empty: {}, filtered_entities: {:?}",
-                            context.current_word.is_empty(),
-                            filtered_entities.iter().map(|e| &e.name).collect::<Vec<_>>()
-                        );
-
-                        // Convert to LSP completion items
-                        let completion_items = filtered_entities
-                            .into_iter()
-                            .take(20)
-                            .map(|entity| {
-                                let insert_text_with_alias =
-                                    SqlContextParser::generate_table_abbreviation(&entity.name);
-                                CompletionItem {
-                                    label: entity.name.clone(),
-                                    kind: Some(CompletionItemKind::CLASS),
-                                    text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
-                                        lsp_types::Range::new(start_pos, end_pos),
-                                        insert_text_with_alias.clone(),
-                                    ))),
-                                    detail: Some(entity.entity_type.display_name().to_string()),
-                                    insert_text: Some(insert_text_with_alias),
-                                    ..Default::default()
-                                }
-                            })
-                            .collect::<Vec<_>>();
-
-                        tracing::debug!(
-                            "SQL Completion: Returning {} table completion items",
-                            completion_items.len()
-                        );
-                        return Ok(CompletionResponse::Array(completion_items));
-                    }
-                    Err(_) => {
-                        // If error fetching tables, return empty response
+                                return Ok(CompletionResponse::Array(completion_items));
+                            }
+                            Err(_) => {
+                                // If error fetching columns, return empty response
+                                return Ok(CompletionResponse::Array(Vec::new()));
+                            }
+                        }
+                    } else {
+                        // Could not extract table name, return empty response
                         return Ok(CompletionResponse::Array(Vec::new()));
                     }
                 }
-            }
 
-            // Show SQL keywords when not in table context
-            // Filter keywords based on current input
-            let filtered_keywords: Vec<&str> = if context.current_word.is_empty() {
-                SQL_KEYWORDS.to_vec()
-            } else {
-                SQL_KEYWORDS
-                    .iter()
-                    .filter(|keyword| {
-                        keyword
-                            .to_lowercase()
-                            .starts_with(&context.current_word.to_lowercase())
-                    })
-                    .copied()
-                    .collect()
-            };
+                if should_show_tables {
+                    // Fetch tables using cache
+                    match provider_clone.get_cached_tables().await {
+                        Ok(entities) => {
+                            // Filter entities based on current input
+                            let mut filtered_entities: Vec<QueryableEntity> =
+                                if context.current_word.is_empty() {
+                                    entities.clone()
+                                } else {
+                                    entities
+                                        .into_iter()
+                                        .filter(|entity| {
+                                            entity
+                                                .name
+                                                .to_lowercase()
+                                                .starts_with(&context.current_word.to_lowercase())
+                                        })
+                                        .collect()
+                                };
 
-            // Convert keywords to LSP completion items
-            let lsp_items: Vec<CompletionItem> = filtered_keywords
-                .iter()
-                .map(|keyword| {
-                    let label = keyword.to_string();
-                    CompletionItem {
-                        label: label.clone(),
-                        kind: Some(CompletionItemKind::KEYWORD),
-                        text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
-                            lsp_types::Range::new(start_pos, end_pos),
-                            label.clone(),
-                        ))),
-                        detail: Some("SQL Keyword".to_string()),
-                        insert_text: Some(label),
-                        ..Default::default()
+                            // Sort by shortest first to prioritize shorter names
+                            filtered_entities.sort_by_key(|e| e.name.len());
+
+                            tracing::debug!(
+                                "SQL Completion: Filter logic - context.current_word_is_empty: {}, filtered_entities: {:?}",
+                                context.current_word.is_empty(),
+                                filtered_entities.iter().map(|e| &e.name).collect::<Vec<_>>()
+                            );
+
+                            // Convert to LSP completion items
+                            let completion_items = filtered_entities
+                                .into_iter()
+                                .take(20)
+                                .map(|entity| {
+                                    let insert_text_with_alias =
+                                        SqlContextParser::generate_table_abbreviation(&entity.name);
+                                    CompletionItem {
+                                        label: entity.name.clone(),
+                                        kind: Some(CompletionItemKind::CLASS),
+                                        text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
+                                            lsp_types::Range::new(start_pos, end_pos),
+                                            insert_text_with_alias.clone(),
+                                        ))),
+                                        detail: Some(entity.entity_type.display_name().to_string()),
+                                        insert_text: Some(insert_text_with_alias),
+                                        ..Default::default()
+                                    }
+                                })
+                                .collect::<Vec<_>>();
+
+                            tracing::debug!(
+                                "SQL Completion: Returning {} table completion items",
+                                completion_items.len()
+                            );
+                            return Ok(CompletionResponse::Array(completion_items));
+                        }
+                        Err(_) => {
+                            // If error fetching tables, return empty response
+                            return Ok(CompletionResponse::Array(Vec::new()));
+                        }
                     }
-                })
-                .collect();
+                }
 
-            Ok(CompletionResponse::Array(lsp_items))
+                // Show SQL keywords when not in table context
+                // Filter keywords based on current input
+                let filtered_keywords: Vec<&str> = if context.current_word.is_empty() {
+                    SQL_KEYWORDS.to_vec()
+                } else {
+                    SQL_KEYWORDS
+                        .iter()
+                        .filter(|keyword| {
+                            keyword
+                                .to_lowercase()
+                                .starts_with(&context.current_word.to_lowercase())
+                        })
+                        .copied()
+                        .collect()
+                };
+
+                // Convert keywords to LSP completion items
+                let lsp_items: Vec<CompletionItem> = filtered_keywords
+                    .iter()
+                    .map(|keyword| {
+                        let label = keyword.to_string();
+                        CompletionItem {
+                            label: label.clone(),
+                            kind: Some(CompletionItemKind::KEYWORD),
+                            text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
+                                lsp_types::Range::new(start_pos, end_pos),
+                                label.clone(),
+                            ))),
+                            detail: Some("SQL Keyword".to_string()),
+                            insert_text: Some(label),
+                            ..Default::default()
+                        }
+                    })
+                    .collect();
+
+                Ok(CompletionResponse::Array(lsp_items))
+            }).await
         })
     }
 
@@ -518,9 +520,6 @@ mod tests {
         );
 
         // Test multi-word keywords
-        // Note: The current implementation finds "JOIN" instead of "LEFT JOIN" in "LEFT JOIN users"
-        // This is because "JOIN" appears later in the string than "LEFT JOIN"
-        // This is actually acceptable behavior for our use case
         assert_eq!(
             SqlContextParser::find_last_keyword("LEFT JOIN users"),
             Some("JOIN".to_string())

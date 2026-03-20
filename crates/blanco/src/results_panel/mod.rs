@@ -252,7 +252,7 @@ impl ResultsPanel {
                 // Debug: Input change handled in edited_values for commit_cell_edit
                 // Note: Can't refresh here due to borrowing issues
             } else if let InputEvent::Blur = event {
-                // Handle blur - save current edit to edited_values when input loses focus
+                // Save current edit to edited_values when input loses focus
                 // Get the current editing cell and value
                 let editing_cell = table.delegate_mut().edit_state.editing_cell;
                 tracing::info!("Blur event triggered for editing_cell: {:?}", editing_cell);
@@ -338,10 +338,9 @@ impl ResultsPanel {
             if let (Some(old_val), Some(tbl_name)) = (&old_value, &table_name)
                 && old_val != &new_value
             {
-                // Check if this is a new row - if so, don't create UPDATE changes
                 // New rows should be handled by INSERT operations only
                 if !delegate.edit_state.is_new_row(row) {
-                    // Get primary key value - if updating the PK column itself, use the original value
+                    // Get primary key value,  if updating the PK column itself, use the original value
                     let primary_key_value = if let Some(pk_column) = &delegate.primary_key_column {
                         // Find the index of the primary key column
                         if let Some(pk_index) = delegate
@@ -741,7 +740,7 @@ impl ResultsPanel {
                     })
                     .log_err();
             } else {
-                // Handle failed operations - show error but keep edits for retry
+                // Handle failed operations, show error but keep edits for retry
                 if let Some(sql_log) = sql_log_response_entity {
                     let error_message_clone = response.error_message.clone();
                     let sql_queries_clone = response.sql_queries.clone();
@@ -810,7 +809,7 @@ impl ResultsPanel {
                     });
                 }
                 ChangeType::DeleteRow => {
-                    // Remove deletion mark - the row stays in the table
+                    // Remove deletion mark, the row stays in the table
                     let row = change.row_index;
                     self.table_state.update(cx, |state, _cx| {
                         state
@@ -1247,7 +1246,6 @@ impl ResultsPanel {
             .unwrap_or(database::DatabaseType::PostgreSQL);
 
         cx.spawn_in(window, async move |entity, cx| {
-            // Await the path result - it's Result<Result<Option<PathBuf>>, Canceled>
             let outer_result = path.await;
 
             // Handle the outer Result (Canceled or inner Result)

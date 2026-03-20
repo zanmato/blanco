@@ -242,7 +242,6 @@ pub trait Connection: Send + Sync {
 
     /// Execute a query and return a stream of rows for large datasets
     /// Returns a tuple of (columns, column_types, row_stream)
-    /// Default implementation uses regular query - should be overridden for large datasets
     async fn execute_query_stream(
         &self,
         query: &str,
@@ -318,33 +317,9 @@ pub trait Connection: Send + Sync {
     /// This is more efficient than calling get_tables, get_views, and get_materialized_views separately
     async fn get_queryable_entities(
         &self,
-        schema: Option<&str>,
+        _schema: Option<&str>,
     ) -> Result<Vec<QueryableEntity>, anyhow::Error> {
-        // Default implementation for backward compatibility - calls individual methods
-        let mut entities = Vec::new();
-
-        for name in self.get_tables(schema).await? {
-            entities.push(QueryableEntity {
-                name,
-                entity_type: EntityType::Table,
-            });
-        }
-
-        for name in self.get_views(schema).await? {
-            entities.push(QueryableEntity {
-                name,
-                entity_type: EntityType::View,
-            });
-        }
-
-        for name in self.get_materialized_views(schema).await? {
-            entities.push(QueryableEntity {
-                name,
-                entity_type: EntityType::MaterializedView,
-            });
-        }
-
-        Ok(entities)
+        Ok(Vec::new())
     }
 
     /// Check if this connection type supports schemas (like PostgreSQL) or uses flat table structure (like SQLite)
@@ -373,8 +348,8 @@ pub trait Connection: Send + Sync {
         query: &str,
         alias: bool,
     ) -> Result<Option<String>, anyhow::Error> {
-        let driver = DriverType::from_string(self.get_connection_type())
-            .unwrap_or(DriverType::PostgreSQL);
+        let driver =
+            DriverType::from_string(self.get_connection_type()).unwrap_or(DriverType::PostgreSQL);
         let extractor = crate::TableExtractor::for_driver(driver);
         match extractor.extract_table(query, alias) {
             Ok(table_name) => Ok(Some(table_name)),

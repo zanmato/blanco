@@ -95,8 +95,7 @@ impl SqlStatementParser {
                 let statement_text = text.slice(range.clone()).to_string();
                 let is_complete = self.is_statement_complete(&statement_text);
                 // Extract parameters and adjust their offsets to be relative to the statement text
-                let mut parameters =
-                    self.extract_parameters_from_node(statement, &text_str);
+                let mut parameters = self.extract_parameters_from_node(statement, &text_str);
                 // Adjust byte offsets to be relative to the statement text (not the full text)
                 for param in &mut parameters {
                     param.byte_offset = param.byte_offset.saturating_sub(range.start);
@@ -132,8 +131,7 @@ impl SqlStatementParser {
             let statement_text = text.slice(range.clone()).to_string();
             let is_complete = self.is_statement_complete(&statement_text);
             // Extract parameters and adjust their offsets to be relative to the statement text
-            let mut parameters =
-                self.extract_parameters_from_node(statement, &text_str);
+            let mut parameters = self.extract_parameters_from_node(statement, &text_str);
             // Adjust byte offsets to be relative to the statement text (not the full text)
             for param in &mut parameters {
                 param.byte_offset = param.byte_offset.saturating_sub(range.start);
@@ -223,7 +221,7 @@ impl SqlStatementParser {
     ) {
         // Check if this node represents a parameter
         if let Some(param) = self.try_parse_parameter(node, text) {
-            // Deduplicate by byte offset - each position can only have one parameter
+            // Deduplicate by byte offset, each position can only have one parameter
             let already_seen = parameters
                 .iter()
                 .any(|p| p.byte_offset == param.byte_offset);

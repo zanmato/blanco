@@ -47,11 +47,8 @@ impl TreeDelegate for ConnectionsTreeDelegate {
         let item = entry.item();
         let depth = entry.depth();
 
-        // Access metadata directly - no HashMap lookups!
         let metadata = &item.metadata;
         let mut tree_item_icon = metadata.icon.clone();
-
-        // The icon is now updated directly in the tree metadata, so we just use it as-is
 
         // Add environment label for connections
         let environment_label = if metadata.kind == TreeItemKind::Connection {
@@ -169,37 +166,37 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                 let connection_id = metadata.connection_id;
                 let connection_name = metadata.connection_name.clone();
                 menu.item(PopupMenuItem::new("Refresh").on_click(window.listener_for(
+                    &self.parent,
+                    move |this, _event, _window, cx| {
+                        this.refresh_connection(connection_id, cx);
+                    },
+                )))
+                .item(PopupMenuItem::new("Edit").on_click(window.listener_for(
+                    &self.parent,
+                    move |this, _event, _window, cx| {
+                        this.edit_connection(connection_id, cx);
+                    },
+                )))
+                .item(
+                    PopupMenuItem::new("Disconnect").on_click(window.listener_for(
                         &self.parent,
                         move |this, _event, _window, cx| {
-                            this.refresh_connection(connection_id, cx);
+                            this.disconnect_connection(connection_id, cx);
                         },
-                    )))
-                    .item(PopupMenuItem::new("Edit").on_click(window.listener_for(
-                        &self.parent,
-                        move |this, _event, _window, cx| {
-                            this.edit_connection(connection_id, cx);
-                        },
-                    )))
-                    .item(
-                        PopupMenuItem::new("Disconnect").on_click(window.listener_for(
-                            &self.parent,
-                            move |this, _event, _window, cx| {
-                                this.disconnect_connection(connection_id, cx);
-                            },
-                        )),
-                    )
-                    .separator()
-                    .item(PopupMenuItem::new("Remove").on_click(window.listener_for(
-                        &self.parent,
-                        move |this, _event, window, cx| {
-                            this.confirm_remove_connection(
-                                connection_id,
-                                connection_name.clone(),
-                                window,
-                                cx,
-                            );
-                        },
-                    )))
+                    )),
+                )
+                .separator()
+                .item(PopupMenuItem::new("Remove").on_click(window.listener_for(
+                    &self.parent,
+                    move |this, _event, window, cx| {
+                        this.confirm_remove_connection(
+                            connection_id,
+                            connection_name.clone(),
+                            window,
+                            cx,
+                        );
+                    },
+                )))
             }
             TreeItemKind::Database => {
                 let connection_id = metadata.connection_id;
@@ -278,24 +275,29 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                         metadata.kind,
                         TreeItemKind::Table | TreeItemKind::View | TreeItemKind::MaterializedView
                     ) {
-                        menu = menu
-                            .separator()
-                            .item(PopupMenuItem::new("Open Structure").on_click(
-                                window.listener_for(&self.parent, move |_this, _event, window, cx| {
-                                    window.dispatch_action(
-                                        Box::new(OpenTableStructure {
-                                            connection_id,
-                                            connection_name: connection_name_for_structure.clone(),
-                                            db_type,
-                                            database_name: database_name_for_structure.clone(),
-                                            schema_name: schema_name_for_structure.clone(),
-                                            table_name: table_name_for_structure.clone(),
-                                            environment_type,
-                                        }),
-                                        cx,
-                                    );
-                                }),
-                            ));
+                        menu =
+                            menu.separator()
+                                .item(PopupMenuItem::new("Open Structure").on_click(
+                                    window.listener_for(
+                                        &self.parent,
+                                        move |_this, _event, window, cx| {
+                                            window.dispatch_action(
+                                                Box::new(OpenTableStructure {
+                                                    connection_id,
+                                                    connection_name: connection_name_for_structure
+                                                        .clone(),
+                                                    db_type,
+                                                    database_name: database_name_for_structure
+                                                        .clone(),
+                                                    schema_name: schema_name_for_structure.clone(),
+                                                    table_name: table_name_for_structure.clone(),
+                                                    environment_type,
+                                                }),
+                                                cx,
+                                            );
+                                        },
+                                    ),
+                                ));
                     }
 
                     menu

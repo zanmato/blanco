@@ -32,7 +32,6 @@ pub trait DatabaseService: Send + Sync {
         _connection_id: i64,
         _database: Option<&str>,
     ) -> Result<Arc<dyn Connection>> {
-        // Default implementation - should be overridden
         Err(anyhow::anyhow!(
             "get_or_create_connection_by_id not implemented - trait default only"
         ))
@@ -114,7 +113,6 @@ pub trait DatabaseService: Send + Sync {
         _connection_id: i64,
         _database_name: Option<&str>,
     ) -> Result<ConnectionStatus> {
-        // Default implementation - should be overridden
         Err(anyhow::anyhow!(
             "get_connection_status not implemented - trait default only"
         ))
@@ -124,7 +122,6 @@ pub trait DatabaseService: Send + Sync {
     async fn get_active_connection_statuses(
         &self,
     ) -> Result<HashMap<(i64, String), ConnectionStatus>> {
-        // Default implementation - should be overridden
         Err(anyhow::anyhow!(
             "get_active_connection_statuses not implemented - trait default only"
         ))

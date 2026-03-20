@@ -1,7 +1,7 @@
 use gpui::{
-    Action, App, AppContext, BorrowAppContext, Context, Entity, FocusHandle,
-    Focusable, InteractiveElement, IntoElement, Menu, MenuItem, ParentElement, Render, Styled,
-    Subscription, Task, Window, actions, div, prelude::FluentBuilder, px, svg,
+    Action, App, AppContext, BorrowAppContext, Context, Entity, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, Menu, MenuItem, ParentElement, Render, Styled, Subscription,
+    Task, Window, actions, div, prelude::FluentBuilder, px, svg,
 };
 use gpui_component::{
     ActiveTheme, Root, TITLE_BAR_HEIGHT, TitleBar, WindowExt as _,
@@ -230,7 +230,7 @@ impl BlancoApp {
                             "DatabaseServiceMessage::Disconnected received for connection_id: {}, database_name: {}",
                             disconn_msg.connection_id, disconn_msg.database_name
                         );
-                        // TODO: Handle disconnection - dispatch action or update state
+                        // TODO: Handle disconnection
                     }
                 }
             }
@@ -244,7 +244,7 @@ impl BlancoApp {
         // Load saved tabs from database
         info!("Loading saved tabs from database");
 
-        // Synchronously load tabs from database - wait for database to be initialized
+        // Synchronously load tabs from database
         let app_database = AppDatabase::global(cx);
         let saved_tabs = smol::block_on(async {
             // Database should already be initialized synchronously{
@@ -277,18 +277,18 @@ impl BlancoApp {
         let mut subscriptions = Vec::new();
 
         // Subscribe to sidebar events
-        let subscription =
-            cx.subscribe_in(&sidebar, window, move |app, _sidebar, event, window, cx| {
-                match event {
-                    ConnectionsPanelEvent::EditConnection {
-                        connection_data, ..
-                    } => {
-                        app.open_edit_connection_modal(*connection_data.clone(), window, cx);
-                    }
+        let subscription = cx.subscribe_in(
+            &sidebar,
+            window,
+            move |app, _sidebar, event, window, cx| match event {
+                ConnectionsPanelEvent::EditConnection {
+                    connection_data, ..
+                } => {
+                    app.open_edit_connection_modal(*connection_data.clone(), window, cx);
                 }
-            });
+            },
+        );
         subscriptions.push(subscription);
-
 
         // Subscribe to snippets panel events
         let subscription = cx.subscribe_in(
@@ -411,10 +411,13 @@ impl BlancoApp {
             (None, Some(table)) => table.to_string(),
         };
 
-        let content = action.table_name.as_ref().map(|table| match &action.schema_name {
-            Some(schema) => format!("SELECT * FROM {}.{} LIMIT 100;", schema, table),
-            None => format!("SELECT * FROM {} LIMIT 100;", table),
-        });
+        let content = action
+            .table_name
+            .as_ref()
+            .map(|table| match &action.schema_name {
+                Some(schema) => format!("SELECT * FROM {}.{} LIMIT 100;", schema, table),
+                None => format!("SELECT * FROM {} LIMIT 100;", table),
+            });
 
         self.editor_panel.update(cx, |panel, cx| {
             panel.create_and_add_tab_with_connection(
@@ -823,7 +826,6 @@ impl BlancoApp {
     }
 }
 
-
 impl Focusable for BlancoApp {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -917,10 +919,7 @@ impl Render for BlancoApp {
                                 .flex_1()
                                 .h(window_height - TITLE_BAR_HEIGHT - px(25.))
                                 .overflow_hidden()
-                                .child(
-                                    // Editor panel (now contains everything - tabs, editor, results)
-                                    self.editor_panel.clone(),
-                                ),
+                                .child(self.editor_panel.clone()),
                         )
                     }),
             )

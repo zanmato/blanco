@@ -37,7 +37,6 @@ pub enum DatabaseServiceMessage {
     Disconnected(DatabaseDisconnectedMessage),
 }
 
-// Shared channel sender wrapper - Arc so clones share the same sender
 type SharedActionSender = Arc<StdMutex<Option<channel::Sender<DatabaseServiceMessage>>>>;
 
 // Type aliases for clarity
@@ -119,7 +118,7 @@ impl DatabaseService {
         configs.get(&id).cloned()
     }
 
-    /// Main API - get or create a connection with automatic SSH handling
+    /// Get or create a connection with automatic SSH handling
     pub async fn get_or_create_connection(
         &self,
         config_id: DatabaseConfigId,
@@ -380,7 +379,6 @@ impl DatabaseService {
                 if tunnel.is_healthy_sync() {
                     return Ok(tunnel.get_info());
                 }
-                // Tunnel exists but is unhealthy - will be removed and recreated
                 tracing::info!(
                     "SSH tunnel for connection {} is unhealthy, recreating",
                     config.id
@@ -487,8 +485,7 @@ impl DatabaseService {
             temp_tunnel = Some(tunnel);
         }
 
-        let connection_string =
-            config.connection_string(None, connection_host, connection_port);
+        let connection_string = config.connection_string(None, connection_host, connection_port);
 
         let factory = self
             .connection_factories
@@ -549,11 +546,7 @@ impl DatabaseServiceTrait for DatabaseService {
             let configs = self.connection_configs.read().await;
             configs
                 .get(&connection_id)
-                .map(|config| {
-                    DriverType::from(config.db_type)
-                        .to_string()
-                        .to_owned()
-                })
+                .map(|config| DriverType::from(config.db_type).to_string().to_owned())
                 .unwrap_or_else(|| "Unknown".to_string())
         };
 

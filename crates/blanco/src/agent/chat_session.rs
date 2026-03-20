@@ -139,8 +139,6 @@ impl ChatSession {
 
     pub fn add_message(&mut self, message: ChatMessage, cx: &mut Context<Self>) {
         self.messages.push(message.clone());
-
-        // Emit message added event
         cx.emit(ChatEvent::MessageAdded { message });
     }
 
