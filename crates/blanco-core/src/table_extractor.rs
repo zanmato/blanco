@@ -1,10 +1,18 @@
+use std::collections::{HashMap, HashSet};
+
 use anyhow::{Result, anyhow};
 use crate::DriverType;
 use sqlparser::{
-    ast::{ObjectName, SetExpr, Statement, TableFactor, TableObject},
+    ast::{Expr, ObjectName, SelectItem, SelectItemQualifiedWildcardKind, SetExpr, Statement, TableFactor, TableObject, TableWithJoins},
     dialect::{Dialect, GenericDialect, MySqlDialect, PostgreSqlDialect},
     parser::Parser,
 };
+
+enum AliasResolution {
+    Single(String),
+    Mixed,
+    Undetermined,
+}
 
 pub struct TableExtractor {
     dialect: Box<dyn Dialect>,
@@ -64,9 +72,75 @@ impl TableExtractor {
         if let SetExpr::Select(select) = &*query.body
             && let Some(first_table) = select.from.first()
         {
+            if !first_table.joins.is_empty() {
+                match Self::resolve_alias_from_projection(&select.projection) {
+                    AliasResolution::Single(ref_alias) => {
+                        let alias_map = Self::build_alias_map(first_table);
+                        if alias_map.contains_key(&ref_alias) {
+                            if alias {
+                                return Some(ref_alias);
+                            }
+                            return alias_map.get(&ref_alias).cloned();
+                        }
+                    }
+                    AliasResolution::Mixed => return None,
+                    AliasResolution::Undetermined => {}
+                }
+            }
             return self.extract_from_table_factor(&first_table.relation, alias);
         }
         None
+    }
+
+    fn build_alias_map(table_with_joins: &TableWithJoins) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        Self::insert_table_factor_alias(&mut map, &table_with_joins.relation);
+        for join in &table_with_joins.joins {
+            Self::insert_table_factor_alias(&mut map, &join.relation);
+        }
+        map
+    }
+
+    fn insert_table_factor_alias(map: &mut HashMap<String, String>, factor: &TableFactor) {
+        if let TableFactor::Table { name, alias, .. } = factor {
+            let table_name = table_name_only(name);
+            if let Some(a) = alias {
+                map.insert(a.name.to_string(), table_name.clone());
+            }
+            map.insert(table_name.clone(), table_name);
+        }
+    }
+
+    fn resolve_alias_from_projection(projection: &[SelectItem]) -> AliasResolution {
+        let mut aliases = HashSet::new();
+
+        for item in projection {
+            match item {
+                SelectItem::QualifiedWildcard(
+                    SelectItemQualifiedWildcardKind::ObjectName(name), _
+                ) => {
+                    if let Some(first) = name.0.first() {
+                        aliases.insert(first.to_string());
+                    }
+                }
+                SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. } => {
+                    match expr {
+                        Expr::CompoundIdentifier(parts) if parts.len() >= 2 => {
+                            aliases.insert(parts[0].to_string());
+                        }
+                        _ => return AliasResolution::Undetermined,
+                    }
+                }
+                SelectItem::Wildcard(_) => return AliasResolution::Undetermined,
+                _ => return AliasResolution::Undetermined,
+            }
+        }
+
+        match aliases.len() {
+            1 => AliasResolution::Single(aliases.into_iter().next().expect("checked len == 1")),
+            n if n > 1 => AliasResolution::Mixed,
+            _ => AliasResolution::Undetermined,
+        }
     }
 
     fn extract_from_table_factor(
@@ -220,6 +294,90 @@ mod tests {
                 .extract_table("DELETE FROM public.users WHERE id = 1", false)
                 .unwrap(),
             "users"
+        );
+    }
+
+    #[test]
+    fn test_join_qualified_wildcard_resolves_correct_table() {
+        let extractor = TableExtractor::for_driver(DriverType::PostgreSQL);
+
+        assert_eq!(
+            extractor
+                .extract_table(
+                    "SELECT oi.* FROM orders o INNER JOIN order_items oi ON oi.order_id = o.id",
+                    false
+                )
+                .unwrap(),
+            "order_items"
+        );
+
+        assert_eq!(
+            extractor
+                .extract_table(
+                    "SELECT oi.* FROM orders o INNER JOIN order_items oi ON oi.order_id = o.id",
+                    true
+                )
+                .unwrap(),
+            "oi"
+        );
+    }
+
+    #[test]
+    fn test_join_qualified_columns_resolves_correct_table() {
+        let extractor = TableExtractor::for_driver(DriverType::PostgreSQL);
+
+        assert_eq!(
+            extractor
+                .extract_table(
+                    "SELECT oi.id, oi.quantity FROM orders o JOIN order_items oi ON oi.order_id = o.id",
+                    false
+                )
+                .unwrap(),
+            "order_items"
+        );
+    }
+
+    #[test]
+    fn test_join_mixed_aliases_returns_none() {
+        let extractor = TableExtractor::for_driver(DriverType::PostgreSQL);
+
+        assert!(
+            extractor
+                .extract_table(
+                    "SELECT oi.id, o.created_at FROM orders o JOIN order_items oi ON oi.order_id = o.id",
+                    false
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_join_unqualified_wildcard_falls_back_to_first_table() {
+        let extractor = TableExtractor::for_driver(DriverType::PostgreSQL);
+
+        assert_eq!(
+            extractor
+                .extract_table(
+                    "SELECT * FROM orders o JOIN order_items oi ON oi.order_id = o.id",
+                    false
+                )
+                .unwrap(),
+            "orders"
+        );
+    }
+
+    #[test]
+    fn test_join_unqualified_columns_falls_back_to_first_table() {
+        let extractor = TableExtractor::for_driver(DriverType::PostgreSQL);
+
+        assert_eq!(
+            extractor
+                .extract_table(
+                    "SELECT id, name FROM orders o JOIN order_items oi ON oi.order_id = o.id",
+                    false
+                )
+                .unwrap(),
+            "orders"
         );
     }
 }
