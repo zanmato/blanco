@@ -64,6 +64,7 @@ pub struct QueryTab {
     pub chat_enabled: bool,
     pub chat_panel: Option<Entity<ChatPanel>>,
     pub sqruff_service: Option<Arc<SqruffService>>,
+    pub completion_provider: Option<SqlCompletionProvider>,
 }
 
 pub struct SettingsTab {
@@ -491,48 +492,52 @@ impl EditorPanel {
         params: TabCreationParams,
         cx: &mut Context<Self>,
     ) {
-        let editor = cx.new(|cx| {
-            // Read settings
-            let editor_settings = &AppSettings::global(cx).settings.editor;
-            let word_wrap = editor_settings.word_wrap;
-            let show_whitespace = editor_settings.show_whitespace;
-            let folding = editor_settings.folding;
-            let hard_tabs = editor_settings.hard_tabs;
-            let tab_size = editor_settings.tab_size;
+        // Create completion provider outside the entity closure so it can be stored on QueryTab
+        let db_service: Arc<dyn DatabaseServiceTrait> =
+            Arc::new(DatabaseService::global(cx).clone());
+        let sql_completion_provider = SqlCompletionProvider::new(
+            params.connection_id,
+            params.database_name.clone(),
+            db_service,
+        );
 
-            let mut editor = InputState::new(window, cx)
-                .code_editor("sql".to_string())
-                .line_number(true)
-                .folding(folding)
-                .tab_size(TabSize {
-                    tab_size: tab_size as usize,
-                    hard_tabs,
-                })
-                .soft_wrap(word_wrap)
-                .show_whitespaces(show_whitespace);
+        let editor = cx.new({
+            let sql_completion_provider = sql_completion_provider.clone();
+            |cx| {
+                // Read settings
+                let editor_settings = &AppSettings::global(cx).settings.editor;
+                let word_wrap = editor_settings.word_wrap;
+                let show_whitespace = editor_settings.show_whitespace;
+                let folding = editor_settings.folding;
+                let hard_tabs = editor_settings.hard_tabs;
+                let tab_size = editor_settings.tab_size;
 
-            // Set up completion provider using connection_id, database_name, and DbService
-            let db_service: Arc<dyn DatabaseServiceTrait> =
-                Arc::new(DatabaseService::global(cx).clone());
-            let completion_provider = SqlCompletionProvider::new(
-                params.connection_id,
-                params.database_name.clone(),
-                db_service,
-            );
-            let completion_provider: Rc<dyn gpui_component::input::CompletionProvider> =
-                Rc::new(completion_provider);
-            editor.lsp.completion_provider = Some(completion_provider);
+                let mut editor = InputState::new(window, cx)
+                    .code_editor("sql".to_string())
+                    .line_number(true)
+                    .folding(folding)
+                    .tab_size(TabSize {
+                        tab_size: tab_size as usize,
+                        hard_tabs,
+                    })
+                    .soft_wrap(word_wrap)
+                    .show_whitespaces(show_whitespace);
 
-            // Set up selection range provider for SQL statement highlighting
-            {
-                let provider = SqlSelectionRangeProvider::new();
-                let selection_range_provider: Rc<
-                    dyn gpui_component::input::SelectionRangeProvider,
-                > = Rc::new(provider);
-                editor.lsp.selection_range_provider = Some(selection_range_provider);
+                let completion_provider: Rc<dyn gpui_component::input::CompletionProvider> =
+                    Rc::new(sql_completion_provider);
+                editor.lsp.completion_provider = Some(completion_provider);
+
+                // Set up selection range provider for SQL statement highlighting
+                {
+                    let provider = SqlSelectionRangeProvider::new();
+                    let selection_range_provider: Rc<
+                        dyn gpui_component::input::SelectionRangeProvider,
+                    > = Rc::new(provider);
+                    editor.lsp.selection_range_provider = Some(selection_range_provider);
+                }
+
+                editor
             }
-
-            editor
         });
 
         // Set content if provided
@@ -590,6 +595,7 @@ impl EditorPanel {
             }),
             sql_log: cx.new(|cx| SqlLog::new(1000, cx.theme().highlight_theme.clone())),
             sqruff_service,
+            completion_provider: Some(sql_completion_provider),
             // Chat functionality
             chat_enabled: false,
             chat_panel: None,

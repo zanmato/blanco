@@ -194,6 +194,7 @@ impl EditorPanel {
             let sql_log_clone = query_tab.sql_log.clone();
             let db_service = DatabaseService::global(cx).clone();
             let query_for_metadata = query.clone();
+            let completion_provider = query_tab.completion_provider.clone();
 
             self._run_query_task = cx.spawn_in(window, async move |editor_panel_entity, window| {
                 let (execution_result, start_time) = query_task.await;
@@ -225,6 +226,13 @@ impl EditorPanel {
                                     connection.get_columns_for_table(table_name, None).await
                             {
                                 result.table_columns = Some(columns);
+                            }
+                        }
+
+                        // Invalidate completion cache after DDL statements
+                        if is_ddl_query(&query_for_metadata) {
+                            if let Some(provider) = &completion_provider {
+                                provider.invalidate_cache();
                             }
                         }
 
@@ -344,4 +352,17 @@ impl EditorPanel {
                 })
         });
     }
+}
+
+fn is_ddl_query(query: &str) -> bool {
+    let trimmed = query.trim();
+    let first_word = trimmed
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_uppercase();
+    matches!(
+        first_word.as_str(),
+        "CREATE" | "DROP" | "ALTER" | "TRUNCATE"
+    )
 }

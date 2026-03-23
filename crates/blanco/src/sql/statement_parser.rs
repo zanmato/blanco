@@ -323,6 +323,505 @@ pub fn extract_statement_info(text: &Rope, cursor_pos: usize) -> Option<Statemen
     TLS_PARSER.with_borrow_mut(|parser| parser.extract_statement_at_cursor(text, cursor_pos))
 }
 
+/// The SQL clause the cursor is currently in
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum SqlClause {
+    Select,
+    From,
+    Where,
+    Join,
+    Set,
+    OrderBy,
+    GroupBy,
+    Having,
+    Insert,
+    Update,
+    Delete,
+    Values,
+    On,
+    Other,
+}
+
+/// Table alias information extracted from the AST
+#[derive(Debug, Clone)]
+pub struct TableAlias {
+    pub table_name: String,
+    pub alias: String,
+}
+
+/// Completion context extracted from tree-sitter AST
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct CompletionContext {
+    pub current_word: String,
+    pub clause: Option<SqlClause>,
+    pub table_aliases: Vec<TableAlias>,
+    pub is_dot_notation: bool,
+    pub dot_table_name: Option<String>,
+    pub statement_text: String,
+    pub statement_byte_range: Range<usize>,
+}
+
+/// Extract completion context at cursor position using tree-sitter.
+/// This replaces the hand-rolled parser in `completion/context.rs` with
+/// an AST-based approach that correctly handles strings, comments, and
+/// nested queries.
+pub fn extract_completion_context(text: &Rope, cursor_byte_pos: usize) -> Option<CompletionContext> {
+    TLS_PARSER.with_borrow_mut(|parser| {
+        let text_str: String = text.chunks().collect();
+        let tree = parser.parser.parse(&text_str, None)?;
+        let root_node = tree.root_node();
+
+        // Find the statement containing the cursor
+        let mut statements = Vec::new();
+        parser.collect_statements(root_node, &mut statements);
+
+        let statement_node = find_statement_at_cursor(&statements, cursor_byte_pos, root_node);
+
+        let (statement_text, statement_range) = if let Some(node) = statement_node {
+            let range = node.byte_range();
+            (text_str[range.clone()].to_string(), range)
+        } else {
+            (text_str.clone(), 0..text_str.len())
+        };
+
+        // Extract table aliases from all `relation` nodes within the statement
+        let search_root = statement_node.unwrap_or(root_node);
+        let table_aliases = extract_table_aliases_from_ast(search_root, &text_str);
+
+        // Detect dot notation by checking if cursor is right after or within "identifier."
+        let (is_dot_notation, dot_table_name) =
+            detect_dot_notation(&text_str, cursor_byte_pos);
+
+        // Extract current word by scanning backwards from cursor
+        let current_word = extract_current_word_from_text(&text_str, cursor_byte_pos);
+
+        // Determine clause. Strategies in priority order:
+        // 1. Check ERROR nodes near cursor for trailing keywords (incomplete SQL like
+        //    "SELECT * FROM users WHERE " where WHERE is in an ERROR node)
+        // 2. Walk the AST within the statement (works for complete SQL and also
+        //    when cursor is just past the statement end in the same clause)
+        // 3. Keyword scan as a last resort (scoped to statement text to avoid
+        //    picking up keywords from string literals in other statements)
+        let clamped_pos = cursor_byte_pos.min(search_root.byte_range().end);
+        let clause = find_clause_in_error_nodes(root_node, &text_str, cursor_byte_pos)
+            .or_else(|| determine_clause(search_root, &text_str, clamped_pos))
+            .or_else(|| {
+                let scan_start = statement_range.start;
+                let scan_end = cursor_byte_pos.min(text_str.len());
+                if scan_end > scan_start {
+                    determine_clause_from_keywords(&text_str[scan_start..scan_end], scan_end - scan_start)
+                } else {
+                    None
+                }
+            });
+
+        Some(CompletionContext {
+            current_word,
+            clause,
+            table_aliases,
+            is_dot_notation,
+            dot_table_name,
+            statement_text,
+            statement_byte_range: statement_range,
+        })
+    })
+}
+
+/// Find the statement node containing the cursor, or the closest one
+fn find_statement_at_cursor<'a>(
+    statements: &[Node<'a>],
+    cursor_byte_pos: usize,
+    root_node: Node<'a>,
+) -> Option<Node<'a>> {
+    // First check if cursor is directly inside a statement
+    for &statement in statements {
+        let range = statement.byte_range();
+        if range.start <= cursor_byte_pos && cursor_byte_pos <= range.end {
+            return Some(statement);
+        }
+    }
+
+    // Check ERROR nodes at the root level that might contain partial statements
+    for i in 0..root_node.child_count() {
+        if let Some(child) = root_node.child(i) {
+            let range = child.byte_range();
+            if range.start <= cursor_byte_pos && cursor_byte_pos <= range.end {
+                // If the cursor is in an ERROR node, find the nearest statement before it
+                if child.kind() == "ERROR" {
+                    return statements
+                        .iter()
+                        .filter(|s| s.byte_range().end <= cursor_byte_pos)
+                        .max_by_key(|s| s.byte_range().end)
+                        .copied();
+                }
+            }
+        }
+    }
+
+    // Find closest statement
+    let mut best: Option<Node<'a>> = None;
+    let mut best_distance = usize::MAX;
+    for &statement in statements {
+        let range = statement.byte_range();
+        let distance = if cursor_byte_pos < range.start {
+            range.start - cursor_byte_pos
+        } else {
+            cursor_byte_pos - range.end
+        };
+        if distance < best_distance {
+            best_distance = distance;
+            best = Some(statement);
+        }
+    }
+    best
+}
+
+/// Extract table aliases from `relation` nodes in the AST.
+/// A `relation` with an `object_reference` child and an `identifier` sibling = table with alias.
+fn extract_table_aliases_from_ast(node: Node, source: &str) -> Vec<TableAlias> {
+    let mut aliases = Vec::new();
+    collect_table_aliases(node, source, &mut aliases);
+    aliases
+}
+
+fn collect_table_aliases(node: Node, source: &str, aliases: &mut Vec<TableAlias>) {
+    if node.kind() == "relation" {
+        let mut table_name: Option<String> = None;
+        let mut alias: Option<String> = None;
+
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                match child.kind() {
+                    "object_reference" => {
+                        // The table name is the text of the object_reference
+                        let range = child.byte_range();
+                        if range.end <= source.len() {
+                            table_name = Some(source[range].to_string());
+                        }
+                    }
+                    "identifier" => {
+                        // The alias is a bare identifier after the object_reference
+                        let range = child.byte_range();
+                        if range.end <= source.len() {
+                            alias = Some(source[range].to_string());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        if let (Some(table), Some(al)) = (table_name, alias) {
+            aliases.push(TableAlias {
+                table_name: table,
+                alias: al,
+            });
+        }
+    }
+
+    // Recurse into children
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i) {
+            collect_table_aliases(child, source, aliases);
+        }
+    }
+}
+
+/// Detect dot notation by scanning backwards from cursor.
+/// Returns (is_dot, optional_table_name).
+fn detect_dot_notation(text: &str, cursor_byte_pos: usize) -> (bool, Option<String>) {
+    let before_cursor = &text[..cursor_byte_pos.min(text.len())];
+
+    // Check if cursor is right after a dot or after "identifier.partial"
+    // Walk backwards: first skip any identifier chars (partial column name being typed)
+    let trimmed = before_cursor.as_bytes();
+    let mut pos = trimmed.len();
+
+    // Skip current word (partial column name after dot)
+    while pos > 0 && (trimmed[pos - 1].is_ascii_alphanumeric() || trimmed[pos - 1] == b'_') {
+        pos -= 1;
+    }
+
+    // Check if there's a dot
+    if pos > 0 && trimmed[pos - 1] == b'.' {
+        pos -= 1;
+        // Extract the identifier before the dot
+        let dot_pos = pos;
+        while pos > 0 && (trimmed[pos - 1].is_ascii_alphanumeric() || trimmed[pos - 1] == b'_') {
+            pos -= 1;
+        }
+        if dot_pos > pos {
+            let table_name = std::str::from_utf8(&trimmed[pos..dot_pos])
+                .ok()
+                .map(|s| s.to_string());
+            return (true, table_name);
+        }
+        return (true, None);
+    }
+
+    (false, None)
+}
+
+/// Extract the current word being typed at cursor position.
+fn extract_current_word_from_text(text: &str, cursor_byte_pos: usize) -> String {
+    let before = &text[..cursor_byte_pos.min(text.len())];
+    for (byte_offset, ch) in before.char_indices().rev() {
+        if !(ch.is_alphanumeric() || ch == '_') {
+            let start = byte_offset + ch.len_utf8();
+            return before[start..].to_string();
+        }
+    }
+    before.to_string()
+}
+
+/// Determine the SQL clause at the cursor position by walking the AST.
+fn determine_clause(root: Node, source: &str, cursor_byte_pos: usize) -> Option<SqlClause> {
+    // Find the deepest named node at (or just before) the cursor position
+    let node = find_deepest_node_at(root, cursor_byte_pos);
+
+    // Walk up from that node to find the enclosing clause
+    let mut current = Some(node);
+    while let Some(node) = current {
+        let clause = match node.kind() {
+            "select" => Some(SqlClause::Select),
+            "from" => {
+                // "from" contains "where", "join", etc. as children.
+                // Check if cursor is in a more specific child clause.
+                if let Some(specific) = find_specific_clause_in_from(node, source, cursor_byte_pos)
+                {
+                    Some(specific)
+                } else {
+                    Some(SqlClause::From)
+                }
+            }
+            "where" => Some(SqlClause::Where),
+            "join" => {
+                // Check if we're in the ON part
+                if is_cursor_in_on_clause(node, cursor_byte_pos) {
+                    Some(SqlClause::On)
+                } else {
+                    Some(SqlClause::Join)
+                }
+            }
+            "order_by" => Some(SqlClause::OrderBy),
+            "group_by" => Some(SqlClause::GroupBy),
+            "having" => Some(SqlClause::Having),
+            "insert" => Some(SqlClause::Insert),
+            "update" => {
+                // Check if we're in the SET part
+                if is_cursor_after_keyword(source, node, "SET", cursor_byte_pos) {
+                    Some(SqlClause::Set)
+                } else {
+                    Some(SqlClause::Update)
+                }
+            }
+            "delete" => Some(SqlClause::Delete),
+            "values" => Some(SqlClause::Values),
+            "set" => Some(SqlClause::Set),
+            _ => None,
+        };
+
+        if clause.is_some() {
+            return clause;
+        }
+        current = node.parent();
+    }
+
+    None
+}
+
+/// Check ERROR nodes at the root level for trailing SQL keywords.
+/// When typing incomplete SQL like "SELECT * FROM users WHERE ", tree-sitter
+/// puts trailing keywords in ERROR nodes separate from the statement node.
+fn find_clause_in_error_nodes(
+    root_node: Node,
+    source: &str,
+    cursor_byte_pos: usize,
+) -> Option<SqlClause> {
+    let mut best_clause: Option<SqlClause> = None;
+    let mut best_pos: usize = 0;
+
+    for i in 0..root_node.child_count() {
+        if let Some(child) = root_node.child(i) {
+            // Only look at ERROR nodes that are at or before the cursor
+            if child.kind() != "ERROR" || child.byte_range().start > cursor_byte_pos {
+                continue;
+            }
+            // Scan keyword children within the ERROR node
+            for j in 0..child.child_count() {
+                if let Some(kw_node) = child.child(j) {
+                    let range = kw_node.byte_range();
+                    if range.start > cursor_byte_pos || range.end > source.len() {
+                        continue;
+                    }
+                    if range.start >= best_pos {
+                        let clause = match kw_node.kind() {
+                            "keyword_select" => Some(SqlClause::Select),
+                            "keyword_from" => Some(SqlClause::From),
+                            "keyword_where" => Some(SqlClause::Where),
+                            "keyword_join" => Some(SqlClause::Join),
+                            "keyword_inner" | "keyword_left" | "keyword_right" => {
+                                Some(SqlClause::Join)
+                            }
+                            "keyword_on" => Some(SqlClause::On),
+                            "keyword_having" => Some(SqlClause::Having),
+                            "keyword_set" => Some(SqlClause::Set),
+                            "keyword_and" | "keyword_or" => {
+                                // AND/OR don't change the clause, skip
+                                None
+                            }
+                            _ => None,
+                        };
+                        if let Some(c) = clause {
+                            best_pos = range.start;
+                            best_clause = Some(c);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    best_clause
+}
+
+/// Find the deepest named node at or just before the cursor position.
+fn find_deepest_node_at(node: Node, cursor_byte_pos: usize) -> Node {
+    let mut best = node;
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i) {
+            let range = child.byte_range();
+            // Allow nodes that start at or before cursor and end at or after cursor,
+            // or nodes that end just before cursor (for trailing whitespace cases)
+            if range.start <= cursor_byte_pos && cursor_byte_pos <= range.end {
+                best = find_deepest_node_at(child, cursor_byte_pos);
+            } else if range.end <= cursor_byte_pos && range.end + 1 >= cursor_byte_pos {
+                // Cursor is right after this node
+                if child.is_named() {
+                    best = child;
+                }
+            }
+        }
+    }
+    best
+}
+
+/// Within a "from" node, check for more specific child clauses.
+fn find_specific_clause_in_from(
+    from_node: Node,
+    source: &str,
+    cursor_byte_pos: usize,
+) -> Option<SqlClause> {
+    for i in 0..from_node.child_count() {
+        if let Some(child) = from_node.child(i) {
+            let range = child.byte_range();
+            if range.start <= cursor_byte_pos && cursor_byte_pos <= range.end {
+                match child.kind() {
+                    "where" => return Some(SqlClause::Where),
+                    "join" => {
+                        if is_cursor_in_on_clause(child, cursor_byte_pos) {
+                            return Some(SqlClause::On);
+                        }
+                        return Some(SqlClause::Join);
+                    }
+                    "order_by" => return Some(SqlClause::OrderBy),
+                    "group_by" => return Some(SqlClause::GroupBy),
+                    "having" => return Some(SqlClause::Having),
+                    _ => {
+                        // Recurse for nested structures
+                        if let Some(clause) =
+                            find_specific_clause_in_from(child, source, cursor_byte_pos)
+                        {
+                            return Some(clause);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Check if cursor is within the ON part of a JOIN
+fn is_cursor_in_on_clause(join_node: Node, cursor_byte_pos: usize) -> bool {
+    for i in 0..join_node.child_count() {
+        if let Some(child) = join_node.child(i) {
+            if child.kind() == "keyword_on" && cursor_byte_pos > child.byte_range().end {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Check if cursor is after a specific keyword within a node
+fn is_cursor_after_keyword(
+    source: &str,
+    node: Node,
+    keyword: &str,
+    cursor_byte_pos: usize,
+) -> bool {
+    let node_text = &source[node.byte_range()];
+    let node_upper = node_text.to_uppercase();
+    if let Some(kw_offset) = node_upper.find(keyword) {
+        let absolute_offset = node.byte_range().start + kw_offset + keyword.len();
+        return cursor_byte_pos >= absolute_offset;
+    }
+    false
+}
+
+/// Fallback clause detection from raw text when AST has ERROR nodes.
+/// Scans for the last SQL keyword before cursor position.
+fn determine_clause_from_keywords(source: &str, cursor_byte_pos: usize) -> Option<SqlClause> {
+    let text = &source[..cursor_byte_pos.min(source.len())];
+    let text_upper = text.to_uppercase();
+
+    // Keywords to search for, ordered by multi-word first
+    const CLAUSE_KEYWORDS: &[(&str, SqlClause)] = &[
+        ("ORDER BY", SqlClause::OrderBy),
+        ("GROUP BY", SqlClause::GroupBy),
+        ("INNER JOIN", SqlClause::Join),
+        ("LEFT JOIN", SqlClause::Join),
+        ("RIGHT JOIN", SqlClause::Join),
+        ("OUTER JOIN", SqlClause::Join),
+        ("SELECT", SqlClause::Select),
+        ("FROM", SqlClause::From),
+        ("WHERE", SqlClause::Where),
+        ("JOIN", SqlClause::Join),
+        ("HAVING", SqlClause::Having),
+        ("SET", SqlClause::Set),
+        ("UPDATE", SqlClause::Update),
+        ("INSERT", SqlClause::Insert),
+        ("DELETE", SqlClause::Delete),
+        ("INTO", SqlClause::Insert),
+        ("VALUES", SqlClause::Values),
+        ("ON", SqlClause::On),
+    ];
+
+    let mut best_pos: Option<usize> = None;
+    let mut best_clause: Option<SqlClause> = None;
+
+    for (keyword, clause) in CLAUSE_KEYWORDS {
+        if let Some(pos) = text_upper.rfind(keyword) {
+            // Verify word boundary
+            let before_ok =
+                pos == 0 || !text.as_bytes()[pos - 1].is_ascii_alphanumeric();
+            let after_pos = pos + keyword.len();
+            let after_ok = after_pos >= text.len()
+                || !text.as_bytes()[after_pos].is_ascii_alphanumeric();
+
+            if before_ok && after_ok && best_pos.map_or(true, |bp| pos > bp) {
+                best_pos = Some(pos);
+                best_clause = Some(clause.clone());
+            }
+        }
+    }
+
+    best_clause
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
