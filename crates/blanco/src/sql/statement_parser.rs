@@ -209,6 +209,18 @@ impl SqlStatementParser {
 
         // Sort by byte offset ascending for user display (in order of appearance)
         parameters.sort_by_key(|p| p.byte_offset);
+
+        // Assign sequential positional indices to bare `?` parameters (Positional(0)).
+        // Each `?` should get a unique index ($1, $2, ...) so the parameter form
+        // creates a separate input for each one.
+        let mut question_mark_index = 1usize;
+        for param in &mut parameters {
+            if param.style == ParameterStyle::Positional(0) {
+                param.style = ParameterStyle::Positional(question_mark_index);
+                question_mark_index += 1;
+            }
+        }
+
         parameters
     }
 
@@ -1233,16 +1245,18 @@ DELETE FROM users WHERE id = 1;",
         // ? IS recognized as a bind_parameter
         assert_eq!(info.parameters.len(), 1);
         assert_eq!(info.parameters[0].raw_text, "?");
-        // Note: ? is parsed as a positional parameter with index 0 (no number in it)
-        matches!(info.parameters[0].style, ParameterStyle::Positional(0));
+        // ? parameters get sequential positional indices starting at 1
+        assert_eq!(info.parameters[0].style, ParameterStyle::Positional(1));
 
         // Test with multiple ? parameters
         let text = Rope::from_str("SELECT * FROM users WHERE id = ? AND name = ?");
         let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 20));
         assert!(result.is_some());
         let info = result.unwrap();
-        // Multiple ? are recognized as separate bind_parameter nodes
+        // Multiple ? are recognized as separate bind_parameter nodes with sequential indices
         assert_eq!(info.parameters.len(), 2);
+        assert_eq!(info.parameters[0].style, ParameterStyle::Positional(1));
+        assert_eq!(info.parameters[1].style, ParameterStyle::Positional(2));
     }
 
     #[test]
