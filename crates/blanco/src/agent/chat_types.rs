@@ -86,25 +86,20 @@ pub enum ChatEvent {
     MessageAdded {
         message: ChatMessage,
     },
-    #[allow(dead_code)]
     StreamStarted {
         message_id: String,
     },
-    #[allow(dead_code)]
     StreamUpdate {
         message_id: String,
         content: String,
     },
-    #[allow(dead_code)]
     StreamCompleted {
         message_id: String,
         final_content: String,
     },
-    #[allow(dead_code)]
     Error {
         message: String,
     },
-    #[allow(dead_code)]
     SessionStarted {
         provider: String,
         model: String,
@@ -171,11 +166,6 @@ impl ChatMessage {
 
     pub fn assistant(content: String, model: String) -> Self {
         Self::new(MessageRole::Assistant, content, model)
-    }
-
-    #[allow(dead_code)]
-    pub fn system(content: String) -> Self {
-        Self::new(MessageRole::System, content, "system".to_string())
     }
 
     pub fn tool(content: String, tool_call_id: String, model: String) -> Self {

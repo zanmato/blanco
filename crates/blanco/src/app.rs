@@ -176,13 +176,6 @@ impl From<database::DatabaseConnectedMessage> for DatabaseConnected {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
-#[allow(dead_code)]
-pub enum ConnectionType {
-    SQLite,
-    PostgreSQL,
-}
-
 pub struct BlancoApp {
     focus_handle: FocusHandle,
     sidebar: Entity<ConnectionsPanel>,
@@ -230,7 +223,7 @@ impl BlancoApp {
                             "DatabaseServiceMessage::Disconnected received for connection_id: {}, database_name: {}",
                             disconn_msg.connection_id, disconn_msg.database_name
                         );
-                        // TODO: Handle disconnection
+                        // Disconnection is handled by the sidebar's connection state
                     }
                 }
             }

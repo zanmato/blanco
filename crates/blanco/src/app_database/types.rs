@@ -64,9 +64,7 @@ pub struct QueryTabData {
 
 /// Data for a query history entry
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct QueryHistoryData {
-    #[allow(dead_code)]
     pub id: Option<i64>,
     pub query_text: String,
     pub executed_at: i64,
@@ -79,7 +77,6 @@ pub struct QueryHistoryData {
 
 /// Data for a code snippet
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct SnippetData {
     pub id: Option<i64>,
     pub name: String,
@@ -103,7 +100,6 @@ pub struct ConnectionData {
     pub username: Option<String>,
     pub password: Option<String>,
     pub database_path: Option<String>,
-    #[allow(dead_code)]
     pub last_used_at: Option<i64>,
     pub is_active: Option<bool>,
     pub environment_type: EnvironmentType,

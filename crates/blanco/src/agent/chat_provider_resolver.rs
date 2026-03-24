@@ -119,13 +119,11 @@ impl ChatProviderResolver {
     }
 
     /// Clear the LLM cache (useful for testing or forced refresh)
-    #[allow(dead_code)]
     pub fn clear_cache(&mut self) {
         self.cached_llm = None;
     }
 
     /// Check if a provider is properly configured
-    #[allow(dead_code)]
     pub fn is_provider_configured(settings: &Settings) -> bool {
         let chat = &settings.chat;
         !chat.api_key.is_empty() && !chat.provider.is_empty() && !chat.model.is_empty()

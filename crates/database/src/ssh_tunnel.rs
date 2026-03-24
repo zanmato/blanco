@@ -76,8 +76,12 @@ impl russh_client::Handler for SshClientHandler {
 impl Drop for SshClientHandler {
     fn drop(&mut self) {
         tracing::info!("SSH session ended, marking tunnel as disconnected");
-        *self.is_running.lock().unwrap() = false;
-        *self.status.lock().unwrap() = TunnelStatus::Disconnected;
+        if let Ok(mut running) = self.is_running.lock() {
+            *running = false;
+        }
+        if let Ok(mut status) = self.status.lock() {
+            *status = TunnelStatus::Disconnected;
+        }
     }
 }
 
@@ -139,8 +143,11 @@ impl SshTunnel {
 
     /// Check if tunnel is healthy (non-async version)
     pub fn is_healthy_sync(&self) -> bool {
-        let status = self.status.lock().unwrap().clone();
-        matches!(status, TunnelStatus::Connected)
+        self.status
+            .lock()
+            .ok()
+            .map(|status| matches!(*status, TunnelStatus::Connected))
+            .unwrap_or(false)
     }
 
     /// Check if tunnel is healthy
@@ -158,14 +165,18 @@ impl SshTunnel {
         );
 
         // Clean up any existing tunnel before reconnecting
-        *self.is_running.lock().unwrap() = false;
+        if let Ok(mut running) = self.is_running.lock() {
+            *running = false;
+        }
         if let Some(task) = self.tunnel_task.take() {
             task.abort();
         }
         // Give a moment for the disconnect to complete
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        *self.status.lock().unwrap() = TunnelStatus::Connecting;
+        if let Ok(mut status) = self.status.lock() {
+            *status = TunnelStatus::Connecting;
+        }
 
         // Create SSH config and handler with shared state
         let ssh_config = Arc::new(SshConfig::default());
@@ -202,7 +213,9 @@ impl SshTunnel {
         }
 
         self.session = Some(session);
-        *self.status.lock().unwrap() = TunnelStatus::Connected;
+        if let Ok(mut status) = self.status.lock() {
+            *status = TunnelStatus::Connected;
+        }
 
         // Set up TCP forwarding and store the task
         let task = self.setup_tcp_forwarding().await?;
@@ -220,14 +233,17 @@ impl SshTunnel {
         let is_running = Arc::clone(&self.is_running);
         let status = Arc::clone(&self.status);
 
-        *is_running.lock().unwrap() = true;
+        if let Ok(mut running) = is_running.lock() {
+            *running = true;
+        }
 
         // Create local listener
         let listener = TcpListener::bind(format!("127.0.0.1:{}", local_port))
             .await
             .map_err(|e| {
-                *status.lock().unwrap() =
-                    TunnelStatus::Failed(format!("Failed to bind local port: {}", e));
+                if let Ok(mut status) = status.lock() {
+                    *status = TunnelStatus::Failed(format!("Failed to bind local port: {}", e));
+                }
                 anyhow::anyhow!("Failed to bind local port: {}", e)
             })?;
 
@@ -250,7 +266,7 @@ impl SshTunnel {
                 let accept_result = listener.accept().await;
 
                 // Check if tunnel is still running after accept
-                if !*is_running.lock().unwrap() {
+                if !is_running.lock().ok().map(|r| *r).unwrap_or(false) {
                     break;
                 }
 
@@ -275,8 +291,7 @@ impl SshTunnel {
                         ));
 
                         // Add connection to tracking
-                        {
-                            let mut connections = active_connections.lock().unwrap();
+                        if let Ok(mut connections) = active_connections.lock() {
                             connections.insert(connection_id.clone());
                         }
 
@@ -285,7 +300,7 @@ impl SshTunnel {
                             tracing::debug!("Processing connection {}", connection_id.0);
 
                             // Check if tunnel is still running
-                            if !*is_running_check.lock().unwrap() {
+                            if !is_running_check.lock().ok().map(|r| *r).unwrap_or(false) {
                                 tracing::debug!("Tunnel no longer running, rejecting connection {}", connection_id.0);
                                 return;
                             }
@@ -322,8 +337,7 @@ impl SshTunnel {
                             }
 
                             // Remove connection from tracking
-                            {
-                                let mut connections = active_connections.lock().unwrap();
+                            if let Ok(mut connections) = active_connections.lock() {
                                 connections.remove(&connection_id);
                             }
                         });
@@ -343,8 +357,12 @@ impl SshTunnel {
     /// Disconnect the tunnel
     pub async fn disconnect(&mut self) -> Result<()> {
         tracing::info!("Disconnecting SSH tunnel");
-        *self.is_running.lock().unwrap() = false;
-        *self.status.lock().unwrap() = TunnelStatus::Disconnected;
+        if let Ok(mut running) = self.is_running.lock() {
+            *running = false;
+        }
+        if let Ok(mut status) = self.status.lock() {
+            *status = TunnelStatus::Disconnected;
+        }
         self.session = None;
         // Abort the task to stop the TCP forwarding
         if let Some(task) = self.tunnel_task.take() {
@@ -357,7 +375,9 @@ impl SshTunnel {
 impl Drop for SshTunnel {
     fn drop(&mut self) {
         tracing::debug!("Dropping SSH tunnel");
-        *self.is_running.lock().unwrap() = false;
+        if let Ok(mut running) = self.is_running.lock() {
+            *running = false;
+        }
         // Abort the task to stop the TCP forwarding
         if let Some(task) = self.tunnel_task.take() {
             task.abort();

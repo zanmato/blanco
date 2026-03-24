@@ -97,7 +97,9 @@ impl DatabaseService {
             "Setting action_sender on DatabaseService, Arc address: {:p}",
             self.action_sender
         );
-        *self.action_sender.lock().unwrap() = Some(sender);
+        if let Ok(mut sender_slot) = self.action_sender.lock() {
+            *sender_slot = Some(sender);
+        }
         tracing::info!("Action sender set successfully");
     }
 
@@ -142,10 +144,11 @@ impl DatabaseService {
             let tunnel_healthy = {
                 let tunnels = self.ssh_tunnels.read().await;
                 if let Some(tunnel_mutex) = tunnels.get(&config_id) {
-                    let tunnel = tunnel_mutex.lock().unwrap();
-                    let healthy = tunnel.is_healthy_sync();
-                    drop(tunnel);
-                    healthy
+                    tunnel_mutex
+                        .lock()
+                        .ok()
+                        .map(|tunnel| tunnel.is_healthy_sync())
+                        .unwrap_or(false)
                 } else {
                     false
                 }
@@ -242,7 +245,7 @@ impl DatabaseService {
             "About to send, action_sender Arc address: {:p}",
             self.action_sender
         );
-        let sender_opt = self.action_sender.lock().unwrap().clone();
+        let sender_opt = self.action_sender.lock().ok().and_then(|s| s.clone());
         // Lock is dropped here
 
         if let Some(sender) = sender_opt {
@@ -375,7 +378,7 @@ impl DatabaseService {
         {
             let tunnels = self.ssh_tunnels.read().await;
             if let Some(tunnel_mutex) = tunnels.get(&config.id) {
-                let tunnel = tunnel_mutex.lock().unwrap();
+                let tunnel = tunnel_mutex.lock().map_err(|e| anyhow::anyhow!("Failed to lock SSH tunnel mutex: {}", e))?;
                 if tunnel.is_healthy_sync() {
                     return Ok(tunnel.get_info());
                 }

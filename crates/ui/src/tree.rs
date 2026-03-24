@@ -27,7 +27,6 @@ pub fn init(cx: &mut App) {
 }
 
 /// A delegate trait for providing tree data and rendering.
-#[allow(dead_code)]
 pub trait TreeDelegate: Sized + 'static {
     /// The metadata type associated with each tree item.
     type Metadata: Clone + 'static;
@@ -77,7 +76,6 @@ pub struct TreeEntry<M> {
     depth: usize,
 }
 
-#[allow(dead_code)]
 impl<M> TreeEntry<M> {
     /// Get the source tree item.
     #[inline]
@@ -114,7 +112,6 @@ impl<M> TreeEntry<M> {
     }
 }
 
-#[allow(dead_code)]
 impl<M> TreeItem<M> {
     /// Create a new tree item with the given label and metadata.
     ///
@@ -193,7 +190,6 @@ pub struct TreeState<D: TreeDelegate> {
     delegate: D,
 }
 
-#[allow(dead_code)]
 impl<D: TreeDelegate> TreeState<D> {
     /// Create a new empty tree state.
     pub fn new(delegate: D, cx: &mut App) -> Self {

@@ -21,7 +21,6 @@ pub struct QueryParameter {
 
 /// Information about an extracted SQL statement
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct StatementInfo {
     pub text: String,
     pub byte_range: Range<usize>,
@@ -337,7 +336,6 @@ pub fn extract_statement_info(text: &Rope, cursor_pos: usize) -> Option<Statemen
 
 /// The SQL clause the cursor is currently in
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum SqlClause {
     Select,
     From,
@@ -364,7 +362,6 @@ pub struct TableAlias {
 
 /// Completion context extracted from tree-sitter AST
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct CompletionContext {
     pub current_word: String,
     pub clause: Option<SqlClause>,

@@ -371,12 +371,12 @@ impl EditorPanel {
             sidebar_collapsed,
             tabbar_scroll_handle: gpui::ScrollHandle::default(),
             _subscriptions: Vec::new(),
-            run_query_keystroke: KeybindingKeystroke::from_keystroke(
-                Keystroke::parse("secondary-enter").unwrap(),
-            ),
-            format_query_keystroke: KeybindingKeystroke::from_keystroke(
-                Keystroke::parse("shift-alt-f").unwrap(),
-            ),
+            run_query_keystroke: Keystroke::parse("secondary-enter")
+                .map(KeybindingKeystroke::from_keystroke)
+                .expect("valid keystroke literal"),
+            format_query_keystroke: Keystroke::parse("shift-alt-f")
+                .map(KeybindingKeystroke::from_keystroke)
+                .expect("valid keystroke literal"),
             editor_chat_resize_state,
             editor_results_resize_state,
             results_log_resize_state,
@@ -466,7 +466,7 @@ impl EditorPanel {
                         .database_name
                         .clone()
                         .unwrap_or_else(|| "default".to_string()),
-                    schema_name: None, // TODO: Load from database when schema is added
+                    schema_name: None, // Schema not yet persisted in query tabs
                     environment_type: tab_data.environment_type,
                 };
                 self.create_and_add_tab_with_connection(window, params, cx);
@@ -1086,7 +1086,9 @@ impl EditorPanel {
                                     .border_color(cx.theme().border)
                                     .size_full()
                                     .min_h_0()
-                                    .child(query_tab.chat_panel.as_ref().unwrap().clone()),
+                                    .when_some(query_tab.chat_panel.as_ref(), |this, chat_panel| {
+                                        this.child(chat_panel.clone())
+                                    }),
                             ),
                     )
                 },

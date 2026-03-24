@@ -9,7 +9,6 @@ pub struct TableChangeOperation {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-#[allow(dead_code)]
 pub enum OperationType {
     Insert,
     Update,
@@ -32,20 +31,17 @@ pub enum RowIdentifier {
         column: String,
         value: String,
     },
-    #[allow(dead_code)]
     RowIndex(usize), // For cases without clear PK
 }
 
 #[derive(Clone, Debug)]
 pub struct ColumnChange {
     pub column_name: String,
-    #[allow(dead_code)]
     pub old_value: Option<String>,
     pub new_value: Option<String>,
 }
 
 impl TableChangeOperation {
-    #[allow(dead_code)]
     pub fn new(
         operation_type: OperationType,
         table_name: String,

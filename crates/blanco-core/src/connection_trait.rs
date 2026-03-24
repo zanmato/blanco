@@ -200,7 +200,6 @@ impl TableMetadata {
 }
 
 impl QueryResult {
-    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty() && self.rows_affected == 0
     }

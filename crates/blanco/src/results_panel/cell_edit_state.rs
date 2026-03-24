@@ -90,7 +90,6 @@ impl CellEditState {
         self.edited_values.get(&(row, col))
     }
 
-    #[allow(dead_code)]
     pub fn get_original_value(&self, row: usize, col: usize) -> Option<&Option<String>> {
         self.original_values.get(&(row, col))
     }

@@ -180,3 +180,113 @@ fn format_cell_to(value: &str, width: usize, output: &mut String) {
         output.push(' ');
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::results_panel::{SelectedCell, SelectedRow, SelectedTableData};
+
+    fn create_test_data() -> SelectedTableData {
+        SelectedTableData {
+            table_name: Some("users".to_string()),
+            db_type: None,
+            columns: vec!["id".to_string(), "name".to_string(), "email".to_string()],
+            selected_rows: vec![
+                SelectedRow {
+                    row: 0,
+                    cells: vec![
+                        SelectedCell {
+                            row: 0,
+                            col: 0,
+                            value: Some("1".to_string()),
+                            column_name: Some("id".to_string()),
+                            column_type: Some(ColumnType::Integer),
+                        },
+                        SelectedCell {
+                            row: 0,
+                            col: 1,
+                            value: Some("Alice".to_string()),
+                            column_name: Some("name".to_string()),
+                            column_type: Some(ColumnType::Text),
+                        },
+                        SelectedCell {
+                            row: 0,
+                            col: 2,
+                            value: Some("alice@example.com".to_string()),
+                            column_name: Some("email".to_string()),
+                            column_type: Some(ColumnType::Text),
+                        },
+                    ],
+                    primary_key_value: Some("1".to_string()),
+                },
+                SelectedRow {
+                    row: 1,
+                    cells: vec![
+                        SelectedCell {
+                            row: 1,
+                            col: 0,
+                            value: Some("2".to_string()),
+                            column_name: Some("id".to_string()),
+                            column_type: Some(ColumnType::Integer),
+                        },
+                        SelectedCell {
+                            row: 1,
+                            col: 1,
+                            value: None,
+                            column_name: Some("name".to_string()),
+                            column_type: Some(ColumnType::Text),
+                        },
+                        SelectedCell {
+                            row: 1,
+                            col: 2,
+                            value: Some("bob@example.com".to_string()),
+                            column_name: Some("email".to_string()),
+                            column_type: Some(ColumnType::Text),
+                        },
+                    ],
+                    primary_key_value: Some("2".to_string()),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn test_markdown_output_structure() {
+        let transformer = MarkdownTransformer;
+        let data = create_test_data();
+        let result = transformer.transform_selected_data(&data).unwrap();
+
+        assert!(result.contains("# Table: users"));
+        assert!(result.contains("| id"));
+        assert!(result.contains("| name"));
+        assert!(result.contains("| email"));
+        // Separator row
+        assert!(result.contains("| ---"));
+        // Data rows
+        assert!(result.contains("Alice"));
+        assert!(result.contains("NULL"));
+        assert!(result.contains("bob@example.com"));
+    }
+
+    #[test]
+    fn test_markdown_empty_selection() {
+        let transformer = MarkdownTransformer;
+        let data = SelectedTableData::default();
+        let result = transformer.transform_selected_data(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_escape_markdown_special_chars() {
+        assert_eq!(escape_markdown("normal text"), "normal text");
+        assert_eq!(escape_markdown("has*stars"), "`has*stars`");
+        assert_eq!(escape_markdown("has|pipe"), "`has|pipe`");
+        assert_eq!(escape_markdown("has_under"), "`has_under`");
+    }
+
+    #[test]
+    fn test_markdown_no_streaming() {
+        let transformer = MarkdownTransformer;
+        assert!(!transformer.supports_streaming());
+    }
+}

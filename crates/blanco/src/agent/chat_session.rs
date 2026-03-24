@@ -63,7 +63,6 @@ pub struct ChatSession {
     pub current_message_task: Option<Task<Result<String>>>,
 }
 
-#[allow(dead_code)]
 impl ChatSession {
     /// Create a new ChatSession with an LLM instance
     pub fn new(
@@ -398,14 +397,18 @@ impl ChatSession {
                     // Normal completion
                     tracing::debug!("Normal completion received on iteration {}", loop_count);
                     let final_message = ChatMessage::assistant(response_text.clone(), model_name);
-                    let _ = ui_sender.send(final_message).await;
+                    if let Err(e) = ui_sender.send(final_message).await {
+                    tracing::error!("Failed to send chat message to UI: {}", e);
+                }
                     return Ok(response_text);
                 }
             } else {
                 // Normal completion
                 tracing::debug!("Normal completion received on iteration {}", loop_count);
                 let final_message = ChatMessage::assistant(response_text.clone(), model_name);
-                let _ = ui_sender.send(final_message).await;
+                if let Err(e) = ui_sender.send(final_message).await {
+                    tracing::error!("Failed to send chat message to UI: {}", e);
+                }
                 return Ok(response_text);
             }
         }
@@ -444,7 +447,9 @@ impl ChatSession {
         let assistant_ui_message =
             ChatMessage::assistant(assistant_content.to_string(), model_name.to_string())
                 .with_tool_calls(tool_call_data.clone());
-        let _ = ui_sender.send(assistant_ui_message).await;
+        if let Err(e) = ui_sender.send(assistant_ui_message).await {
+            tracing::error!("Failed to send assistant message to UI: {}", e);
+        }
 
         // Add the assistant's message to the conversation
         current_messages.push(
@@ -485,7 +490,9 @@ impl ChatSession {
                             tool_call.id.clone(),
                             model_name.to_string(),
                         );
-                        let _ = ui_sender.send(tool_ui_message).await;
+                        if let Err(e) = ui_sender.send(tool_ui_message).await {
+                            tracing::error!("Failed to send tool message to UI: {}", e);
+                        }
 
                         current_messages
                             .push(LlmChatMessage::user().content(&error_content).build());
@@ -500,7 +507,9 @@ impl ChatSession {
                             tool_call.id.clone(),
                             model_name.to_string(),
                         );
-                        let _ = ui_sender.send(tool_ui_message).await;
+                        if let Err(e) = ui_sender.send(tool_ui_message).await {
+                            tracing::error!("Failed to send tool message to UI: {}", e);
+                        }
 
                         current_messages
                             .push(LlmChatMessage::user().content(&error_content).build());
@@ -547,7 +556,9 @@ impl ChatSession {
             // Use the summary as the display content instead of raw JSON
             let tool_ui_message =
                 ChatMessage::tool(summary.clone(), result.id.clone(), model_name.to_string());
-            let _ = ui_sender.send(tool_ui_message).await;
+            if let Err(e) = ui_sender.send(tool_ui_message).await {
+                tracing::error!("Failed to send tool result to UI: {}", e);
+            }
 
             // Add tool result as a message to conversation (using user role for tool results)
             current_messages.push(

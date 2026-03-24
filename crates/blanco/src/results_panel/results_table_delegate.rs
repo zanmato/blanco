@@ -656,7 +656,10 @@ impl TableDelegate for ResultsTableDelegate {
     }
 
     fn column(&self, col_ix: usize, _: &App) -> Column {
-        self.columns[col_ix].clone()
+        self.columns
+            .get(col_ix)
+            .cloned()
+            .unwrap_or_else(|| Column::new(format!("col_{}", col_ix), format!("Column {}", col_ix)))
     }
 
     fn render_th(

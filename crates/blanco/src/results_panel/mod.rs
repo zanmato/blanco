@@ -53,7 +53,6 @@ pub struct TableOperationResponse {
 // Data structures for copy functionality
 #[derive(Clone, Debug)]
 pub struct SelectedCell {
-    #[allow(dead_code)]
     pub row: usize,
     pub col: usize,
     pub value: Option<String>,
@@ -65,7 +64,6 @@ pub struct SelectedCell {
 pub struct SelectedRow {
     pub row: usize,
     pub cells: Vec<SelectedCell>,
-    #[allow(dead_code)]
     pub primary_key_value: Option<String>,
 }
 
@@ -980,43 +978,6 @@ impl ResultsPanel {
         cx.notify();
     }
 
-    /// Handle table operation completion event
-    #[allow(dead_code)]
-    pub fn handle_table_operation_completed(
-        &mut self,
-        _table_name: &str,
-        success: bool,
-        rows_affected: Option<u64>,
-        error_message: Option<String>,
-        operations_executed: usize,
-        cx: &mut Context<Self>,
-    ) {
-        if success {
-            tracing::info!(
-                "Table operation completed successfully: {} operations, {} rows affected",
-                operations_executed,
-                rows_affected.unwrap_or(0)
-            );
-
-            // Clear edit state after successful commit
-            self.table_state.update(cx, |state, cx| {
-                state.delegate_mut().edit_state.clear_edits();
-                state.refresh(cx);
-            });
-
-            // Optionally refresh the data or show a success message
-            cx.notify();
-        } else {
-            tracing::error!(
-                "Table operation failed: {}",
-                error_message.unwrap_or_else(|| "Unknown error".to_string())
-            );
-
-            // Keep the edit state so user can retry or fix issues
-            // Don't refresh the table to preserve user's changes
-        }
-    }
-
     // Copy and selection action handlers
 
     fn on_copy_as_csv(
@@ -1359,10 +1320,21 @@ impl ResultsPanel {
                     })
                     .collect();
 
+                let primary_key_value = delegate
+                    .get_primary_key_column_index()
+                    .and_then(|pk_idx| {
+                        let display_col = pk_idx + 1;
+                        delegate
+                            .rows
+                            .get(row)
+                            .and_then(|r| r.get(display_col))
+                            .and_then(|v| v.clone())
+                    });
+
                 selected_rows_data.push(SelectedRow {
                     row,
                     cells,
-                    primary_key_value: None, // TODO: Extract primary key if needed
+                    primary_key_value,
                 });
             }
         }

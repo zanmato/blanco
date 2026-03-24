@@ -360,7 +360,6 @@ pub enum ToolMode {
 /// Tool registry for agent
 pub struct AgentToolRegistry {
     handlers: HashMap<String, Box<dyn AgentToolHandler>>,
-    #[allow(dead_code)]
     mode: ToolMode,
 }
 
