@@ -948,6 +948,7 @@ fn init_menus(cx: &mut App) {
                 MenuItem::Separator,
                 MenuItem::action("Quit", Quit),
             ],
+            disabled: false,
         },
         Menu {
             name: "Edit".into(),
@@ -961,6 +962,7 @@ fn init_menus(cx: &mut App) {
                 MenuItem::separator(),
                 MenuItem::action("Select All", gpui_component::input::SelectAll),
             ],
+            disabled: false,
         },
         Menu {
             name: "View".into(),
@@ -968,6 +970,7 @@ fn init_menus(cx: &mut App) {
                 MenuItem::action("Render Whitespace", ToggleRenderWhitespace),
                 MenuItem::action("Word Wrap", ToggleWordWrap),
             ],
+            disabled: false,
         },
     ]
     .into_iter()
@@ -988,6 +991,7 @@ fn init_menus(cx: &mut App) {
                 MenuItem::Separator,
                 MenuItem::action("Quit", Quit),
             ],
+            disabled: false,
         },
         Menu {
             name: "Edit".into(),
@@ -1001,6 +1005,7 @@ fn init_menus(cx: &mut App) {
                 MenuItem::separator(),
                 MenuItem::action("Select All", gpui_component::input::SelectAll),
             ],
+            disabled: false,
         },
         Menu {
             name: "View".into(),
@@ -1008,6 +1013,7 @@ fn init_menus(cx: &mut App) {
                 MenuItem::action("Render Whitespace", ToggleRenderWhitespace),
                 MenuItem::action("Word Wrap", ToggleWordWrap),
             ],
+            disabled: false,
         },
     ]);
 }

@@ -17,18 +17,18 @@ publish = false
 
 [workspace.dependencies]
 # Core GPUI dependencies
-gpui = { git = "https://github.com/zed-industries/zed", rev = "d08d98f6c1c1aefb342de072d9beac25eaf6130f" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "d08d98f6c1c1aefb342de072d9beac25eaf6130f", features = [
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = [
     "font-kit",
     "x11",
     "wayland",
     "runtime_shaders",
 ] }
-gpui_macros = { git = "https://github.com/zed-industries/zed", rev = "d08d98f6c1c1aefb342de072d9beac25eaf6130f" }
-gpui-component = { path = "vendor/gpui-component/crates/ui", features = [
+gpui_macros = { git = "https://github.com/zed-industries/zed" }
+gpui-component = { git = "https://github.com/zanmato/gpui-component", branch = "blanco", features = [
     "tree-sitter-languages",
 ] }
-gpui-component-macros = { path = "vendor/gpui-component/crates/macros" }
+gpui-component-macros = { git = "https://github.com/zanmato/gpui-component", branch = "blanco" }
 
 # Additional dependencies for gpui-component compatibility
 notify = "7.0.0"
@@ -96,7 +96,9 @@ ropey = { version = "=2.0.0-beta.1", features = [
 ] }
 async-stream = "0.3"
 tokio = { version = "1.0", features = ["full"] }
-tikv-jemallocator = { version = "0.6", features = ["unprefixed_malloc_on_supported_platforms"] }
+tikv-jemallocator = { version = "0.6", features = [
+    "unprefixed_malloc_on_supported_platforms",
+] }
 
 [workspace.lints.clippy]
 almost_complete_range = "allow"
