@@ -2,8 +2,8 @@
 
 use crate::connection::MysqlConnection;
 use anyhow::Result;
-use blanco_core::connection_trait::{ColumnInfo, TableSchemaInfo};
 use blanco_core::Connection;
+use blanco_core::connection_trait::{ColumnInfo, TableSchemaInfo};
 
 impl MysqlConnection {
     /// Get MySQL database schema with pagination using a single JSON aggregation query
@@ -24,66 +24,64 @@ impl MysqlConnection {
         for row in &query_result.rows {
             if !row.is_empty()
                 && let Some(row_value) = row[0].as_deref()
-                && let Ok(table_info_json) = serde_json::from_str::<serde_json::Value>(row_value) {
-                    // Parse the JSON into our structured types
-                    if let Some(table_name) = table_info_json.get("name").and_then(|v| v.as_str())
-                        && let Some(columns_array) =
-                            table_info_json.get("columns").and_then(|v| v.as_array())
-                        {
-                            let column_count = table_info_json
-                                .get("column_count")
+                && let Ok(table_info_json) = serde_json::from_str::<serde_json::Value>(row_value)
+            {
+                // Parse the JSON into our structured types
+                if let Some(table_name) = table_info_json.get("name").and_then(|v| v.as_str())
+                    && let Some(columns_array) =
+                        table_info_json.get("columns").and_then(|v| v.as_array())
+                {
+                    let column_count = table_info_json
+                        .get("column_count")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as usize;
+
+                    let mut columns = Vec::new();
+                    for col_json in columns_array {
+                        if let Some(name) = col_json.get("name").and_then(|v| v.as_str()) {
+                            let data_type = col_json
+                                .get("type")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            let nullable = col_json
+                                .get("nullable")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(true);
+                            let primary_key = col_json
+                                .get("primary_key")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                            let default_value = col_json
+                                .get("default_value")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                            let character_maximum_length = col_json
+                                .get("character_maximum_length")
                                 .and_then(|v| v.as_u64())
-                                .unwrap_or(0)
-                                as usize;
+                                .map(|v| v as i32);
 
-                            let mut columns = Vec::new();
-                            for col_json in columns_array {
-                                if let Some(name) =
-                                    col_json.get("name").and_then(|v| v.as_str())
-                                {
-                                    let data_type = col_json
-                                        .get("type")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("unknown")
-                                        .to_string();
-                                    let nullable = col_json
-                                        .get("nullable")
-                                        .and_then(|v| v.as_bool())
-                                        .unwrap_or(true);
-                                    let primary_key = col_json
-                                        .get("primary_key")
-                                        .and_then(|v| v.as_bool())
-                                        .unwrap_or(false);
-                                    let default_value = col_json
-                                        .get("default_value")
-                                        .and_then(|v| v.as_str())
-                                        .map(|s| s.to_string());
-                                    let character_maximum_length = col_json
-                                        .get("character_maximum_length")
-                                        .and_then(|v| v.as_u64())
-                                        .map(|v| v as i32);
-
-                                    columns.push(ColumnInfo {
-                                        name: name.to_string(),
-                                        data_type,
-                                        is_nullable: nullable,
-                                        is_primary_key: primary_key,
-                                        default_value,
-                                        character_maximum_length,
-                                        foreign_key: None,
-                                    });
-                                }
-                            }
-
-                            tables.push(TableSchemaInfo {
-                                name: table_name.to_string(),
-                                schema: self.get_display_name(),
-                                object_type: "TABLE".to_string(),
-                                columns,
-                                column_count,
+                            columns.push(ColumnInfo {
+                                name: name.to_string(),
+                                data_type,
+                                is_nullable: nullable,
+                                is_primary_key: primary_key,
+                                default_value,
+                                character_maximum_length,
+                                foreign_key: None,
                             });
                         }
+                    }
+
+                    tables.push(TableSchemaInfo {
+                        name: table_name.to_string(),
+                        schema: self.get_display_name(),
+                        object_type: "TABLE".to_string(),
+                        columns,
+                        column_count,
+                    });
                 }
+            }
         }
 
         tracing::info!(
@@ -105,25 +103,26 @@ impl MysqlConnection {
 
         // Add table name filter with LIKE wildcard support if specified
         if let Some(names_str) = table_names
-            && !names_str.trim().is_empty() {
-                let patterns: Vec<String> = names_str
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
+            && !names_str.trim().is_empty()
+        {
+            let patterns: Vec<String> = names_str
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
 
-                if !patterns.is_empty() {
-                    let like_conditions = patterns
-                        .iter()
-                        .map(|_| "t.table_name LIKE ?")
-                        .collect::<Vec<_>>()
-                        .join(" OR ");
-                    where_conditions.push(format!("({})", like_conditions));
-                    for pattern in &patterns {
-                        params.push(pattern.clone());
-                    }
+            if !patterns.is_empty() {
+                let like_conditions = patterns
+                    .iter()
+                    .map(|_| "t.table_name LIKE ?")
+                    .collect::<Vec<_>>()
+                    .join(" OR ");
+                where_conditions.push(format!("({})", like_conditions));
+                for pattern in &patterns {
+                    params.push(pattern.clone());
                 }
             }
+        }
 
         let where_clause = where_conditions.join(" AND ");
 

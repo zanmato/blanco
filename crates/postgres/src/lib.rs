@@ -153,9 +153,8 @@ mod tests {
                 .map(|(i, col)| (col.clone(), first_row[i].clone()))
                 .collect();
 
-            let get_val = |key: &str| -> &str {
-                value_map.get(key).and_then(|v| v.as_deref()).unwrap_or("")
-            };
+            let get_val =
+                |key: &str| -> &str { value_map.get(key).and_then(|v| v.as_deref()).unwrap_or("") };
 
             // Test basic types
             assert_eq!(get_val("id"), "1");
@@ -208,10 +207,7 @@ mod tests {
             );
 
             // Test UUID
-            assert_eq!(
-                get_val("uuid_col"),
-                "550e8400-e29b-41d4-a716-446655440000"
-            );
+            assert_eq!(get_val("uuid_col"), "550e8400-e29b-41d4-a716-446655440000");
 
             // Test JSON types (key order may vary, so check for content)
             let json_col = get_val("json_col");
@@ -222,10 +218,7 @@ mod tests {
 
             // Test array types
             assert_eq!(get_val("int_array_col"), "{1,2,3,4,5}");
-            assert_eq!(
-                get_val("text_array_col"),
-                "{\"hello\",\"world\",\"test\"}"
-            );
+            assert_eq!(get_val("text_array_col"), "{\"hello\",\"world\",\"test\"}");
             assert_eq!(
                 get_val("uuid_array_col"),
                 "{550e8400-e29b-41d4-a716-446655440000,660e8400-e29b-41d4-a716-446655440001}"

@@ -1,3 +1,4 @@
+use crate::transformers::{CsvTransformer, DataTransformer, JsonTransformer, SqlTransformer};
 use chrono::Utc;
 use database::DatabaseService;
 use gpui::{
@@ -13,7 +14,6 @@ use gpui_component::{
     select::{Select, SelectEvent, SelectState},
     v_flex,
 };
-use crate::transformers::{CsvTransformer, DataTransformer, JsonTransformer, SqlTransformer};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -43,10 +43,8 @@ impl ExportFormat {
     }
 }
 
-#[derive(Clone)]
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct ExportOptions {}
-
 
 pub struct ExportModal {
     focus_handle: FocusHandle,
@@ -159,7 +157,8 @@ impl ExportModal {
 
         // Ensure the filename has the correct extension
         if file_path
-            .extension().is_none_or(|ext| ext != format.file_extension())
+            .extension()
+            .is_none_or(|ext| ext != format.file_extension())
         {
             file_path.set_extension(format.file_extension());
         }
@@ -179,15 +178,16 @@ impl ExportModal {
         cx.spawn_in(window, async move |_, window| {
             if let Some(path) = path.await.ok()?.ok()?
                 && let Some(dir_path) = path.first()
-                    && let Some(dir_str) = dir_path.to_str() {
-                        window
-                            .update(|window, cx| {
-                                directory_input.update(cx, |input, cx| {
-                                    input.set_value(dir_str.to_string(), window, cx);
-                                });
-                            })
-                            .ok();
-                    }
+                && let Some(dir_str) = dir_path.to_str()
+            {
+                window
+                    .update(|window, cx| {
+                        directory_input.update(cx, |input, cx| {
+                            input.set_value(dir_str.to_string(), window, cx);
+                        });
+                    })
+                    .ok();
+            }
             Some(())
         })
         .detach();
@@ -233,29 +233,21 @@ impl ExportModal {
                                 .get_or_create_connection(connection_id, None)
                                 .await?;
 
-                            let transformer: Box<dyn DataTransformer> =
-                                match format {
-                                    ExportFormat::Csv => {
-                                        Box::new(CsvTransformer)
-                                    }
-                                    ExportFormat::Json => {
-                                        Box::new(JsonTransformer::new())
-                                    }
-                                    ExportFormat::Sql => {
-                                        let table_name_for_sql =
-                                            if let Some(schema) = &schema_name {
-                                                format!("{}.{}", schema, table_name_param)
-                                            } else {
-                                                table_name_param.clone()
-                                            };
-                                        Box::new(
-                                            SqlTransformer::with_table_name(
-                                                table_name_for_sql,
-                                                db_type,
-                                            ),
-                                        )
-                                    }
-                                };
+                            let transformer: Box<dyn DataTransformer> = match format {
+                                ExportFormat::Csv => Box::new(CsvTransformer),
+                                ExportFormat::Json => Box::new(JsonTransformer::new()),
+                                ExportFormat::Sql => {
+                                    let table_name_for_sql = if let Some(schema) = &schema_name {
+                                        format!("{}.{}", schema, table_name_param)
+                                    } else {
+                                        table_name_param.clone()
+                                    };
+                                    Box::new(SqlTransformer::with_table_name(
+                                        table_name_for_sql,
+                                        db_type,
+                                    ))
+                                }
+                            };
 
                             let export_service = super::service::ExportService::new();
 

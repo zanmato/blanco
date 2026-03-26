@@ -95,17 +95,15 @@ impl CreateNewQueryTabParams for TreeItemMetadata {
             | TreeItemKind::Schema
             | TreeItemKind::Table
             | TreeItemKind::View
-            | TreeItemKind::MaterializedView => {
-                Some(CreateNewQueryTab {
-                    connection_id: self.connection_id,
-                    connection_name: self.connection_name.clone(),
-                    db_type: self.db_type,
-                    database_name: self.database_name.clone().unwrap_or_default(),
-                    schema_name: self.schema_name.clone(),
-                    table_name: self.table_name.clone(),
-                    environment_type: self.environment_type,
-                })
-            }
+            | TreeItemKind::MaterializedView => Some(CreateNewQueryTab {
+                connection_id: self.connection_id,
+                connection_name: self.connection_name.clone(),
+                db_type: self.db_type,
+                database_name: self.database_name.clone().unwrap_or_default(),
+                schema_name: self.schema_name.clone(),
+                table_name: self.table_name.clone(),
+                environment_type: self.environment_type,
+            }),
         }
     }
 }
@@ -144,10 +142,12 @@ impl ConnectionsPanel {
         };
 
         cx.spawn(async |this_handle, cx| {
-            this_handle.update(cx, |this, cx| {
-                this.update_tree_items(cx);
-                cx.notify();
-            }).log_err();
+            this_handle
+                .update(cx, |this, cx| {
+                    this.update_tree_items(cx);
+                    cx.notify();
+                })
+                .log_err();
         })
         .detach();
 
@@ -158,8 +158,8 @@ impl ConnectionsPanel {
         let app_database = AppDatabase::global(cx).clone();
         cx.spawn(async move |this_handle, cx| {
             let connections = app_database.load_connections().await;
-            this_handle.update(cx, |this, cx| {
-                match connections {
+            this_handle
+                .update(cx, |this, cx| match connections {
                     Ok(connections) => {
                         this.connections = connections;
                         this.update_tree_items(cx);
@@ -168,9 +168,10 @@ impl ConnectionsPanel {
                     Err(e) => {
                         tracing::error!("Failed to reload connections: {}", e);
                     }
-                }
-            }).log_err();
-        }).detach();
+                })
+                .log_err();
+        })
+        .detach();
     }
 
     /// Update tree items from connections data and update connection status directly
@@ -189,29 +190,31 @@ impl ConnectionsPanel {
             };
 
             // Update connection status directly in tree metadata
-            this_handle.update(cx, |this, cx| {
-                // Rebuild tree items with updated metadata
-                let tree_items: Vec<TreeItem<TreeItemMetadata>> = this
-                    .connections
-                    .iter()
-                    .map(|conn| {
-                        this.build_connection_tree_item_with_expand(
-                            conn,
-                            this.expanded_connections.contains(&conn.id.unwrap_or(0)),
-                            cx,
-                        )
-                    })
-                    .collect();
+            this_handle
+                .update(cx, |this, cx| {
+                    // Rebuild tree items with updated metadata
+                    let tree_items: Vec<TreeItem<TreeItemMetadata>> = this
+                        .connections
+                        .iter()
+                        .map(|conn| {
+                            this.build_connection_tree_item_with_expand(
+                                conn,
+                                this.expanded_connections.contains(&conn.id.unwrap_or(0)),
+                                cx,
+                            )
+                        })
+                        .collect();
 
-                this.tree_state.update(cx, |state, cx| {
-                    state.set_items(tree_items, cx);
-                });
+                    this.tree_state.update(cx, |state, cx| {
+                        state.set_items(tree_items, cx);
+                    });
 
-                // Update connection status directly in tree entries
-                this.update_connection_status_in_tree(&connection_statuses, cx);
+                    // Update connection status directly in tree entries
+                    this.update_connection_status_in_tree(&connection_statuses, cx);
 
-                cx.notify();
-            }).log_err();
+                    cx.notify();
+                })
+                .log_err();
         })
         .detach();
     }
@@ -505,7 +508,6 @@ impl ConnectionsPanel {
         }
     }
 
-
     /// Handle tree item click and expand/collapse
     pub fn handle_tree_item_click(
         &mut self,
@@ -702,12 +704,14 @@ impl ConnectionsPanel {
             }
 
             // Update the UI
-            this_handle.update(cx, |this, cx| {
-                this.loaded_connections.remove(&connection_id);
-                this.expanded_connections.remove(&connection_id);
-                this.update_tree_items(cx);
-                cx.notify();
-            }).log_err();
+            this_handle
+                .update(cx, |this, cx| {
+                    this.loaded_connections.remove(&connection_id);
+                    this.expanded_connections.remove(&connection_id);
+                    this.update_tree_items(cx);
+                    cx.notify();
+                })
+                .log_err();
         })
         .detach();
     }
@@ -742,10 +746,12 @@ impl ConnectionsPanel {
             }
 
             // Update the UI
-            this_handle.update(cx, |this, cx| {
-                this.update_tree_items(cx);
-                cx.notify();
-            }).log_err();
+            this_handle
+                .update(cx, |this, cx| {
+                    this.update_tree_items(cx);
+                    cx.notify();
+                })
+                .log_err();
         })
         .detach();
     }
@@ -888,15 +894,17 @@ impl ConnectionsPanel {
                                             return;
                                         }
 
-                                        this_handle.update(cx, |this, cx| {
-                                            this.connections
-                                                .retain(|c| c.id != Some(connection_id));
-                                            this.loaded_connections.remove(&connection_id);
-                                            this.expanded_connections.remove(&connection_id);
-                                            this.database_metadata.remove(&connection_id);
-                                            this.update_tree_items(cx);
-                                            cx.notify();
-                                        }).log_err();
+                                        this_handle
+                                            .update(cx, |this, cx| {
+                                                this.connections
+                                                    .retain(|c| c.id != Some(connection_id));
+                                                this.loaded_connections.remove(&connection_id);
+                                                this.expanded_connections.remove(&connection_id);
+                                                this.database_metadata.remove(&connection_id);
+                                                this.update_tree_items(cx);
+                                                cx.notify();
+                                            })
+                                            .log_err();
                                     })
                                     .detach();
                                     window.close_dialog(cx);

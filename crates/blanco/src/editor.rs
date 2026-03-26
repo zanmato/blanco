@@ -1086,9 +1086,10 @@ impl EditorPanel {
                                     .border_color(cx.theme().border)
                                     .size_full()
                                     .min_h_0()
-                                    .when_some(query_tab.chat_panel.as_ref(), |this, chat_panel| {
-                                        this.child(chat_panel.clone())
-                                    }),
+                                    .when_some(
+                                        query_tab.chat_panel.as_ref(),
+                                        |this, chat_panel| this.child(chat_panel.clone()),
+                                    ),
                             ),
                     )
                 },

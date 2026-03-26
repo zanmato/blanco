@@ -2,8 +2,7 @@ use crate::app::NewSnippet;
 use crate::snippets_panel::{CreateGroup, SnippetsPanel};
 use gpui::ClickEvent;
 use gpui::{
-    App, Entity, InteractiveElement, ParentElement, Styled, Window, div,
-    prelude::FluentBuilder, px,
+    App, Entity, InteractiveElement, ParentElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{ActiveTheme, Icon, h_flex};
 use gpui_component::{
@@ -37,17 +36,18 @@ impl SnippetsTreeDelegate {
 
     fn get_snippet_metadata(&self, item_id: &str, cx: &App) -> Option<SnippetItemMetadata> {
         if let Some(id_str) = item_id.strip_prefix("snippet:")
-            && let Ok(id) = id_str.parse::<i64>() {
-                let panel = self.parent.read(cx);
-                if let Some(snippet) = panel.snippets.iter().find(|s| s.id == Some(id)) {
-                    return Some(SnippetItemMetadata {
-                        id: snippet.id.unwrap_or(0),
-                        name: snippet.name.clone(),
-                        is_group: snippet.is_group,
-                        parent_id: snippet.parent_id,
-                    });
-                }
+            && let Ok(id) = id_str.parse::<i64>()
+        {
+            let panel = self.parent.read(cx);
+            if let Some(snippet) = panel.snippets.iter().find(|s| s.id == Some(id)) {
+                return Some(SnippetItemMetadata {
+                    id: snippet.id.unwrap_or(0),
+                    name: snippet.name.clone(),
+                    is_group: snippet.is_group,
+                    parent_id: snippet.parent_id,
+                });
             }
+        }
         None
     }
 }

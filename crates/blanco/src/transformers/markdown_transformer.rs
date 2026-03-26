@@ -60,10 +60,8 @@ impl DataTransformer for MarkdownTransformer {
                 for row in &data.selected_rows {
                     for cell in &row.cells {
                         if cell.col == col_idx {
-                            let cell_len = cell
-                                .value
-                                .as_ref()
-                                .map_or(4, |v| escape_markdown(v).len());
+                            let cell_len =
+                                cell.value.as_ref().map_or(4, |v| escape_markdown(v).len());
                             max_width = max_width.max(cell_len);
                             break;
                         }

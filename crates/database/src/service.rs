@@ -378,7 +378,9 @@ impl DatabaseService {
         {
             let tunnels = self.ssh_tunnels.read().await;
             if let Some(tunnel_mutex) = tunnels.get(&config.id) {
-                let tunnel = tunnel_mutex.lock().map_err(|e| anyhow::anyhow!("Failed to lock SSH tunnel mutex: {}", e))?;
+                let tunnel = tunnel_mutex
+                    .lock()
+                    .map_err(|e| anyhow::anyhow!("Failed to lock SSH tunnel mutex: {}", e))?;
                 if tunnel.is_healthy_sync() {
                     return Ok(tunnel.get_info());
                 }

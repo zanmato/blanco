@@ -75,7 +75,6 @@ impl SqliteForm {
         connection.environment_type = environment_type;
         Some(connection)
     }
-
 }
 
 /// PostgreSQL connector form

@@ -41,5 +41,4 @@ impl AppDatabase {
 
         Ok(rows.into_iter().map(|r| (r.get(0), r.get(1))).collect())
     }
-
 }

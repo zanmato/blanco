@@ -43,3 +43,4 @@ sqruff-lib = "0.34.1"
 sqruff-lib-dialects = "0.34.1"
 sqruff-lib-core = "0.34.1"
 ahash = "0.8"
+tikv-jemallocator = { workspace = true }

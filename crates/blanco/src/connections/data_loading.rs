@@ -177,31 +177,35 @@ impl ConnectionsPanel {
                     };
 
                     // Update the panel with loaded metadata
-                    this_handle.update(cx, |this, cx| {
-                        // Clear loading state for this connection
-                        let item_id = format!("connection:{}", connection_id);
-                        this.set_item_loading(&item_id, false, cx);
+                    this_handle
+                        .update(cx, |this, cx| {
+                            // Clear loading state for this connection
+                            let item_id = format!("connection:{}", connection_id);
+                            this.set_item_loading(&item_id, false, cx);
 
-                        this.database_metadata.insert(connection_id, metadata);
-                        this.loaded_connections.insert(connection_id);
-                        if expand {
-                            this.expanded_connections.insert(connection_id);
-                        }
+                            this.database_metadata.insert(connection_id, metadata);
+                            this.loaded_connections.insert(connection_id);
+                            if expand {
+                                this.expanded_connections.insert(connection_id);
+                            }
 
-                        // Build tree items with all loaded connections visible
-                        this.update_tree_items(cx);
+                            // Build tree items with all loaded connections visible
+                            this.update_tree_items(cx);
 
-                        cx.notify();
-                    }).log_err();
+                            cx.notify();
+                        })
+                        .log_err();
                 }
                 Err(e) => {
                     tracing::error!("Failed to get connection {}: {}", connection_id, e);
                     // Clear loading state on error
-                    this_handle.update(cx, |this, cx| {
-                        let item_id = format!("connection:{}", connection_id);
-                        this.set_item_loading(&item_id, false, cx);
-                        cx.notify();
-                    }).log_err();
+                    this_handle
+                        .update(cx, |this, cx| {
+                            let item_id = format!("connection:{}", connection_id);
+                            this.set_item_loading(&item_id, false, cx);
+                            cx.notify();
+                        })
+                        .log_err();
                 }
             }
         })
@@ -289,33 +293,35 @@ impl ConnectionsPanel {
                     }
 
                     // Update the panel with loaded schemas
-                    this_handle.update(cx, |this, cx| {
-                        // Clear loading state for this database
-                        let item_id = format!("database:{}:{}", connection_id, database_name);
-                        this.set_item_loading(&item_id, false, cx);
+                    this_handle
+                        .update(cx, |this, cx| {
+                            // Clear loading state for this database
+                            let item_id = format!("database:{}:{}", connection_id, database_name);
+                            this.set_item_loading(&item_id, false, cx);
 
-                        if let Some(metadata) = this.database_metadata.get_mut(&connection_id) {
-                            // Find the database and update its schemas
-                            if let Some(database) = metadata
-                                .databases
-                                .iter_mut()
-                                .find(|db| db.name == database_name)
-                            {
-                                database.schemas = schema_tables
-                                    .into_iter()
-                                    .map(|(schema_name, tables)| DatabaseSchema {
-                                        name: schema_name,
-                                        tables,
-                                        is_expanded: false,
-                                    })
-                                    .collect();
-                                database.is_expanded = true; // Mark as expanded
+                            if let Some(metadata) = this.database_metadata.get_mut(&connection_id) {
+                                // Find the database and update its schemas
+                                if let Some(database) = metadata
+                                    .databases
+                                    .iter_mut()
+                                    .find(|db| db.name == database_name)
+                                {
+                                    database.schemas = schema_tables
+                                        .into_iter()
+                                        .map(|(schema_name, tables)| DatabaseSchema {
+                                            name: schema_name,
+                                            tables,
+                                            is_expanded: false,
+                                        })
+                                        .collect();
+                                    database.is_expanded = true; // Mark as expanded
+                                }
+
+                                this.update_tree_items(cx);
+                                cx.notify();
                             }
-
-                            this.update_tree_items(cx);
-                            cx.notify();
-                        }
-                    }).log_err();
+                        })
+                        .log_err();
                 }
                 Err(e) => {
                     tracing::error!(
@@ -325,11 +331,13 @@ impl ConnectionsPanel {
                         e
                     );
                     // Clear loading state on error
-                    this_handle.update(cx, |this, cx| {
-                        let item_id = format!("database:{}:{}", connection_id, database_name);
-                        this.set_item_loading(&item_id, false, cx);
-                        cx.notify();
-                    }).log_err();
+                    this_handle
+                        .update(cx, |this, cx| {
+                            let item_id = format!("database:{}:{}", connection_id, database_name);
+                            this.set_item_loading(&item_id, false, cx);
+                            cx.notify();
+                        })
+                        .log_err();
                 }
             }
         })

@@ -256,9 +256,7 @@ impl ConnectionData {
 
     /// Check if this connection uses SSH tunnel
     pub fn uses_ssh_tunnel(&self) -> bool {
-        self.ssh_host
-            .as_ref()
-            .is_some_and(|h| !h.trim().is_empty())
+        self.ssh_host.as_ref().is_some_and(|h| !h.trim().is_empty())
     }
 
     /// Convert to a ConnectionConfig for use with the database service.

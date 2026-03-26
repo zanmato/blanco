@@ -148,40 +148,34 @@ mod tests {
         SelectedTableData {
             table_name: Some("products".to_string()),
             db_type: Some(database::DatabaseType::PostgreSQL),
-            columns: vec![
-                "id".to_string(),
-                "name".to_string(),
-                "price".to_string(),
-            ],
-            selected_rows: vec![
-                SelectedRow {
-                    row: 0,
-                    cells: vec![
-                        SelectedCell {
-                            row: 0,
-                            col: 0,
-                            value: Some("1".to_string()),
-                            column_name: Some("id".to_string()),
-                            column_type: Some(ColumnType::Integer),
-                        },
-                        SelectedCell {
-                            row: 0,
-                            col: 1,
-                            value: Some("Widget".to_string()),
-                            column_name: Some("name".to_string()),
-                            column_type: Some(ColumnType::Text),
-                        },
-                        SelectedCell {
-                            row: 0,
-                            col: 2,
-                            value: None,
-                            column_name: Some("price".to_string()),
-                            column_type: Some(ColumnType::Numeric),
-                        },
-                    ],
-                    primary_key_value: Some("1".to_string()),
-                },
-            ],
+            columns: vec!["id".to_string(), "name".to_string(), "price".to_string()],
+            selected_rows: vec![SelectedRow {
+                row: 0,
+                cells: vec![
+                    SelectedCell {
+                        row: 0,
+                        col: 0,
+                        value: Some("1".to_string()),
+                        column_name: Some("id".to_string()),
+                        column_type: Some(ColumnType::Integer),
+                    },
+                    SelectedCell {
+                        row: 0,
+                        col: 1,
+                        value: Some("Widget".to_string()),
+                        column_name: Some("name".to_string()),
+                        column_type: Some(ColumnType::Text),
+                    },
+                    SelectedCell {
+                        row: 0,
+                        col: 2,
+                        value: None,
+                        column_name: Some("price".to_string()),
+                        column_type: Some(ColumnType::Numeric),
+                    },
+                ],
+                primary_key_value: Some("1".to_string()),
+            }],
         }
     }
 
@@ -213,7 +207,11 @@ mod tests {
 
         for format in &["csv", "json", "sql", "markdown"] {
             let result = registry.transform_data(&data, format);
-            assert!(result.is_err(), "Format '{}' should reject empty data", format);
+            assert!(
+                result.is_err(),
+                "Format '{}' should reject empty data",
+                format
+            );
         }
     }
 

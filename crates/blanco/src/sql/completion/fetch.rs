@@ -8,7 +8,10 @@ pub async fn fetch_queryable_entities(
     connection_id: i64,
     database_name: &str,
 ) -> Result<Vec<QueryableEntity>> {
-    tracing::debug!("Fetching queryable entities for database '{}'", database_name);
+    tracing::debug!(
+        "Fetching queryable entities for database '{}'",
+        database_name
+    );
     if let Ok(connection) = db_service
         .get_or_create_connection_by_id(connection_id, Some(database_name))
         .await

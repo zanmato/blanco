@@ -8,7 +8,7 @@ use anyhow::Result;
 use std::sync::Arc;
 
 use crate::settings::{ChatSettings, Settings};
-use llm::{builder::LLMBuilder, builder::LLMBackend, LLMProvider};
+use llm::{LLMProvider, builder::LLMBackend, builder::LLMBuilder};
 
 /// LLM instance with metadata
 #[derive(Clone)]
@@ -27,7 +27,6 @@ pub struct LLMInstance {
 pub struct ChatProviderResolver {
     cached_llm: Option<(LLMInstance, u64)>,
 }
-
 
 impl ChatProviderResolver {
     /// Get an LLM instance based on current settings
@@ -66,12 +65,15 @@ impl ChatProviderResolver {
                 return Err(anyhow::anyhow!(
                     "Unsupported chat provider: {}",
                     chat_settings.provider
-                ))
+                ));
             }
         };
 
         if chat_settings.api_key.is_empty() {
-            return Err(anyhow::anyhow!("API key is required for {}", chat_settings.provider));
+            return Err(anyhow::anyhow!(
+                "API key is required for {}",
+                chat_settings.provider
+            ));
         }
 
         let mut builder = LLMBuilder::new()
@@ -82,7 +84,8 @@ impl ChatProviderResolver {
             .temperature(chat_settings.temperature);
 
         // Set base URL if provided (for custom endpoints)
-        if !chat_settings.base_url.is_empty() && chat_settings.base_url != "https://api.openai.com" {
+        if !chat_settings.base_url.is_empty() && chat_settings.base_url != "https://api.openai.com"
+        {
             builder = builder.base_url(&chat_settings.base_url);
         }
 

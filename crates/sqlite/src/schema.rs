@@ -2,8 +2,8 @@
 
 use crate::connection::SqliteConnection;
 use anyhow::Result;
-use blanco_core::connection_trait::{ColumnInfo, TableSchemaInfo};
 use blanco_core::Connection;
+use blanco_core::connection_trait::{ColumnInfo, TableSchemaInfo};
 
 impl SqliteConnection {
     /// Get SQLite schema using optimized JSON aggregation queries with pagination
@@ -150,25 +150,26 @@ impl SqliteConnection {
 
         // Add table name filter with LIKE wildcard support if specified
         if let Some(names_str) = table_names
-            && !names_str.trim().is_empty() {
-                let patterns: Vec<String> = names_str
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
+            && !names_str.trim().is_empty()
+        {
+            let patterns: Vec<String> = names_str
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
 
-                if !patterns.is_empty() {
-                    let like_conditions = patterns
-                        .iter()
-                        .map(|_| "name LIKE ?")
-                        .collect::<Vec<_>>()
-                        .join(" OR ");
-                    where_conditions.push(format!("({})", like_conditions));
-                    for pattern in &patterns {
-                        params.push(pattern.clone());
-                    }
+            if !patterns.is_empty() {
+                let like_conditions = patterns
+                    .iter()
+                    .map(|_| "name LIKE ?")
+                    .collect::<Vec<_>>()
+                    .join(" OR ");
+                where_conditions.push(format!("({})", like_conditions));
+                for pattern in &patterns {
+                    params.push(pattern.clone());
                 }
             }
+        }
 
         let where_clause = where_conditions.join(" AND ");
 

@@ -376,7 +376,10 @@ pub struct CompletionContext {
 /// This replaces the hand-rolled parser in `completion/context.rs` with
 /// an AST-based approach that correctly handles strings, comments, and
 /// nested queries.
-pub fn extract_completion_context(text: &Rope, cursor_byte_pos: usize) -> Option<CompletionContext> {
+pub fn extract_completion_context(
+    text: &Rope,
+    cursor_byte_pos: usize,
+) -> Option<CompletionContext> {
     TLS_PARSER.with_borrow_mut(|parser| {
         let text_str: String = text.chunks().collect();
         let tree = parser.parser.parse(&text_str, None)?;
@@ -400,8 +403,7 @@ pub fn extract_completion_context(text: &Rope, cursor_byte_pos: usize) -> Option
         let table_aliases = extract_table_aliases_from_ast(search_root, &text_str);
 
         // Detect dot notation by checking if cursor is right after or within "identifier."
-        let (is_dot_notation, dot_table_name) =
-            detect_dot_notation(&text_str, cursor_byte_pos);
+        let (is_dot_notation, dot_table_name) = detect_dot_notation(&text_str, cursor_byte_pos);
 
         // Extract current word by scanning backwards from cursor
         let current_word = extract_current_word_from_text(&text_str, cursor_byte_pos);
@@ -420,7 +422,10 @@ pub fn extract_completion_context(text: &Rope, cursor_byte_pos: usize) -> Option
                 let scan_start = statement_range.start;
                 let scan_end = cursor_byte_pos.min(text_str.len());
                 if scan_end > scan_start {
-                    determine_clause_from_keywords(&text_str[scan_start..scan_end], scan_end - scan_start)
+                    determine_clause_from_keywords(
+                        &text_str[scan_start..scan_end],
+                        scan_end - scan_start,
+                    )
                 } else {
                     None
                 }
@@ -815,11 +820,10 @@ fn determine_clause_from_keywords(source: &str, cursor_byte_pos: usize) -> Optio
     for (keyword, clause) in CLAUSE_KEYWORDS {
         if let Some(pos) = text_upper.rfind(keyword) {
             // Verify word boundary
-            let before_ok =
-                pos == 0 || !text.as_bytes()[pos - 1].is_ascii_alphanumeric();
+            let before_ok = pos == 0 || !text.as_bytes()[pos - 1].is_ascii_alphanumeric();
             let after_pos = pos + keyword.len();
-            let after_ok = after_pos >= text.len()
-                || !text.as_bytes()[after_pos].is_ascii_alphanumeric();
+            let after_ok =
+                after_pos >= text.len() || !text.as_bytes()[after_pos].is_ascii_alphanumeric();
 
             if before_ok && after_ok && best_pos.map_or(true, |bp| pos > bp) {
                 best_pos = Some(pos);

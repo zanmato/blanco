@@ -15,7 +15,9 @@ mod tests {
     }
 
     async fn test_save_and_load_postgres_with_ssh_and_ssl_disabled_inner() {
-        let db = AppDatabase::new_in_memory().await.expect("Failed to create in-memory database");
+        let db = AppDatabase::new_in_memory()
+            .await
+            .expect("Failed to create in-memory database");
 
         let mut connection = ConnectionData::new_postgres_with_ssh(
             "Test PG SSH".to_string(),
@@ -34,10 +36,16 @@ mod tests {
         connection.ssl_mode = Some("disabled".to_string());
         connection.environment_type = EnvironmentType::Prod;
 
-        let saved_id = db.save_connection(&connection).await.expect("Failed to save connection");
+        let saved_id = db
+            .save_connection(&connection)
+            .await
+            .expect("Failed to save connection");
         assert!(saved_id > 0);
 
-        let loaded = db.load_connections().await.expect("Failed to load connections");
+        let loaded = db
+            .load_connections()
+            .await
+            .expect("Failed to load connections");
         assert_eq!(loaded.len(), 1);
 
         let loaded = &loaded[0];
@@ -56,7 +64,10 @@ mod tests {
         assert_eq!(loaded.ssh_port, Some(22));
         assert_eq!(loaded.ssh_user.as_deref(), Some("ssh_user"));
         assert_eq!(loaded.ssh_password.as_deref(), Some("ssh_pass"));
-        assert_eq!(loaded.ssh_private_key_path.as_deref(), Some("/home/user/.ssh/id_rsa"));
+        assert_eq!(
+            loaded.ssh_private_key_path.as_deref(),
+            Some("/home/user/.ssh/id_rsa")
+        );
         assert_eq!(loaded.ssh_private_key_password.as_deref(), Some("key_pass"));
 
         // SSL fields
@@ -198,7 +209,6 @@ impl AppDatabase {
 
         Ok(connections)
     }
-
 
     /// Delete a connection by ID
     pub async fn delete_connection(&self, connection_id: i64) -> Result<(), sqlx::Error> {

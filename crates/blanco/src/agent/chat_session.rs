@@ -398,8 +398,8 @@ impl ChatSession {
                     tracing::debug!("Normal completion received on iteration {}", loop_count);
                     let final_message = ChatMessage::assistant(response_text.clone(), model_name);
                     if let Err(e) = ui_sender.send(final_message).await {
-                    tracing::error!("Failed to send chat message to UI: {}", e);
-                }
+                        tracing::error!("Failed to send chat message to UI: {}", e);
+                    }
                     return Ok(response_text);
                 }
             } else {

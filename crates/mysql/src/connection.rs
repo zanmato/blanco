@@ -525,9 +525,6 @@ impl Connection for MysqlConnection {
         self.port = key.port;
         self.username = key.username.clone();
         self.password = key.password.clone();
-
-        // SSH tunnel setup is now handled by DbService
-        // The connection string received here already includes the tunnel port if SSH is used
         self.server_connection_string = connection_string.to_string();
 
         // Update display name

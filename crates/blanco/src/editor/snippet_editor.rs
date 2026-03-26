@@ -113,10 +113,12 @@ impl SnippetEditor {
             };
 
             // Update the entity with the new snippet ID
-            weak_handle.update(cx, |editor, _cx| {
-                editor.snippet_id = Some(id);
-                editor.name = saved_name.clone();
-            }).log_err();
+            weak_handle
+                .update(cx, |editor, _cx| {
+                    editor.snippet_id = Some(id);
+                    editor.name = saved_name.clone();
+                })
+                .log_err();
             cx.update(|cx| {
                 cx.dispatch_action(&RefreshSnippets);
             });

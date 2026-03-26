@@ -27,10 +27,7 @@ impl std::fmt::Display for OperationType {
 
 #[derive(Clone, Debug)]
 pub enum RowIdentifier {
-    PrimaryKey {
-        column: String,
-        value: String,
-    },
+    PrimaryKey { column: String, value: String },
     RowIndex(usize), // For cases without clear PK
 }
 

@@ -1320,9 +1320,8 @@ impl ResultsPanel {
                     })
                     .collect();
 
-                let primary_key_value = delegate
-                    .get_primary_key_column_index()
-                    .and_then(|pk_idx| {
+                let primary_key_value =
+                    delegate.get_primary_key_column_index().and_then(|pk_idx| {
                         let display_col = pk_idx + 1;
                         delegate
                             .rows

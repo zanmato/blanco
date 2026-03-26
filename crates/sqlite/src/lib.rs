@@ -140,9 +140,8 @@ mod tests {
                 .collect();
 
             // Helper to get a value as &str
-            let get_val = |key: &str| -> &str {
-                value_map.get(key).and_then(|v| v.as_deref()).unwrap_or("")
-            };
+            let get_val =
+                |key: &str| -> &str { value_map.get(key).and_then(|v| v.as_deref()).unwrap_or("") };
 
             // Test integer affinity types
             assert!(

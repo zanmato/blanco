@@ -225,9 +225,11 @@ impl SnippetsPanel {
             }
 
             // Defer the tree refresh to avoid nested update panic
-            weak_panel.update(cx, |this, cx| {
-                this.refresh_snippets(cx);
-            }).log_err();
+            weak_panel
+                .update(cx, |this, cx| {
+                    this.refresh_snippets(cx);
+                })
+                .log_err();
         })
         .detach();
     }
@@ -314,10 +316,7 @@ impl Render for SnippetsPanel {
             .border_t_1()
             .border_color(cx.theme().border)
             .on_action(cx.listener(|_this, _: &NewSnippet, window, cx| {
-                window.dispatch_action(
-                    Box::new(OpenSnippetEditor { snippet_id: None }),
-                    cx,
-                );
+                window.dispatch_action(Box::new(OpenSnippetEditor { snippet_id: None }), cx);
             }))
             .on_action(cx.listener(|this, _: &CreateGroup, window, cx| {
                 this.start_creating_group(window, cx);

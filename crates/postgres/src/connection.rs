@@ -1164,9 +1164,6 @@ impl Connection for PostgresConnection {
         // Parse and validate the connection string to extract server details
         let key = PgConnectionKey::from_connection_string(connection_string)?;
         self.server_key = key.to_server_key();
-
-        // SSH tunnel setup is now handled by DbService
-        // The connection string received here already includes the tunnel port if SSH is used
         self.server_connection_string = connection_string.to_string();
 
         // Update display name

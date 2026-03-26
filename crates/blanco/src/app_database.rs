@@ -1,16 +1,16 @@
 mod connections;
+mod query_tabs;
 mod schema;
 mod settings;
 mod snippets;
 mod types;
-mod query_tabs;
 
 pub use schema::{app_db_path, init_schema};
 pub use types::{ConnectionData, EnvironmentType, QueryTabData, SnippetData};
 
 use gpui::{App, Global};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use sqlx::ConnectOptions;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use std::str::FromStr;
 
 /// Application database for persisting query tabs, history, and connections
@@ -25,7 +25,6 @@ impl AppDatabase {
     pub fn global(cx: &App) -> &Self {
         cx.global::<Self>()
     }
-
 }
 
 impl AppDatabase {
@@ -46,8 +45,8 @@ impl AppDatabase {
 
     #[cfg(test)]
     pub async fn new_in_memory() -> Result<Self, sqlx::Error> {
-        let options = SqliteConnectOptions::from_str("sqlite::memory:")?
-            .disable_statement_logging();
+        let options =
+            SqliteConnectOptions::from_str("sqlite::memory:")?.disable_statement_logging();
 
         let pool = SqlitePool::connect_with(options).await?;
 

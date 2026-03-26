@@ -113,13 +113,7 @@ impl SqlCompletionProvider {
             cache
                 .columns
                 .insert(table_name.to_string(), CacheEntry::new(columns));
-            Arc::clone(
-                &cache
-                    .columns
-                    .get(table_name)
-                    .expect("just inserted")
-                    .data,
-            )
+            Arc::clone(&cache.columns.get(table_name).expect("just inserted").data)
         } else {
             Arc::new(columns)
         };
@@ -135,10 +129,7 @@ impl SqlCompletionProvider {
     }
 
     /// Extract table name for column completion from the tree-sitter context
-    async fn extract_table_for_columns(
-        &self,
-        context: &TsCompletionContext,
-    ) -> Option<String> {
+    async fn extract_table_for_columns(&self, context: &TsCompletionContext) -> Option<String> {
         let table_aliases = &context.table_aliases;
 
         // Handle dot notation: "table.column" or "alias.column"
@@ -260,11 +251,9 @@ impl CompletionProvider for SqlCompletionProvider {
                                         columns
                                             .iter()
                                             .filter(|column| {
-                                                column
-                                                    .to_lowercase()
-                                                    .starts_with(
-                                                        &context.current_word.to_lowercase(),
-                                                    )
+                                                column.to_lowercase().starts_with(
+                                                    &context.current_word.to_lowercase(),
+                                                )
                                             })
                                             .cloned()
                                             .collect()
@@ -311,9 +300,7 @@ impl CompletionProvider for SqlCompletionProvider {
                                             entity
                                                 .name
                                                 .to_lowercase()
-                                                .starts_with(
-                                                    &context.current_word.to_lowercase(),
-                                                )
+                                                .starts_with(&context.current_word.to_lowercase())
                                         })
                                         .cloned()
                                         .collect()
@@ -323,7 +310,10 @@ impl CompletionProvider for SqlCompletionProvider {
 
                             tracing::debug!(
                                 "SQL Completion: filtered_entities: {:?}",
-                                filtered_entities.iter().map(|e| &e.name).collect::<Vec<_>>()
+                                filtered_entities
+                                    .iter()
+                                    .map(|e| &e.name)
+                                    .collect::<Vec<_>>()
                             );
 
                             let completion_items = filtered_entities
@@ -339,9 +329,7 @@ impl CompletionProvider for SqlCompletionProvider {
                                             lsp_types::Range::new(start_pos, end_pos),
                                             insert_text_with_alias.clone(),
                                         ))),
-                                        detail: Some(
-                                            entity.entity_type.display_name().to_string(),
-                                        ),
+                                        detail: Some(entity.entity_type.display_name().to_string()),
                                         insert_text: Some(insert_text_with_alias),
                                         ..Default::default()
                                     }
@@ -462,8 +450,7 @@ mod tests {
 
     #[test]
     fn test_completion_context_aliases() {
-        let rope =
-            Rope::from_str("SELECT * FROM users u JOIN orders o ON u.id = o.user_id WHERE ");
+        let rope = Rope::from_str("SELECT * FROM users u JOIN orders o ON u.id = o.user_id WHERE ");
         let ctx = statement_parser::extract_completion_context(&rope, rope.len()).unwrap();
         assert_eq!(ctx.table_aliases.len(), 2);
         assert_eq!(ctx.table_aliases[0].table_name, "users");
@@ -485,8 +472,7 @@ mod tests {
     #[test]
     fn test_completion_context_semicolon_in_string() {
         // The rfind(';') approach would break on semicolons in strings
-        let rope =
-            Rope::from_str("INSERT INTO orders (a) VALUES ('hello;'); SELECT * FROM ");
+        let rope = Rope::from_str("INSERT INTO orders (a) VALUES ('hello;'); SELECT * FROM ");
         // cursor at end, after "FROM "
         let ctx = statement_parser::extract_completion_context(&rope, rope.len()).unwrap();
         assert_eq!(ctx.clause, Some(SqlClause::From));

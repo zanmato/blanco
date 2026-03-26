@@ -343,10 +343,16 @@ mod tests {
         );
 
         let conn_str = config.connection_string(None, None, None);
-        assert_eq!(conn_str, "postgresql://user:pass@localhost:5432/default_db?application_name=Blanco");
+        assert_eq!(
+            conn_str,
+            "postgresql://user:pass@localhost:5432/default_db?application_name=Blanco"
+        );
 
         let override_db = config.connection_string(Some("new_db"), None, None);
-        assert_eq!(override_db, "postgresql://user:pass@localhost:5432/new_db?application_name=Blanco");
+        assert_eq!(
+            override_db,
+            "postgresql://user:pass@localhost:5432/new_db?application_name=Blanco"
+        );
     }
 
     #[test]

@@ -9,12 +9,12 @@ mod service;
 mod ssh_tunnel;
 
 pub use connection_config::{ConnectionConfig, DatabaseType};
+pub use factories::{MysqlConnectionFactory, PostgresConnectionFactory, SqliteConnectionFactory};
 pub use service::{
-    DatabaseConnectedMessage, DatabaseDisconnectedMessage, DatabaseService,
-    DatabaseServiceMessage, DatabaseConfigId, ConnectionId,
+    ConnectionId, DatabaseConfigId, DatabaseConnectedMessage, DatabaseDisconnectedMessage,
+    DatabaseService, DatabaseServiceMessage,
 };
 pub use ssh_tunnel::{SshTunnel, SshTunnelConfig, TunnelInfo};
-pub use factories::{SqliteConnectionFactory, PostgresConnectionFactory, MysqlConnectionFactory};
 
 // Re-export blanco_core traits for convenience
-pub use blanco_core::{Connection, DatabaseService as DatabaseServiceTrait, ConnectionFactory};
+pub use blanco_core::{Connection, ConnectionFactory, DatabaseService as DatabaseServiceTrait};

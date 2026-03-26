@@ -9,9 +9,12 @@ use gpui_component::input::InputState;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use blanco_core::DatabaseService;
 use crate::result_ext::ResultExt;
-use llm::{chat::FunctionTool, chat::ParameterProperty, chat::ParametersSchema, chat::Tool, FunctionCall, ToolCall};
+use blanco_core::DatabaseService;
+use llm::{
+    FunctionCall, ToolCall, chat::FunctionTool, chat::ParameterProperty, chat::ParametersSchema,
+    chat::Tool,
+};
 
 /// Context for executing tools with GPUI/database access
 pub struct ToolContext {
@@ -283,16 +286,20 @@ impl AgentToolHandler for WriteTabHandler {
                 .unwrap_or("")
                 .to_string();
 
-            input_state.update_in(cx, |input_state, window, cx| {
-                input_state.set_value(content.clone(), window, cx);
-            }).log_err();
+            input_state
+                .update_in(cx, |input_state, window, cx| {
+                    input_state.set_value(content.clone(), window, cx);
+                })
+                .log_err();
 
             ToolCall {
                 id: "write-tab".to_string(),
                 call_type: "function".to_string(),
                 function: FunctionCall {
                     name: "write-tab".to_string(),
-                    arguments: serde_json::json!({"success": true, "message": "Content written to tab"}).to_string(),
+                    arguments:
+                        serde_json::json!({"success": true, "message": "Content written to tab"})
+                            .to_string(),
                 },
             }
         } else {
@@ -348,14 +355,12 @@ impl AgentToolHandler for WriteTabHandler {
 }
 
 /// Tool mode for read/write operations
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum ToolMode {
     #[default]
     Read,
     Write,
 }
-
 
 /// Tool registry for agent
 pub struct AgentToolRegistry {
@@ -425,11 +430,12 @@ impl AgentToolRegistry {
         match handler {
             Some(handler) => {
                 // Parse arguments
-                let arguments: serde_json::Value =
-                    match serde_json::from_str(&tool_call.function.arguments) {
-                        Ok(args) => args,
-                        Err(err) => {
-                            let error_result = ToolCall {
+                let arguments: serde_json::Value = match serde_json::from_str(
+                    &tool_call.function.arguments,
+                ) {
+                    Ok(args) => args,
+                    Err(err) => {
+                        let error_result = ToolCall {
                                 id: tool_call.id.clone(),
                                 call_type: tool_call.call_type.clone(),
                                 function: FunctionCall {
@@ -437,9 +443,9 @@ impl AgentToolRegistry {
                                     arguments: serde_json::json!({"error": format!("Invalid JSON arguments: {}", err)}).to_string(),
                                 },
                             };
-                            return (error_result, format!("Error: {}", err));
-                        }
-                    };
+                        return (error_result, format!("Error: {}", err));
+                    }
+                };
 
                 // Execute tool
                 let mut result = handler.execute(arguments.clone(), context, cx).await;

@@ -1,6 +1,6 @@
 use sqlx::Row;
 
-use crate::app_database::{AppDatabase, QueryTabData, EnvironmentType};
+use crate::app_database::{AppDatabase, EnvironmentType, QueryTabData};
 
 impl AppDatabase {
     pub async fn save_query_tab(&self, tab: &QueryTabData) -> Result<i64, sqlx::Error> {
