@@ -79,14 +79,6 @@ pub trait DatabaseService: Send + Sync {
             .get_or_create_connection_by_id(connection_id, database)
             .await?;
 
-        tracing::info!(
-            "Getting database schema for {} ({}) with limit={:?}, offset={:?}",
-            connection.get_display_name(),
-            connection.get_connection_type(),
-            limit,
-            offset
-        );
-
         // Use the Connection trait's unified method
         let schema_result = connection
             .get_database_schema_paginated(database, table_names, limit, offset)

@@ -78,10 +78,10 @@ impl CellEditState {
 
     pub fn toggle_expanded(&mut self, row: usize, col: usize) {
         if self.expanded_cell == Some((row, col)) {
-            tracing::info!("Collapsing cell at ({}, {})", row, col);
+            tracing::debug!("Collapsing cell at ({}, {})", row, col);
             self.expanded_cell = None;
         } else {
-            tracing::info!("Expanding cell at ({}, {})", row, col);
+            tracing::debug!("Expanding cell at ({}, {})", row, col);
             self.expanded_cell = Some((row, col));
         }
     }

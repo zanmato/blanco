@@ -94,7 +94,7 @@ impl ParameterForm {
         // Sort by offset descending (so replacements don't affect earlier offsets)
         replacements.sort_by_key(|(offset, _, _)| std::cmp::Reverse(*offset));
 
-        tracing::info!(
+        tracing::debug!(
             "get_substituted_query: original_query={}, replacements={:?}",
             self.original_query,
             replacements
@@ -107,7 +107,7 @@ impl ParameterForm {
                 let before = &result[..byte_offset];
                 let after = &result[byte_offset + byte_length..];
                 let new_result = format!("{}{}{}", before, value, after);
-                tracing::info!(
+                tracing::debug!(
                     "Replacing at offset {}: len={}, value='{}', result='{}'",
                     byte_offset,
                     byte_length,

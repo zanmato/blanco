@@ -387,14 +387,6 @@ impl BlancoApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        tracing::info!(
-            "CreateNewQueryTab action: {} (database: {:?}, schema: {:?}, table: {:?})",
-            action.connection_id,
-            action.database_name,
-            action.schema_name,
-            action.table_name,
-        );
-
         let title = match (&action.schema_name, &action.table_name) {
             (None, None) => action.database_name.clone(),
             (Some(schema), None) => format!("{}.{}", action.database_name, schema),
@@ -438,14 +430,6 @@ impl BlancoApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        tracing::info!(
-            "OpenTableStructure action: {} (database: {:?}, schema: {:?}, table: {:?})",
-            action.connection_id,
-            action.database_name,
-            action.schema_name,
-            action.table_name,
-        );
-
         self.editor_panel.update(cx, |panel, cx| {
             panel.create_table_structure_tab(
                 TableStructureParams {
@@ -746,11 +730,6 @@ impl BlancoApp {
     }
 
     fn on_rename_tab(&mut self, action: &RenameTab, _window: &mut Window, cx: &mut Context<Self>) {
-        tracing::info!(
-            "on_rename_tab called: tab_index={}, new_name={}",
-            action.tab_index,
-            action.new_name
-        );
         // Delegate tab renaming to the editor panel
         self.editor_panel.update(cx, |panel, cx| {
             panel.rename_tab(action.tab_index, &action.new_name, cx);

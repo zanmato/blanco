@@ -101,10 +101,6 @@ impl PostgresConnection {
             }
         }
 
-        tracing::info!(
-            "PostgreSQL schema query completed: {} tables found",
-            tables.len()
-        );
         Ok(tables)
     }
 

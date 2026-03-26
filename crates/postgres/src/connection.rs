@@ -339,8 +339,6 @@ impl PostgresConnection {
         }
 
         let database_connection_string = self.connection_string_for_database(database)?;
-        tracing::info!("Creating new connection pool for database: {}", database);
-
         let pool = PgPoolOptions::new()
             .max_connections(1)
             .connect(&database_connection_string)
@@ -348,10 +346,6 @@ impl PostgresConnection {
             .map_err(|e| anyhow::anyhow!("Failed to connect to database '{}': {}", database, e))?;
 
         pools.insert(database.to_string(), pool.clone());
-        tracing::info!(
-            "Successfully created connection pool for database: {}",
-            database
-        );
 
         Ok(pool)
     }
@@ -1154,13 +1148,6 @@ impl Connection for PostgresConnection {
     }
 
     async fn connect(&mut self, connection_string: &str) -> Result<()> {
-        tracing::info!(
-            "Connecting to PostgreSQL server: {}@{}:{}",
-            self.server_key.username,
-            self.server_key.host,
-            self.server_key.port
-        );
-
         // Parse and validate the connection string to extract server details
         let key = PgConnectionKey::from_connection_string(connection_string)?;
         self.server_key = key.to_server_key();
@@ -1174,8 +1161,6 @@ impl Connection for PostgresConnection {
         pools.clear();
         drop(pools);
 
-        tracing::info!("PostgreSQL server connection configured (pools will be created on demand)");
-        tracing::info!("Connection string: {}", self.server_connection_string);
         Ok(())
     }
 

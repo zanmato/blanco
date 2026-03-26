@@ -62,7 +62,6 @@ impl ChatPanel {
         // Subscribe to session events
         let subscription = cx.subscribe(&session, |panel, _session, event, cx| match event {
             ChatEvent::MessageAdded { message } => {
-                tracing::info!("Message added! {:?}", message);
                 let message = message.clone();
                 let message_state = cx.new(|cx| {
                     ChatMessageState::new(

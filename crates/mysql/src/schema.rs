@@ -84,10 +84,6 @@ impl MysqlConnection {
             }
         }
 
-        tracing::info!(
-            "MySQL schema query completed: {} tables found",
-            tables.len()
-        );
         Ok(tables)
     }
 

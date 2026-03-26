@@ -8,7 +8,6 @@ impl AppDatabase {
         let now = chrono::Utc::now().timestamp();
 
         if let Some(id) = snippet.id {
-            tracing::info!("UPDATING SNIPPET ID {}", id);
             sqlx::query(
                 r#"
                 UPDATE snippets

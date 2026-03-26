@@ -69,8 +69,6 @@ impl EditorPanel {
                 .map(|info| !info.parameters.is_empty())
                 .unwrap_or(false);
 
-            tracing::info!("statement_info {:?}", statement_info);
-
             if has_params {
                 // Show parameter modal instead of executing directly
                 let params = statement_info.unwrap().parameters;

@@ -517,8 +517,6 @@ impl Connection for MysqlConnection {
     }
 
     async fn connect(&mut self, connection_string: &str) -> Result<(), anyhow::Error> {
-        tracing::info!("Connecting to MySQL server: {}", connection_string);
-
         // Parse and validate the connection string to extract server details
         let key = MysqlConnectionKey::from_connection_string(connection_string)?;
         self.host = key.host;
@@ -536,7 +534,6 @@ impl Connection for MysqlConnection {
             self.get_or_create_pool(&key.database).await?;
         }
 
-        tracing::info!("MySQL connection established successfully");
         Ok(())
     }
 
@@ -601,8 +598,6 @@ impl Connection for MysqlConnection {
                             .unzip();
                         column_types = types;
                         raw_column_types = raw_types;
-
-                        tracing::info!("columns {:?}, {:?}", columns, column_types);
                     }
 
                     // Convert row to strings immediately instead of collecting raw rows

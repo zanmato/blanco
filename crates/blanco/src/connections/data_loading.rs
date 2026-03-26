@@ -368,14 +368,6 @@ impl ConnectionsPanel {
 
                     // Process tables
                     if let Ok(table_list) = tables_result {
-                        let table_count: usize = table_list.len();
-                        tracing::info!(
-                            "Loaded {} tables for schema {} in database {} on connection {}",
-                            table_count,
-                            schema_name,
-                            database_name,
-                            connection_id
-                        );
                         for table_name in table_list {
                             all_items.push(DatabaseTable {
                                 name: table_name,
@@ -387,14 +379,6 @@ impl ConnectionsPanel {
 
                     // Process views
                     if let Ok(view_list) = views_result {
-                        let view_count: usize = view_list.len();
-                        tracing::info!(
-                            "Loaded {} views for schema {} in database {} on connection {}",
-                            view_count,
-                            schema_name,
-                            database_name,
-                            connection_id
-                        );
                         for view_name in view_list {
                             all_items.push(DatabaseTable {
                                 name: view_name,
@@ -406,14 +390,6 @@ impl ConnectionsPanel {
 
                     // Process materialized views
                     if let Ok(matview_list) = matviews_result {
-                        let matview_count: usize = matview_list.len();
-                        tracing::info!(
-                            "Loaded {} materialized views for schema {} in database {} on connection {}",
-                            matview_count,
-                            schema_name,
-                            database_name,
-                            connection_id
-                        );
                         for matview_name in matview_list {
                             all_items.push(DatabaseTable {
                                 name: matview_name,

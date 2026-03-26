@@ -86,7 +86,6 @@ fn main() {
         if let Err(err) = ThemeRegistry::watch_dir(PathBuf::from("./themes"), cx, move |cx| {
             if let Some(theme) = ThemeRegistry::global(cx).themes().get(&theme_name).cloned() {
                 Theme::global_mut(cx).apply_config(&theme);
-                tracing::info!("Applying theme {}", theme_name);
             }
         }) {
             tracing::error!("Failed to watch themes directory: {}", err);

@@ -127,10 +127,6 @@ impl SqliteConnection {
             }
         }
 
-        tracing::info!(
-            "SQLite schema query completed: {} tables found",
-            tables.len()
-        );
         Ok(tables)
     }
 

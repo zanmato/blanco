@@ -239,12 +239,6 @@ impl SqliteConnection {
         let metadata = std::fs::metadata(&self.database_path)?;
         Ok(metadata.len())
     }
-
-    /// Sanitize path for logging (remove sensitive parts if any)
-    fn get_sanitize_path(&self, path: &str) -> String {
-        // For SQLite, paths are generally not sensitive, but we can still clean them up
-        path.replace("\\", "/") // Normalize path separators
-    }
 }
 
 #[async_trait]
@@ -258,11 +252,6 @@ impl Connection for SqliteConnection {
     }
 
     async fn connect(&mut self, connection_string: &str) -> Result<()> {
-        tracing::info!(
-            "Connecting to SQLite database: {}",
-            self.get_sanitize_path(connection_string)
-        );
-
         // Parse and validate the connection string
         let key = SqliteConnectionKey::from_connection_string(connection_string)?;
         self.connection_key = key.clone();
@@ -279,7 +268,6 @@ impl Connection for SqliteConnection {
         let pool = self.connect_async(&database_path).await?;
         self.pool = Some(pool);
 
-        tracing::info!("Successfully connected to SQLite database");
         Ok(())
     }
 

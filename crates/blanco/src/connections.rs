@@ -759,11 +759,6 @@ impl ConnectionsPanel {
     /// Validate and mark a connection as connected after successful query execution
     pub fn validate_connection_as_connected(&mut self, connection_id: i64, cx: &mut Context<Self>) {
         self.load_connection_children(connection_id, false, cx);
-
-        tracing::info!(
-            "Validated and marked connection {} as connected",
-            connection_id
-        );
         cx.notify();
     }
 
@@ -849,8 +844,6 @@ impl ConnectionsPanel {
 
     /// Set loading state for a tree item by updating the tree entry directly
     pub fn set_item_loading(&mut self, item_id: &str, loading: bool, cx: &mut Context<Self>) {
-        tracing::info!("Setting item loading {} = {}", item_id, loading);
-
         self.tree_state.update(cx, |tree_state, cx| {
             if let Some(entry) = tree_state.find_mut(item_id, cx) {
                 entry.item.metadata.loading = loading;

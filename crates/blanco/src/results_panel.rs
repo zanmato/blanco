@@ -233,12 +233,6 @@ impl ResultsPanel {
         cx.subscribe(input, move |table, input, event, cx| {
             if let InputEvent::Change = event {
                 let new_text = input.read(cx).text().to_string();
-                tracing::info!(
-                    "Input change: '{}' at ({}, {})",
-                    new_text,
-                    row_clone,
-                    col_clone
-                );
                 table
                     .delegate_mut()
                     .edit_state
@@ -1317,10 +1311,7 @@ impl ResultsPanel {
                     })
                     .collect();
 
-                selected_rows_data.push(SelectedRow {
-                    row,
-                    cells,
-                });
+                selected_rows_data.push(SelectedRow { row, cells });
             }
         }
 

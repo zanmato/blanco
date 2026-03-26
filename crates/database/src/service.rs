@@ -93,14 +93,9 @@ impl DatabaseService {
 
     /// Set the action sender (called via cx.update_global from app initialization)
     pub fn set_action_sender(&mut self, sender: channel::Sender<DatabaseServiceMessage>) {
-        tracing::info!(
-            "Setting action_sender on DatabaseService, Arc address: {:p}",
-            self.action_sender
-        );
         if let Ok(mut sender_slot) = self.action_sender.lock() {
             *sender_slot = Some(sender);
         }
-        tracing::info!("Action sender set successfully");
     }
 
     /// Add a connection configuration
@@ -241,18 +236,9 @@ impl DatabaseService {
         }
 
         // Send action message for newly created connections
-        tracing::info!(
-            "About to send, action_sender Arc address: {:p}",
-            self.action_sender
-        );
         let sender_opt = self.action_sender.lock().ok().and_then(|s| s.clone());
-        // Lock is dropped here
 
         if let Some(sender) = sender_opt {
-            tracing::info!(
-                "Dispatching DatabaseServiceMessage::Connected for connection ID: {}",
-                config_id
-            );
             sender
                 .send(DatabaseServiceMessage::Connected(
                     DatabaseConnectedMessage {
@@ -261,8 +247,6 @@ impl DatabaseService {
                     },
                 ))
                 .await?;
-        } else {
-            tracing::warn!("action_sender is None, cannot dispatch DatabaseServiceMessage");
         }
 
         tracing::info!(
