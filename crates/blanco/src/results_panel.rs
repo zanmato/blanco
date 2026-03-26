@@ -53,7 +53,6 @@ pub struct TableOperationResponse {
 // Data structures for copy functionality
 #[derive(Clone, Debug)]
 pub struct SelectedCell {
-    pub row: usize,
     pub col: usize,
     pub value: Option<String>,
     pub column_name: Option<String>,
@@ -64,7 +63,6 @@ pub struct SelectedCell {
 pub struct SelectedRow {
     pub row: usize,
     pub cells: Vec<SelectedCell>,
-    pub primary_key_value: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1312,7 +1310,6 @@ impl ResultsPanel {
                     .enumerate()
                     .filter(|&(col, _)| col > 0) // Skip row number column
                     .map(|(col, value)| SelectedCell {
-                        row,
                         col: col - 1, // Adjust for row number column
                         value: value.clone(),
                         column_name: delegate.columns.get(col).map(|c| c.name.to_string()),
@@ -1320,20 +1317,9 @@ impl ResultsPanel {
                     })
                     .collect();
 
-                let primary_key_value =
-                    delegate.get_primary_key_column_index().and_then(|pk_idx| {
-                        let display_col = pk_idx + 1;
-                        delegate
-                            .rows
-                            .get(row)
-                            .and_then(|r| r.get(display_col))
-                            .and_then(|v| v.clone())
-                    });
-
                 selected_rows_data.push(SelectedRow {
                     row,
                     cells,
-                    primary_key_value,
                 });
             }
         }

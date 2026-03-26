@@ -121,17 +121,6 @@ impl ChatProviderResolver {
         hasher.finish()
     }
 
-    /// Clear the LLM cache (useful for testing or forced refresh)
-    pub fn clear_cache(&mut self) {
-        self.cached_llm = None;
-    }
-
-    /// Check if a provider is properly configured
-    pub fn is_provider_configured(settings: &Settings) -> bool {
-        let chat = &settings.chat;
-        !chat.api_key.is_empty() && !chat.provider.is_empty() && !chat.model.is_empty()
-    }
-
     /// Get validation errors for current settings
     pub fn validate_settings(settings: &Settings) -> Vec<String> {
         let mut errors = Vec::new();

@@ -24,8 +24,6 @@ pub struct QueryParameter {
 pub struct StatementInfo {
     pub text: String,
     pub byte_range: Range<usize>,
-    pub utf16_range: Range<usize>,
-    pub is_complete: bool,
     pub parameters: Vec<QueryParameter>,
 }
 
@@ -89,10 +87,7 @@ impl SqlStatementParser {
 
             // If cursor is inside the statement, return it immediately
             if range.contains(&cursor_byte_pos) {
-                let utf16_range =
-                    text.byte_to_utf16_idx(range.start)..text.byte_to_utf16_idx(range.end);
                 let statement_text = text.slice(range.clone()).to_string();
-                let is_complete = self.is_statement_complete(&statement_text);
                 // Extract parameters and adjust their offsets to be relative to the statement text
                 let mut parameters = self.extract_parameters_from_node(statement, &text_str);
                 // Adjust byte offsets to be relative to the statement text (not the full text)
@@ -102,8 +97,6 @@ impl SqlStatementParser {
                 return Some(StatementInfo {
                     text: statement_text,
                     byte_range: range,
-                    utf16_range,
-                    is_complete,
                     parameters,
                 });
             }
@@ -125,10 +118,7 @@ impl SqlStatementParser {
         // Return the closest statement (if any)
         if let Some(statement) = best_statement {
             let range = statement.byte_range();
-            let utf16_range =
-                text.byte_to_utf16_idx(range.start)..text.byte_to_utf16_idx(range.end);
             let statement_text = text.slice(range.clone()).to_string();
-            let is_complete = self.is_statement_complete(&statement_text);
             // Extract parameters and adjust their offsets to be relative to the statement text
             let mut parameters = self.extract_parameters_from_node(statement, &text_str);
             // Adjust byte offsets to be relative to the statement text (not the full text)
@@ -138,8 +128,6 @@ impl SqlStatementParser {
             Some(StatementInfo {
                 text: statement_text,
                 byte_range: range,
-                utf16_range,
-                is_complete,
                 parameters,
             })
         } else {
@@ -181,20 +169,6 @@ impl SqlStatementParser {
                 | "transaction_statement"
                 | "compound_statement"
         )
-    }
-
-    /// Check if a statement is complete (has proper termination)
-    fn is_statement_complete(&self, statement: &str) -> bool {
-        let trimmed = statement.trim();
-
-        // Empty statements are not complete
-        if trimmed.is_empty() {
-            return false;
-        }
-
-        // Since we're extracting statement nodes from tree-sitter,
-        // they represent complete statements regardless of semicolon presence
-        true
     }
 
     /// Extract parameters from a statement node
@@ -350,7 +324,6 @@ pub enum SqlClause {
     Delete,
     Values,
     On,
-    Other,
 }
 
 /// Table alias information extracted from the AST
@@ -368,8 +341,6 @@ pub struct CompletionContext {
     pub table_aliases: Vec<TableAlias>,
     pub is_dot_notation: bool,
     pub dot_table_name: Option<String>,
-    pub statement_text: String,
-    pub statement_byte_range: Range<usize>,
 }
 
 /// Extract completion context at cursor position using tree-sitter.
@@ -391,11 +362,10 @@ pub fn extract_completion_context(
 
         let statement_node = find_statement_at_cursor(&statements, cursor_byte_pos, root_node);
 
-        let (statement_text, statement_range) = if let Some(node) = statement_node {
-            let range = node.byte_range();
-            (text_str[range.clone()].to_string(), range)
+        let statement_range = if let Some(node) = statement_node {
+            node.byte_range()
         } else {
-            (text_str.clone(), 0..text_str.len())
+            0..text_str.len()
         };
 
         // Extract table aliases from all `relation` nodes within the statement
@@ -437,8 +407,6 @@ pub fn extract_completion_context(
             table_aliases,
             is_dot_notation,
             dot_table_name,
-            statement_text,
-            statement_byte_range: statement_range,
         })
     })
 }
@@ -725,7 +693,7 @@ fn find_deepest_node_at(node: Node, cursor_byte_pos: usize) -> Node {
 /// Within a "from" node, check for more specific child clauses.
 fn find_specific_clause_in_from(
     from_node: Node,
-    source: &str,
+    _source: &str,
     cursor_byte_pos: usize,
 ) -> Option<SqlClause> {
     for i in 0..from_node.child_count() {
@@ -746,7 +714,7 @@ fn find_specific_clause_in_from(
                     _ => {
                         // Recurse for nested structures
                         if let Some(clause) =
-                            find_specific_clause_in_from(child, source, cursor_byte_pos)
+                            find_specific_clause_in_from(child, _source, cursor_byte_pos)
                         {
                             return Some(clause);
                         }
@@ -761,10 +729,11 @@ fn find_specific_clause_in_from(
 /// Check if cursor is within the ON part of a JOIN
 fn is_cursor_in_on_clause(join_node: Node, cursor_byte_pos: usize) -> bool {
     for i in 0..join_node.child_count() {
-        if let Some(child) = join_node.child(i) {
-            if child.kind() == "keyword_on" && cursor_byte_pos > child.byte_range().end {
-                return true;
-            }
+        if let Some(child) = join_node.child(i)
+            && child.kind() == "keyword_on"
+            && cursor_byte_pos > child.byte_range().end
+        {
+            return true;
         }
     }
     false
@@ -825,7 +794,7 @@ fn determine_clause_from_keywords(source: &str, cursor_byte_pos: usize) -> Optio
             let after_ok =
                 after_pos >= text.len() || !text.as_bytes()[after_pos].is_ascii_alphanumeric();
 
-            if before_ok && after_ok && best_pos.map_or(true, |bp| pos > bp) {
+            if before_ok && after_ok && best_pos.is_none_or(|bp| pos > bp) {
                 best_pos = Some(pos);
                 best_clause = Some(clause.clone());
             }
@@ -861,7 +830,7 @@ mod tests {
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "SELECT * FROM users");
-        assert!(info.is_complete);
+
     }
 
     #[test]
@@ -873,7 +842,7 @@ mod tests {
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "INSERT INTO orders (a) VALUES ('hello;')");
-        assert!(info.is_complete);
+
     }
 
     #[test]
@@ -902,14 +871,14 @@ mod tests {
             info.text.trim(),
             "INSERT INTO table2 (col) VALUES ('test;')"
         );
-        assert!(info.is_complete);
+
 
         // Test cursor in third statement
         let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 85));
         assert!(result.is_some());
         let info = result.unwrap();
         assert!(info.text.trim().starts_with("UPDATE table3"));
-        assert!(info.is_complete);
+
     }
 
     #[test]
@@ -935,7 +904,8 @@ mod tests {
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "SELECT * FROM users WHERE id = 1");
-        assert!(info.is_complete); // No semicolon but still a complete statement
+
+
     }
 
     #[test]
@@ -959,7 +929,7 @@ mod tests {
         );
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "SELECT * FROM users");
-        assert!(info.is_complete);
+
 
         // Also test at the semicolon position
         let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 19));
@@ -969,7 +939,7 @@ mod tests {
         );
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "SELECT * FROM users");
-        assert!(info.is_complete);
+
     }
 
     #[test]
@@ -985,11 +955,11 @@ mod tests {
         );
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "SELECT * FROM users");
-        assert!(info.is_complete);
+
     }
 
     #[test]
-    fn test_unicode_utf16_indices() {
+    fn test_unicode_statement() {
         let mut parser = create_test_parser();
         // Test with Unicode characters (emoji and non-ASCII) in a valid SQL statement
         let text = Rope::from_str("SELECT * FROM testing WHERE text_col = '🏠';");
@@ -1003,20 +973,11 @@ mod tests {
         );
         let info = result.unwrap();
 
-        // Verify both byte and UTF-16 ranges are provided
         assert!(info.byte_range.start < info.byte_range.end);
-        assert!(info.utf16_range.start < info.utf16_range.end);
         assert_eq!(
             info.text.trim(),
             "SELECT * FROM testing WHERE text_col = '🏠'"
         );
-        assert!(info.is_complete);
-
-        // Verify UTF-16 range exists and is reasonable
-        assert!(info.utf16_range.end > info.utf16_range.start);
-        // The house emoji 🏠 should be represented as a surrogate pair in UTF-16
-        // So the UTF-16 length should be greater than the byte length / 4 (approximation)
-        assert!(info.utf16_range.end > info.byte_range.end / 3);
     }
 
     #[test]
@@ -1039,7 +1000,7 @@ DELETE FROM users WHERE id = 1;",
             info.text.trim().replace('\n', " "),
             "INSERT INTO orders (a) VALUES ('hello;')"
         );
-        assert!(info.is_complete);
+
 
         // Test cursor on second line (VALUES part of INSERT)
         let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 30));
@@ -1049,7 +1010,7 @@ DELETE FROM users WHERE id = 1;",
             info.text.trim().replace('\n', " "),
             "INSERT INTO orders (a) VALUES ('hello;')"
         );
-        assert!(info.is_complete);
+
 
         // Test cursor on third line (empty line after INSERT semicolon)
         let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 40));
@@ -1057,14 +1018,14 @@ DELETE FROM users WHERE id = 1;",
         let info = result.unwrap();
         // The INSERT statement is still the closest at this position
         assert!(info.text.trim().contains("INSERT INTO orders"));
-        assert!(info.is_complete);
+
 
         // Test cursor on fourth line (SELECT)
         let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 45));
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "SELECT * FROM users");
-        assert!(info.is_complete);
+
 
         // Test cursor on fifth line (comment after SELECT)
         let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 60));
@@ -1072,21 +1033,21 @@ DELETE FROM users WHERE id = 1;",
         let info = result.unwrap();
         // Should still return the SELECT statement even with cursor in comment
         assert!(info.text.trim().contains("SELECT * FROM users"));
-        assert!(info.is_complete);
+
 
         // Test cursor on sixth line (empty line before DELETE)
         let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 80));
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "DELETE FROM users WHERE id = 1");
-        assert!(info.is_complete);
+
 
         // Test cursor on seventh line (DELETE)
         let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 85));
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "DELETE FROM users WHERE id = 1");
-        assert!(info.is_complete);
+
     }
 
     #[test]
@@ -1110,14 +1071,14 @@ DELETE FROM users WHERE id = 1;",
         let info = result.unwrap();
         // Multi-line CREATE statement may not include the semicolon
         assert!(info.text.trim().starts_with("CREATE TABLE test"));
-        assert!(info.is_complete);
+
 
         // Test cursor in CREATE (middle)
         let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 30));
         assert!(result.is_some());
         let info = result.unwrap();
         assert!(info.text.trim().starts_with("CREATE TABLE test"));
-        assert!(info.is_complete);
+
 
         // Test cursor in UPDATE
         let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 120));
@@ -1127,14 +1088,14 @@ DELETE FROM users WHERE id = 1;",
             info.text.trim(),
             "UPDATE test SET name = 'test' WHERE id = 1"
         );
-        assert!(info.is_complete);
+
 
         // Test cursor in DROP
         let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 175));
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "DROP TABLE test");
-        assert!(info.is_complete);
+
     }
 
     #[test]
@@ -1149,21 +1110,21 @@ DELETE FROM users WHERE id = 1;",
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "SELECT a FROM b");
-        assert!(info.is_complete);
+
 
         // Test cursor in INSERT (position 20)
         let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 20));
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "INSERT INTO c VALUES (1)");
-        assert!(info.is_complete);
+
 
         // Test cursor in DELETE (position 45, well into DELETE)
         let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 45));
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "DELETE FROM d WHERE e = 2");
-        assert!(info.is_complete);
+
     }
 
     #[test]
@@ -1189,7 +1150,7 @@ DELETE FROM users WHERE id = 1;",
                 info.text.trim(),
                 "UPDATE alternative_images ai SET updated_at = NOW() WHERE id = 'f893fd7a-45a2-4747-a726-5561bb4735ec'"
             );
-            assert!(info.is_complete);
+    
             // Should have no parameters
             assert!(info.parameters.is_empty());
         }
@@ -1295,7 +1256,7 @@ WITH customer_addresses AS (
         );
         let info = result.unwrap();
         assert!(info.text.trim().contains("SELECT * FROM ps_customer"));
-        assert!(info.is_complete);
+
 
         // Test cursor at different positions in first statement
         for cursor_pos in [30, 50, 70] {
@@ -1308,7 +1269,7 @@ WITH customer_addresses AS (
             );
             let info = result.unwrap();
             assert!(info.text.trim().contains("SELECT * FROM ps_customer"));
-            assert!(info.is_complete);
+    
         }
 
         // Test cursor inside the WITH/CTE statement (position around 150)
@@ -1319,6 +1280,6 @@ WITH customer_addresses AS (
         );
         let info = result.unwrap();
         assert!(info.text.trim().contains("WITH customer_addresses"));
-        assert!(info.is_complete);
+
     }
 }

@@ -51,6 +51,7 @@ pub struct ChatSession {
     pub messages: Vec<ChatMessage>,
     pub llm: Option<Arc<Box<dyn LLMProvider>>>,
     pub model_name: String,
+    #[allow(dead_code)]
     pub provider_name: String,
     pub loading_state: LoadingState,
     #[allow(dead_code)]
@@ -86,54 +87,6 @@ impl ChatSession {
             database_name: context.database_name,
             current_message_task: None,
         }
-    }
-
-    /// Create a mock ChatSession for testing
-    pub fn with_mock() -> Self {
-        Self {
-            messages: Vec::new(),
-            llm: None,
-            provider_name: "Mock".to_string(),
-            model_name: "mock-gpt-4".to_string(),
-            loading_state: LoadingState::Idle,
-            streaming_message_id: None,
-            tool_registry: Some(std::sync::Arc::new(
-                super::tool_handlers::AgentToolRegistry::new(),
-            )),
-            input_state: None,
-            connection_id: None,
-            database_name: None,
-            current_message_task: None,
-        }
-    }
-
-    /// Create a ChatSession without a provider (for deferred initialization)
-    pub fn new_empty() -> Self {
-        Self {
-            messages: Vec::new(),
-            llm: None,
-            provider_name: "Unknown".to_string(),
-            model_name: "unknown".to_string(),
-            loading_state: LoadingState::Idle,
-            streaming_message_id: None,
-            tool_registry: None,
-            input_state: None,
-            connection_id: None,
-            database_name: None,
-            current_message_task: None,
-        }
-    }
-
-    /// Set the LLM instance after creation
-    pub fn set_llm(
-        &mut self,
-        llm: Arc<Box<dyn LLMProvider>>,
-        provider_name: String,
-        model_name: String,
-    ) {
-        self.llm = Some(llm);
-        self.provider_name = provider_name;
-        self.model_name = model_name;
     }
 
     pub fn add_message(&mut self, message: ChatMessage, cx: &mut Context<Self>) {
@@ -629,28 +582,6 @@ impl ChatSession {
         request_messages.push(LlmChatMessage::user().content(user_message).build());
 
         request_messages
-    }
-
-    pub fn get_last_assistant_message(&self) -> Option<&ChatMessage> {
-        self.messages
-            .iter()
-            .rev()
-            .find(|m| m.role == MessageRole::Assistant)
-    }
-
-    pub fn get_last_user_message(&self) -> Option<&ChatMessage> {
-        self.messages
-            .iter()
-            .rev()
-            .find(|m| m.role == MessageRole::User)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.messages.is_empty()
-    }
-
-    pub fn message_count(&self) -> usize {
-        self.messages.len()
     }
 
     pub fn is_generating(&self) -> bool {

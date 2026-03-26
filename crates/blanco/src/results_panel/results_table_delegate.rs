@@ -221,7 +221,6 @@ impl ResultsTableDelegate {
                     // Create column change
                     let column_change = ColumnChange {
                         column_name,
-                        old_value: change.old_value.clone(),
                         new_value: change.new_value.clone(),
                     };
 
@@ -265,7 +264,6 @@ impl ResultsTableDelegate {
                         .zip(row_values.iter())
                         .map(|(column_name, value)| ColumnChange {
                             column_name,
-                            old_value: None,
                             new_value: value.clone(),
                         })
                         .collect();
@@ -1311,7 +1309,7 @@ mod tests {
             Some(&Some("modified".to_string()))
         );
         assert_eq!(
-            edit_state.get_original_value(0, 0),
+            edit_state.original_values.get(&(0, 0)),
             Some(&Some("original".to_string()))
         );
 

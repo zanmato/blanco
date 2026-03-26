@@ -62,19 +62,6 @@ pub struct QueryTabData {
     pub environment_type: Option<EnvironmentType>,
 }
 
-/// Data for a query history entry
-#[derive(Debug, Clone)]
-pub struct QueryHistoryData {
-    pub id: Option<i64>,
-    pub query_text: String,
-    pub executed_at: i64,
-    pub duration_ms: Option<i64>,
-    pub rows_affected: Option<i64>,
-    pub row_count: Option<i64>,
-    pub success: bool,
-    pub error_message: Option<String>,
-}
-
 /// Data for a code snippet
 #[derive(Debug, Clone)]
 pub struct SnippetData {
@@ -84,8 +71,6 @@ pub struct SnippetData {
     pub parent_id: Option<i64>,
     pub is_group: bool,
     pub position: i32,
-    pub created_at: i64,
-    pub updated_at: i64,
 }
 
 /// Data for a database connection

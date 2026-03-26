@@ -28,36 +28,21 @@ impl std::fmt::Display for OperationType {
 #[derive(Clone, Debug)]
 pub enum RowIdentifier {
     PrimaryKey { column: String, value: String },
-    RowIndex(usize), // For cases without clear PK
+    RowIndex, // For cases without clear PK
 }
 
 #[derive(Clone, Debug)]
 pub struct ColumnChange {
     pub column_name: String,
-    pub old_value: Option<String>,
     pub new_value: Option<String>,
 }
 
 impl TableChangeOperation {
-    pub fn new(
-        operation_type: OperationType,
-        table_name: String,
-        row_identifier: RowIdentifier,
-        changes: Vec<ColumnChange>,
-    ) -> Self {
-        Self {
-            operation_type,
-            table_name,
-            row_identifier,
-            changes,
-        }
-    }
-
     pub fn insert_row(table_name: String, column_changes: Vec<ColumnChange>) -> Self {
         Self {
             operation_type: OperationType::Insert,
             table_name,
-            row_identifier: RowIdentifier::RowIndex(0), // Will be determined after insertion
+            row_identifier: RowIdentifier::RowIndex, // Will be determined after insertion
             changes: column_changes,
         }
     }

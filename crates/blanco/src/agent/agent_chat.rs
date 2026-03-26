@@ -77,35 +77,6 @@ impl ChatPanel {
 
                 cx.notify();
             }
-            ChatEvent::StreamStarted { message_id } => {
-                tracing::debug!("Chat stream started: {}", message_id);
-                panel.loading_state = LoadingState::Streaming;
-                cx.notify();
-            }
-            ChatEvent::StreamUpdate {
-                message_id: _,
-                content: _,
-            } => {
-                panel.scroll_to_bottom(cx);
-                cx.notify();
-            }
-            ChatEvent::StreamCompleted {
-                message_id: _,
-                final_content: _,
-            } => {
-                panel.loading_state = LoadingState::Idle;
-                panel.scroll_to_bottom(cx);
-                cx.notify();
-            }
-            ChatEvent::Error { message } => {
-                tracing::error!("Chat error: {}", message);
-                panel.loading_state = LoadingState::Error(message.clone());
-                cx.notify();
-            }
-            ChatEvent::SessionStarted { provider, model } => {
-                tracing::info!("Chat session started: {} ({})", provider, model);
-                cx.notify();
-            }
             ChatEvent::SessionCleared => {
                 panel.messages.clear();
                 panel.loading_state = LoadingState::Idle;

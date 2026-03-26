@@ -90,10 +90,6 @@ impl CellEditState {
         self.edited_values.get(&(row, col))
     }
 
-    pub fn get_original_value(&self, row: usize, col: usize) -> Option<&Option<String>> {
-        self.original_values.get(&(row, col))
-    }
-
     pub fn start_editing(&mut self, row: usize, col: usize, input: Entity<InputState>) {
         self.editing_cell = Some((row, col));
         self.editing_input = Some(input);

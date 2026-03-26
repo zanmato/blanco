@@ -153,28 +153,24 @@ mod tests {
                 row: 0,
                 cells: vec![
                     SelectedCell {
-                        row: 0,
                         col: 0,
                         value: Some("1".to_string()),
                         column_name: Some("id".to_string()),
                         column_type: Some(ColumnType::Integer),
                     },
                     SelectedCell {
-                        row: 0,
                         col: 1,
                         value: Some("Widget".to_string()),
                         column_name: Some("name".to_string()),
                         column_type: Some(ColumnType::Text),
                     },
                     SelectedCell {
-                        row: 0,
                         col: 2,
                         value: None,
                         column_name: Some("price".to_string()),
                         column_type: Some(ColumnType::Numeric),
                     },
                 ],
-                primary_key_value: Some("1".to_string()),
             }],
         }
     }
@@ -237,13 +233,11 @@ mod tests {
             selected_rows: vec![SelectedRow {
                 row: 0,
                 cells: vec![SelectedCell {
-                    row: 0,
                     col: 0,
                     value: Some("has;semicolon and \"quotes\"".to_string()),
                     column_name: Some("value".to_string()),
                     column_type: Some(ColumnType::Text),
                 }],
-                primary_key_value: None,
             }],
         };
 

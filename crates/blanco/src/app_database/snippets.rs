@@ -67,8 +67,6 @@ impl AppDatabase {
                 parent_id: row.get(3),
                 is_group: row.get::<i64, _>(4) != 0,
                 position: row.get(5),
-                created_at: row.get(6),
-                updated_at: row.get(7),
             })
             .collect();
 
@@ -78,7 +76,7 @@ impl AppDatabase {
     pub async fn get_snippet_by_id(&self, id: i64) -> Result<Option<SnippetData>, sqlx::Error> {
         let row = sqlx::query(
             r#"
-            SELECT id, name, content, parent_id, is_group, position, created_at, updated_at
+            SELECT id, name, content, parent_id, is_group, position
             FROM snippets
             WHERE id = ?
             "#,
@@ -95,8 +93,6 @@ impl AppDatabase {
                 parent_id: row.get(3),
                 is_group: row.get::<i64, _>(4) != 0,
                 position: row.get(5),
-                created_at: row.get(6),
-                updated_at: row.get(7),
             }))
         } else {
             Ok(None)

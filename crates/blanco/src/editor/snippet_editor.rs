@@ -89,8 +89,6 @@ impl SnippetEditor {
             parent_id: None,
             is_group: false,
             position: 0,
-            created_at: 0,
-            updated_at: 0,
         };
 
         let snippet_id = self.snippet_id;

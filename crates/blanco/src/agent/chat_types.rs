@@ -86,24 +86,6 @@ pub enum ChatEvent {
     MessageAdded {
         message: ChatMessage,
     },
-    StreamStarted {
-        message_id: String,
-    },
-    StreamUpdate {
-        message_id: String,
-        content: String,
-    },
-    StreamCompleted {
-        message_id: String,
-        final_content: String,
-    },
-    Error {
-        message: String,
-    },
-    SessionStarted {
-        provider: String,
-        model: String,
-    },
     SessionCleared,
     LoadingStateChanged {
         _old_state: LoadingState,

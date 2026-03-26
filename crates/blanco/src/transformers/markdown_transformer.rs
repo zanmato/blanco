@@ -194,55 +194,47 @@ mod tests {
                     row: 0,
                     cells: vec![
                         SelectedCell {
-                            row: 0,
                             col: 0,
                             value: Some("1".to_string()),
                             column_name: Some("id".to_string()),
                             column_type: Some(ColumnType::Integer),
                         },
                         SelectedCell {
-                            row: 0,
                             col: 1,
                             value: Some("Alice".to_string()),
                             column_name: Some("name".to_string()),
                             column_type: Some(ColumnType::Text),
                         },
                         SelectedCell {
-                            row: 0,
                             col: 2,
                             value: Some("alice@example.com".to_string()),
                             column_name: Some("email".to_string()),
                             column_type: Some(ColumnType::Text),
                         },
                     ],
-                    primary_key_value: Some("1".to_string()),
                 },
                 SelectedRow {
                     row: 1,
                     cells: vec![
                         SelectedCell {
-                            row: 1,
                             col: 0,
                             value: Some("2".to_string()),
                             column_name: Some("id".to_string()),
                             column_type: Some(ColumnType::Integer),
                         },
                         SelectedCell {
-                            row: 1,
                             col: 1,
                             value: None,
                             column_name: Some("name".to_string()),
                             column_type: Some(ColumnType::Text),
                         },
                         SelectedCell {
-                            row: 1,
                             col: 2,
                             value: Some("bob@example.com".to_string()),
                             column_name: Some("email".to_string()),
                             column_type: Some(ColumnType::Text),
                         },
                     ],
-                    primary_key_value: Some("2".to_string()),
                 },
             ],
         }

@@ -256,8 +256,6 @@ impl SnippetsPanel {
             parent_id: None,
             is_group: true,
             position: 0,
-            created_at: 0,
-            updated_at: 0,
         };
 
         smol::block_on(async {

@@ -230,10 +230,10 @@ impl EditorPanel {
                         }
 
                         // Invalidate completion cache after DDL statements
-                        if is_ddl_query(&query_for_metadata) {
-                            if let Some(provider) = &completion_provider {
-                                provider.invalidate_cache();
-                            }
+                        if is_ddl_query(&query_for_metadata)
+                            && let Some(provider) = &completion_provider
+                        {
+                            provider.invalidate_cache();
                         }
 
                         // Store rows_affected before moving result

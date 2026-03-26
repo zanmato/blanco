@@ -365,7 +365,6 @@ pub enum ToolMode {
 /// Tool registry for agent
 pub struct AgentToolRegistry {
     handlers: HashMap<String, Box<dyn AgentToolHandler>>,
-    mode: ToolMode,
 }
 
 impl AgentToolRegistry {
@@ -376,7 +375,6 @@ impl AgentToolRegistry {
     pub fn with_mode(mode: ToolMode) -> Self {
         let mut registry = Self {
             handlers: HashMap::new(),
-            mode,
         };
 
         // Register default tools (always available)
@@ -392,8 +390,6 @@ impl AgentToolRegistry {
     }
 
     pub fn _set_mode(&mut self, mode: ToolMode) {
-        self.mode = mode;
-
         // Remove or add write-tab handler based on mode
         if mode == ToolMode::Write {
             if !self.handlers.contains_key("write-tab") {
@@ -402,10 +398,6 @@ impl AgentToolRegistry {
         } else {
             self.handlers.remove("write-tab");
         }
-    }
-
-    pub fn _mode(&self) -> ToolMode {
-        self.mode
     }
 
     pub fn register(&mut self, handler: Box<dyn AgentToolHandler>) {
