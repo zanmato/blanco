@@ -42,7 +42,6 @@ pub struct ResultsTableDelegate {
     pub rows: Vec<Vec<Option<String>>>,
     pub edit_state: CellEditState,
     pub table_name: Option<String>,
-    pub primary_key_column: Option<String>,
     pub connection_id: i64,
     pub database_name: SharedString,
     pub db_type: Option<database::DatabaseType>,
@@ -59,14 +58,43 @@ impl ResultsTableDelegate {
         }
     }
 
-    /// Find the column index of the primary key column (excluding row number column)
-    pub fn get_primary_key_column_index(&self) -> Option<usize> {
-        if let Some(pk_column) = &self.primary_key_column {
-            // Skip row number column (index 0) and find the primary key in data columns
+    pub fn primary_key_column_names(&self) -> Vec<&str> {
+        self.table_columns
+            .iter()
+            .filter(|c| c.is_primary_key)
+            .map(|c| c.name.as_str())
+            .collect()
+    }
+
+    fn primary_key_is_complete(&self) -> bool {
+        let pk_names = self.primary_key_column_names();
+        if pk_names.is_empty() {
+            return false;
+        }
+        pk_names.iter().all(|pk_name| {
             self.columns
                 .iter()
                 .skip(1)
-                .position(|col| col.name.as_str() == pk_column)
+                .any(|col| col.name.as_str() == *pk_name)
+        })
+    }
+
+    fn primary_key_column_indices(&self) -> Option<Vec<usize>> {
+        if !self.primary_key_is_complete() {
+            return None;
+        }
+        let pk_names = self.primary_key_column_names();
+        let indices: Vec<usize> = pk_names
+            .into_iter()
+            .filter_map(|pk_name| {
+                self.columns
+                    .iter()
+                    .skip(1)
+                    .position(|col| col.name.as_str() == pk_name)
+            })
+            .collect();
+        if indices.len() == self.primary_key_column_names().len() {
+            Some(indices)
         } else {
             None
         }
@@ -74,24 +102,22 @@ impl ResultsTableDelegate {
 
     /// Get column names for INSERT operations, excluding row number and primary key (for new rows)
     pub fn get_insert_column_names(&self, exclude_primary_key: bool) -> Vec<String> {
-        let pk_index = if exclude_primary_key {
-            self.get_primary_key_column_index()
+        let pk_indices = if exclude_primary_key {
+            self.primary_key_column_indices()
         } else {
             None
         };
 
         self.columns
             .iter()
-            .skip(1) // Skip row number column
+            .skip(1)
             .enumerate()
             .filter_map(|(data_index, col)| {
-                // Convert data_index back to full column index
-                let _full_index = data_index + 1;
                 if exclude_primary_key
-                    && let Some(pk_data_index) = pk_index
-                    && data_index == pk_data_index
+                    && let Some(ref pk_indices) = pk_indices
+                    && pk_indices.contains(&data_index)
                 {
-                    return None; // Skip primary key column
+                    return None;
                 }
                 Some(col.name.to_string())
             })
@@ -104,8 +130,8 @@ impl ResultsTableDelegate {
         row_index: usize,
         exclude_primary_key: bool,
     ) -> Vec<Option<String>> {
-        let pk_index = if exclude_primary_key {
-            self.get_primary_key_column_index()
+        let pk_indices = if exclude_primary_key {
+            self.primary_key_column_indices()
         } else {
             None
         };
@@ -116,8 +142,8 @@ impl ResultsTableDelegate {
                 .enumerate()
                 .filter_map(|(data_index, val)| {
                     if exclude_primary_key
-                        && let Some(pk_data_index) = pk_index
-                        && data_index == pk_data_index
+                        && let Some(ref pk_indices) = pk_indices
+                        && pk_indices.contains(&data_index)
                     {
                         return None; // Skip primary key column
                     }
@@ -167,8 +193,8 @@ impl ResultsTableDelegate {
     pub fn create_change_operations(&self) -> Vec<TableChangeOperation> {
         use std::collections::HashMap;
 
-        // Map to consolidate changes by (table_name, pk_column, pk_value)
-        let mut update_operations: HashMap<(String, String, String), Vec<ColumnChange>> =
+        // Map to consolidate changes by (table_name, sorted PK pairs)
+        let mut update_operations: HashMap<(String, Vec<(String, String)>), Vec<ColumnChange>> =
             HashMap::new();
         let mut insert_operations: Vec<TableChangeOperation> = Vec::new();
         let mut delete_operations: Vec<TableChangeOperation> = Vec::new();
@@ -176,84 +202,66 @@ impl ResultsTableDelegate {
         for change in &self.edit_state.changes {
             match change.change_type {
                 ChangeType::DeleteRow => {
-                    // Get primary key information for DELETE operation
-                    let (pk_column, pk_value) = if let Some(ref pk_column) = self.primary_key_column
-                    {
-                        if let Some(pk_val) = &change.primary_key_value {
-                            (pk_column.clone(), pk_val.clone())
-                        } else {
-                            continue;
-                        }
-                    } else {
-                        continue; // Skip this change if we can't determine PK
-                    };
+                    let pk_columns: Vec<(String, String)> = change
+                        .primary_key_values
+                        .iter()
+                        .filter_map(|(col, val)| val.as_ref().map(|v| (col.clone(), v.clone())))
+                        .collect();
+                    if pk_columns.len() != change.primary_key_values.len() {
+                        continue;
+                    }
 
-                    let operation = TableChangeOperation {
+                    delete_operations.push(TableChangeOperation {
                         operation_type: OperationType::Delete,
                         table_name: change.table_name.clone(),
-                        row_identifier: RowIdentifier::PrimaryKey {
-                            column: pk_column,
-                            value: pk_value,
-                        },
+                        row_identifier: RowIdentifier::PrimaryKey { columns: pk_columns },
                         changes: vec![],
-                    };
-                    delete_operations.push(operation);
+                    });
                 }
                 ChangeType::UpdateCell => {
-                    let (pk_column, pk_value) = if let Some(ref pk_column) = self.primary_key_column
-                    {
-                        if let Some(pk_val) = &change.primary_key_value {
-                            (pk_column.clone(), pk_val.clone())
-                        } else {
-                            continue;
-                        }
-                    } else {
-                        continue; // Skip this change if we can't determine PK
-                    };
+                    let pk_columns: Vec<(String, String)> = change
+                        .primary_key_values
+                        .iter()
+                        .filter_map(|(col, val)| val.as_ref().map(|v| (col.clone(), v.clone())))
+                        .collect();
+                    if pk_columns.len() != change.primary_key_values.len() {
+                        continue;
+                    }
 
-                    // Get column name from index
                     let column_name = self
                         .columns
                         .get(change.column_index.unwrap_or(0))
                         .map(|col| col.name.to_string())
                         .unwrap_or_else(|| "unknown".to_string());
 
-                    // Create column change
                     let column_change = ColumnChange {
                         column_name,
                         new_value: change.new_value.clone(),
                     };
 
-                    // Add to the consolidated operation
-                    let key = (change.table_name.clone(), pk_column, pk_value);
+                    let mut key = pk_columns.clone();
+                    key.sort_by(|a, b| a.0.cmp(&b.0));
                     update_operations
-                        .entry(key)
+                        .entry((change.table_name.clone(), key))
                         .or_default()
                         .push(column_change);
                 }
                 ChangeType::InsertRow => {
-                    // For INSERT operations, get the current values from the actual row data
-                    // This ensures we use the most up-to-date values instead of stored ones
-
-                    // Check if primary key should be excluded (only if it's NULL/auto-generated)
-                    let pk_col_index = self.get_primary_key_column_index();
-                    let exclude_primary_key = pk_col_index.is_some_and(|idx| {
-                        // Get the current value of the primary key column
-                        let display_col = idx + 1; // +1 for row number column
-
-                        // Check edited values first, then fall back to row data
-                        let pk_value = self
-                            .edit_state
-                            .edited_values
-                            .get(&(change.row_index, display_col))
-                            .or_else(|| {
-                                self.rows
-                                    .get(change.row_index)
-                                    .and_then(|row| row.get(display_col))
-                            });
-
-                        // Only exclude if PK is NULL or empty
-                        pk_value.is_none_or(|v| v.as_ref().is_none_or(|s| s.is_empty()))
+                    let pk_col_indices = self.primary_key_column_indices();
+                    let exclude_primary_key = pk_col_indices.as_ref().is_some_and(|indices| {
+                        indices.iter().all(|&idx| {
+                            let display_col = idx + 1;
+                            let pk_value = self
+                                .edit_state
+                                .edited_values
+                                .get(&(change.row_index, display_col))
+                                .or_else(|| {
+                                    self.rows
+                                        .get(change.row_index)
+                                        .and_then(|row| row.get(display_col))
+                                });
+                            pk_value.is_none_or(|v| v.as_ref().is_none_or(|s| s.is_empty()))
+                        })
                     });
 
                     let column_names = self.get_insert_column_names(exclude_primary_key);
@@ -276,25 +284,17 @@ impl ResultsTableDelegate {
             }
         }
 
-        // Convert consolidated update operations to TableChangeOperations
         let mut operations = Vec::new();
-        for ((table_name, pk_column, pk_value), column_changes) in update_operations {
-            let operation = TableChangeOperation {
+        for ((table_name, pk_columns), column_changes) in update_operations {
+            operations.push(TableChangeOperation {
                 operation_type: OperationType::Update,
                 table_name,
-                row_identifier: RowIdentifier::PrimaryKey {
-                    column: pk_column,
-                    value: pk_value,
-                },
+                row_identifier: RowIdentifier::PrimaryKey { columns: pk_columns },
                 changes: column_changes,
-            };
-            operations.push(operation);
+            });
         }
 
-        // Add insert operations
         operations.extend(insert_operations);
-
-        // Add delete operations
         operations.extend(delete_operations);
 
         operations
@@ -459,16 +459,28 @@ impl ResultsTableDelegate {
             }
         }
 
-        // Extract primary key column name from table_columns metadata
-        self.primary_key_column = result.table_columns.as_ref().and_then(|columns| {
-            columns
-                .iter()
-                .find(|c| c.is_primary_key)
-                .map(|c| c.name.clone())
-        });
-
         // Store table columns metadata for tooltips and rendering
         self.table_columns = result.table_columns.clone().unwrap_or_default();
+
+        // Warn if PK columns are missing from the result set (disables editing)
+        if !self.table_columns.is_empty() {
+            let pk_names: Vec<&str> = self.primary_key_column_names();
+            if !pk_names.is_empty() {
+                let missing: Vec<&str> = pk_names
+                    .iter()
+                    .filter(|pk_name| {
+                        !self.columns.iter().skip(1).any(|col| col.name.as_str() == **pk_name)
+                    })
+                    .copied()
+                    .collect();
+                if !missing.is_empty() {
+                    tracing::warn!(
+                        "Primary key column(s) missing from result set, editing disabled: {}",
+                        missing.join(", ")
+                    );
+                }
+            }
+        }
     }
 
     pub fn start_editing_cell(&mut self, row: usize, col: usize) {
@@ -493,7 +505,7 @@ impl ResultsTableDelegate {
             self.edit_state.edited_values
         );
 
-        // Bail early if table is not editable (no table_name or primary_key_column)
+        // Bail early if table is not editable (no table_name or incomplete primary key)
         if !self.is_editable() {
             tracing::info!("Table is not editable, bailing commit");
             self.edit_state.editing_cell = None;
@@ -530,55 +542,53 @@ impl ResultsTableDelegate {
                 // Check if this is a new row, if so, don't create UPDATE changes
                 // New rows should be handled by INSERT operations only
                 if !self.edit_state.is_new_row(row) {
-                    // Get primary key value, if updating the PK column itself, use the original value
-                    let primary_key_value = if let Some(pk_column) = &self.primary_key_column {
-                        // Find the index of the primary key column
-                        if let Some(pk_index) = self
-                            .columns
-                            .iter()
-                            .position(|col| col.name.as_str() == pk_column)
-                        {
-                            // If we're updating the primary key column itself, get the original value
-                            if pk_index == col {
+                    let primary_key_values: Vec<(String, Option<String>)> = self
+                        .primary_key_column_names()
+                        .into_iter()
+                        .filter_map(|pk_name| {
+                            let pk_col_index = self
+                                .columns
+                                .iter()
+                                .skip(1)
+                                .position(|c| c.name.as_str() == pk_name)?;
+                            let full_index = pk_col_index + 1;
+                            let value = if full_index == col {
                                 self.edit_state
                                     .original_values
                                     .get(&(row, col))
                                     .and_then(|v| v.clone())
                             } else {
-                                // Otherwise get the current value from the row
                                 self.rows
                                     .get(row)
-                                    .and_then(|r| r.get(pk_index))
+                                    .and_then(|r| r.get(full_index))
                                     .and_then(|v| v.clone())
-                            }
-                        } else {
-                            None
-                        }
+                            };
+                            Some((pk_name.to_string(), value))
+                        })
+                        .collect();
+
+                    let all_present = primary_key_values
+                        .iter()
+                        .all(|(_, v)| v.is_some());
+                    if !all_present {
+                        tracing::warn!(
+                            "Skipping change tracking: missing primary key value(s) for row {}",
+                            row
+                        );
                     } else {
-                        None
-                    };
+                        let change = TableChange::new(
+                            ChangeType::UpdateCell,
+                            table_name.clone(),
+                            row,
+                            Some(col),
+                            original.clone(),
+                            new_value.clone(),
+                            primary_key_values,
+                            None,
+                        );
 
-                    // Validate change before creating
-                    let _validation_status = if primary_key_value.is_none() {
-                        "INVALID: No primary key value"
-                    } else if self.primary_key_column.is_none() {
-                        "WARNING: No primary key column detected"
-                    } else {
-                        "VALID"
-                    };
-
-                    let change = TableChange::new(
-                        ChangeType::UpdateCell,
-                        table_name.clone(),
-                        row,
-                        Some(col),
-                        original.clone(),
-                        new_value.clone(),
-                        primary_key_value,
-                        None, // No insert_values for UpdateCell operations
-                    );
-
-                    self.edit_state.add_change(change);
+                        self.edit_state.add_change(change);
+                    }
                 }
             }
 
@@ -601,7 +611,7 @@ impl ResultsTableDelegate {
     }
 
     pub fn is_editable(&self) -> bool {
-        self.table_name.is_some() && self.primary_key_column.is_some()
+        self.table_name.is_some() && self.primary_key_is_complete()
     }
 
     pub fn clear_selection(&mut self) {
@@ -676,9 +686,9 @@ impl TableDelegate for ResultsTableDelegate {
         let has_fk = col_info.is_some_and(|c| c.foreign_key.is_some());
         let is_pk = !is_row_number_col
             && self
-                .primary_key_column
-                .as_ref()
-                .is_some_and(|pk| pk == &col.name);
+                .table_columns
+                .iter()
+                .any(|c| c.is_primary_key && c.name == col.name);
         let is_nullable = col_info.is_some_and(|c| c.is_nullable);
 
         let tooltip_id = format!("col-tooltip-{}", col_ix);
@@ -1322,9 +1332,8 @@ mod tests {
     fn test_results_table_delegate_default() {
         let delegate = ResultsTableDelegate::default();
 
-        // Test basic properties without requiring App context
         assert!(delegate.table_name.is_none());
-        assert!(delegate.primary_key_column.is_none());
+        assert!(!delegate.primary_key_is_complete());
         assert!(delegate.columns.is_empty());
         assert!(delegate.rows.is_empty());
     }
@@ -1355,31 +1364,47 @@ mod tests {
 
     #[test]
     fn test_primary_key_update_preserves_original_value() {
+        use blanco_core::connection_trait::ColumnInfo;
+
         let mut delegate = ResultsTableDelegate::default();
 
-        // Set up test data with primary key as first column
         delegate.table_name = Some("test_table".to_string());
-        delegate.primary_key_column = Some("id".to_string());
+        delegate.table_columns = vec![
+            ColumnInfo {
+                name: "id".to_string(),
+                data_type: "integer".to_string(),
+                is_nullable: false,
+                is_primary_key: true,
+                default_value: None,
+                character_maximum_length: None,
+                foreign_key: None,
+            },
+            ColumnInfo {
+                name: "name".to_string(),
+                data_type: "text".to_string(),
+                is_nullable: true,
+                is_primary_key: false,
+                default_value: None,
+                character_maximum_length: None,
+                foreign_key: None,
+            },
+        ];
 
-        // Create columns: row_number, id, name
         delegate.columns = vec![
             Column::new("row_number".to_string(), "#".to_string()),
             Column::new("id".to_string(), "id".to_string()),
             Column::new("name".to_string(), "name".to_string()),
         ];
 
-        // Add a row with id=2
         delegate.rows = vec![vec![
             Some("1".to_string()),
             Some("2".to_string()),
             Some("test".to_string()),
         ]];
 
-        // Simulate editing the primary key column (id) from 2 to 4
         let row = 0;
-        let col = 1; // id column
+        let col = 1;
 
-        // Store original value
         delegate
             .edit_state
             .original_values
@@ -1389,25 +1414,21 @@ mod tests {
             .edited_values
             .insert((row, col), Some("4".to_string()));
 
-        // Commit the edit
         delegate.commit_cell_edit(row, col);
 
-        // Check that the change was created with the correct primary key value
         assert_eq!(delegate.edit_state.changes.len(), 1);
         let change = &delegate.edit_state.changes[0];
 
-        // The primary key value should be the original value (2), not the new value (4)
-        assert_eq!(change.primary_key_value, Some("2".to_string()));
+        assert_eq!(change.primary_key_values, vec![("id".to_string(), Some("2".to_string()))]);
         assert_eq!(change.old_value, Some("2".to_string()));
         assert_eq!(change.new_value, Some("4".to_string()));
 
-        // Verify the SQL generation would use the correct WHERE clause
         let operations = delegate.create_change_operations();
         assert_eq!(operations.len(), 1);
 
         if let OperationType::Update = &operations[0].operation_type {
-            if let RowIdentifier::PrimaryKey { value, .. } = &operations[0].row_identifier {
-                assert_eq!(value, "2"); // Should use original ID in WHERE clause
+            if let RowIdentifier::PrimaryKey { columns } = &operations[0].row_identifier {
+                assert_eq!(columns, &[("id".to_string(), "2".to_string())]);
             } else {
                 panic!("Expected PrimaryKey row identifier");
             }

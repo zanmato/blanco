@@ -27,7 +27,7 @@ impl std::fmt::Display for OperationType {
 
 #[derive(Clone, Debug)]
 pub enum RowIdentifier {
-    PrimaryKey { column: String, value: String },
+    PrimaryKey { columns: Vec<(String, String)> },
     RowIndex, // For cases without clear PK
 }
 
@@ -42,43 +42,34 @@ impl TableChangeOperation {
         Self {
             operation_type: OperationType::Insert,
             table_name,
-            row_identifier: RowIdentifier::RowIndex, // Will be determined after insertion
+            row_identifier: RowIdentifier::RowIndex,
             changes: column_changes,
         }
     }
 
+    fn format_where_clause(columns: &[(String, String)]) -> String {
+        let escape_sql_value = |value: &str| value.replace('\'', "''");
+        columns
+            .iter()
+            .map(|(col, val)| {
+                format!("{} = '{}'", col, escape_sql_value(val))
+            })
+            .collect::<Vec<_>>()
+            .join(" AND ")
+    }
+
     /// Generate the actual SQL query for logging purposes
     pub fn to_sql_query(&self) -> String {
-        // Helper function to escape single quotes in SQL values
         let escape_sql_value = |value: &str| value.replace('\'', "''");
 
         match self.operation_type {
             OperationType::Update => {
-                if let RowIdentifier::PrimaryKey {
-                    column: pk_column,
-                    value: pk_value,
-                } = &self.row_identifier
+                if let RowIdentifier::PrimaryKey { columns: pk_columns } = &self.row_identifier
+                    && !pk_columns.is_empty()
                 {
                     if self.changes.is_empty() {
                         format!("UPDATE {}", self.table_name)
-                    } else if self.changes.len() == 1 {
-                        // Single column change
-                        let change = &self.changes[0];
-                        let set_value = match &change.new_value {
-                            None => "NULL".to_string(),
-                            Some(v) => format!("'{}'", escape_sql_value(v)),
-                        };
-                        let escaped_pk_value = escape_sql_value(pk_value);
-                        format!(
-                            "UPDATE {} SET {} = {} WHERE {} = '{}'",
-                            self.table_name,
-                            change.column_name,
-                            set_value,
-                            pk_column,
-                            escaped_pk_value
-                        )
                     } else {
-                        // Multiple column changes
                         let set_clauses: Vec<String> = self
                             .changes
                             .iter()
@@ -90,13 +81,11 @@ impl TableChangeOperation {
                                 format!("{} = {}", change.column_name, set_value)
                             })
                             .collect();
-                        let escaped_pk_value = escape_sql_value(pk_value);
                         format!(
-                            "UPDATE {} SET {} WHERE {} = '{}'",
+                            "UPDATE {} SET {} WHERE {}",
                             self.table_name,
                             set_clauses.join(", "),
-                            pk_column,
-                            escaped_pk_value
+                            Self::format_where_clause(pk_columns),
                         )
                     }
                 } else {
@@ -111,10 +100,10 @@ impl TableChangeOperation {
                     .iter()
                     .map(|c| {
                         match &c.new_value {
-                            None => "NULL".to_string(), // NULL without quotes
+                            None => "NULL".to_string(),
                             Some(value) => {
                                 let escaped_value = escape_sql_value(value);
-                                format!("'{}'", escaped_value) // Empty string becomes ''
+                                format!("'{}'", escaped_value)
                             }
                         }
                     })
@@ -127,15 +116,13 @@ impl TableChangeOperation {
                 )
             }
             OperationType::Delete => {
-                if let RowIdentifier::PrimaryKey {
-                    column: pk_column,
-                    value: pk_value,
-                } = &self.row_identifier
+                if let RowIdentifier::PrimaryKey { columns: pk_columns } = &self.row_identifier
+                    && !pk_columns.is_empty()
                 {
-                    let escaped_pk_value = escape_sql_value(pk_value);
                     format!(
-                        "DELETE FROM {} WHERE {} = '{}'",
-                        self.table_name, pk_column, escaped_pk_value
+                        "DELETE FROM {} WHERE {}",
+                        self.table_name,
+                        Self::format_where_clause(pk_columns),
                     )
                 } else {
                     format!("DELETE FROM {}", self.table_name)

@@ -1,5 +1,6 @@
 use crate::app_database::AppDatabase;
 use crate::app_settings::AppSettings;
+use crate::settings::formatter_page::formatter_page;
 use crate::settings::Settings;
 use gpui::{App, Context, FocusHandle, Focusable, IntoElement, Render, SharedString, Task, Window};
 use gpui_component::ThemeRegistry;
@@ -28,7 +29,7 @@ impl SettingsView {
     }
 
     /// Save a setting with debouncing
-    fn save_setting_debounced(
+    pub(super) fn save_setting_debounced(
         &mut self,
         key: String,
         value: String,
@@ -203,6 +204,7 @@ impl SettingsView {
                     .description("Number of spaces per tab stop (1-8)."),
                 ]),
             ]),
+            formatter_page(view_handle.clone(), &default_settings),
             // Database Settings Page
             SettingPage::new("Database").resettable(true).groups(vec![
                 SettingGroup::new().title("Connection").items(vec![

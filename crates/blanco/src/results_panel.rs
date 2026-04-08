@@ -284,19 +284,16 @@ impl ResultsPanel {
         let mut committed_value = None;
         let mut old_value: Option<String> = None;
         let mut table_name = None;
-        let mut primary_key_value: Option<String> = None;
 
         self.table_state.update(cx, |state, cx| {
             let delegate = state.delegate_mut();
 
-            // Bail early if table is not editable (no table_name or primary_key_column)
             if !delegate.is_editable() {
                 tracing::info!("Table is not editable, bailing commit");
                 delegate.edit_state.editing_cell = None;
                 return;
             }
 
-            // Get the original value before updating
             old_value = delegate
                 .rows
                 .get(row)
@@ -304,72 +301,49 @@ impl ResultsPanel {
                 .and_then(|v| v.clone());
             table_name = delegate.table_name.clone();
 
-            // Get primary key value if we have a primary key column
-            if let Some(pk_column) = &delegate.primary_key_column {
-                // Find the index of the primary key column
-                if let Some(pk_index) = delegate
-                    .columns
-                    .iter()
-                    .position(|col| col.name.as_str() == pk_column)
-                {
-                    primary_key_value = delegate
-                        .rows
-                        .get(row)
-                        .and_then(|r| r.get(pk_index))
-                        .and_then(|v| v.clone());
-                }
-            }
-
-            // Update the cell value
             delegate.update_cell_value(row, col, Some(new_value.clone()));
             committed_value = delegate.commit_cell_edit(row, col).and_then(|v| v);
 
-            // Track the change for SQL generation (but not for new rows)
             if let (Some(old_val), Some(tbl_name)) = (&old_value, &table_name)
                 && old_val != &new_value
+                && !delegate.edit_state.is_new_row(row)
             {
-                // New rows should be handled by INSERT operations only
-                if !delegate.edit_state.is_new_row(row) {
-                    // Get primary key value,  if updating the PK column itself, use the original value
-                    let primary_key_value = if let Some(pk_column) = &delegate.primary_key_column {
-                        // Find the index of the primary key column
-                        if let Some(pk_index) = delegate
+                let primary_key_values: Vec<(String, Option<String>)> = delegate
+                    .primary_key_column_names()
+                    .into_iter()
+                    .filter_map(|pk_name: &str| {
+                        let pk_col_index = delegate
                             .columns
                             .iter()
-                            .position(|col| col.name.as_str() == pk_column)
-                        {
-                            // If we're updating the primary key column itself, get the original value
-                            if pk_index == col {
-                                delegate
-                                    .edit_state
-                                    .original_values
-                                    .get(&(row, col))
-                                    .and_then(|v| v.clone())
-                            } else {
-                                // Otherwise get the current value from the row
-                                delegate
-                                    .rows
-                                    .get(row)
-                                    .and_then(|r| r.get(pk_index))
-                                    .and_then(|v| v.clone())
-                            }
+                            .skip(1)
+                            .position(|c| c.name.as_str() == pk_name)?;
+                        let full_index = pk_col_index + 1;
+                        let value = if full_index == col {
+                            delegate
+                                .edit_state
+                                .original_values
+                                .get(&(row, col))
+                                .and_then(|v| v.clone())
                         } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
-                    let primary_key_column = delegate.primary_key_column.clone();
+                            delegate
+                                .rows
+                                .get(row)
+                                .and_then(|r| r.get(full_index))
+                                .and_then(|v| v.clone())
+                        };
+                        Some((pk_name.to_string(), value))
+                    })
+                    .collect();
 
-                    // Validate change data before creating
-                    let _validation_msg = if primary_key_value.is_none() {
-                        "Warning: No primary key value found - change may not be executable"
-                    } else if primary_key_column.is_none() {
-                        "Warning: No primary key column detected - using first column"
-                    } else {
-                        "Change validation passed"
-                    };
-
+                let all_present = primary_key_values
+                    .iter()
+                    .all(|(_, v): &(String, Option<String>)| v.is_some());
+                if !all_present {
+                    tracing::warn!(
+                        "Skipping change: missing primary key value(s) for row {}",
+                        row
+                    );
+                } else {
                     let change = TableChange::new(
                         ChangeType::UpdateCell,
                         tbl_name.clone(),
@@ -377,22 +351,17 @@ impl ResultsPanel {
                         Some(col),
                         Some(old_val.clone()),
                         Some(new_value.clone()),
-                        primary_key_value,
-                        None, // No insert_values for UpdateCell operations
+                        primary_key_values,
+                        None,
                     );
                     delegate.edit_state.add_change(change);
-
-                    // Log the change tracking (this will be visible when user commits)
-                    // Note: We defer detailed logging to commit time to avoid cluttering the log
                 }
             }
 
-            // Stop editing and clear input
             delegate.edit_state.stop_editing();
             state.refresh(cx);
         });
 
-        // Clear panel editing state
         self.editing_input = None;
         self.editing_cell = None;
 
@@ -432,8 +401,8 @@ impl ResultsPanel {
                     Some(*col),
                     original_value.clone(),
                     new_value.clone(),
-                    None, // primary_key_value
-                    None, // No insert_values for UpdateCell operations
+                    Vec::new(), // primary_key_values
+                    None,       // No insert_values for UpdateCell operations
                 ));
             }
         }
@@ -853,7 +822,7 @@ impl ResultsPanel {
                     None,
                     None,
                     None,             // No single new_value for insert operations
-                    None,             // No primary key value for new rows
+                    Vec::new(),       // No primary key values for new rows
                     Some(values_vec), // Use insert_values parameter instead
                 );
                 delegate.edit_state.add_change(change);
@@ -895,7 +864,7 @@ impl ResultsPanel {
                         None,
                         None,
                         None,             // No single new_value for insert operations
-                        None,             // No primary key value for new rows
+                        Vec::new(),       // No primary key values for new rows
                         Some(values_vec), // Use insert_values parameter instead
                     );
                     delegate.edit_state.add_change(change);
@@ -935,17 +904,24 @@ impl ResultsPanel {
                 return;
             }
 
-            // Get primary key value for the row
-            let pk_value = if let Some(pk_col_idx) = delegate.get_primary_key_column_index() {
-                let display_col = pk_col_idx + 1; // +1 for row number column
-                delegate
-                    .rows
-                    .get(row_ix)
-                    .and_then(|row| row.get(display_col))
-                    .and_then(|v| v.clone())
-            } else {
-                None
-            };
+            let pk_values: Vec<(String, Option<String>)> = delegate
+                .primary_key_column_names()
+                .into_iter()
+                .filter_map(|pk_name| {
+                    let pk_col_idx = delegate
+                        .columns
+                        .iter()
+                        .skip(1)
+                        .position(|c| c.name.as_str() == pk_name)?;
+                    let display_col = pk_col_idx + 1;
+                    let value = delegate
+                        .rows
+                        .get(row_ix)
+                        .and_then(|row| row.get(display_col))
+                        .and_then(|v| v.clone());
+                    Some((pk_name.to_string(), value))
+                })
+                .collect();
 
             // Mark the row as deleted
             delegate.edit_state.pending_deleted_rows.insert(row_ix);
@@ -959,7 +935,7 @@ impl ResultsPanel {
                     None,
                     None,
                     None,
-                    pk_value,
+                    pk_values,
                     None,
                 );
                 delegate.edit_state.add_change(change);

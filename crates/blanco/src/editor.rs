@@ -562,7 +562,13 @@ impl EditorPanel {
         self._subscriptions.push(subscription);
 
         // Create SqruffService for this tab
-        let sqruff_service = match SqruffService::new(params.db_type.to_sqruff_dialect()) {
+        let formatter_settings = AppSettings::global(cx).settings.formatter.clone();
+        let editor_settings = AppSettings::global(cx).settings.editor.clone();
+        let sqruff_service = match SqruffService::new(
+            params.db_type.to_sqruff_dialect(),
+            &formatter_settings,
+            &editor_settings,
+        ) {
             Ok(service) => Some(Arc::new(service)),
             Err(e) => {
                 error!(

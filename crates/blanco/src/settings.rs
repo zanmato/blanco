@@ -1,13 +1,16 @@
+mod formatter_page;
 mod view;
 
 pub use view::SettingsView;
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
     pub general: GeneralSettings,
     pub editor: EditorSettings,
+    pub formatter: FormatterSettings,
     pub database: DatabaseSettings,
     pub appearance: AppearanceSettings,
     pub chat: ChatSettings,
@@ -81,6 +84,64 @@ impl Settings {
                 }
                 "chat.show_thinking_process" => {
                     settings.chat.show_thinking_process = value.parse().unwrap_or_default();
+                }
+                "formatter.indented_joins" => {
+                    settings.formatter.indented_joins = value.parse().unwrap_or(false);
+                }
+                "formatter.indented_ctes" => {
+                    settings.formatter.indented_ctes = value.parse().unwrap_or(false);
+                }
+                "formatter.indented_using_on" => {
+                    settings.formatter.indented_using_on = value.parse().unwrap_or(true);
+                }
+                "formatter.indented_on_contents" => {
+                    settings.formatter.indented_on_contents = value.parse().unwrap_or(true);
+                }
+                "formatter.indented_then" => {
+                    settings.formatter.indented_then = value.parse().unwrap_or(true);
+                }
+                "formatter.indented_then_contents" => {
+                    settings.formatter.indented_then_contents = value.parse().unwrap_or(true);
+                }
+                "formatter.allow_implicit_indents" => {
+                    settings.formatter.allow_implicit_indents = value.parse().unwrap_or(false);
+                }
+                "formatter.trailing_comments" => {
+                    settings.formatter.trailing_comments = value.clone();
+                }
+                "formatter.max_line_length" => {
+                    settings.formatter.max_line_length = value.parse().unwrap_or(80);
+                }
+                "formatter.keywords_policy" => {
+                    settings.formatter.keywords_policy = value.clone();
+                }
+                "formatter.identifiers_policy" => {
+                    settings.formatter.identifiers_policy = value.clone();
+                }
+                "formatter.functions_policy" => {
+                    settings.formatter.functions_policy = value.clone();
+                }
+                "formatter.literals_policy" => {
+                    settings.formatter.literals_policy = value.clone();
+                }
+                "formatter.types_policy" => {
+                    settings.formatter.types_policy = value.clone();
+                }
+                "formatter.select_clause_trailing_comma" => {
+                    settings.formatter.select_clause_trailing_comma = value.clone();
+                }
+                "formatter.terminator_multiline_newline" => {
+                    settings.formatter.terminator_multiline_newline = value.parse().unwrap_or(false);
+                }
+                "formatter.require_final_semicolon" => {
+                    settings.formatter.require_final_semicolon = value.parse().unwrap_or(false);
+                }
+                "formatter.exclude_rules" => {
+                    settings.formatter.exclude_rules = value
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
                 }
                 _ => {}
             }
@@ -183,6 +244,53 @@ impl Default for ChatSettings {
             temperature: 0.7,
             auto_execute_queries: false,
             show_thinking_process: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FormatterSettings {
+    pub indented_joins: bool,
+    pub indented_ctes: bool,
+    pub indented_using_on: bool,
+    pub indented_on_contents: bool,
+    pub indented_then: bool,
+    pub indented_then_contents: bool,
+    pub allow_implicit_indents: bool,
+    pub trailing_comments: String,
+    pub max_line_length: u32,
+    pub exclude_rules: HashSet<String>,
+    pub keywords_policy: String,
+    pub identifiers_policy: String,
+    pub functions_policy: String,
+    pub literals_policy: String,
+    pub types_policy: String,
+    pub select_clause_trailing_comma: String,
+    pub terminator_multiline_newline: bool,
+    pub require_final_semicolon: bool,
+}
+
+impl Default for FormatterSettings {
+    fn default() -> Self {
+        Self {
+            indented_joins: false,
+            indented_ctes: false,
+            indented_using_on: true,
+            indented_on_contents: true,
+            indented_then: true,
+            indented_then_contents: true,
+            allow_implicit_indents: false,
+            trailing_comments: "before".to_string(),
+            max_line_length: 80,
+            exclude_rules: HashSet::from(["LT12".to_string()]),
+            keywords_policy: "consistent".to_string(),
+            identifiers_policy: "consistent".to_string(),
+            functions_policy: "consistent".to_string(),
+            literals_policy: "consistent".to_string(),
+            types_policy: "consistent".to_string(),
+            select_clause_trailing_comma: "forbid".to_string(),
+            terminator_multiline_newline: false,
+            require_final_semicolon: false,
         }
     }
 }

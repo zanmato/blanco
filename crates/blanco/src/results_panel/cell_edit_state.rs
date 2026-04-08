@@ -39,7 +39,7 @@ pub struct TableChange {
     pub column_index: Option<usize>,
     pub old_value: Option<String>,
     pub new_value: Option<String>,
-    pub primary_key_value: Option<String>,
+    pub primary_key_values: Vec<(String, Option<String>)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -173,7 +173,7 @@ pub struct TableChangeBuilder {
     column_index: Option<usize>,
     old_value: Option<String>,
     new_value: Option<String>,
-    primary_key_value: Option<String>,
+    primary_key_values: Vec<(String, Option<String>)>,
     insert_values: Option<Vec<Option<String>>>,
 }
 
@@ -186,7 +186,7 @@ impl TableChangeBuilder {
             column_index: None,
             old_value: None,
             new_value: None,
-            primary_key_value: None,
+            primary_key_values: Vec::new(),
             insert_values: None,
         }
     }
@@ -206,8 +206,8 @@ impl TableChangeBuilder {
         self
     }
 
-    pub fn primary_key_value(mut self, primary_key_value: Option<String>) -> Self {
-        self.primary_key_value = primary_key_value;
+    pub fn primary_key_values(mut self, primary_key_values: Vec<(String, Option<String>)>) -> Self {
+        self.primary_key_values = primary_key_values;
         self
     }
 
@@ -224,7 +224,7 @@ impl TableChangeBuilder {
             column_index: self.column_index,
             old_value: self.old_value,
             new_value: self.new_value,
-            primary_key_value: self.primary_key_value,
+            primary_key_values: self.primary_key_values,
         }
     }
 }
@@ -238,14 +238,14 @@ impl TableChange {
         column_index: Option<usize>,
         old_value: Option<String>,
         new_value: Option<String>,
-        primary_key_value: Option<String>,
+        primary_key_values: Vec<(String, Option<String>)>,
         insert_values: Option<Vec<Option<String>>>,
     ) -> Self {
         TableChangeBuilder::new(change_type, table_name, row_index)
             .column_index(column_index)
             .old_value(old_value)
             .new_value(new_value)
-            .primary_key_value(primary_key_value)
+            .primary_key_values(primary_key_values)
             .insert_values(insert_values)
             .build()
     }

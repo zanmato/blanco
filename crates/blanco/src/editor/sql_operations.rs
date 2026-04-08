@@ -3,7 +3,10 @@ use std::time::Duration;
 use gpui::{AppContext, Context, SharedString, Window};
 use gpui_component::{RopeExt, WindowExt as _, notification::NotificationType};
 
+use crate::app_settings::AppSettings;
 use crate::result_ext::ResultExt;
+use crate::settings::EditorSettings;
+use crate::settings::FormatterSettings;
 use crate::sql::extract_statement_info;
 
 use super::{EditorPanel, LINT_DEBOUNCE_MS, TabType};
@@ -62,9 +65,17 @@ impl EditorPanel {
             return;
         };
 
+        let formatter_settings = AppSettings::global(cx).settings.formatter.clone();
+        let editor_settings = AppSettings::global(cx).settings.editor.clone();
+
         // Background task: do the heavy linting work
         let lint_task = cx.background_spawn(async move {
-            sqruff_service.lint(&statement_text, Some(byte_range.start))
+            sqruff_service.lint(
+                &statement_text,
+                &formatter_settings,
+                &editor_settings,
+                Some(byte_range.start),
+            )
         });
 
         // Foreground task: wait for background task to complete and update UI
@@ -164,8 +175,13 @@ impl EditorPanel {
             return;
         };
 
+        let formatter_settings: FormatterSettings =
+            AppSettings::global(cx).settings.formatter.clone();
+        let editor_settings: EditorSettings = AppSettings::global(cx).settings.editor.clone();
+
         cx.spawn_in(window, async move |entity_handle, window| {
-            let formatted_result = sqruff_service.format(&statement_text);
+            let formatted_result =
+                sqruff_service.format(&statement_text, &formatter_settings, &editor_settings);
             let formatted = match formatted_result {
                 Ok(f) => f,
                 Err(e) => {

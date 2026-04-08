@@ -1,68 +1,239 @@
-//! Sqruff service for SQL linting and formatting.
-//!
-//! This module provides integration with sqruff-lib for real-time SQL linting
-//! and formatting functionality. Linting is scoped to the current query/statement
-//! that the cursor is in, not the entire file.
-
+use crate::settings::{EditorSettings, FormatterSettings};
 use gpui_component::highlighter::{Diagnostic, DiagnosticSeverity};
 use gpui_component::input::Position;
 use sqruff_lib::core::config::{FluffConfig, Value};
 use sqruff_lib::core::linter::core::Linter;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Mutex;
 
-/// Sqruff service for SQL linting and formatting.
-///
-/// This service wraps sqruff-lib to provide:
-/// - Linting of SQL statements with configurable dialects
-/// - Formatting of SQL statements
-/// - Conversion of sqruff violations to gpui-component diagnostics
+struct LinterState {
+    linter: Linter,
+    fingerprint: u64,
+}
+
 pub struct SqruffService {
-    linter: Mutex<Linter>,
+    dialect: String,
+    state: Mutex<LinterState>,
+}
+
+fn compute_fingerprint(formatter: &FormatterSettings, editor: &EditorSettings) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    formatter.indented_joins.hash(&mut hasher);
+    formatter.indented_ctes.hash(&mut hasher);
+    formatter.indented_using_on.hash(&mut hasher);
+    formatter.indented_on_contents.hash(&mut hasher);
+    formatter.indented_then.hash(&mut hasher);
+    formatter.indented_then_contents.hash(&mut hasher);
+    formatter.allow_implicit_indents.hash(&mut hasher);
+    formatter.trailing_comments.hash(&mut hasher);
+    formatter.max_line_length.hash(&mut hasher);
+    let mut rules: Vec<&String> = formatter.exclude_rules.iter().collect();
+    rules.sort();
+    rules.len().hash(&mut hasher);
+    for rule in rules {
+        rule.hash(&mut hasher);
+    }
+    formatter.keywords_policy.hash(&mut hasher);
+    formatter.identifiers_policy.hash(&mut hasher);
+    formatter.functions_policy.hash(&mut hasher);
+    formatter.literals_policy.hash(&mut hasher);
+    formatter.types_policy.hash(&mut hasher);
+    formatter.select_clause_trailing_comma.hash(&mut hasher);
+    formatter.terminator_multiline_newline.hash(&mut hasher);
+    formatter.require_final_semicolon.hash(&mut hasher);
+    editor.hard_tabs.hash(&mut hasher);
+    editor.tab_size.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn build_config(
+    dialect: &str,
+    formatter: &FormatterSettings,
+    editor: &EditorSettings,
+) -> FluffConfig {
+    let mut configs = ahash::AHashMap::new();
+
+    let exclude_rules_str = formatter
+        .exclude_rules
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(",");
+
+    let mut core_config = ahash::AHashMap::new();
+    core_config.insert("dialect".to_string(), Value::String(dialect.into()));
+    core_config.insert("exclude_rules".to_string(), Value::String(exclude_rules_str.into()));
+    core_config.insert(
+        "max_line_length".to_string(),
+        Value::Int(formatter.max_line_length as i32),
+    );
+    configs.insert("core".to_string(), Value::Map(core_config));
+
+    let indent_unit = if editor.hard_tabs { "tab" } else { "space" };
+    let mut indentation_config = ahash::AHashMap::new();
+    indentation_config.insert(
+        "indent_unit".to_string(),
+        Value::String(indent_unit.into()),
+    );
+    indentation_config.insert(
+        "tab_space_size".to_string(),
+        Value::Int(editor.tab_size as i32),
+    );
+    indentation_config.insert(
+        "indented_joins".to_string(),
+        Value::Bool(formatter.indented_joins),
+    );
+    indentation_config.insert(
+        "indented_ctes".to_string(),
+        Value::Bool(formatter.indented_ctes),
+    );
+    indentation_config.insert(
+        "indented_using_on".to_string(),
+        Value::Bool(formatter.indented_using_on),
+    );
+    indentation_config.insert(
+        "indented_on_contents".to_string(),
+        Value::Bool(formatter.indented_on_contents),
+    );
+    indentation_config.insert(
+        "indented_then".to_string(),
+        Value::Bool(formatter.indented_then),
+    );
+    indentation_config.insert(
+        "indented_then_contents".to_string(),
+        Value::Bool(formatter.indented_then_contents),
+    );
+    indentation_config.insert(
+        "allow_implicit_indents".to_string(),
+        Value::Bool(formatter.allow_implicit_indents),
+    );
+    indentation_config.insert(
+        "trailing_comments".to_string(),
+        Value::String(formatter.trailing_comments.as_str().into()),
+    );
+    configs.insert("indentation".to_string(), Value::Map(indentation_config));
+
+    let mut kw_config = ahash::AHashMap::new();
+    kw_config.insert(
+        "capitalisation_policy".to_string(),
+        Value::String(formatter.keywords_policy.as_str().into()),
+    );
+    configs.insert(
+        "rules:capitalisation.keywords".to_string(),
+        Value::Map(kw_config),
+    );
+
+    let mut ident_config = ahash::AHashMap::new();
+    ident_config.insert(
+        "extended_capitalisation_policy".to_string(),
+        Value::String(formatter.identifiers_policy.as_str().into()),
+    );
+    configs.insert(
+        "rules:capitalisation.identifiers".to_string(),
+        Value::Map(ident_config),
+    );
+
+    let mut func_config = ahash::AHashMap::new();
+    func_config.insert(
+        "extended_capitalisation_policy".to_string(),
+        Value::String(formatter.functions_policy.as_str().into()),
+    );
+    configs.insert(
+        "rules:capitalisation.functions".to_string(),
+        Value::Map(func_config),
+    );
+
+    let mut lit_config = ahash::AHashMap::new();
+    lit_config.insert(
+        "capitalisation_policy".to_string(),
+        Value::String(formatter.literals_policy.as_str().into()),
+    );
+    configs.insert(
+        "rules:capitalisation.literals".to_string(),
+        Value::Map(lit_config),
+    );
+
+    let mut types_config = ahash::AHashMap::new();
+    types_config.insert(
+        "extended_capitalisation_policy".to_string(),
+        Value::String(formatter.types_policy.as_str().into()),
+    );
+    configs.insert(
+        "rules:capitalisation.types".to_string(),
+        Value::Map(types_config),
+    );
+
+    let mut trailing_comma_config = ahash::AHashMap::new();
+    trailing_comma_config.insert(
+        "select_clause_trailing_comma".to_string(),
+        Value::String(formatter.select_clause_trailing_comma.as_str().into()),
+    );
+    configs.insert(
+        "rules:convention.select_trailing_comma".to_string(),
+        Value::Map(trailing_comma_config),
+    );
+
+    let mut terminator_config = ahash::AHashMap::new();
+    terminator_config.insert(
+        "multiline_newline".to_string(),
+        Value::Bool(formatter.terminator_multiline_newline),
+    );
+    terminator_config.insert(
+        "require_final_semicolon".to_string(),
+        Value::Bool(formatter.require_final_semicolon),
+    );
+    configs.insert(
+        "rules:convention.terminator".to_string(),
+        Value::Map(terminator_config),
+    );
+
+    FluffConfig::new(configs, None, None)
 }
 
 impl SqruffService {
-    /// Create a new SqruffService with the specified dialect.
-    ///
-    /// # Arguments
-    /// * `dialect` - SQL dialect to use for linting/formatting
-    ///
-    /// # Returns
-    /// Result with the service or an error message
-    pub fn new(dialect: &str) -> Result<Self, String> {
-        let mut configs = ahash::AHashMap::new();
-
-        let mut core_config = ahash::AHashMap::new();
-        core_config.insert("dialect".to_string(), Value::String(dialect.into()));
-        // Exclude LT12 (files must end with trailing newline) as it's not relevant for editor queries
-        core_config.insert("exclude_rules".to_string(), Value::String("LT12".into()));
-        configs.insert("core".to_string(), Value::Map(core_config));
-
-        let mut indentation_config = ahash::AHashMap::new();
-        indentation_config.insert("tab_space_size".to_string(), Value::Int(2));
-        indentation_config.insert("indented_joins".to_string(), Value::Bool(false));
-        indentation_config.insert("indent_unit".to_string(), Value::String("space".into()));
-        configs.insert("indentation".to_string(), Value::Map(indentation_config));
-
-        let config = FluffConfig::new(configs, None, None);
+    pub fn new(
+        dialect: &str,
+        formatter: &FormatterSettings,
+        editor: &EditorSettings,
+    ) -> Result<Self, String> {
+        let config = build_config(dialect, formatter, editor);
         let linter = Linter::new(config, None, None, false);
 
         Ok(Self {
-            linter: Mutex::new(linter),
+            dialect: dialect.to_string(),
+            state: Mutex::new(LinterState {
+                linter,
+                fingerprint: compute_fingerprint(formatter, editor),
+            }),
         })
     }
 
-    /// Lint SQL text and return diagnostics.
-    ///
-    /// # Arguments
-    /// * `sql` - The SQL text to lint
-    /// * `statement_offset` - Optional byte offset to add to diagnostics
-    ///   (useful when linting a sub-section of a larger file)
-    ///
-    /// # Returns
-    /// Vector of diagnostics or an error message
+    fn ensure_linter(
+        &self,
+        formatter: &FormatterSettings,
+        editor: &EditorSettings,
+    ) -> Result<(), String> {
+        let fingerprint = compute_fingerprint(formatter, editor);
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|e| format!("Linter lock poisoned: {}", e))?;
+
+        if state.fingerprint != fingerprint {
+            let config = build_config(&self.dialect, formatter, editor);
+            state.linter = Linter::new(config, None, None, false);
+            state.fingerprint = fingerprint;
+        }
+
+        Ok(())
+    }
+
     pub fn lint(
         &self,
         sql: &str,
+        formatter: &FormatterSettings,
+        editor: &EditorSettings,
         _statement_offset: Option<usize>,
     ) -> Result<Vec<Diagnostic>, String> {
         if sql.len() > 300_000 {
@@ -73,29 +244,25 @@ impl SqruffService {
             return Ok(Vec::new());
         }
 
-        let mut linter = self
-            .linter
+        self.ensure_linter(formatter, editor)?;
+
+        let mut state = self
+            .state
             .lock()
             .map_err(|e| format!("Linter lock poisoned: {}", e))?;
-        let linted_file = linter.lint_string_wrapped(sql, false);
-        drop(linter);
+        let linted_file = state.linter.lint_string_wrapped(sql, false);
+        drop(state);
 
         let violations = linted_file.violations();
 
-        // Sqruff provides positions relative to the SQL text we passed in (the statement)
-        // We return diagnostics relative to the statement text
-        // The caller is responsible for adjusting positions to the full file if needed
         let diagnostics: Vec<Diagnostic> = violations
             .iter()
             .map(|violation| {
-                // Convert sqruff violation to gpui_component Diagnostic
                 let severity = Self::severity_for_rule(violation.rule_code());
 
-                // sqruff uses 1-indexed line numbers and column positions
                 let line_no = violation.line_no.saturating_sub(1) as u32;
                 let col_no = violation.line_pos.saturating_sub(1) as u32;
 
-                // Calculate end position based on source_slice length
                 let length = if violation.source_slice.end > violation.source_slice.start {
                     (violation.source_slice.end - violation.source_slice.start) as u32
                 } else {
@@ -114,26 +281,25 @@ impl SqruffService {
         Ok(diagnostics)
     }
 
-    /// Format SQL text.
-    ///
-    /// # Arguments
-    /// * `sql` - The SQL text to format
-    ///
-    /// # Returns
-    /// Formatted SQL string or an error message
-    pub fn format(&self, sql: &str) -> Result<String, String> {
+    pub fn format(
+        &self,
+        sql: &str,
+        formatter: &FormatterSettings,
+        editor: &EditorSettings,
+    ) -> Result<String, String> {
         if sql.trim().is_empty() {
             return Ok(sql.to_string());
         }
 
-        let mut linter = self
-            .linter
+        self.ensure_linter(formatter, editor)?;
+
+        let mut state = self
+            .state
             .lock()
             .map_err(|e| format!("Linter lock poisoned: {}", e))?;
-        let linted_file = linter.lint_string_wrapped(sql, true);
-        drop(linter);
+        let linted_file = state.linter.lint_string_wrapped(sql, true);
+        drop(state);
 
-        // Apply fixes to get formatted SQL
         let formatted = linted_file.fix_string();
 
         if formatted.is_empty() {
@@ -144,19 +310,15 @@ impl SqruffService {
         }
     }
 
-    /// Map sqruff rule code to diagnostic severity.
     fn severity_for_rule(rule_code: &str) -> DiagnosticSeverity {
-        // Sqruff rule codes: CP01, LT02, AL01, etc.
-        // CP = Capitalization, LT = Layout, AL = Aliasing, etc.
-        // Most are warnings, but some layout issues could be hints
         match &rule_code[..2.min(rule_code.len())] {
-            "LT" => DiagnosticSeverity::Hint,    // Layout rules are hints
-            "CV" => DiagnosticSeverity::Warning, // Convention violations are warnings
-            "ST" => DiagnosticSeverity::Error,   // Structure issues can be errors
-            "RF" => DiagnosticSeverity::Warning, // Reference issues are warnings
-            "AM" => DiagnosticSeverity::Warning, // Ambiguous code is warning
-            "JJ" => DiagnosticSeverity::Warning, // Jinja issues are warnings
-            _ => DiagnosticSeverity::Warning,    // Default to warning
+            "LT" => DiagnosticSeverity::Hint,
+            "CV" => DiagnosticSeverity::Warning,
+            "ST" => DiagnosticSeverity::Error,
+            "RF" => DiagnosticSeverity::Warning,
+            "AM" => DiagnosticSeverity::Warning,
+            "JJ" => DiagnosticSeverity::Warning,
+            _ => DiagnosticSeverity::Warning,
         }
     }
 }
