@@ -87,9 +87,12 @@ fn main() {
             if let Some(theme) = ThemeRegistry::global(cx).themes().get(&theme_name).cloned() {
                 Theme::global_mut(cx).apply_config(&theme);
             }
+            settings::apply_font_settings(cx);
         }) {
             tracing::error!("Failed to watch themes directory: {}", err);
         }
+
+        settings::apply_font_settings(cx);
 
         cx.set_text_rendering_mode(gpui::TextRenderingMode::Subpixel);
 

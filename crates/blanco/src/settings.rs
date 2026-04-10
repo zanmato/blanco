@@ -3,8 +3,23 @@ mod view;
 
 pub use view::SettingsView;
 
+use crate::app_settings::AppSettings;
+use gpui::{App, SharedString};
+use gpui_component::Theme;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+
+/// Apply user font settings on top of the current theme.
+/// Called after theme changes and on startup to ensure font preferences persist.
+pub fn apply_font_settings(cx: &mut App) {
+    let appearance = AppSettings::global(cx).settings.appearance.clone();
+    if !appearance.font_family.is_empty() {
+        Theme::global_mut(cx).font_family = SharedString::from(appearance.font_family);
+    }
+    if !appearance.mono_font_family.is_empty() {
+        Theme::global_mut(cx).mono_font_family = SharedString::from(appearance.mono_font_family);
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
@@ -27,7 +42,10 @@ impl Settings {
                     settings.general.check_for_updates = value.parse().unwrap_or_default();
                 }
                 "editor.font_family" => {
-                    settings.editor.font_family = value.clone();
+                    // Legacy: migrate to appearance.mono_font_family
+                    if settings.appearance.mono_font_family.is_empty() {
+                        settings.appearance.mono_font_family = value.clone();
+                    }
                 }
                 "editor.word_wrap" => {
                     settings.editor.word_wrap = value.parse().unwrap_or_default();
@@ -63,6 +81,12 @@ impl Settings {
                 }
                 "appearance.theme" => {
                     settings.appearance.theme = value.clone();
+                }
+                "appearance.font_family" => {
+                    settings.appearance.font_family = value.clone();
+                }
+                "appearance.mono_font_family" => {
+                    settings.appearance.mono_font_family = value.clone();
                 }
                 "chat.provider" => {
                     settings.chat.provider = value.clone();
@@ -158,7 +182,6 @@ pub struct GeneralSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EditorSettings {
-    pub font_family: String,
     pub word_wrap: bool,
     pub show_whitespace: bool,
     pub folding: bool,
@@ -178,6 +201,8 @@ pub struct DatabaseSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppearanceSettings {
     pub theme: String,
+    pub font_family: String,
+    pub mono_font_family: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -203,7 +228,6 @@ impl Default for GeneralSettings {
 impl Default for EditorSettings {
     fn default() -> Self {
         Self {
-            font_family: "Fira Code".to_string(),
             word_wrap: false,
             show_whitespace: false,
             folding: true,
@@ -229,6 +253,8 @@ impl Default for AppearanceSettings {
     fn default() -> Self {
         Self {
             theme: "One Dark - Darkened".to_string(),
+            font_family: String::new(),
+            mono_font_family: String::new(),
         }
     }
 }
