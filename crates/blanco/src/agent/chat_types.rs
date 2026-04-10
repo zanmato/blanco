@@ -33,6 +33,8 @@ pub struct ToolCallData {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MessageMetadata {
     pub tokens_used: Option<u32>,
+    pub prompt_tokens: Option<u32>,
+    pub completion_tokens: Option<u32>,
     pub model: String,
     pub execution_time: Option<std::time::Duration>,
 }
@@ -41,6 +43,8 @@ impl Default for MessageMetadata {
     fn default() -> Self {
         Self {
             tokens_used: None,
+            prompt_tokens: None,
+            completion_tokens: None,
             model: "unknown".to_string(),
             execution_time: None,
         }
@@ -133,9 +137,8 @@ impl ChatMessage {
             content: content.into(),
             timestamp: Utc::now(),
             metadata: MessageMetadata {
-                tokens_used: None,
                 model,
-                execution_time: None,
+                ..Default::default()
             },
             tool_calls: None,
             tool_call_id: None,
@@ -157,9 +160,8 @@ impl ChatMessage {
             content: content.into(),
             timestamp: Utc::now(),
             metadata: MessageMetadata {
-                tokens_used: None,
                 model,
-                execution_time: None,
+                ..Default::default()
             },
             tool_calls: None,
             tool_call_id: Some(tool_call_id),
@@ -168,6 +170,13 @@ impl ChatMessage {
 
     pub fn with_tool_calls(mut self, tool_calls: Vec<ToolCallData>) -> Self {
         self.tool_calls = Some(tool_calls);
+        self
+    }
+
+    pub fn with_usage(mut self, prompt_tokens: u32, completion_tokens: u32) -> Self {
+        self.metadata.prompt_tokens = Some(prompt_tokens);
+        self.metadata.completion_tokens = Some(completion_tokens);
+        self.metadata.tokens_used = Some(prompt_tokens + completion_tokens);
         self
     }
 }

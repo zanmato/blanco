@@ -250,6 +250,8 @@ impl ChatSession {
             Self::build_request_messages(&system_prompt, &initial_messages, &user_message);
 
         let mut loop_count = 0;
+        let mut accumulated_prompt_tokens: u32 = 0;
+        let mut accumulated_completion_tokens: u32 = 0;
         const MAX_LOOP_ITERATIONS: usize = 10; // Prevent infinite loops
 
         loop {
@@ -299,9 +301,13 @@ impl ChatSession {
             .map_err(|e| anyhow::anyhow!("Tokio join error: {}", e))?
             .map_err(|e| anyhow::anyhow!("LLM error: {}", e))?;
 
-            // Get response text and tool calls
+            // Get response text, tool calls, and usage
             let response_text = response.text().unwrap_or_default();
             let tool_calls = response.tool_calls();
+            if let Some(usage) = response.usage() {
+                accumulated_prompt_tokens = accumulated_prompt_tokens.max(usage.prompt_tokens);
+                accumulated_completion_tokens += usage.completion_tokens;
+            }
 
             // Check if there are tool calls
             if let Some(calls) = tool_calls {
@@ -349,7 +355,10 @@ impl ChatSession {
                 } else {
                     // Normal completion
                     tracing::debug!("Normal completion received on iteration {}", loop_count);
-                    let final_message = ChatMessage::assistant(response_text.clone(), model_name);
+                    let mut final_message = ChatMessage::assistant(response_text.clone(), model_name);
+                    if accumulated_prompt_tokens > 0 || accumulated_completion_tokens > 0 {
+                        final_message = final_message.with_usage(accumulated_prompt_tokens, accumulated_completion_tokens);
+                    }
                     if let Err(e) = ui_sender.send(final_message).await {
                         tracing::error!("Failed to send chat message to UI: {}", e);
                     }
@@ -358,7 +367,10 @@ impl ChatSession {
             } else {
                 // Normal completion
                 tracing::debug!("Normal completion received on iteration {}", loop_count);
-                let final_message = ChatMessage::assistant(response_text.clone(), model_name);
+                let mut final_message = ChatMessage::assistant(response_text.clone(), model_name);
+                if accumulated_prompt_tokens > 0 || accumulated_completion_tokens > 0 {
+                    final_message = final_message.with_usage(accumulated_prompt_tokens, accumulated_completion_tokens);
+                }
                 if let Err(e) = ui_sender.send(final_message).await {
                     tracing::error!("Failed to send chat message to UI: {}", e);
                 }

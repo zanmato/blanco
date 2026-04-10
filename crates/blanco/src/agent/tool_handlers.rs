@@ -5,11 +5,10 @@
 
 use async_trait::async_trait;
 use gpui::{AsyncWindowContext, WeakEntity};
-use gpui_component::input::InputState;
+use gpui_component::input::{InputState, RopeExt};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::result_ext::ResultExt;
 use blanco_core::DatabaseService;
 use llm::{
     FunctionCall, ToolCall, chat::FunctionTool, chat::ParameterProperty, chat::ParametersSchema,
@@ -204,28 +203,88 @@ impl AgentToolHandler for ListTablesHandler {
     }
 }
 
-/// Read tab tool handler
+/// Maximum lines to return when no range is specified
+const READ_TAB_DEFAULT_LIMIT: usize = 200;
+
+/// Read tab tool handler with optional line range support
 pub struct ReadTabHandler;
 
 #[async_trait(?Send)]
 impl AgentToolHandler for ReadTabHandler {
     async fn execute(
         &self,
-        _arguments: serde_json::Value,
+        arguments: serde_json::Value,
         context: &ToolContext,
         cx: &mut AsyncWindowContext,
     ) -> ToolCall {
         if let Some(input_state) = &context.input_state {
-            // Read from input state entity
-            match input_state.read_with(cx, |input, _cx| input.text().to_string()) {
-                Ok(content) => ToolCall {
-                    id: "read-tab".to_string(),
-                    call_type: "function".to_string(),
-                    function: FunctionCall {
-                        name: "read-tab".to_string(),
-                        arguments: serde_json::json!({"content": content}).to_string(),
-                    },
-                },
+            let requested_start = arguments
+                .get("start_line")
+                .and_then(|v| v.as_i64())
+                .map(|v| v.max(1) as usize);
+
+            let requested_end = arguments
+                .get("end_line")
+                .and_then(|v| v.as_i64())
+                .map(|v| v.max(1) as usize);
+
+            match input_state.read_with(cx, |input, _cx| {
+                let rope = input.text();
+                let total_lines = rope.lines_len();
+
+                if total_lines == 0 {
+                    return (String::new(), 0usize, 0usize, 0usize);
+                }
+
+                let (start, end) = match (requested_start, requested_end) {
+                    (Some(s), Some(e)) => (s, e),
+                    (Some(s), None) => (s, total_lines),
+                    (None, Some(e)) => (1, e),
+                    (None, None) if total_lines > READ_TAB_DEFAULT_LIMIT => {
+                        (1, READ_TAB_DEFAULT_LIMIT)
+                    }
+                    (None, None) => (1, total_lines),
+                };
+
+                let start = start.min(total_lines);
+                let end = end.min(total_lines).max(start);
+
+                let slice = rope.slice_lines((start - 1)..end);
+                let content = slice.to_string();
+                let numbered = content
+                    .lines()
+                    .enumerate()
+                    .map(|(i, line)| format!("{}: {}", start + i, line))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                (numbered, total_lines, start, end)
+            }) {
+                Ok((content, total_lines, start, end)) => {
+                    let mut json = serde_json::json!({
+                        "content": content,
+                        "total_lines": total_lines,
+                        "start_line": start,
+                        "end_line": end,
+                    });
+
+                    if total_lines > end {
+                        json["truncated"] = serde_json::json!(true);
+                        json["hint"] = serde_json::json!(format!(
+                            "Showing lines {}-{} of {}. Use start_line/end_line to read more.",
+                            start, end, total_lines
+                        ));
+                    }
+
+                    ToolCall {
+                        id: "read-tab".to_string(),
+                        call_type: "function".to_string(),
+                        function: FunctionCall {
+                            name: "read-tab".to_string(),
+                            arguments: json.to_string(),
+                        },
+                    }
+                }
                 Err(e) => ToolCall {
                     id: "read-tab".to_string(),
                     call_type: "function".to_string(),
@@ -248,27 +307,114 @@ impl AgentToolHandler for ReadTabHandler {
     }
 
     fn as_tool(&self) -> Tool {
+        let mut properties = HashMap::new();
+        properties.insert(
+            "start_line".to_string(),
+            ParameterProperty {
+                property_type: "integer".to_string(),
+                description: "1-based starting line number to read from. Defaults to line 1.".to_string(),
+                items: None,
+                enum_list: None,
+            },
+        );
+        properties.insert(
+            "end_line".to_string(),
+            ParameterProperty {
+                property_type: "integer".to_string(),
+                description: format!("1-based ending line number (inclusive). Defaults to the last line, or {} if the file is large and no range is specified.", READ_TAB_DEFAULT_LIMIT),
+                items: None,
+                enum_list: None,
+            },
+        );
+
         Tool {
             tool_type: "function".to_string(),
             function: FunctionTool {
                 name: "read-tab".to_string(),
-                description: "Read the current query tab content including the SQL query text. Returns the SQL content from the active tab connected to this chat session.".to_string(),
+                description: format!("Read the current query tab content with optional line range. Returns line-numbered content. If the tab has more than {} lines and no range is specified, returns only the first {} lines with a hint to read more.", READ_TAB_DEFAULT_LIMIT, READ_TAB_DEFAULT_LIMIT),
                 parameters: serde_json::to_value(ParametersSchema {
                     schema_type: "object".to_string(),
-                    properties: HashMap::new(),
+                    properties,
                     required: vec![],
                 }).unwrap_or_default(),
             },
         }
     }
 
-    fn call_summary(&self, _arguments: &serde_json::Value, _result: &ToolCall) -> String {
-        "Read Tab".to_string()
+    fn call_summary(&self, arguments: &serde_json::Value, _result: &ToolCall) -> String {
+        let start = arguments
+            .get("start_line")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(1);
+        let end = arguments
+            .get("end_line")
+            .and_then(|v| v.as_i64());
+        match end {
+            Some(end) => format!("Read Tab: lines {}-{}", start, end),
+            None => "Read Tab".to_string(),
+        }
     }
 }
 
-/// Write tab tool handler
+/// Write tab tool handler with multiple operation modes
 pub struct WriteTabHandler;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum WriteOperation {
+    ReplaceAll,
+    InsertBeforeLine,
+    ReplaceLines,
+}
+
+fn apply_line_operation(
+    current_text: &str,
+    operation: WriteOperation,
+    content: &str,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
+) -> Result<String, String> {
+    match operation {
+        WriteOperation::ReplaceAll => Ok(content.to_string()),
+        WriteOperation::InsertBeforeLine => {
+            let target = start_line.ok_or("start_line is required for insert_before_line")?;
+            if target == 0 {
+                return Err("start_line must be 1 or greater".to_string());
+            }
+            let mut lines: Vec<String> = current_text.lines().map(|l| l.to_string()).collect();
+            let insert_at = (target - 1).min(lines.len());
+            let new_lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+            for (i, new_line) in new_lines.into_iter().enumerate() {
+                lines.insert(insert_at + i, new_line);
+            }
+            // Preserve trailing newline if original had one
+            let mut result = lines.join("\n");
+            if current_text.ends_with('\n') {
+                result.push('\n');
+            }
+            Ok(result)
+        }
+        WriteOperation::ReplaceLines => {
+            let start = start_line.ok_or("start_line is required for replace_lines")?;
+            let end = end_line.ok_or("end_line is required for replace_lines")?;
+            if start == 0 || end == 0 {
+                return Err("start_line and end_line must be 1 or greater".to_string());
+            }
+            if start > end {
+                return Err("start_line must be <= end_line".to_string());
+            }
+            let mut lines: Vec<String> = current_text.lines().map(|l| l.to_string()).collect();
+            let replace_start = (start - 1).min(lines.len());
+            let replace_end = end.min(lines.len());
+            let new_lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+            lines.splice(replace_start..replace_end, new_lines);
+            let mut result = lines.join("\n");
+            if current_text.ends_with('\n') {
+                result.push('\n');
+            }
+            Ok(result)
+        }
+    }
+}
 
 #[async_trait(?Send)]
 impl AgentToolHandler for WriteTabHandler {
@@ -279,27 +425,86 @@ impl AgentToolHandler for WriteTabHandler {
         cx: &mut AsyncWindowContext,
     ) -> ToolCall {
         if let Some(input_state) = &context.input_state {
-            // Extract content from arguments
             let content = arguments
                 .get("content")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
 
-            input_state
-                .update_in(cx, |input_state, window, cx| {
-                    input_state.set_value(content.clone(), window, cx);
-                })
-                .log_err();
+            let operation_str = arguments
+                .get("operation")
+                .and_then(|v| v.as_str())
+                .unwrap_or("replace_all");
 
-            ToolCall {
-                id: "write-tab".to_string(),
-                call_type: "function".to_string(),
-                function: FunctionCall {
-                    name: "write-tab".to_string(),
-                    arguments:
-                        serde_json::json!({"success": true, "message": "Content written to tab"})
+            let operation = match operation_str {
+                "insert_before_line" => WriteOperation::InsertBeforeLine,
+                "replace_lines" => WriteOperation::ReplaceLines,
+                _ => WriteOperation::ReplaceAll,
+            };
+
+            let start_line = arguments
+                .get("start_line")
+                .and_then(|v| v.as_i64())
+                .map(|v| v as usize);
+
+            let end_line = arguments
+                .get("end_line")
+                .and_then(|v| v.as_i64())
+                .map(|v| v as usize);
+
+            match input_state.update_in(cx, |input_state, window, cx| {
+                let current = input_state.text().to_string();
+                let new_text = apply_line_operation(&current, operation, &content, start_line, end_line)?;
+                input_state.set_value(new_text, window, cx);
+                let total_lines = input_state.text().lines_len();
+                Ok::<usize, String>(total_lines)
+            }) {
+                Ok(Ok(total_lines)) => {
+                    let message = match operation {
+                        WriteOperation::ReplaceAll => "Content written to tab".to_string(),
+                        WriteOperation::InsertBeforeLine => {
+                            format!("Inserted before line {}", start_line.unwrap_or(0))
+                        }
+                        WriteOperation::ReplaceLines => {
+                            format!(
+                                "Replaced lines {}-{}",
+                                start_line.unwrap_or(0),
+                                end_line.unwrap_or(0)
+                            )
+                        }
+                    };
+
+                    ToolCall {
+                        id: "write-tab".to_string(),
+                        call_type: "function".to_string(),
+                        function: FunctionCall {
+                            name: "write-tab".to_string(),
+                            arguments: serde_json::json!({
+                                "success": true,
+                                "message": message,
+                                "total_lines": total_lines,
+                            })
                             .to_string(),
+                        },
+                    }
+                }
+                Ok(Err(e)) => ToolCall {
+                    id: "write-tab".to_string(),
+                    call_type: "function".to_string(),
+                    function: FunctionCall {
+                        name: "write-tab".to_string(),
+                        arguments: serde_json::json!({"error": format!("Failed to write tab: {}", e)})
+                            .to_string(),
+                    },
+                },
+                Err(e) => ToolCall {
+                    id: "write-tab".to_string(),
+                    call_type: "function".to_string(),
+                    function: FunctionCall {
+                        name: "write-tab".to_string(),
+                        arguments: serde_json::json!({"error": format!("Failed to write tab: {}", e)})
+                            .to_string(),
+                    },
                 },
             }
         } else {
@@ -317,10 +522,41 @@ impl AgentToolHandler for WriteTabHandler {
     fn as_tool(&self) -> Tool {
         let mut properties = HashMap::new();
         properties.insert(
+            "operation".to_string(),
+            ParameterProperty {
+                property_type: "string".to_string(),
+                description: "The write operation to perform. \"replace_all\" (default): replaces the entire tab content. \"insert_before_line\": inserts content before the specified line. \"replace_lines\": replaces the specified line range with new content.".to_string(),
+                items: None,
+                enum_list: Some(vec![
+                    "replace_all".to_string(),
+                    "insert_before_line".to_string(),
+                    "replace_lines".to_string(),
+                ]),
+            },
+        );
+        properties.insert(
             "content".to_string(),
             ParameterProperty {
                 property_type: "string".to_string(),
-                description: "The SQL query content to write to the tab.".to_string(),
+                description: "The SQL query content to write/insert.".to_string(),
+                items: None,
+                enum_list: None,
+            },
+        );
+        properties.insert(
+            "start_line".to_string(),
+            ParameterProperty {
+                property_type: "integer".to_string(),
+                description: "1-based line number. Required for \"insert_before_line\" and \"replace_lines\" operations.".to_string(),
+                items: None,
+                enum_list: None,
+            },
+        );
+        properties.insert(
+            "end_line".to_string(),
+            ParameterProperty {
+                property_type: "integer".to_string(),
+                description: "1-based ending line number (inclusive). Required for \"replace_lines\" operation.".to_string(),
                 items: None,
                 enum_list: None,
             },
@@ -330,7 +566,7 @@ impl AgentToolHandler for WriteTabHandler {
             tool_type: "function".to_string(),
             function: FunctionTool {
                 name: "write-tab".to_string(),
-                description: "Write/update the current query tab content with the provided SQL query. This replaces the entire tab content with the new query.".to_string(),
+                description: "Write content to the current query tab. Supports three modes: replace all content (default), insert before a specific line, or replace a specific range of lines.".to_string(),
                 parameters: serde_json::to_value(ParametersSchema {
                     schema_type: "object".to_string(),
                     properties,
@@ -341,15 +577,40 @@ impl AgentToolHandler for WriteTabHandler {
     }
 
     fn call_summary(&self, arguments: &serde_json::Value, _result: &ToolCall) -> String {
-        if let Some(content) = arguments.get("content").and_then(|v| v.as_str()) {
-            let preview = if content.len() > 50 {
-                format!("{}...", &content[..50])
-            } else {
-                content.to_string()
-            };
-            format!("Write Tab: {}", preview)
+        let operation = arguments
+            .get("operation")
+            .and_then(|v| v.as_str())
+            .unwrap_or("replace_all");
+        let content = arguments
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let preview = if content.len() > 40 {
+            format!("{}...", &content[..40])
         } else {
-            "Write Tab".to_string()
+            content.to_string()
+        };
+
+        match operation {
+            "insert_before_line" => {
+                let line = arguments
+                    .get("start_line")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                format!("Insert before line {}: {}", line, preview)
+            }
+            "replace_lines" => {
+                let start = arguments
+                    .get("start_line")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                let end = arguments
+                    .get("end_line")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                format!("Replace lines {}-{}: {}", start, end, preview)
+            }
+            _ => format!("Write Tab: {}", preview),
         }
     }
 }

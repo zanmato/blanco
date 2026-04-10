@@ -68,6 +68,7 @@ impl ChatPanel {
                         panel.messages.len(),
                         message.content.into(),
                         message.role.clone(),
+                        Some(message.metadata.clone()),
                         cx,
                     )
                 });
