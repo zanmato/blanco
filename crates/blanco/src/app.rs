@@ -4,7 +4,7 @@ use gpui::{
     Task, Window, actions, div, prelude::FluentBuilder, px, svg,
 };
 use gpui_component::{
-    ActiveTheme, Root, TITLE_BAR_HEIGHT, TitleBar, WindowExt as _,
+    ActiveTheme, Root, TitleBar, WindowExt as _,
     button::{Button, ButtonVariants as _},
     dialog::{DialogAction, DialogClose, DialogFooter},
     global_state::GlobalState,
@@ -810,8 +810,6 @@ impl Render for BlancoApp {
         let dialog_layer = Root::render_dialog_layer(window, cx);
         let notification_layer = Root::render_notification_layer(window, cx);
 
-        let window_bounds = window.bounds();
-
         div()
             .flex()
             .flex_col()
@@ -832,6 +830,7 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_toggle_render_whitespace))
             .on_action(cx.listener(Self::on_toggle_word_wrap))
             .size_full()
+            .overflow_hidden()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             // Title bar
@@ -854,18 +853,22 @@ impl Render for BlancoApp {
             )
             // Main content area
             .child(
-                h_resizable("main-layout")
-                    .with_state(&self.main_resize_state)
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .child(
+                        h_resizable("main-layout")
+                            .with_state(&self.main_resize_state)
                     // Left side: Connections panel sidebar
                     .when(!self.sidebar_collapsed, |this| {
-                        let window_height = window_bounds.size.height;
                         this.child(
                             resizable_panel()
                                 .size(px(256.))
                                 .size_range(px(200.)..px(500.))
                                 .child(
                                     div()
-                                        .h(window_height - TITLE_BAR_HEIGHT - px(25.))
                                         .w_full()
                                         .pb_6()
                                         .overflow_hidden()
@@ -883,17 +886,17 @@ impl Render for BlancoApp {
                         )
                     })
                     // Main panel
-                    .child({
-                        let window_height = window_bounds.size.height;
+                    .child(
                         resizable_panel().child(
                             div()
                                 .flex()
                                 .flex_1()
-                                .h(window_height - TITLE_BAR_HEIGHT - px(25.))
+                                .h_full()
                                 .overflow_hidden()
                                 .child(self.editor_panel.clone()),
-                        )
-                    }),
+                        ),
+                    ),
+                    ),
             )
             .children(sheet_layer)
             .children(dialog_layer)
@@ -918,10 +921,7 @@ fn init_menus(cx: &mut App) {
 
     cx.set_menus(build_menu());
 
-     let menu = build_menu()
-        .into_iter()
-        .map(|menu| menu.owned())
-        .collect();
+    let menu = build_menu().into_iter().map(|menu| menu.owned()).collect();
     GlobalState::global_mut(cx).set_app_menus(menu);
 }
 
