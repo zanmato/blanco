@@ -245,7 +245,12 @@ impl ConnectionConfig {
 
                 let mut params = vec!["application_name=Blanco".to_string()];
                 if let Some(ssl_mode) = &self.ssl_mode {
-                    params.push(format!("sslmode={}", ssl_mode));
+                    let pg_ssl_mode = match ssl_mode.as_str() {
+                        "disabled" => "disable",
+                        _ => ssl_mode.as_str(),
+                    };
+
+                    params.push(format!("sslmode={}", pg_ssl_mode));
                 }
                 if let Some(ssl_key) = &self.ssl_key_path {
                     params.push(format!("sslkey={}", ssl_key));

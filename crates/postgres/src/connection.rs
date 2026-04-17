@@ -1215,7 +1215,7 @@ impl Connection for PostgresConnection {
     async fn get_schemas(&self) -> Result<Vec<String>> {
         let result = self
             .execute_query(
-                "SELECT schema_name FROM information_schema.schemata WHERE schema_owner = 'pg_database_owner' ORDER BY schema_name",
+                "SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT LIKE 'pg_temp%' AND schema_name NOT LIKE 'pg_toast%' ORDER BY schema_name",
                 self.initial_database.as_deref(),
                 None,
             )
