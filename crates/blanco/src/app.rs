@@ -916,8 +916,17 @@ fn init_menus(cx: &mut App) {
         gpui::KeyBinding::new("alt-f4", Quit, None),
     ]);
 
-    // Convert menus to OwnedMenu for global state (AppMenuBar component)
-    let owned_menus: Vec<gpui::OwnedMenu> = vec![
+    cx.set_menus(build_menu());
+
+     let menu = build_menu()
+        .into_iter()
+        .map(|menu| menu.owned())
+        .collect();
+    GlobalState::global_mut(cx).set_app_menus(menu);
+}
+
+fn build_menu() -> Vec<Menu> {
+    vec![
         Menu {
             name: "File".into(),
             items: vec![
@@ -952,47 +961,4 @@ fn init_menus(cx: &mut App) {
             disabled: false,
         },
     ]
-    .into_iter()
-    .map(|m| m.owned())
-    .collect();
-
-    // Set global state menus for AppMenuBar component
-    GlobalState::global_mut(cx).set_app_menus(owned_menus);
-
-    // Set native OS menus (requires fresh Menu instances since Menu doesn't implement Clone)
-    cx.set_menus(vec![
-        Menu {
-            name: "File".into(),
-            items: vec![
-                MenuItem::action("New Connection", OpenNewConnectionModal),
-                MenuItem::action("New Snippet", NewSnippet),
-                MenuItem::action("Settings", OpenSettings),
-                MenuItem::Separator,
-                MenuItem::action("Quit", Quit),
-            ],
-            disabled: false,
-        },
-        Menu {
-            name: "Edit".into(),
-            items: vec![
-                MenuItem::action("Undo", gpui_component::input::Undo),
-                MenuItem::action("Redo", gpui_component::input::Redo),
-                MenuItem::separator(),
-                MenuItem::action("Cut", gpui_component::input::Cut),
-                MenuItem::action("Copy", gpui_component::input::Copy),
-                MenuItem::action("Paste", gpui_component::input::Paste),
-                MenuItem::separator(),
-                MenuItem::action("Select All", gpui_component::input::SelectAll),
-            ],
-            disabled: false,
-        },
-        Menu {
-            name: "View".into(),
-            items: vec![
-                MenuItem::action("Render Whitespace", ToggleRenderWhitespace),
-                MenuItem::action("Word Wrap", ToggleWordWrap),
-            ],
-            disabled: false,
-        },
-    ]);
 }
