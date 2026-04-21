@@ -5,7 +5,7 @@ pub use delegate::{SnippetItemMetadata, SnippetsTreeDelegate};
 use crate::app::{NewSnippet, OpenSnippetEditor};
 use crate::app_database::{AppDatabase, SnippetData};
 use crate::result_ext::ResultExt;
-use blanco_ui::draggable_tree::{DraggableTreeState, TreeItem};
+use blanco_ui::draggable_tree::{DraggableTree, DraggableTreeState, TreeItem};
 use gpui::{
     AppContext, ClipboardItem, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
     KeyDownEvent, ParentElement, Render, SharedString, Styled, Window, actions,
@@ -308,7 +308,7 @@ impl Render for SnippetsPanel {
 
         v_flex()
             .id("snippets-panel")
-            .min_h_72()
+            .size_full()
             .flex_col()
             .gap_2()
             .border_t_1()
@@ -337,7 +337,9 @@ impl Render for SnippetsPanel {
             .child(
                 v_flex()
                     .id("snippets-tree-container")
-                    .h_full()
+                    .flex_1()
+                    .min_h_0()
+                    .pb_6()
                     .when_some(group_input, |this, input| {
                         this.child(
                             h_flex()
@@ -353,7 +355,7 @@ impl Render for SnippetsPanel {
                                 }),
                         )
                     })
-                    .child(self.tree_state.clone())
+                    .child(DraggableTree::new(&self.tree_state))
                     .overflow_y_scrollbar(),
             )
     }

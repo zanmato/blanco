@@ -599,7 +599,7 @@ impl EditorPanel {
                     cx,
                 )
             }),
-            sql_log: cx.new(|cx| SqlLog::new(1000, cx.theme().highlight_theme.clone())),
+            sql_log: cx.new(|cx| SqlLog::new(10, cx.theme().highlight_theme.clone())),
             sqruff_service,
             completion_provider: Some(sql_completion_provider),
             // Chat functionality

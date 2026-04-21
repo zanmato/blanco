@@ -460,9 +460,9 @@ impl ImportModal {
                     let raw = std::fs::read(&path).ok();
                     match raw {
                         Some(bytes) => {
-                            let mut d = chardetng::EncodingDetector::new();
+                            let mut d = chardetng::EncodingDetector::new(chardetng::Iso2022JpDetection::Allow);
                             d.feed(&bytes, true);
-                            d.guess(None, true)
+                            d.guess(None, chardetng::Utf8Detection::Allow)
                         }
                         None => encoding_rs::UTF_8,
                     }

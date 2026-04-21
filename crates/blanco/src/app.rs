@@ -11,7 +11,7 @@ use gpui_component::{
     h_flex,
     menu::AppMenuBar,
     notification::NotificationType,
-    resizable::{ResizableState, h_resizable, resizable_panel},
+    resizable::{ResizableState, h_resizable, resizable_panel, v_resizable},
 };
 use serde::Deserialize;
 use smol::channel;
@@ -184,6 +184,7 @@ pub struct BlancoApp {
     sidebar_collapsed: bool,
     app_menu_bar: Entity<AppMenuBar>,
     main_resize_state: Entity<ResizableState>,
+    sidebar_resize_state: Entity<ResizableState>,
     _subscriptions: Vec<Subscription>,
     _action_task: Task<()>,
 }
@@ -233,6 +234,7 @@ impl BlancoApp {
         let sidebar = cx.new(|cx| ConnectionsPanel::new(window, cx));
         let snippets_panel = cx.new(|cx| SnippetsPanel::new(window, cx));
         let main_resize_state = cx.new(|_| ResizableState::default());
+        let sidebar_resize_state = cx.new(|_| ResizableState::default());
 
         // Load saved tabs from database
         info!("Loading saved tabs from database");
@@ -305,6 +307,7 @@ impl BlancoApp {
             sidebar_collapsed: false,
             app_menu_bar,
             main_resize_state,
+            sidebar_resize_state,
             _subscriptions: subscriptions,
             _action_task: action_task,
         }
@@ -870,12 +873,18 @@ impl Render for BlancoApp {
                                             .border_r_1()
                                             .border_color(cx.theme().border)
                                             .child(
-                                                div()
-                                                    .size_full()
-                                                    .flex()
-                                                    .flex_col()
-                                                    .child(self.sidebar.clone())
-                                                    .child(self.snippets_panel.clone()),
+                                                v_resizable("sidebar-layout")
+                                                    .with_state(&self.sidebar_resize_state)
+                                                    .child(
+                                                        resizable_panel()
+                                                            .child(self.sidebar.clone()),
+                                                    )
+                                                    .child(
+                                                        resizable_panel()
+                                                            .size(px(280.))
+                                                            .size_range(px(120.)..px(600.))
+                                                            .child(self.snippets_panel.clone()),
+                                                    ),
                                             ),
                                     ),
                             )

@@ -55,9 +55,9 @@ fn read_sample_bytes(path: &Path) -> Result<Vec<u8>> {
 }
 
 fn detect_encoding(raw: &[u8]) -> &'static Encoding {
-    let mut detector = chardetng::EncodingDetector::new();
+    let mut detector = chardetng::EncodingDetector::new(chardetng::Iso2022JpDetection::Allow);
     detector.feed(raw, true);
-    detector.guess(None, true)
+    detector.guess(None, chardetng::Utf8Detection::Allow)
 }
 
 fn decode_sample(raw: &[u8], encoding: &'static Encoding) -> String {
