@@ -239,6 +239,30 @@ pub trait Connection: Send + Sync {
         parameters: Option<&[String]>,
     ) -> Result<QueryResult, anyhow::Error>;
 
+    /// Execute a write statement (INSERT/UPDATE/DELETE/DDL) with optional nullable parameters.
+    /// Unlike `execute_query`, each parameter may be `None` to bind SQL NULL.
+    /// Returns the number of rows affected. Backends that do not override this fall back
+    /// to `execute_query` after coercing `None` values to empty strings, which is unsafe
+    /// for NULL handling; implementations should override.
+    async fn execute_write(
+        &self,
+        query: &str,
+        database_name: Option<&str>,
+        parameters: &[Option<String>],
+    ) -> Result<u64, anyhow::Error> {
+        let coerced: Vec<String> = parameters
+            .iter()
+            .map(|v| v.clone().unwrap_or_default())
+            .collect();
+        let params = if coerced.is_empty() {
+            None
+        } else {
+            Some(coerced.as_slice())
+        };
+        let result = self.execute_query(query, database_name, params).await?;
+        Ok(result.rows_affected)
+    }
+
     /// Execute a query and return a stream of rows for large datasets
     /// Returns a tuple of (columns, column_types, row_stream)
     async fn execute_query_stream(

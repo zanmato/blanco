@@ -1,7 +1,7 @@
 use crate::app_database::AppDatabase;
 use crate::app_settings::AppSettings;
-use crate::settings::formatter_page::formatter_page;
 use crate::settings::Settings;
+use crate::settings::formatter_page::formatter_page;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, Render, SharedString,
     Styled, Subscription, Task, Window, px, rems,
@@ -129,12 +129,7 @@ impl SettingsView {
         let font_name = value.clone().unwrap_or_default();
         AppSettings::global_mut(cx).settings.appearance.font_family = font_name.clone();
         crate::settings::apply_font_settings(cx);
-        self.save_setting_debounced(
-            "appearance.font_family".to_string(),
-            font_name,
-            false,
-            cx,
-        );
+        self.save_setting_debounced("appearance.font_family".to_string(), font_name, false, cx);
     }
 
     fn on_mono_font_selected(
@@ -146,7 +141,10 @@ impl SettingsView {
     ) {
         let SelectEvent::Confirm(value) = event;
         let font_name = value.clone().unwrap_or_default();
-        AppSettings::global_mut(cx).settings.appearance.mono_font_family = font_name.clone();
+        AppSettings::global_mut(cx)
+            .settings
+            .appearance
+            .mono_font_family = font_name.clone();
         crate::settings::apply_font_settings(cx);
         self.save_setting_debounced(
             "appearance.mono_font_family".to_string(),
@@ -532,9 +530,7 @@ impl SettingsView {
                             }
                         }),
                     )
-                    .description(
-                        "Monospace font used in the SQL editor and results table.",
-                    ),
+                    .description("Monospace font used in the SQL editor and results table."),
                 ]),
             ]),
             // Chat Settings Page

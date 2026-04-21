@@ -136,25 +136,25 @@ impl SqlCompletionProvider {
         if context.is_dot_notation
             && let Some(table_name) = &context.dot_table_name
         {
+            tracing::debug!(
+                "SQL Completion: Dot notation detected, table_name='{}'",
+                table_name
+            );
+
+            // First try to resolve as alias
+            if let Some(resolved_table) = resolve_table_alias(table_aliases, table_name) {
                 tracing::debug!(
-                    "SQL Completion: Dot notation detected, table_name='{}'",
-                    table_name
+                    "SQL Completion: Resolved alias '{}' to table '{}'",
+                    table_name,
+                    resolved_table
                 );
+                return Some(resolved_table);
+            }
 
-                // First try to resolve as alias
-                if let Some(resolved_table) = resolve_table_alias(table_aliases, table_name) {
-                    tracing::debug!(
-                        "SQL Completion: Resolved alias '{}' to table '{}'",
-                        table_name,
-                        resolved_table
-                    );
-                    return Some(resolved_table);
-                }
-
-                // Use directly if it's a valid identifier
-                if is_valid_identifier(table_name) && !is_sql_keyword(table_name) {
-                    return Some(table_name.clone());
-                }
+            // Use directly if it's a valid identifier
+            if is_valid_identifier(table_name) && !is_sql_keyword(table_name) {
+                return Some(table_name.clone());
+            }
         }
 
         // For non-dot notation, find a table from the aliases in the statement.

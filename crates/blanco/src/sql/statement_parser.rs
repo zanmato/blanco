@@ -830,7 +830,6 @@ mod tests {
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "SELECT * FROM users");
-
     }
 
     #[test]
@@ -842,7 +841,6 @@ mod tests {
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "INSERT INTO orders (a) VALUES ('hello;')");
-
     }
 
     #[test]
@@ -872,13 +870,11 @@ mod tests {
             "INSERT INTO table2 (col) VALUES ('test;')"
         );
 
-
         // Test cursor in third statement
         let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 85));
         assert!(result.is_some());
         let info = result.unwrap();
         assert!(info.text.trim().starts_with("UPDATE table3"));
-
     }
 
     #[test]
@@ -904,8 +900,6 @@ mod tests {
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "SELECT * FROM users WHERE id = 1");
-
-
     }
 
     #[test]
@@ -930,7 +924,6 @@ mod tests {
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "SELECT * FROM users");
 
-
         // Also test at the semicolon position
         let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 19));
         assert!(
@@ -939,7 +932,6 @@ mod tests {
         );
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "SELECT * FROM users");
-
     }
 
     #[test]
@@ -955,7 +947,6 @@ mod tests {
         );
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "SELECT * FROM users");
-
     }
 
     #[test]
@@ -1001,7 +992,6 @@ DELETE FROM users WHERE id = 1;",
             "INSERT INTO orders (a) VALUES ('hello;')"
         );
 
-
         // Test cursor on second line (VALUES part of INSERT)
         let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 30));
         assert!(result.is_some());
@@ -1011,7 +1001,6 @@ DELETE FROM users WHERE id = 1;",
             "INSERT INTO orders (a) VALUES ('hello;')"
         );
 
-
         // Test cursor on third line (empty line after INSERT semicolon)
         let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 40));
         assert!(result.is_some());
@@ -1019,13 +1008,11 @@ DELETE FROM users WHERE id = 1;",
         // The INSERT statement is still the closest at this position
         assert!(info.text.trim().contains("INSERT INTO orders"));
 
-
         // Test cursor on fourth line (SELECT)
         let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 45));
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "SELECT * FROM users");
-
 
         // Test cursor on fifth line (comment after SELECT)
         let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 60));
@@ -1034,20 +1021,17 @@ DELETE FROM users WHERE id = 1;",
         // Should still return the SELECT statement even with cursor in comment
         assert!(info.text.trim().contains("SELECT * FROM users"));
 
-
         // Test cursor on sixth line (empty line before DELETE)
         let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 80));
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "DELETE FROM users WHERE id = 1");
 
-
         // Test cursor on seventh line (DELETE)
         let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 85));
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "DELETE FROM users WHERE id = 1");
-
     }
 
     #[test]
@@ -1072,13 +1056,11 @@ DELETE FROM users WHERE id = 1;",
         // Multi-line CREATE statement may not include the semicolon
         assert!(info.text.trim().starts_with("CREATE TABLE test"));
 
-
         // Test cursor in CREATE (middle)
         let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 30));
         assert!(result.is_some());
         let info = result.unwrap();
         assert!(info.text.trim().starts_with("CREATE TABLE test"));
-
 
         // Test cursor in UPDATE
         let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 120));
@@ -1089,13 +1071,11 @@ DELETE FROM users WHERE id = 1;",
             "UPDATE test SET name = 'test' WHERE id = 1"
         );
 
-
         // Test cursor in DROP
         let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 175));
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "DROP TABLE test");
-
     }
 
     #[test]
@@ -1111,20 +1091,17 @@ DELETE FROM users WHERE id = 1;",
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "SELECT a FROM b");
 
-
         // Test cursor in INSERT (position 20)
         let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 20));
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "INSERT INTO c VALUES (1)");
 
-
         // Test cursor in DELETE (position 45, well into DELETE)
         let result = parser.extract_statement_at_cursor(&text, char_to_byte_pos(&text, 45));
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.text.trim(), "DELETE FROM d WHERE e = 2");
-
     }
 
     #[test]
@@ -1150,7 +1127,7 @@ DELETE FROM users WHERE id = 1;",
                 info.text.trim(),
                 "UPDATE alternative_images ai SET updated_at = NOW() WHERE id = 'f893fd7a-45a2-4747-a726-5561bb4735ec'"
             );
-    
+
             // Should have no parameters
             assert!(info.parameters.is_empty());
         }
@@ -1257,7 +1234,6 @@ WITH customer_addresses AS (
         let info = result.unwrap();
         assert!(info.text.trim().contains("SELECT * FROM ps_customer"));
 
-
         // Test cursor at different positions in first statement
         for cursor_pos in [30, 50, 70] {
             let result =
@@ -1269,7 +1245,6 @@ WITH customer_addresses AS (
             );
             let info = result.unwrap();
             assert!(info.text.trim().contains("SELECT * FROM ps_customer"));
-    
         }
 
         // Test cursor inside the WITH/CTE statement (position around 150)
@@ -1280,6 +1255,5 @@ WITH customer_addresses AS (
         );
         let info = result.unwrap();
         assert!(info.text.trim().contains("WITH customer_addresses"));
-
     }
 }

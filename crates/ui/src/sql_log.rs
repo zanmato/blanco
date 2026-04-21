@@ -133,9 +133,7 @@ impl Render for SqlLog {
                         let highlights = entry.highlighter.styles(&range, &self.theme);
                         div()
                             .mb_1()
-                            .child(
-                                StyledText::new(entry.text.clone()).with_highlights(highlights),
-                            )
+                            .child(StyledText::new(entry.text.clone()).with_highlights(highlights))
                     })),
             )
             .vertical_scrollbar(&self.scroll_handle)

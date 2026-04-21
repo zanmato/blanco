@@ -292,6 +292,28 @@ impl Connection for SqliteConnection {
         self.execute_query_async(query, parameters).await
     }
 
+    async fn execute_write(
+        &self,
+        query: &str,
+        _database_name: Option<&str>,
+        parameters: &[Option<String>],
+    ) -> Result<u64> {
+        let pool = self
+            .pool
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
+
+        let mut q = sqlx::query(query);
+        for param in parameters {
+            q = match param {
+                Some(value) => q.bind(value),
+                None => q.bind(Option::<String>::None),
+            };
+        }
+        let result = q.execute(pool).await?;
+        Ok(result.rows_affected())
+    }
+
     async fn get_schemas(&self) -> Result<Vec<String>> {
         // SQLite has a main schema by default, plus any attached databases
         let mut schemas = vec!["main".to_string()];

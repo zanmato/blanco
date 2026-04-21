@@ -14,6 +14,7 @@ mod connection_modal;
 mod connections;
 mod editor;
 mod export;
+mod import;
 mod result_ext;
 mod results_panel;
 mod settings;

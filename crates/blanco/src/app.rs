@@ -853,50 +853,45 @@ impl Render for BlancoApp {
             )
             // Main content area
             .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_hidden()
-                    .child(
-                        h_resizable("main-layout")
-                            .with_state(&self.main_resize_state)
-                    // Left side: Connections panel sidebar
-                    .when(!self.sidebar_collapsed, |this| {
-                        this.child(
-                            resizable_panel()
-                                .size(px(256.))
-                                .size_range(px(200.)..px(500.))
-                                .child(
-                                    div()
-                                        .w_full()
-                                        .pb_6()
-                                        .overflow_hidden()
-                                        .border_r_1()
-                                        .border_color(cx.theme().border)
-                                        .child(
-                                            div()
-                                                .size_full()
-                                                .flex()
-                                                .flex_col()
-                                                .child(self.sidebar.clone())
-                                                .child(self.snippets_panel.clone()),
-                                        ),
-                                ),
-                        )
-                    })
-                    // Main panel
-                    .child(
-                        resizable_panel().child(
-                            div()
-                                .flex()
-                                .flex_1()
-                                .h_full()
-                                .overflow_hidden()
-                                .child(self.editor_panel.clone()),
+                div().flex().flex_1().min_h_0().overflow_hidden().child(
+                    h_resizable("main-layout")
+                        .with_state(&self.main_resize_state)
+                        // Left side: Connections panel sidebar
+                        .when(!self.sidebar_collapsed, |this| {
+                            this.child(
+                                resizable_panel()
+                                    .size(px(256.))
+                                    .size_range(px(200.)..px(500.))
+                                    .child(
+                                        div()
+                                            .w_full()
+                                            .pb_6()
+                                            .overflow_hidden()
+                                            .border_r_1()
+                                            .border_color(cx.theme().border)
+                                            .child(
+                                                div()
+                                                    .size_full()
+                                                    .flex()
+                                                    .flex_col()
+                                                    .child(self.sidebar.clone())
+                                                    .child(self.snippets_panel.clone()),
+                                            ),
+                                    ),
+                            )
+                        })
+                        // Main panel
+                        .child(
+                            resizable_panel().child(
+                                div()
+                                    .flex()
+                                    .flex_1()
+                                    .h_full()
+                                    .overflow_hidden()
+                                    .child(self.editor_panel.clone()),
+                            ),
                         ),
-                    ),
-                    ),
+                ),
             )
             .children(sheet_layer)
             .children(dialog_layer)

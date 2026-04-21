@@ -1,9 +1,9 @@
 use blanco_ui::IconName;
-use gpui::{
-    Context, ElementId, IntoElement, ParentElement, Render, SharedString,
-    StyleRefinement, Styled, Subscription, Window, div, px, rems,
-};
 use gpui::prelude::FluentBuilder as _;
+use gpui::{
+    Context, ElementId, IntoElement, ParentElement, Render, SharedString, StyleRefinement, Styled,
+    Subscription, Window, div, px, rems,
+};
 use gpui_component::{
     ActiveTheme, Icon, StyledExt as _,
     clipboard::Clipboard,
@@ -23,7 +23,13 @@ pub struct ChatMessageState {
 }
 
 impl ChatMessageState {
-    pub fn new(id: usize, message: String, role: MessageRole, metadata: Option<MessageMetadata>, _cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        id: usize,
+        message: String,
+        role: MessageRole,
+        metadata: Option<MessageMetadata>,
+        _cx: &mut Context<Self>,
+    ) -> Self {
         Self {
             id: ("chat-message-", id).into(),
             message: message.into(),
@@ -47,7 +53,10 @@ impl Render for ChatMessageState {
                         let total = m.tokens_used?;
                         let prompt = m.prompt_tokens.unwrap_or(0);
                         let completion = m.completion_tokens.unwrap_or(0);
-                        Some(format!("{} tokens ({} in / {} out)", total, prompt, completion))
+                        Some(format!(
+                            "{} tokens ({} in / {} out)",
+                            total, prompt, completion
+                        ))
                     });
                     div()
                         .child(

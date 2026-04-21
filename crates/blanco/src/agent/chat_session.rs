@@ -355,9 +355,11 @@ impl ChatSession {
                 } else {
                     // Normal completion
                     tracing::debug!("Normal completion received on iteration {}", loop_count);
-                    let mut final_message = ChatMessage::assistant(response_text.clone(), model_name);
+                    let mut final_message =
+                        ChatMessage::assistant(response_text.clone(), model_name);
                     if accumulated_prompt_tokens > 0 || accumulated_completion_tokens > 0 {
-                        final_message = final_message.with_usage(accumulated_prompt_tokens, accumulated_completion_tokens);
+                        final_message = final_message
+                            .with_usage(accumulated_prompt_tokens, accumulated_completion_tokens);
                     }
                     if let Err(e) = ui_sender.send(final_message).await {
                         tracing::error!("Failed to send chat message to UI: {}", e);
@@ -369,7 +371,8 @@ impl ChatSession {
                 tracing::debug!("Normal completion received on iteration {}", loop_count);
                 let mut final_message = ChatMessage::assistant(response_text.clone(), model_name);
                 if accumulated_prompt_tokens > 0 || accumulated_completion_tokens > 0 {
-                    final_message = final_message.with_usage(accumulated_prompt_tokens, accumulated_completion_tokens);
+                    final_message = final_message
+                        .with_usage(accumulated_prompt_tokens, accumulated_completion_tokens);
                 }
                 if let Err(e) = ui_sender.send(final_message).await {
                     tracing::error!("Failed to send chat message to UI: {}", e);

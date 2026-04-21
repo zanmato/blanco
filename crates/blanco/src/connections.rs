@@ -7,6 +7,7 @@ pub use delegate::ConnectionsTreeDelegate;
 use crate::app::CreateNewQueryTab;
 use crate::app_database::{AppDatabase, ConnectionData, EnvironmentType};
 use crate::export::modal::ExportModal;
+use crate::import::modal::ImportModal;
 use crate::result_ext::ResultExt;
 use blanco_core::DatabaseService as DatabaseServiceTrait;
 use blanco_ui::IconName;
@@ -840,6 +841,45 @@ impl ConnectionsPanel {
         } else {
             tracing::error!("Cannot export: No table name provided");
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn import_table_data(
+        &mut self,
+        connection_id: i64,
+        _connection_name: String,
+        database_name: String,
+        schema_name: Option<String>,
+        table_name: Option<String>,
+        db_type: database::DatabaseType,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(table_name) = table_name else {
+            tracing::error!("Cannot import: No table name provided");
+            return;
+        };
+
+        let modal_content = cx.new(|cx| {
+            ImportModal::new(
+                connection_id,
+                database_name,
+                schema_name,
+                table_name,
+                db_type,
+                window,
+                cx,
+            )
+        });
+
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            dialog
+                .title("Import CSV")
+                .w(px(780.0))
+                .h(px(780.0))
+                .overlay_closable(false)
+                .child(modal_content.clone())
+        })
     }
 
     /// Set loading state for a tree item by updating the tree entry directly

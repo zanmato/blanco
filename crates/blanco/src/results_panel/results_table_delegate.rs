@@ -214,7 +214,9 @@ impl ResultsTableDelegate {
                     delete_operations.push(TableChangeOperation {
                         operation_type: OperationType::Delete,
                         table_name: change.table_name.clone(),
-                        row_identifier: RowIdentifier::PrimaryKey { columns: pk_columns },
+                        row_identifier: RowIdentifier::PrimaryKey {
+                            columns: pk_columns,
+                        },
                         changes: vec![],
                     });
                 }
@@ -289,7 +291,9 @@ impl ResultsTableDelegate {
             operations.push(TableChangeOperation {
                 operation_type: OperationType::Update,
                 table_name,
-                row_identifier: RowIdentifier::PrimaryKey { columns: pk_columns },
+                row_identifier: RowIdentifier::PrimaryKey {
+                    columns: pk_columns,
+                },
                 changes: column_changes,
             });
         }
@@ -469,7 +473,11 @@ impl ResultsTableDelegate {
                 let missing: Vec<&str> = pk_names
                     .iter()
                     .filter(|pk_name| {
-                        !self.columns.iter().skip(1).any(|col| col.name.as_str() == **pk_name)
+                        !self
+                            .columns
+                            .iter()
+                            .skip(1)
+                            .any(|col| col.name.as_str() == **pk_name)
                     })
                     .copied()
                     .collect();
@@ -567,9 +575,7 @@ impl ResultsTableDelegate {
                         })
                         .collect();
 
-                    let all_present = primary_key_values
-                        .iter()
-                        .all(|(_, v)| v.is_some());
+                    let all_present = primary_key_values.iter().all(|(_, v)| v.is_some());
                     if !all_present {
                         tracing::warn!(
                             "Skipping change tracking: missing primary key value(s) for row {}",
@@ -1419,7 +1425,10 @@ mod tests {
         assert_eq!(delegate.edit_state.changes.len(), 1);
         let change = &delegate.edit_state.changes[0];
 
-        assert_eq!(change.primary_key_values, vec![("id".to_string(), Some("2".to_string()))]);
+        assert_eq!(
+            change.primary_key_values,
+            vec![("id".to_string(), Some("2".to_string()))]
+        );
         assert_eq!(change.old_value, Some("2".to_string()));
         assert_eq!(change.new_value, Some("4".to_string()));
 

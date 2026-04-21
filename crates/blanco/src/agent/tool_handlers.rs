@@ -312,7 +312,8 @@ impl AgentToolHandler for ReadTabHandler {
             "start_line".to_string(),
             ParameterProperty {
                 property_type: "integer".to_string(),
-                description: "1-based starting line number to read from. Defaults to line 1.".to_string(),
+                description: "1-based starting line number to read from. Defaults to line 1."
+                    .to_string(),
                 items: None,
                 enum_list: None,
             },
@@ -331,12 +332,16 @@ impl AgentToolHandler for ReadTabHandler {
             tool_type: "function".to_string(),
             function: FunctionTool {
                 name: "read-tab".to_string(),
-                description: format!("Read the current query tab content with optional line range. Returns line-numbered content. If the tab has more than {} lines and no range is specified, returns only the first {} lines with a hint to read more.", READ_TAB_DEFAULT_LIMIT, READ_TAB_DEFAULT_LIMIT),
+                description: format!(
+                    "Read the current query tab content with optional line range. Returns line-numbered content. If the tab has more than {} lines and no range is specified, returns only the first {} lines with a hint to read more.",
+                    READ_TAB_DEFAULT_LIMIT, READ_TAB_DEFAULT_LIMIT
+                ),
                 parameters: serde_json::to_value(ParametersSchema {
                     schema_type: "object".to_string(),
                     properties,
                     required: vec![],
-                }).unwrap_or_default(),
+                })
+                .unwrap_or_default(),
             },
         }
     }
@@ -346,9 +351,7 @@ impl AgentToolHandler for ReadTabHandler {
             .get("start_line")
             .and_then(|v| v.as_i64())
             .unwrap_or(1);
-        let end = arguments
-            .get("end_line")
-            .and_then(|v| v.as_i64());
+        let end = arguments.get("end_line").and_then(|v| v.as_i64());
         match end {
             Some(end) => format!("Read Tab: lines {}-{}", start, end),
             None => "Read Tab".to_string(),
@@ -454,7 +457,8 @@ impl AgentToolHandler for WriteTabHandler {
 
             match input_state.update_in(cx, |input_state, window, cx| {
                 let current = input_state.text().to_string();
-                let new_text = apply_line_operation(&current, operation, &content, start_line, end_line)?;
+                let new_text =
+                    apply_line_operation(&current, operation, &content, start_line, end_line)?;
                 input_state.set_value(new_text, window, cx);
                 let total_lines = input_state.text().lines_len();
                 Ok::<usize, String>(total_lines)
@@ -493,8 +497,9 @@ impl AgentToolHandler for WriteTabHandler {
                     call_type: "function".to_string(),
                     function: FunctionCall {
                         name: "write-tab".to_string(),
-                        arguments: serde_json::json!({"error": format!("Failed to write tab: {}", e)})
-                            .to_string(),
+                        arguments:
+                            serde_json::json!({"error": format!("Failed to write tab: {}", e)})
+                                .to_string(),
                     },
                 },
                 Err(e) => ToolCall {
@@ -502,8 +507,9 @@ impl AgentToolHandler for WriteTabHandler {
                     call_type: "function".to_string(),
                     function: FunctionCall {
                         name: "write-tab".to_string(),
-                        arguments: serde_json::json!({"error": format!("Failed to write tab: {}", e)})
-                            .to_string(),
+                        arguments:
+                            serde_json::json!({"error": format!("Failed to write tab: {}", e)})
+                                .to_string(),
                     },
                 },
             }

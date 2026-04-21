@@ -63,7 +63,10 @@ fn build_config(
 
     let mut core_config = ahash::AHashMap::new();
     core_config.insert("dialect".to_string(), Value::String(dialect.into()));
-    core_config.insert("exclude_rules".to_string(), Value::String(exclude_rules_str.into()));
+    core_config.insert(
+        "exclude_rules".to_string(),
+        Value::String(exclude_rules_str.into()),
+    );
     core_config.insert(
         "max_line_length".to_string(),
         Value::Int(formatter.max_line_length as i32),
@@ -72,10 +75,7 @@ fn build_config(
 
     let indent_unit = if editor.hard_tabs { "tab" } else { "space" };
     let mut indentation_config = ahash::AHashMap::new();
-    indentation_config.insert(
-        "indent_unit".to_string(),
-        Value::String(indent_unit.into()),
-    );
+    indentation_config.insert("indent_unit".to_string(), Value::String(indent_unit.into()));
     indentation_config.insert(
         "tab_space_size".to_string(),
         Value::Int(editor.tab_size as i32),

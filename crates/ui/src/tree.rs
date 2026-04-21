@@ -328,33 +328,33 @@ impl<D: TreeDelegate> TreeState<D> {
     fn on_action_confirm(&mut self, _: &Confirm, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(selected_ix) = self.selected_ix
             && let Some(entry) = self.entries.get(selected_ix)
-                && entry.is_folder()
-            {
-                self.toggle_expand(selected_ix);
-                cx.notify();
-            }
+            && entry.is_folder()
+        {
+            self.toggle_expand(selected_ix);
+            cx.notify();
+        }
     }
 
     fn on_action_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(selected_ix) = self.selected_ix
             && let Some(entry) = self.entries.get(selected_ix)
-                && entry.is_folder()
-                && entry.is_expanded()
-            {
-                self.toggle_expand(selected_ix);
-                cx.notify();
-            }
+            && entry.is_folder()
+            && entry.is_expanded()
+        {
+            self.toggle_expand(selected_ix);
+            cx.notify();
+        }
     }
 
     fn on_action_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(selected_ix) = self.selected_ix
             && let Some(entry) = self.entries.get(selected_ix)
-                && entry.is_folder()
-                && !entry.is_expanded()
-            {
-                self.toggle_expand(selected_ix);
-                cx.notify();
-            }
+            && entry.is_folder()
+            && !entry.is_expanded()
+        {
+            self.toggle_expand(selected_ix);
+            cx.notify();
+        }
     }
 
     fn on_action_up(&mut self, _: &SelectUp, _: &mut Window, cx: &mut Context<Self>) {

@@ -44,3 +44,10 @@ sqruff-lib-dialects = "0.34.1"
 sqruff-lib-core = "0.34.1"
 ahash = "0.8"
 tikv-jemallocator = { workspace = true }
+
+# CSV import
+csv = "1"
+chardetng = "0.1"
+encoding_rs = "0.8"
+encoding_rs_io = "0.1"
+deunicode = "1"

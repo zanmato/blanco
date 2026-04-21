@@ -244,6 +244,11 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                     let schema_name_for_structure = schema_name.clone();
                     let table_name_for_structure = table_name.clone().unwrap_or_default();
 
+                    let connection_name_for_import = connection_name.clone();
+                    let database_name_for_import = database_name.clone();
+                    let schema_name_for_import = schema_name.clone();
+                    let table_name_for_import = table_name.clone();
+
                     let mut menu = menu
                         .item(
                             PopupMenuItem::new("New Query").on_click(window.listener_for(
@@ -270,6 +275,23 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                                 },
                             )),
                         );
+
+                    if matches!(metadata.kind, TreeItemKind::Table) {
+                        menu = menu.item(PopupMenuItem::new("Import Data").on_click(
+                            window.listener_for(&self.parent, move |this, _event, window, cx| {
+                                this.import_table_data(
+                                    connection_id,
+                                    connection_name_for_import.clone(),
+                                    database_name_for_import.clone(),
+                                    schema_name_for_import.clone(),
+                                    table_name_for_import.clone(),
+                                    db_type,
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        ));
+                    }
 
                     if matches!(
                         metadata.kind,

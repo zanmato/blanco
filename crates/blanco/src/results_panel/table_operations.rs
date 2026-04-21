@@ -51,9 +51,7 @@ impl TableChangeOperation {
         let escape_sql_value = |value: &str| value.replace('\'', "''");
         columns
             .iter()
-            .map(|(col, val)| {
-                format!("{} = '{}'", col, escape_sql_value(val))
-            })
+            .map(|(col, val)| format!("{} = '{}'", col, escape_sql_value(val)))
             .collect::<Vec<_>>()
             .join(" AND ")
     }
@@ -64,7 +62,9 @@ impl TableChangeOperation {
 
         match self.operation_type {
             OperationType::Update => {
-                if let RowIdentifier::PrimaryKey { columns: pk_columns } = &self.row_identifier
+                if let RowIdentifier::PrimaryKey {
+                    columns: pk_columns,
+                } = &self.row_identifier
                     && !pk_columns.is_empty()
                 {
                     if self.changes.is_empty() {
@@ -98,13 +98,11 @@ impl TableChangeOperation {
                 let values: Vec<String> = self
                     .changes
                     .iter()
-                    .map(|c| {
-                        match &c.new_value {
-                            None => "NULL".to_string(),
-                            Some(value) => {
-                                let escaped_value = escape_sql_value(value);
-                                format!("'{}'", escaped_value)
-                            }
+                    .map(|c| match &c.new_value {
+                        None => "NULL".to_string(),
+                        Some(value) => {
+                            let escaped_value = escape_sql_value(value);
+                            format!("'{}'", escaped_value)
                         }
                     })
                     .collect();
@@ -116,7 +114,9 @@ impl TableChangeOperation {
                 )
             }
             OperationType::Delete => {
-                if let RowIdentifier::PrimaryKey { columns: pk_columns } = &self.row_identifier
+                if let RowIdentifier::PrimaryKey {
+                    columns: pk_columns,
+                } = &self.row_identifier
                     && !pk_columns.is_empty()
                 {
                     format!(

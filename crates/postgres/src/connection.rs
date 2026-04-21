@@ -1196,6 +1196,35 @@ impl Connection for PostgresConnection {
         Ok(result)
     }
 
+    async fn execute_write(
+        &self,
+        query: &str,
+        database_name: Option<&str>,
+        parameters: &[Option<String>],
+    ) -> Result<u64> {
+        let database_name = database_name.ok_or(anyhow::anyhow!("missing database"))?;
+        let pool = self.get_or_create_pool(database_name).await.map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to get connection pool for database '{}': {}",
+                database_name,
+                e
+            )
+        })?;
+
+        let mut q = sqlx::query(query);
+        for param in parameters {
+            q = match param {
+                Some(value) => q.bind(value.clone()),
+                None => q.bind(Option::<String>::None),
+            };
+        }
+        let result = q
+            .execute(&pool)
+            .await
+            .map_err(|e| anyhow::anyhow!("PostgreSQL write failed: {}", e))?;
+        Ok(result.rows_affected())
+    }
+
     async fn get_databases(&self) -> Result<Vec<String>> {
         let result = self
             .execute_query(

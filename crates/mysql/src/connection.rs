@@ -635,6 +635,28 @@ impl Connection for MysqlConnection {
         })
     }
 
+    async fn execute_write(
+        &self,
+        query: &str,
+        database_name: Option<&str>,
+        parameters: &[Option<String>],
+    ) -> Result<u64, anyhow::Error> {
+        let database = database_name
+            .or(self.initial_database.as_deref())
+            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+        let pool = self.get_or_create_pool(database).await?;
+
+        let mut q = sqlx::query(query);
+        for param in parameters {
+            q = match param {
+                Some(value) => q.bind(value.clone()),
+                None => q.bind(Option::<String>::None),
+            };
+        }
+        let result = q.execute(&pool).await?;
+        Ok(result.rows_affected())
+    }
+
     async fn get_databases(&self) -> Result<Vec<String>, anyhow::Error> {
         tracing::debug!("Getting MySQL databases");
 

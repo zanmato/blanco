@@ -1,9 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
-use anyhow::{Result, anyhow};
 use crate::DriverType;
+use anyhow::{Result, anyhow};
 use sqlparser::{
-    ast::{Expr, ObjectName, SelectItem, SelectItemQualifiedWildcardKind, SetExpr, Statement, TableFactor, TableObject, TableWithJoins},
+    ast::{
+        Expr, ObjectName, SelectItem, SelectItemQualifiedWildcardKind, SetExpr, Statement,
+        TableFactor, TableObject, TableWithJoins,
+    },
     dialect::{Dialect, GenericDialect, MySqlDialect, PostgreSqlDialect},
     parser::Parser,
 };
@@ -117,7 +120,8 @@ impl TableExtractor {
         for item in projection {
             match item {
                 SelectItem::QualifiedWildcard(
-                    SelectItemQualifiedWildcardKind::ObjectName(name), _
+                    SelectItemQualifiedWildcardKind::ObjectName(name),
+                    _,
                 ) => {
                     if let Some(first) = name.0.first() {
                         aliases.insert(first.to_string());
@@ -143,20 +147,14 @@ impl TableExtractor {
         }
     }
 
-    fn extract_from_table_factor(
-        &self,
-        table_factor: &TableFactor,
-        alias: bool,
-    ) -> Option<String> {
+    fn extract_from_table_factor(&self, table_factor: &TableFactor, alias: bool) -> Option<String> {
         match table_factor {
             TableFactor::Table {
                 name,
                 alias: table_alias,
                 ..
             } => {
-                if alias
-                    && let Some(a) = table_alias
-                {
+                if alias && let Some(a) = table_alias {
                     return Some(a.name.to_string());
                 }
                 Some(table_name_only(name))

@@ -155,7 +155,8 @@ impl Settings {
                     settings.formatter.select_clause_trailing_comma = value.clone();
                 }
                 "formatter.terminator_multiline_newline" => {
-                    settings.formatter.terminator_multiline_newline = value.parse().unwrap_or(false);
+                    settings.formatter.terminator_multiline_newline =
+                        value.parse().unwrap_or(false);
                 }
                 "formatter.require_final_semicolon" => {
                     settings.formatter.require_final_semicolon = value.parse().unwrap_or(false);
