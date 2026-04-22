@@ -127,7 +127,7 @@ impl Render for TableStructureTab {
             .w_full()
             .overflow_hidden()
             .bg(theme.background)
-            .child(v_flex().flex_1().overflow_scrollbar().p_4().gap_4().child(
+            .child(v_flex().flex_1().overflow_y_scrollbar().p_4().gap_4().child(
                 if let Some(error) = &self.error {
                     div()
                         .text_color(theme.danger_foreground)
