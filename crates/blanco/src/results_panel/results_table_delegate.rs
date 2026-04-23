@@ -194,8 +194,8 @@ impl ResultsTableDelegate {
         use std::collections::HashMap;
 
         // Map to consolidate changes by (table_name, sorted PK pairs)
-        let mut update_operations: HashMap<(String, Vec<(String, String)>), Vec<ColumnChange>> =
-            HashMap::new();
+        type UpdateKey = (String, Vec<(String, String)>);
+        let mut update_operations: HashMap<UpdateKey, Vec<ColumnChange>> = HashMap::new();
         let mut insert_operations: Vec<TableChangeOperation> = Vec::new();
         let mut delete_operations: Vec<TableChangeOperation> = Vec::new();
 
@@ -1372,41 +1372,40 @@ mod tests {
     fn test_primary_key_update_preserves_original_value() {
         use blanco_core::connection_trait::ColumnInfo;
 
-        let mut delegate = ResultsTableDelegate::default();
-
-        delegate.table_name = Some("test_table".to_string());
-        delegate.table_columns = vec![
-            ColumnInfo {
-                name: "id".to_string(),
-                data_type: "integer".to_string(),
-                is_nullable: false,
-                is_primary_key: true,
-                default_value: None,
-                character_maximum_length: None,
-                foreign_key: None,
-            },
-            ColumnInfo {
-                name: "name".to_string(),
-                data_type: "text".to_string(),
-                is_nullable: true,
-                is_primary_key: false,
-                default_value: None,
-                character_maximum_length: None,
-                foreign_key: None,
-            },
-        ];
-
-        delegate.columns = vec![
-            Column::new("row_number".to_string(), "#".to_string()),
-            Column::new("id".to_string(), "id".to_string()),
-            Column::new("name".to_string(), "name".to_string()),
-        ];
-
-        delegate.rows = vec![vec![
-            Some("1".to_string()),
-            Some("2".to_string()),
-            Some("test".to_string()),
-        ]];
+        let mut delegate = ResultsTableDelegate {
+            table_name: Some("test_table".to_string()),
+            table_columns: vec![
+                ColumnInfo {
+                    name: "id".to_string(),
+                    data_type: "integer".to_string(),
+                    is_nullable: false,
+                    is_primary_key: true,
+                    default_value: None,
+                    character_maximum_length: None,
+                    foreign_key: None,
+                },
+                ColumnInfo {
+                    name: "name".to_string(),
+                    data_type: "text".to_string(),
+                    is_nullable: true,
+                    is_primary_key: false,
+                    default_value: None,
+                    character_maximum_length: None,
+                    foreign_key: None,
+                },
+            ],
+            columns: vec![
+                Column::new("row_number".to_string(), "#".to_string()),
+                Column::new("id".to_string(), "id".to_string()),
+                Column::new("name".to_string(), "name".to_string()),
+            ],
+            rows: vec![vec![
+                Some("1".to_string()),
+                Some("2".to_string()),
+                Some("test".to_string()),
+            ]],
+            ..Default::default()
+        };
 
         let row = 0;
         let col = 1;

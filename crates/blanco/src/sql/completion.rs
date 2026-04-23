@@ -402,28 +402,6 @@ impl CompletionProvider for SqlCompletionProvider {
 mod tests {
     use super::*;
 
-    #[derive(Clone)]
-    struct MockDatabaseService;
-
-    #[async_trait::async_trait]
-    impl DatabaseServiceTrait for MockDatabaseService {
-        async fn get_or_create_connection_by_id(
-            &self,
-            _connection_id: i64,
-            _database: Option<&str>,
-        ) -> std::result::Result<Arc<dyn blanco_core::Connection>, anyhow::Error> {
-            unimplemented!("Mock database service not implemented for unit tests")
-        }
-    }
-
-    fn create_test_db_service() -> Arc<dyn DatabaseServiceTrait> {
-        Arc::new(MockDatabaseService)
-    }
-
-    pub fn create_test_provider() -> SqlCompletionProvider {
-        SqlCompletionProvider::new(1, "default".to_string(), create_test_db_service())
-    }
-
     #[test]
     fn test_completion_context_basic_select() {
         let rope = Rope::from_str("SELECT * FROM users WHERE ");

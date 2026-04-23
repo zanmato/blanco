@@ -16,9 +16,9 @@ use gpui_component::{
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::chat_message_view::ChatMessageState;
+use super::chat_message_view::{ApprovalEvent, ChatMessageState};
 use super::chat_session::{ChatSession, ChatSessionContext};
-use super::chat_types::{ChatEvent, LoadingState};
+use super::chat_types::{ApprovalState, ChatEvent, LoadingState, MessageRole};
 use super::tool_handlers::ToolMode;
 use blanco_ui::IconName;
 use gpui::ScrollHandle;
@@ -35,6 +35,7 @@ pub struct ChatPanel {
     pub _subscriptions: Vec<Subscription>,
     pub loading_state: LoadingState,
     pub tool_mode_select: Entity<SelectState<ToolModeSelectDelegate>>,
+    pub current_tool_mode: ToolMode,
 }
 
 impl ChatPanel {
@@ -53,25 +54,69 @@ impl ChatPanel {
             InputState::new(window, cx)
                 .multi_line(true)
                 .rows(3)
-                .auto_grow(2, 6) // Auto-grow between 2 and 6 rows
+                .auto_grow(2, 6)
                 .placeholder("Ask me anything about your query...")
         });
 
         let mut subscriptions = Vec::new();
 
-        // Subscribe to session events
         let subscription = cx.subscribe(&session, |panel, _session, event, cx| match event {
             ChatEvent::MessageAdded { message } => {
                 let message = message.clone();
+                let is_tool_request = message.role == MessageRole::ToolRequest;
                 let message_state = cx.new(|cx| {
                     ChatMessageState::new(
                         panel.messages.len(),
-                        message.content.into(),
+                        message.content.to_string(),
                         message.role.clone(),
                         Some(message.metadata.clone()),
                         cx,
                     )
                 });
+
+                if message.role == MessageRole::Tool
+                    && let Some(ref tool_call_id) = message.tool_call_id
+                {
+                    let already_resolved = panel.messages.iter().any(|entity| {
+                        entity
+                            .read(cx)
+                            .metadata
+                            .as_ref()
+                            .and_then(|m| m.approval.as_ref())
+                            .map(|a| {
+                                a.tool_call_id == *tool_call_id
+                                    && entity.read(cx).tool_result.is_some()
+                            })
+                            .unwrap_or(false)
+                    });
+                    if already_resolved {
+                        message_state.update(cx, |state, cx| {
+                            state.hidden = true;
+                            cx.notify();
+                        });
+                    }
+                }
+
+                if is_tool_request {
+                    let session_handle = panel.session.clone();
+                    panel._subscriptions.push(cx.subscribe(
+                        &message_state,
+                        move |_panel, _state, event, cx| {
+                            let ApprovalEvent {
+                                tool_call_id,
+                                approved,
+                            } = event;
+                            session_handle.update(cx, |session, _cx| {
+                                if *approved {
+                                    session.approve_tool(tool_call_id);
+                                } else {
+                                    session.deny_tool(tool_call_id);
+                                }
+                            });
+                        },
+                    ));
+                }
+
                 panel.messages.push(message_state);
                 panel.scroll_to_bottom(cx);
 
@@ -86,30 +131,54 @@ impl ChatPanel {
                 panel.loading_state = new_state.clone();
                 cx.notify();
             }
+            ChatEvent::ToolResultReady {
+                tool_call_id,
+                result_summary,
+            } => {
+                let result_summary = result_summary.clone();
+                let tool_call_id = tool_call_id.clone();
+                for msg_entity in &panel.messages {
+                    let is_match = msg_entity
+                        .read(cx)
+                        .metadata
+                        .as_ref()
+                        .and_then(|m| m.approval.as_ref())
+                        .map(|a| a.tool_call_id == tool_call_id)
+                        .unwrap_or(false);
+                    if is_match {
+                        msg_entity.update(cx, |state, cx| {
+                            state.approval_state = Some(ApprovalState::Approved);
+                            state.set_tool_result(result_summary.clone());
+                            cx.notify();
+                        });
+                        break;
+                    }
+                }
+                cx.notify();
+            }
         });
 
         subscriptions.push(subscription);
 
-        // Create tool mode select (Read/Write)
         let tool_mode_select = cx.new(|cx| {
             SelectState::new(
                 ToolModeSelectDelegate::new(),
-                Some(gpui_component::IndexPath::default().row(0)), // Default to "Read"
+                Some(gpui_component::IndexPath::default().row(0)),
                 window,
                 cx,
             )
         });
 
-        // Subscribe to tool mode select changes
         let session_clone = session.clone();
         subscriptions.push(
-            cx.subscribe(&tool_mode_select, move |_panel, _select, event, cx| {
+            cx.subscribe(&tool_mode_select, move |panel, _select, event, cx| {
                 let SelectEvent::Confirm(selected) = event;
-                let mode = if selected.as_ref().map(|s| s.as_str()) == Some("Write") {
-                    ToolMode::Write
-                } else {
-                    ToolMode::Read
+                let mode = match selected.as_ref().map(|s| s.as_str()) {
+                    Some("Allow all") => ToolMode::AllowAll,
+                    _ => ToolMode::Ask,
                 };
+
+                panel.current_tool_mode = mode;
 
                 session_clone.update(cx, |session, cx| {
                     session.set_tool_mode(mode, cx);
@@ -117,12 +186,10 @@ impl ChatPanel {
             }),
         );
 
-        // Subscribe to input events
         let subscription = cx.subscribe_in(
             &input_state,
             window,
             |this, _input_state, event, window, cx| {
-                // Only lint if the event is a text change
                 if let InputEvent::PressEnter { secondary } = event
                     && *secondary
                 {
@@ -141,23 +208,21 @@ impl ChatPanel {
             _subscriptions: subscriptions,
             loading_state: LoadingState::Idle,
             tool_mode_select,
+            current_tool_mode: ToolMode::Ask,
         }
     }
 
     pub fn send_message(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Get the current input text and convert to string early to avoid borrow issues
         let input_text = self.input_state.read(cx).text().to_string();
 
         if input_text.trim().is_empty() {
             return;
         }
 
-        // Clear the input
         self.input_state.update(cx, |input, cx| {
             input.set_value("", window, cx);
         });
 
-        // Set loading state to connecting when sending message
         self.loading_state = LoadingState::Connecting;
         cx.notify();
 
@@ -182,12 +247,9 @@ impl ChatPanel {
     }
 
     fn scroll_to_bottom(&mut self, cx: &mut Context<Self>) {
-        // Clone the scroll handle before moving into the async closure
         let scroll_handle = self.scroll_handle.clone();
 
-        // Schedule scroll to bottom after render
         cx.spawn(async move |_, cx| {
-            // Small delay to ensure content is rendered
             cx.background_executor()
                 .timer(Duration::from_millis(50))
                 .await;
@@ -222,7 +284,6 @@ impl Render for ChatPanel {
             .min_h_0()
             .bg(cx.theme().sidebar_primary_foreground)
             .text_color(cx.theme().foreground)
-            // Header
             .child(
                 h_flex()
                     .px_3()
@@ -255,7 +316,6 @@ impl Render for ChatPanel {
                         ),
                     ),
             )
-            // Messages area
             .child(
                 div()
                     .flex_1()
@@ -268,9 +328,7 @@ impl Render for ChatPanel {
                             .size_full()
                             .track_scroll(&self.scroll_handle)
                             .overflow_scroll()
-                            // Messages
                             .children(self.messages.iter().cloned())
-                            // Loading indicator
                             .when(self.loading_state.is_loading(), |this| {
                                 this.child(
                                     div()
@@ -311,9 +369,7 @@ impl Render for ChatPanel {
                             .child(Scrollbar::vertical(&self.scroll_handle)),
                     ),
             )
-            // Input area
             .child(
-                // Text input container with no borders
                 div()
                     .relative()
                     .bg(self.editor_background_color(cx))
@@ -327,7 +383,6 @@ impl Render for ChatPanel {
                             .p_3()
                             .bg(self.editor_background_color(cx)),
                     )
-                    // Tool mode select and send button in a row below the input
                     .child(
                         div()
                             .w_full()
@@ -336,12 +391,34 @@ impl Render for ChatPanel {
                             .items_center()
                             .justify_end()
                             .gap_2()
+                            .when(self.current_tool_mode == ToolMode::AllowAll, |el| {
+                                el.child(
+                                    div().px_3().py_1().child(
+                                        h_flex()
+                                            .gap_1()
+                                            .items_center()
+                                            .child(
+                                                Icon::new(IconName::TriangleAlert)
+                                                    .size(px(12.))
+                                                    .text_color(cx.theme().danger),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(cx.theme().danger)
+                                                    .child(
+                                                        "The agent can execute SQL without asking",
+                                                    ),
+                                            ),
+                                    ),
+                                )
+                            })
                             .child(
-                                div().w(px(80.)).child(
+                                div().w(px(110.)).child(
                                     Select::new(&self.tool_mode_select)
                                         .xsmall()
                                         .appearance(false)
-                                        .menu_width(px(80.)),
+                                        .menu_width(px(110.)),
                                 ),
                             )
                             .when(self.session.read(cx).is_generating(), |this| {
@@ -372,7 +449,6 @@ impl Render for ChatPanel {
     }
 }
 
-/// Select delegate for tool mode (Read/Write)
 #[derive(Clone)]
 pub struct ToolModeSelectDelegate {
     modes: Vec<SharedString>,
@@ -381,7 +457,7 @@ pub struct ToolModeSelectDelegate {
 impl ToolModeSelectDelegate {
     pub fn new() -> Self {
         Self {
-            modes: vec!["Read".into(), "Write".into()],
+            modes: vec!["Ask".into(), "Allow all".into()],
         }
     }
 }

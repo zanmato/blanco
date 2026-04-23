@@ -8,6 +8,7 @@ pub enum MessageRole {
     Assistant,
     System,
     Tool,
+    ToolRequest,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -37,6 +38,8 @@ pub struct MessageMetadata {
     pub completion_tokens: Option<u32>,
     pub model: String,
     pub execution_time: Option<std::time::Duration>,
+    pub sql_query: Option<String>,
+    pub approval: Option<PendingApproval>,
 }
 
 impl Default for MessageMetadata {
@@ -47,8 +50,26 @@ impl Default for MessageMetadata {
             completion_tokens: None,
             model: "unknown".to_string(),
             execution_time: None,
+            sql_query: None,
+            approval: None,
         }
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum ApprovalState {
+    Pending,
+    Approved,
+    Denied,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PendingApproval {
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub arguments_preview: String,
+    pub state: ApprovalState,
+    pub result: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -57,6 +78,7 @@ pub enum LoadingState {
     Connecting,
     Streaming,
     ProcessingTools,
+    AwaitingApproval,
     Error(String),
 }
 
@@ -71,6 +93,7 @@ impl LoadingState {
             LoadingState::Connecting => "Connecting...".to_string(),
             LoadingState::Streaming => "Thinking".to_string(),
             LoadingState::ProcessingTools => "Processing tools...".to_string(),
+            LoadingState::AwaitingApproval => "Awaiting approval...".to_string(),
             LoadingState::Error(e) => e.clone(),
         }
     }
@@ -78,7 +101,10 @@ impl LoadingState {
     pub fn show_spinner(&self) -> bool {
         matches!(
             self,
-            LoadingState::Connecting | LoadingState::Streaming | LoadingState::ProcessingTools
+            LoadingState::Connecting
+                | LoadingState::Streaming
+                | LoadingState::ProcessingTools
+                | LoadingState::AwaitingApproval
         )
     }
 }
@@ -94,6 +120,10 @@ pub enum ChatEvent {
     LoadingStateChanged {
         _old_state: LoadingState,
         new_state: LoadingState,
+    },
+    ToolResultReady {
+        tool_call_id: String,
+        result_summary: String,
     },
 }
 
@@ -165,6 +195,39 @@ impl ChatMessage {
             },
             tool_calls: None,
             tool_call_id: Some(tool_call_id),
+        }
+    }
+
+    pub fn tool_request(
+        tool_call_id: String,
+        tool_name: String,
+        arguments_preview: String,
+        code_block: Option<String>,
+        model: String,
+    ) -> Self {
+        let content = match code_block {
+            Some(code) => format!("```sql\n{}\n```", code),
+            None => arguments_preview.clone(),
+        };
+
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            role: MessageRole::ToolRequest,
+            content: content.into(),
+            timestamp: Utc::now(),
+            metadata: MessageMetadata {
+                model,
+                approval: Some(PendingApproval {
+                    tool_call_id,
+                    tool_name,
+                    arguments_preview,
+                    state: ApprovalState::Pending,
+                    result: None,
+                }),
+                ..Default::default()
+            },
+            tool_calls: None,
+            tool_call_id: None,
         }
     }
 

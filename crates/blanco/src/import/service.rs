@@ -185,6 +185,7 @@ where
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn flush_batch(
     connection: &dyn Connection,
     database: Option<&str>,
@@ -200,13 +201,24 @@ async fn flush_batch(
         return Ok(0);
     }
     let rows = std::mem::take(batch);
-    let sql = build_insert_sql(fq_table, column_names, data_types, rows.len(), db_type, conflict);
+    let sql = build_insert_sql(
+        fq_table,
+        column_names,
+        data_types,
+        rows.len(),
+        db_type,
+        conflict,
+    );
     let mut params: Vec<Option<String>> = Vec::with_capacity(rows.len() * mappings.len());
     for row in &rows {
         for mapping in mappings {
             let value = match &mapping.source {
-                MappingSource::Fixed(v) => cell_to_param(Some(v.as_str()), mapping.is_nullable, mapping.transform),
-                MappingSource::CsvColumn(idx) => cell_to_param(row.get(*idx), mapping.is_nullable, mapping.transform),
+                MappingSource::Fixed(v) => {
+                    cell_to_param(Some(v.as_str()), mapping.is_nullable, mapping.transform)
+                }
+                MappingSource::CsvColumn(idx) => {
+                    cell_to_param(row.get(*idx), mapping.is_nullable, mapping.transform)
+                }
             };
             params.push(value);
         }

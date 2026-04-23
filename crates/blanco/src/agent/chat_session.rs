@@ -2,12 +2,13 @@ use anyhow::Result;
 use futures::StreamExt;
 use gpui::{Context, EventEmitter, Task, WeakEntity, Window};
 use smol::channel::Sender;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::chat_types::{
     ChatCommand, ChatEvent, ChatMessage, LoadingState, MessageRole, ToolCallData,
 };
-use super::tool_handlers::{AgentToolRegistry, ToolMode};
+use super::tool_handlers::ToolMode;
 use crate::result_ext::ResultExt;
 use database::DatabaseService;
 use gpui_component::input::InputState;
@@ -56,12 +57,13 @@ pub struct ChatSession {
     pub loading_state: LoadingState,
     #[allow(dead_code)]
     pub streaming_message_id: Option<String>,
-    // New fields for tool execution
     pub tool_registry: Option<std::sync::Arc<super::tool_handlers::AgentToolRegistry>>,
+    pub tool_mode: ToolMode,
     pub input_state: Option<WeakEntity<InputState>>,
     pub connection_id: Option<i64>,
     pub database_name: Option<String>,
     pub current_message_task: Option<Task<Result<String>>>,
+    pending_approvals: HashMap<String, smol::channel::Sender<bool>>,
 }
 
 impl ChatSession {
@@ -82,10 +84,12 @@ impl ChatSession {
             tool_registry: Some(std::sync::Arc::new(
                 super::tool_handlers::AgentToolRegistry::new(),
             )),
+            tool_mode: ToolMode::default(),
             input_state: context.input_state,
             connection_id: context.connection_id,
             database_name: context.database_name,
             current_message_task: None,
+            pending_approvals: HashMap::new(),
         }
     }
 
@@ -109,8 +113,28 @@ impl ChatSession {
     }
 
     pub fn set_tool_mode(&mut self, mode: ToolMode, cx: &mut Context<Self>) {
-        self.tool_registry = Some(Arc::new(AgentToolRegistry::with_mode(mode)));
+        self.tool_mode = mode;
         cx.notify();
+    }
+
+    pub fn register_pending_approval(
+        &mut self,
+        tool_call_id: String,
+        sender: smol::channel::Sender<bool>,
+    ) {
+        self.pending_approvals.insert(tool_call_id, sender);
+    }
+
+    pub fn approve_tool(&mut self, tool_call_id: &str) {
+        if let Some(sender) = self.pending_approvals.remove(tool_call_id) {
+            let _ = sender.try_send(true);
+        }
+    }
+
+    pub fn deny_tool(&mut self, tool_call_id: &str) {
+        if let Some(sender) = self.pending_approvals.remove(tool_call_id) {
+            let _ = sender.try_send(false);
+        }
     }
 
     pub fn get_system_prompt(&self) -> String {
@@ -494,7 +518,83 @@ impl ChatSession {
                 input_state,
             };
 
-            let (result, summary): (ToolCall, String) = if let Some(registry) = tool_registry {
+            // Determine tool mode and request approval if needed
+            let tool_mode = chat_session_handle
+                .update(async_cx, |session, _cx| session.tool_mode)
+                .ok()
+                .unwrap_or_default();
+
+            let mut denied = false;
+
+            if tool_mode == ToolMode::Ask {
+                let (approval_tx, approval_rx) = smol::channel::bounded::<bool>(1);
+
+                let preview = tool_registry
+                    .as_ref()
+                    .map(|r| r.call_preview(&tool_call))
+                    .unwrap_or_else(|| tool_call.function.name.clone());
+
+                let code_block = if tool_call.function.name == "execute-sql" {
+                    serde_json::from_str::<serde_json::Value>(&tool_call.function.arguments)
+                        .ok()
+                        .and_then(|args| {
+                            args.get("sql")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string())
+                        })
+                } else {
+                    None
+                };
+
+                let tool_request_message = ChatMessage::tool_request(
+                    tool_call.id.clone(),
+                    tool_call.function.name.clone(),
+                    preview,
+                    code_block,
+                    model_name.to_string(),
+                );
+
+                if let Err(e) = ui_sender.send(tool_request_message).await {
+                    tracing::error!("Failed to send tool request to UI: {}", e);
+                }
+
+                chat_session_handle
+                    .update(async_cx, |session, _cx| {
+                        session.register_pending_approval(tool_call.id.clone(), approval_tx);
+                    })
+                    .log_err();
+
+                chat_session_handle
+                    .update(async_cx, |session, cx| {
+                        session.set_loading_state(LoadingState::AwaitingApproval, cx);
+                    })
+                    .log_err();
+
+                let approved = approval_rx.recv().await.unwrap_or(false);
+
+                chat_session_handle
+                    .update(async_cx, |session, cx| {
+                        session.set_loading_state(LoadingState::ProcessingTools, cx);
+                    })
+                    .log_err();
+
+                if !approved {
+                    denied = true;
+                }
+            }
+
+            let (result, summary): (ToolCall, String) = if denied {
+                let denied_result = ToolCall {
+                    id: tool_call.id.clone(),
+                    call_type: "function".to_string(),
+                    function: FunctionCall {
+                        name: tool_call.function.name.clone(),
+                        arguments: serde_json::json!({"error": "User denied tool execution"})
+                            .to_string(),
+                    },
+                };
+                (denied_result, "Denied by user".to_string())
+            } else if let Some(registry) = tool_registry {
                 registry
                     .execute_tool_with_summary(&tool_call, &tool_context, async_cx)
                     .await
@@ -520,12 +620,34 @@ impl ChatSession {
                 tc_data.summary = Some(summary.clone());
             }
 
-            // Create and immediately emit tool result message for UI
-            // Use the summary as the display content instead of raw JSON
-            let tool_ui_message =
-                ChatMessage::tool(summary.clone(), result.id.clone(), model_name.to_string());
-            if let Err(e) = ui_sender.send(tool_ui_message).await {
-                tracing::error!("Failed to send tool result to UI: {}", e);
+            if tool_mode == ToolMode::Ask {
+                chat_session_handle
+                    .update(async_cx, |_session, cx| {
+                        cx.emit(ChatEvent::ToolResultReady {
+                            tool_call_id: tool_call.id.clone(),
+                            result_summary: summary.clone(),
+                        });
+                    })
+                    .log_err();
+            } else {
+                let mut tool_content = summary.clone();
+                if tool_call.function.name == "execute-sql"
+                    && let Some(sql) =
+                        serde_json::from_str::<serde_json::Value>(&tool_call.function.arguments)
+                            .ok()
+                            .and_then(|args| {
+                                args.get("sql")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string())
+                            })
+                {
+                    tool_content = format!("{}\n```sql\n{}\n```", tool_content, sql);
+                }
+                let tool_ui_message =
+                    ChatMessage::tool(tool_content, result.id.clone(), model_name.to_string());
+                if let Err(e) = ui_sender.send(tool_ui_message).await {
+                    tracing::error!("Failed to send tool result to UI: {}", e);
+                }
             }
 
             // Add tool result as a message to conversation (using user role for tool results)
@@ -587,6 +709,9 @@ impl ChatSession {
                     .content(message.content.to_string())
                     .build(),
                 MessageRole::Tool => LlmChatMessage::user()
+                    .content(message.content.to_string())
+                    .build(),
+                MessageRole::ToolRequest => LlmChatMessage::user()
                     .content(message.content.to_string())
                     .build(),
             };

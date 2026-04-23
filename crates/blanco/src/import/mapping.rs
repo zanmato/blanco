@@ -70,14 +70,10 @@ pub fn compile_mappings(
         .collect()
 }
 
-pub fn cell_to_param(
-    raw: Option<&str>,
-    is_nullable: bool,
-    transform: Transform,
-) -> Option<String> {
+pub fn cell_to_param(raw: Option<&str>, is_nullable: bool, transform: Transform) -> Option<String> {
     match raw {
         None => None,
-        Some(value) if value.is_empty() => {
+        Some("") => {
             if is_nullable {
                 None
             } else {
@@ -89,11 +85,10 @@ pub fn cell_to_param(
 }
 
 fn apply_transform(value: &str, transform: Transform) -> String {
-    let s = match transform {
-        Transform::None => return value.to_string(),
+    match transform {
+        Transform::None => value.to_string(),
         Transform::Slugify => slugify(value),
-    };
-    s
+    }
 }
 
 pub fn slugify(value: &str) -> String {
@@ -103,10 +98,8 @@ pub fn slugify(value: &str) -> String {
     for c in lower.chars() {
         if c.is_ascii_alphanumeric() {
             result.push(c);
-        } else if c == ' ' || c == '-' || c == '_' {
-            if !result.ends_with('-') {
-                result.push('-');
-            }
+        } else if (c == ' ' || c == '-' || c == '_') && !result.ends_with('-') {
+            result.push('-');
         }
     }
     result.trim_end_matches('-').to_string()
@@ -146,18 +139,20 @@ pub fn build_insert_sql(
             DatabaseType::PostgreSQL => format!("${}", global_idx + 1),
             _ => "?".to_string(),
         };
-        if db_type == DatabaseType::PostgreSQL {
-            if let Some(dt) = data_types.get(col_idx) {
-                let lower = dt.to_lowercase();
-                if !is_text_type(&lower) {
-                    return format!("{}::{}", ph, lower);
-                }
+        if db_type == DatabaseType::PostgreSQL
+            && let Some(dt) = data_types.get(col_idx)
+        {
+            let lower = dt.to_lowercase();
+            if !is_text_type(&lower) {
+                return format!("{}::{}", ph, lower);
             }
         }
         ph
     };
 
-    let needs_type_cast = data_types.iter().any(|dt| !is_text_type(&dt.to_lowercase()));
+    let needs_type_cast = data_types
+        .iter()
+        .any(|dt| !is_text_type(&dt.to_lowercase()));
 
     let placeholder_for_simple = |global_idx: usize| -> String {
         match db_type {
@@ -278,10 +273,14 @@ pub fn preview_statements(
             let values: Vec<String> = compiled
                 .iter()
                 .map(|m| match &m.source {
-                    MappingSource::Fixed(v) => literal(Some(v.as_str()), m.is_nullable, m.transform),
-                    MappingSource::CsvColumn(idx) => {
-                        literal(row.get(*idx).map(|s| s.as_str()), m.is_nullable, m.transform)
+                    MappingSource::Fixed(v) => {
+                        literal(Some(v.as_str()), m.is_nullable, m.transform)
                     }
+                    MappingSource::CsvColumn(idx) => literal(
+                        row.get(*idx).map(|s| s.as_str()),
+                        m.is_nullable,
+                        m.transform,
+                    ),
                 })
                 .collect();
             format!("({})", values.join(","))
@@ -449,7 +448,7 @@ mod tests {
             ColumnMapping::CsvColumn(1),
             ColumnMapping::Fixed("acme".into()),
         ];
-        let compiled = compile_mappings(&cols, &mappings, &vec![Transform::None; 4]);
+        let compiled = compile_mappings(&cols, &mappings, &[Transform::None; 4]);
         assert_eq!(compiled.len(), 3);
         assert_eq!(compiled[0].table_column, "name");
         assert!(matches!(compiled[2].source, MappingSource::Fixed(_)));
@@ -458,8 +457,14 @@ mod tests {
     #[test]
     fn empty_cell_respects_nullability() {
         assert_eq!(cell_to_param(Some(""), true, Transform::None), None);
-        assert_eq!(cell_to_param(Some(""), false, Transform::None), Some(String::new()));
-        assert_eq!(cell_to_param(Some("x"), true, Transform::None), Some("x".into()));
+        assert_eq!(
+            cell_to_param(Some(""), false, Transform::None),
+            Some(String::new())
+        );
+        assert_eq!(
+            cell_to_param(Some("x"), true, Transform::None),
+            Some("x".into())
+        );
         assert_eq!(cell_to_param(None, false, Transform::None), None);
     }
 

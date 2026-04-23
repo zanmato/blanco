@@ -127,74 +127,79 @@ impl Render for TableStructureTab {
             .w_full()
             .overflow_hidden()
             .bg(theme.background)
-            .child(v_flex().flex_1().overflow_y_scrollbar().p_4().gap_4().child(
-                if let Some(error) = &self.error {
-                    div()
-                        .text_color(theme.danger_foreground)
-                        .child(format!("Error: {}", error))
-                        .into_any_element()
-                } else if self.loading {
-                    div()
-                        .text_color(theme.muted_foreground)
-                        .child("Loading...")
-                        .into_any_element()
-                } else {
-                    v_flex()
-                        .flex_1()
-                        .gap_4()
-                        .child(
-                            v_flex()
-                                .flex_grow()
-                                .flex_basis(px(300.))
-                                .min_h(px(150.))
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .text_lg()
-                                        .font_semibold()
-                                        .text_color(theme.foreground)
-                                        .child("Columns"),
-                                )
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .border_1()
-                                        .border_color(theme.border)
-                                        .overflow_hidden()
-                                        .child(
-                                            DataTable::new(&self.columns_table_state)
-                                                .bordered(false),
-                                        ),
-                                ),
-                        )
-                        .child(
-                            v_flex()
-                                .flex_grow()
-                                .flex_basis(px(150.))
-                                .min_h(px(80.))
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .text_lg()
-                                        .font_semibold()
-                                        .text_color(theme.foreground)
-                                        .child("Indexes"),
-                                )
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .border_1()
-                                        .border_color(theme.border)
-                                        .overflow_hidden()
-                                        .child(
-                                            DataTable::new(&self.indexes_table_state)
-                                                .bordered(false),
-                                        ),
-                                ),
-                        )
-                        .into_any_element()
-                },
-            ))
+            .child(
+                v_flex()
+                    .flex_1()
+                    .overflow_y_scrollbar()
+                    .p_4()
+                    .gap_4()
+                    .child(if let Some(error) = &self.error {
+                        div()
+                            .text_color(theme.danger_foreground)
+                            .child(format!("Error: {}", error))
+                            .into_any_element()
+                    } else if self.loading {
+                        div()
+                            .text_color(theme.muted_foreground)
+                            .child("Loading...")
+                            .into_any_element()
+                    } else {
+                        v_flex()
+                            .flex_1()
+                            .gap_4()
+                            .child(
+                                v_flex()
+                                    .flex_grow()
+                                    .flex_basis(px(300.))
+                                    .min_h(px(150.))
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .text_lg()
+                                            .font_semibold()
+                                            .text_color(theme.foreground)
+                                            .child("Columns"),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .border_1()
+                                            .border_color(theme.border)
+                                            .overflow_hidden()
+                                            .child(
+                                                DataTable::new(&self.columns_table_state)
+                                                    .bordered(false),
+                                            ),
+                                    ),
+                            )
+                            .child(
+                                v_flex()
+                                    .flex_grow()
+                                    .flex_basis(px(150.))
+                                    .min_h(px(80.))
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .text_lg()
+                                            .font_semibold()
+                                            .text_color(theme.foreground)
+                                            .child("Indexes"),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .border_1()
+                                            .border_color(theme.border)
+                                            .overflow_hidden()
+                                            .child(
+                                                DataTable::new(&self.indexes_table_state)
+                                                    .bordered(false),
+                                            ),
+                                    ),
+                            )
+                            .into_any_element()
+                    }),
+            )
     }
 }
 

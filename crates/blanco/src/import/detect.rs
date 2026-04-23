@@ -12,7 +12,6 @@ const CANDIDATE_DELIMITERS: &[u8] = b",;\t|";
 pub struct DetectedFile {
     pub encoding: &'static Encoding,
     pub delimiter: u8,
-    pub has_header_guess: bool,
     pub headers: Vec<String>,
     pub sample_rows: Vec<Vec<String>>,
 }
@@ -126,34 +125,12 @@ fn read_sample(decoded: &str, delimiter: u8, has_header: bool) -> Result<Detecte
         }
     }
 
-    let has_header_guess = has_header && guess_header_is_header(&headers, &sample_rows);
     Ok(DetectedFile {
         encoding: encoding_rs::UTF_8,
         delimiter,
-        has_header_guess,
         headers,
         sample_rows,
     })
-}
-
-fn guess_header_is_header(headers: &[String], sample_rows: &[Vec<String>]) -> bool {
-    if headers.is_empty() || sample_rows.is_empty() {
-        return !headers.is_empty();
-    }
-    let header_numeric = headers.iter().filter(|h| looks_numeric(h)).count();
-    let first_row_numeric = sample_rows
-        .first()
-        .map(|row| row.iter().filter(|v| looks_numeric(v)).count())
-        .unwrap_or(0);
-    header_numeric <= first_row_numeric
-}
-
-fn looks_numeric(value: &str) -> bool {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    trimmed.parse::<f64>().is_ok()
 }
 
 #[cfg(test)]
