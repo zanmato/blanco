@@ -1,0 +1,23 @@
+[package]
+name = "clickhouse"
+version = "0.1.0"
+edition = "2024"
+description = "ClickHouse database implementation for Blanco SQL editor"
+
+[lib]
+path = "src/clickhouse.rs"
+
+[dependencies]
+blanco-core = { path = "../blanco-core" }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true, features = ["native-tls"] }
+async-compat = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+futures = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+smol = { workspace = true }

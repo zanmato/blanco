@@ -27,6 +27,7 @@ impl TableExtractor {
             DriverType::SQLite => Box::new(GenericDialect {}),
             DriverType::PostgreSQL => Box::new(PostgreSqlDialect {}),
             DriverType::MySQL => Box::new(MySqlDialect {}),
+            DriverType::ClickHouse => Box::new(GenericDialect {}),
         };
         Self { dialect }
     }

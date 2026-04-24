@@ -13,7 +13,8 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use crate::connection_config::{ConnectionConfig, DatabaseType};
 use crate::factories::{
-    MysqlConnectionFactory, PostgresConnectionFactory, SqliteConnectionFactory,
+    ClickhouseConnectionFactory, MysqlConnectionFactory, PostgresConnectionFactory,
+    SqliteConnectionFactory,
 };
 use crate::ssh_tunnel::{SshTunnel, SshTunnelConfig, TunnelInfo};
 
@@ -78,6 +79,10 @@ impl DatabaseService {
         factories.insert(
             DatabaseType::MySQL.to_string(),
             Arc::new(MysqlConnectionFactory::new()),
+        );
+        factories.insert(
+            DatabaseType::ClickHouse.to_string(),
+            Arc::new(ClickhouseConnectionFactory::new()),
         );
 
         Self {

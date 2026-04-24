@@ -9,6 +9,7 @@ pub enum DatabaseType {
     SQLite,
     PostgreSQL,
     MySQL,
+    ClickHouse,
 }
 
 impl DatabaseType {
@@ -18,6 +19,7 @@ impl DatabaseType {
             DatabaseType::SQLite => "SQLite",
             DatabaseType::PostgreSQL => "PostgreSQL",
             DatabaseType::MySQL => "MySQL",
+            DatabaseType::ClickHouse => "ClickHouse",
         }
     }
 
@@ -27,6 +29,7 @@ impl DatabaseType {
             "SQLite" => Some(DatabaseType::SQLite),
             "PostgreSQL" => Some(DatabaseType::PostgreSQL),
             "MySQL" => Some(DatabaseType::MySQL),
+            "ClickHouse" => Some(DatabaseType::ClickHouse),
             _ => None,
         }
     }
@@ -37,6 +40,7 @@ impl DatabaseType {
             DatabaseType::SQLite => false,
             DatabaseType::PostgreSQL => true,
             DatabaseType::MySQL => true,
+            DatabaseType::ClickHouse => true,
         }
     }
 
@@ -46,6 +50,7 @@ impl DatabaseType {
             DatabaseType::SQLite => "sqlite",
             DatabaseType::PostgreSQL => "postgres",
             DatabaseType::MySQL => "mysql",
+            DatabaseType::ClickHouse => "ansi",
         }
     }
 
@@ -55,6 +60,7 @@ impl DatabaseType {
             "SQLite" => Some(DatabaseType::SQLite),
             "PostgreSQL" => Some(DatabaseType::PostgreSQL),
             "MySQL" => Some(DatabaseType::MySQL),
+            "ClickHouse" => Some(DatabaseType::ClickHouse),
             _ => None,
         }
     }
@@ -72,6 +78,7 @@ impl From<DatabaseType> for blanco_core::DriverType {
             DatabaseType::SQLite => blanco_core::DriverType::SQLite,
             DatabaseType::PostgreSQL => blanco_core::DriverType::PostgreSQL,
             DatabaseType::MySQL => blanco_core::DriverType::MySQL,
+            DatabaseType::ClickHouse => blanco_core::DriverType::ClickHouse,
         }
     }
 }
@@ -315,6 +322,76 @@ impl ConnectionConfig {
                 }
 
                 conn_str
+            }
+            DatabaseType::ClickHouse => {
+                // Allow the user to specify the scheme in the host field
+                // (e.g. `https://ch.example.com`). If no scheme is present,
+                // default to http. If the host already includes a port, don't
+                // append the separate port field.
+                let (scheme_prefix, host_rest) =
+                    if let Some(rest) = conn_host.strip_prefix("https://") {
+                        ("https://", rest)
+                    } else if let Some(rest) = conn_host.strip_prefix("http://") {
+                        ("http://", rest)
+                    } else {
+                        ("http://", conn_host)
+                    };
+                let host_clean = host_rest
+                    .split(['/', '?'])
+                    .next()
+                    .unwrap_or(host_rest)
+                    .trim_end_matches('/');
+                let host_has_port = match host_clean.rfind(':') {
+                    Some(idx) => {
+                        // Guard against IPv6 literals like [::1]; only treat
+                        // as a port separator when it follows a `]` or a
+                        // non-bracketed hostname.
+                        let after = &host_clean[idx + 1..];
+                        !host_clean.starts_with('[')
+                            || host_clean[..idx].ends_with(']')
+                                && after.chars().all(|c| c.is_ascii_digit())
+                    }
+                    None => false,
+                };
+                let host_and_port = if host_has_port {
+                    host_clean.to_string()
+                } else {
+                    format!("{}:{}", host_clean, conn_port)
+                };
+
+                let mut params = vec![format!("database={}", db_name)];
+                if let Some(ssl_mode) = &self.ssl_mode {
+                    params.push(format!("ssl_mode={}", ssl_mode));
+                }
+                if let Some(ssl_ca) = &self.ssl_ca_cert_path {
+                    params.push(format!("sslrootcert={}", ssl_ca));
+                }
+                if let Some(ssl_cert) = &self.ssl_cert_path {
+                    params.push(format!("sslcert={}", ssl_cert));
+                }
+                if let Some(ssl_key) = &self.ssl_key_path {
+                    params.push(format!("sslkey={}", ssl_key));
+                }
+
+                // Build the URL via `url::Url` so that userinfo is properly
+                // percent-encoded (passwords may contain '@', '/', ':' etc.).
+                // The ClickHouse driver reads the username and password from
+                // the URL's userinfo.
+                let raw = format!("{}{}/?{}", scheme_prefix, host_and_port, params.join("&"));
+                match url::Url::parse(&raw) {
+                    Ok(mut url) => {
+                        if !self.username.is_empty() {
+                            let _ = url.set_username(&self.username);
+                        }
+                        if let Some(password) = &self.password {
+                            if !password.is_empty() {
+                                let _ = url.set_password(Some(password));
+                            }
+                        }
+                        url.to_string()
+                    }
+                    Err(_) => raw,
+                }
             }
         }
     }

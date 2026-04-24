@@ -5,12 +5,34 @@ use gpui_component::select::SelectState;
 use crate::app_database::{ConnectionData, EnvironmentType};
 use blanco_core::connection_trait::DriverType;
 
+/// Returns true if the host string (possibly containing a scheme and/or path)
+/// specifies an explicit port like `host:1234` or `https://host:1234`.
+fn host_contains_explicit_port(host: &str) -> bool {
+    let rest = host
+        .strip_prefix("https://")
+        .or_else(|| host.strip_prefix("http://"))
+        .unwrap_or(host);
+    let host_clean = rest.split(['/', '?']).next().unwrap_or(rest);
+    match host_clean.rfind(':') {
+        Some(idx) => {
+            if host_clean.starts_with('[') {
+                host_clean[..idx].ends_with(']')
+                    && host_clean[idx + 1..].chars().all(|c| c.is_ascii_digit())
+            } else {
+                host_clean[idx + 1..].chars().all(|c| c.is_ascii_digit())
+            }
+        }
+        None => false,
+    }
+}
+
 /// Represents a database connector type
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum ConnectorType {
     SQLite,
     PostgreSQL,
     MySQL,
+    ClickHouse,
 }
 
 impl ConnectorType {
@@ -18,6 +40,7 @@ impl ConnectorType {
         match s {
             "PostgreSQL" => ConnectorType::PostgreSQL,
             "MySQL" => ConnectorType::MySQL,
+            "ClickHouse" => ConnectorType::ClickHouse,
             _ => ConnectorType::SQLite,
         }
     }
@@ -29,6 +52,7 @@ impl From<DriverType> for ConnectorType {
             DriverType::SQLite => ConnectorType::SQLite,
             DriverType::PostgreSQL => ConnectorType::PostgreSQL,
             DriverType::MySQL => ConnectorType::MySQL,
+            DriverType::ClickHouse => ConnectorType::ClickHouse,
         }
     }
 }
@@ -39,6 +63,7 @@ impl From<ConnectorType> for DriverType {
             ConnectorType::SQLite => DriverType::SQLite,
             ConnectorType::PostgreSQL => DriverType::PostgreSQL,
             ConnectorType::MySQL => DriverType::MySQL,
+            ConnectorType::ClickHouse => DriverType::ClickHouse,
         }
     }
 }
@@ -503,6 +528,215 @@ impl MysqlForm {
         }
 
         None
+    }
+
+    #[allow(dead_code)]
+    pub fn first_input_focus_handle(&self, cx: &App) -> FocusHandle {
+        self.host_input.focus_handle(cx)
+    }
+}
+
+/// ClickHouse connector form
+pub(super) struct ClickhouseForm {
+    pub host_input: Entity<InputState>,
+    pub port_input: Entity<InputState>,
+    pub database_input: Entity<InputState>,
+    pub username_input: Entity<InputState>,
+    pub password_input: Entity<InputState>,
+    // SSH tunnel configuration
+    pub ssh_enabled: bool,
+    pub ssh_host_input: Entity<InputState>,
+    pub ssh_port_input: Entity<InputState>,
+    pub ssh_user_input: Entity<InputState>,
+    pub ssh_password_input: Entity<InputState>,
+    pub ssh_private_key_input: Entity<InputState>,
+    pub ssh_private_key_password_input: Entity<InputState>,
+    // SSL/TLS configuration
+    pub ssl_mode_select: Entity<SelectState<Vec<String>>>,
+    pub ssl_key_input: Entity<InputState>,
+    pub ssl_cert_input: Entity<InputState>,
+    pub ssl_ca_cert_input: Entity<InputState>,
+    pub ssl_advanced_expanded: bool,
+}
+
+impl ClickhouseForm {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        host_input: Entity<InputState>,
+        port_input: Entity<InputState>,
+        database_input: Entity<InputState>,
+        username_input: Entity<InputState>,
+        password_input: Entity<InputState>,
+        ssh_host_input: Entity<InputState>,
+        ssh_port_input: Entity<InputState>,
+        ssh_user_input: Entity<InputState>,
+        ssh_password_input: Entity<InputState>,
+        ssh_private_key_input: Entity<InputState>,
+        ssh_private_key_password_input: Entity<InputState>,
+        ssl_mode_select: Entity<SelectState<Vec<String>>>,
+        ssl_key_input: Entity<InputState>,
+        ssl_cert_input: Entity<InputState>,
+        ssl_ca_cert_input: Entity<InputState>,
+    ) -> Self {
+        Self {
+            host_input,
+            port_input,
+            database_input,
+            username_input,
+            password_input,
+            ssh_enabled: false,
+            ssh_host_input,
+            ssh_port_input,
+            ssh_user_input,
+            ssh_password_input,
+            ssh_private_key_input,
+            ssh_private_key_password_input,
+            ssl_mode_select,
+            ssl_key_input,
+            ssl_cert_input,
+            ssl_ca_cert_input,
+            ssl_advanced_expanded: false,
+        }
+    }
+
+    pub fn render(&self, _cx: &App) -> gpui::AnyElement {
+        use gpui::{IntoElement, ParentElement, Styled};
+        use gpui_component::{h_flex, input::Input, v_flex};
+
+        v_flex()
+            .gap_3()
+            .child(
+                h_flex()
+                    .gap_3()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .gap_2()
+                            .child(
+                                gpui::div()
+                                    .text_sm()
+                                    .child("Host (http:// or https://)"),
+                            )
+                            .child(Input::new(&self.host_input)),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .gap_2()
+                            .child(gpui::div().text_sm().child("Port"))
+                            .child(Input::new(&self.port_input)),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .gap_3()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .gap_2()
+                            .child(gpui::div().text_sm().child("User"))
+                            .child(Input::new(&self.username_input)),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .gap_2()
+                            .child(gpui::div().text_sm().child("Password"))
+                            .child(Input::new(&self.password_input)),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .gap_2()
+                    .child(gpui::div().text_sm().child("Database name"))
+                    .child(Input::new(&self.database_input)),
+            )
+            .into_any_element()
+    }
+
+    pub fn validate(&self, cx: &App) -> Option<String> {
+        let host = self.host_input.read(cx).value();
+        let port_str = self.port_input.read(cx).value();
+        let database = self.database_input.read(cx).value();
+        let username = self.username_input.read(cx).value();
+
+        if host.is_empty() {
+            return Some("Host is required".to_string());
+        }
+
+        let host_has_port = host_contains_explicit_port(&host);
+        if port_str.is_empty() && !host_has_port {
+            return Some("Port is required".to_string());
+        }
+
+        if !port_str.is_empty() && port_str.parse::<u16>().is_err() {
+            return Some("Port must be a valid number (1-65535)".to_string());
+        }
+
+        if database.is_empty() {
+            return Some("Database name is required".to_string());
+        }
+
+        if username.is_empty() {
+            return Some("Username is required".to_string());
+        }
+
+        None
+    }
+
+    pub fn get_connection_data(
+        &self,
+        name: String,
+        environment_type: EnvironmentType,
+        cx: &App,
+    ) -> Option<ConnectionData> {
+        let host = self.host_input.read(cx).value().to_string();
+        let port_str = self.port_input.read(cx).value();
+        let database = self.database_input.read(cx).value().to_string();
+        let username = self.username_input.read(cx).value().to_string();
+        let password = self.password_input.read(cx).value().to_string();
+
+        if host.is_empty() || database.is_empty() || username.is_empty() {
+            return None;
+        }
+
+        let port = if port_str.is_empty() {
+            // Host carries its own port, or we'll fall back to the scheme default.
+            if host.starts_with("https://") { 8443 } else { 8123 }
+        } else {
+            port_str.parse::<i32>().ok()?
+        };
+
+        let mut connection =
+            ConnectionData::new_clickhouse(name, host, port, database, username, password);
+        connection.environment_type = environment_type;
+
+        let ssl_mode = self.ssl_mode_select.read(cx).selected_value().cloned();
+        let ssl_key_path = self.ssl_key_input.read(cx).value();
+        let ssl_key_path = if ssl_key_path.is_empty() {
+            None
+        } else {
+            Some(ssl_key_path.to_string())
+        };
+        let ssl_cert_path = self.ssl_cert_input.read(cx).value();
+        let ssl_cert_path = if ssl_cert_path.is_empty() {
+            None
+        } else {
+            Some(ssl_cert_path.to_string())
+        };
+        let ssl_ca_cert_path = self.ssl_ca_cert_input.read(cx).value();
+        let ssl_ca_cert_path = if ssl_ca_cert_path.is_empty() {
+            None
+        } else {
+            Some(ssl_ca_cert_path.to_string())
+        };
+
+        connection.ssl_mode = ssl_mode;
+        connection.ssl_key_path = ssl_key_path;
+        connection.ssl_cert_path = ssl_cert_path;
+        connection.ssl_ca_cert_path = ssl_ca_cert_path;
+
+        Some(connection)
     }
 
     #[allow(dead_code)]

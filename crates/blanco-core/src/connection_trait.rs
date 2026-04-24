@@ -66,6 +66,7 @@ pub enum DriverType {
     SQLite,
     PostgreSQL,
     MySQL,
+    ClickHouse,
 }
 
 impl DriverType {
@@ -75,6 +76,7 @@ impl DriverType {
             "SQLite" => Some(Self::SQLite),
             "PostgreSQL" => Some(Self::PostgreSQL),
             "MySQL" => Some(Self::MySQL),
+            "ClickHouse" => Some(Self::ClickHouse),
             _ => None,
         }
     }
@@ -85,6 +87,7 @@ impl DriverType {
             Self::SQLite => "SQLite",
             Self::PostgreSQL => "PostgreSQL",
             Self::MySQL => "MySQL",
+            Self::ClickHouse => "ClickHouse",
         }
     }
 }

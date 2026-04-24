@@ -1,6 +1,8 @@
 mod connector_forms;
 
-use connector_forms::{ConnectorType, MysqlForm, PostgresForm, SqliteForm, TestResult};
+use connector_forms::{
+    ClickhouseForm, ConnectorType, MysqlForm, PostgresForm, SqliteForm, TestResult,
+};
 
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement,
@@ -26,6 +28,7 @@ pub struct NewConnectionModal {
     sqlite_form: SqliteForm,
     postgres_form: PostgresForm,
     mysql_form: MysqlForm,
+    clickhouse_form: ClickhouseForm,
     test_result: Option<TestResult>,
     is_testing: bool,
     editing_connection_id: Option<i64>,
@@ -46,6 +49,7 @@ impl NewConnectionModal {
             "SQLite".to_string(),
             "PostgreSQL".to_string(),
             "MySQL".to_string(),
+            "ClickHouse".to_string(),
         ];
 
         // Determine initial values and editing mode
@@ -55,6 +59,7 @@ impl NewConnectionModal {
                 let db_type_index = match conn.db_type {
                     database::DatabaseType::PostgreSQL => 1,
                     database::DatabaseType::MySQL => 2,
+                    database::DatabaseType::ClickHouse => 3,
                     database::DatabaseType::SQLite => 0,
                 };
                 (conn.name.clone(), Some(db_type_index), conn_id, true)
@@ -460,6 +465,185 @@ impl NewConnectionModal {
             mysql_form.ssh_enabled = true;
         }
 
+        // Create entities for ClickHouse form
+        let ch_host = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("localhost");
+            if let Some(conn) = &connection_data
+                && conn.db_type == database::DatabaseType::ClickHouse
+                && let Some(host) = &conn.host
+            {
+                input.set_value(host.clone(), window, cx);
+            }
+            input
+        });
+        let ch_port = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("8123");
+            if let Some(conn) = &connection_data
+                && conn.db_type == database::DatabaseType::ClickHouse
+                && let Some(port) = conn.port
+            {
+                input.set_value(port.to_string(), window, cx);
+            }
+            input
+        });
+        let ch_database = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("default");
+            if let Some(conn) = &connection_data
+                && conn.db_type == database::DatabaseType::ClickHouse
+                && let Some(db) = &conn.database_name
+            {
+                input.set_value(db.clone(), window, cx);
+            }
+            input
+        });
+        let ch_username = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("default");
+            if let Some(conn) = &connection_data
+                && conn.db_type == database::DatabaseType::ClickHouse
+                && let Some(user) = &conn.username
+            {
+                input.set_value(user.clone(), window, cx);
+            }
+            input
+        });
+        let ch_password = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("Password");
+            if let Some(conn) = &connection_data
+                && conn.db_type == database::DatabaseType::ClickHouse
+                && let Some(pass) = &conn.password
+            {
+                input.set_value(pass.clone(), window, cx);
+            }
+            input
+        });
+
+        // ClickHouse SSH fields
+        let ch_ssh_host = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("SSH Host");
+            if let Some(conn) = &connection_data
+                && conn.db_type == database::DatabaseType::ClickHouse
+                && let Some(host) = &conn.ssh_host
+            {
+                input.set_value(host.clone(), window, cx);
+            }
+            input
+        });
+        let ch_ssh_port = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("22");
+            if let Some(conn) = &connection_data
+                && conn.db_type == database::DatabaseType::ClickHouse
+                && let Some(port) = conn.ssh_port
+            {
+                input.set_value(port.to_string(), window, cx);
+            }
+            input
+        });
+        let ch_ssh_user = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("SSH Username");
+            if let Some(conn) = &connection_data
+                && conn.db_type == database::DatabaseType::ClickHouse
+                && let Some(user) = &conn.ssh_user
+            {
+                input.set_value(user.clone(), window, cx);
+            }
+            input
+        });
+        let ch_ssh_password = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("SSH Password (optional)");
+            if let Some(conn) = &connection_data
+                && conn.db_type == database::DatabaseType::ClickHouse
+                && let Some(pass) = &conn.ssh_password
+            {
+                input.set_value(pass.clone(), window, cx);
+            }
+            input
+        });
+        let ch_ssh_private_key = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("Private Key Path (optional)");
+            if let Some(conn) = &connection_data
+                && conn.db_type == database::DatabaseType::ClickHouse
+                && let Some(key) = &conn.ssh_private_key_path
+            {
+                input.set_value(key.clone(), window, cx);
+            }
+            input
+        });
+        let ch_ssh_private_key_password = cx.new(|cx| {
+            let mut input =
+                InputState::new(window, cx).placeholder("Private Key Password (optional)");
+            if let Some(conn) = &connection_data
+                && conn.db_type == database::DatabaseType::ClickHouse
+                && let Some(pass) = &conn.ssh_private_key_password
+            {
+                input.set_value(pass.clone(), window, cx);
+            }
+            input
+        });
+
+        // ClickHouse SSL
+        let ch_ssl_modes = vec![
+            "disabled".to_string(),
+            "required".to_string(),
+            "preferred".to_string(),
+        ];
+        let initial_ch_ssl_index = connection_data
+            .as_ref()
+            .and_then(|c| c.ssl_mode.as_ref())
+            .and_then(|mode| ch_ssl_modes.iter().position(|m| m == mode));
+        let ch_ssl_mode_select = cx.new(|cx| {
+            SelectState::new(
+                ch_ssl_modes,
+                initial_ch_ssl_index.map(IndexPath::new),
+                window,
+                cx,
+            )
+        });
+        let ch_ssl_key = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("SSL Key Path (optional)");
+            if let Some(conn) = &connection_data
+                && let Some(path) = &conn.ssl_key_path
+            {
+                input.set_value(path.clone(), window, cx);
+            }
+            input
+        });
+        let ch_ssl_cert = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("SSL Cert Path (optional)");
+            if let Some(conn) = &connection_data
+                && let Some(path) = &conn.ssl_cert_path
+            {
+                input.set_value(path.clone(), window, cx);
+            }
+            input
+        });
+        let ch_ssl_ca_cert = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("SSL CA Cert Path (optional)");
+            if let Some(conn) = &connection_data
+                && let Some(path) = &conn.ssl_ca_cert_path
+            {
+                input.set_value(path.clone(), window, cx);
+            }
+            input
+        });
+
+        let clickhouse_form = ClickhouseForm::new(
+            ch_host,
+            ch_port,
+            ch_database,
+            ch_username,
+            ch_password,
+            ch_ssh_host,
+            ch_ssh_port,
+            ch_ssh_user,
+            ch_ssh_password,
+            ch_ssh_private_key,
+            ch_ssh_private_key_password,
+            ch_ssl_mode_select,
+            ch_ssl_key,
+            ch_ssl_cert,
+            ch_ssl_ca_cert,
+        );
+
         Self {
             focus_handle: cx.focus_handle(),
             name_input,
@@ -468,6 +652,7 @@ impl NewConnectionModal {
             sqlite_form,
             postgres_form,
             mysql_form,
+            clickhouse_form,
             test_result: None,
             is_testing: false,
             editing_connection_id,
@@ -509,6 +694,11 @@ impl NewConnectionModal {
         cx.notify();
     }
 
+    fn toggle_clickhouse_ssh_enabled(&mut self, cx: &mut Context<Self>) {
+        self.clickhouse_form.ssh_enabled = !self.clickhouse_form.ssh_enabled;
+        cx.notify();
+    }
+
     fn toggle_postgres_ssl_advanced(&mut self, cx: &mut Context<Self>) {
         self.postgres_form.ssl_advanced_expanded = !self.postgres_form.ssl_advanced_expanded;
         cx.notify();
@@ -516,6 +706,11 @@ impl NewConnectionModal {
 
     fn toggle_mysql_ssl_advanced(&mut self, cx: &mut Context<Self>) {
         self.mysql_form.ssl_advanced_expanded = !self.mysql_form.ssl_advanced_expanded;
+        cx.notify();
+    }
+
+    fn toggle_clickhouse_ssl_advanced(&mut self, cx: &mut Context<Self>) {
+        self.clickhouse_form.ssl_advanced_expanded = !self.clickhouse_form.ssl_advanced_expanded;
         cx.notify();
     }
 
@@ -571,6 +766,7 @@ impl NewConnectionModal {
             }
             ConnectorType::PostgreSQL => self.postgres_form.validate(cx),
             ConnectorType::MySQL => self.mysql_form.validate(cx),
+            ConnectorType::ClickHouse => self.clickhouse_form.validate(cx),
         };
 
         if let Some(error) = validation_error {
@@ -614,6 +810,10 @@ impl NewConnectionModal {
                 };
                 conn.environment_type = environment_type;
                 Some(conn)
+            }
+            ConnectorType::ClickHouse => {
+                self.clickhouse_form
+                    .get_connection_data(name, environment_type, cx)
             }
         };
 
@@ -695,6 +895,10 @@ impl NewConnectionModal {
                 let mut conn = self.mysql_form.build_connection_data(&name, cx)?;
                 conn.environment_type = environment_type;
                 conn
+            }
+            ConnectorType::ClickHouse => {
+                self.clickhouse_form
+                    .get_connection_data(name, environment_type, cx)?
             }
         };
 
@@ -978,6 +1182,75 @@ impl NewConnectionModal {
             })
             .into_any_element()
     }
+
+    fn render_clickhouse_form(&self, cx: &mut Context<Self>) -> AnyElement {
+        let base_fields = self.clickhouse_form.render(cx);
+        let ssl_advanced_expanded = self.clickhouse_form.ssl_advanced_expanded;
+        let ssh_enabled = self.clickhouse_form.ssh_enabled;
+
+        v_flex()
+            .gap_3()
+            .child(base_fields)
+            .child(
+                v_flex()
+                    .flex_1()
+                    .gap_2()
+                    .child(div().text_sm().child("SSL Mode"))
+                    .child(Select::new(&self.clickhouse_form.ssl_mode_select)),
+            )
+            .child(
+                Button::new("clickhouse-ssl-advanced-toggle")
+                    .ghost()
+                    .xsmall()
+                    .child(if ssl_advanced_expanded {
+                        "Hide Advanced SSL"
+                    } else {
+                        "Show Advanced SSL"
+                    })
+                    .icon(if ssl_advanced_expanded {
+                        IconName::ChevronUp
+                    } else {
+                        IconName::ChevronDown
+                    })
+                    .on_click(cx.listener(|modal: &mut Self, _event, _window, cx| {
+                        modal.toggle_clickhouse_ssl_advanced(cx);
+                    })),
+            )
+            .when(ssl_advanced_expanded, |this| {
+                this.child(self.render_ssl_advanced_fields(
+                    "clickhouse",
+                    &self.clickhouse_form.ssl_key_input,
+                    &self.clickhouse_form.ssl_cert_input,
+                    &self.clickhouse_form.ssl_ca_cert_input,
+                    cx,
+                ))
+            })
+            .child(
+                div().child(
+                    h_flex().gap_2().items_center().child(
+                        Switch::new("clickhouse-ssh-enabled-switch")
+                            .checked(ssh_enabled)
+                            .label("SSH")
+                            .on_click(cx.listener(|modal: &mut Self, _checked, _window, cx| {
+                                modal.toggle_clickhouse_ssh_enabled(cx);
+                            })),
+                    ),
+                ),
+            )
+            .when(ssh_enabled, |this| {
+                this.child(self.render_ssh_section(
+                    "clickhouse",
+                    &self.clickhouse_form.ssh_host_input,
+                    &self.clickhouse_form.ssh_port_input,
+                    &self.clickhouse_form.ssh_user_input,
+                    &self.clickhouse_form.ssh_password_input,
+                    &self.clickhouse_form.ssh_private_key_input,
+                    &self.clickhouse_form.ssh_private_key_password_input,
+                    cx,
+                ))
+            })
+            .into_any_element()
+    }
 }
 
 impl Focusable for NewConnectionModal {
@@ -1023,6 +1296,7 @@ impl Render for NewConnectionModal {
                     ConnectorType::SQLite => self.render_sqlite_form(cx),
                     ConnectorType::PostgreSQL => self.render_postgres_form(cx),
                     ConnectorType::MySQL => self.render_mysql_form(cx),
+                    ConnectorType::ClickHouse => self.render_clickhouse_form(cx),
                 })
                 // Testing in progress indicator
                 .when(self.is_testing, |this| {

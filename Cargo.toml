@@ -7,6 +7,7 @@ members = [
     "crates/postgres",
     "crates/sqlite",
     "crates/mysql",
+    "crates/clickhouse",
     "crates/database",
     "crates/gpui_tokio",
 ]

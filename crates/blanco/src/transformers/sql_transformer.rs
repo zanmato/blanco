@@ -227,7 +227,7 @@ fn sql_escape_string_to(value: &str, output: &mut String) {
 fn sql_identifier(name: &str, db_type: DatabaseType) -> String {
     match db_type {
         DatabaseType::MySQL => format!("`{}`", name.replace('`', "``")),
-        DatabaseType::PostgreSQL | DatabaseType::SQLite => {
+        DatabaseType::PostgreSQL | DatabaseType::SQLite | DatabaseType::ClickHouse => {
             format!("\"{}\"", name.replace('"', "\"\""))
         }
     }
