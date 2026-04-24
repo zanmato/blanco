@@ -6,7 +6,7 @@ use gpui::{
 use gpui_component::{
     ActiveTheme, Root, TitleBar, WindowExt as _,
     button::{Button, ButtonVariants as _},
-    dialog::{DialogAction, DialogClose, DialogFooter},
+    dialog::{DialogAction, DialogFooter},
     global_state::GlobalState,
     h_flex,
     menu::AppMenuBar,
@@ -523,8 +523,12 @@ impl BlancoApp {
                             h_flex()
                                 .gap_2()
                                 .child(
-                                    DialogClose::new()
-                                        .child(Button::new("cancel").label("Cancel").outline()),
+                                    Button::new("cancel")
+                                        .label("Cancel")
+                                        .outline()
+                                        .on_click(|_, window, cx| {
+                                            window.close_dialog(cx);
+                                        }),
                                 )
                                 .child(
                                     DialogAction::new()
@@ -634,8 +638,12 @@ impl BlancoApp {
                             h_flex()
                                 .gap_2()
                                 .child(
-                                    DialogClose::new()
-                                        .child(Button::new("cancel").label("Cancel").outline()),
+                                    Button::new("cancel")
+                                        .label("Cancel")
+                                        .outline()
+                                        .on_click(|_, window, cx| {
+                                            window.close_dialog(cx);
+                                        }),
                                 )
                                 .child(
                                     DialogAction::new()
