@@ -3,8 +3,7 @@ use blanco_core::connection_trait::ColumnType;
 use database::DatabaseType;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Determine if a value should be quoted based on its column type
-fn should_quote_value(column_type: &ColumnType) -> bool {
+pub(crate) fn should_quote_value(column_type: &ColumnType) -> bool {
     matches!(
         column_type,
         ColumnType::Text
@@ -204,9 +203,7 @@ impl DataTransformer for SqlTransformer {
     }
 }
 
-/// Escape a string for SQL (single quotes)
-/// This avoids allocating a new String for each cell value
-fn sql_escape_string_to(value: &str, output: &mut String) {
+pub(crate) fn sql_escape_string_to(value: &str, output: &mut String) {
     // Check if we need to escape at all
     if !value.contains('\'') {
         output.push_str(value);
@@ -222,9 +219,7 @@ fn sql_escape_string_to(value: &str, output: &mut String) {
     }
 }
 
-/// Quote a SQL identifier safely, using the appropriate quoting style for the database.
-/// MySQL uses backticks, PostgreSQL and SQLite use double quotes.
-fn sql_identifier(name: &str, db_type: DatabaseType) -> String {
+pub(crate) fn sql_identifier(name: &str, db_type: DatabaseType) -> String {
     match db_type {
         DatabaseType::MySQL => format!("`{}`", name.replace('`', "``")),
         DatabaseType::PostgreSQL | DatabaseType::SQLite | DatabaseType::ClickHouse => {

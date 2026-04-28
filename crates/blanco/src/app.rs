@@ -41,6 +41,7 @@ actions!(
         CopyAsCSV,
         CopyAsJSON,
         CopyAsSQL,
+        CopyAsVALUES,
         CopyAsMarkdown,
         ExportData,
         ExportAsCSV,

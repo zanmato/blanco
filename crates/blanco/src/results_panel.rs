@@ -19,7 +19,7 @@ use blanco_core::connection_trait::ColumnType;
 use database::DatabaseService;
 
 use crate::app::{
-    AddRow, CopyAsCSV, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, DeleteRow, DuplicateRow, ExportAsCSV,
+    AddRow, CopyAsCSV, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsVALUES, DeleteRow, DuplicateRow, ExportAsCSV,
     ExportAsJSON, ExportAsMarkdown, ExportAsSQL, SetCellNull,
 };
 use crate::export::service::{ExportResult, ExportService};
@@ -1025,6 +1025,30 @@ impl ResultsPanel {
         self.copy_handler.copy_as_format(&selected_data, "sql", cx);
     }
 
+    fn on_copy_as_values(
+        &mut self,
+        _action: &CopyAsVALUES,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let table_state = self.table_state.read(cx);
+        let mut selected_rows = table_state.selected_rows().clone();
+        let delegate = table_state.delegate();
+
+        if selected_rows.is_empty() {
+            if let Some(cell) = table_state.selected_cell() {
+                selected_rows.insert(cell.0);
+            } else {
+                tracing::error!("Failed to copy as VALUES: No rows selected for copying");
+                return;
+            }
+        }
+
+        let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
+
+        self.copy_handler.copy_as_format(&selected_data, "values", cx);
+    }
+
     fn on_copy_as_markdown(
         &mut self,
         _action: &CopyAsMarkdown,
@@ -1326,6 +1350,7 @@ impl Render for ResultsPanel {
             .on_action(cx.listener(Self::on_copy_as_csv))
             .on_action(cx.listener(Self::on_copy_as_json))
             .on_action(cx.listener(Self::on_copy_as_sql))
+            .on_action(cx.listener(Self::on_copy_as_values))
             .on_action(cx.listener(Self::on_copy_as_markdown))
             .on_action(cx.listener(Self::on_export_as_csv))
             .on_action(cx.listener(Self::on_export_as_json))

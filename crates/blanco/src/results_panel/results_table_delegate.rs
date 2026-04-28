@@ -26,7 +26,7 @@ use super::cell_edit_state::{
 };
 use super::foreign_key_popover::ForeignKeyPopover;
 use crate::app::{
-    AddRow, CopyAsCSV, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, DeleteRow, DuplicateRow, ExportAsCSV,
+    AddRow, CopyAsCSV, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsVALUES, DeleteRow, DuplicateRow, ExportAsCSV,
     ExportAsJSON, ExportAsMarkdown, ExportAsSQL, SetCellNull,
 };
 use crate::results_panel::ResultsPanel;
@@ -1245,6 +1245,11 @@ impl TableDelegate for ResultsTableDelegate {
             "Copy as SQL",
             Icon::new(IconName::Database),
             Box::new(CopyAsSQL),
+        )
+        .menu_with_icon(
+            "Copy as VALUES",
+            Icon::new(IconName::Database),
+            Box::new(CopyAsVALUES),
         )
         .menu_with_icon(
             "Copy as Markdown",
