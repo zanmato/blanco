@@ -63,6 +63,7 @@ pub struct QueryTab {
     // Chat functionality
     pub chat_enabled: bool,
     pub chat_panel: Option<Entity<ChatPanel>>,
+    pub sql_log_visible: bool,
     pub sqruff_service: Option<Arc<SqruffService>>,
     pub completion_provider: Option<SqlCompletionProvider>,
 }
@@ -605,6 +606,7 @@ impl EditorPanel {
             // Chat functionality
             chat_enabled: false,
             chat_panel: None,
+            sql_log_visible: true,
         };
 
         self.tabs.push(TabType::Query(Box::new(query_tab)));
@@ -697,6 +699,17 @@ impl EditorPanel {
                 }
             }
 
+            cx.notify();
+        }
+    }
+
+    pub fn toggle_sql_log_for_active_tab(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(TabType::Query(query_tab)) = self.tabs.get_mut(self.active_tab_ix) {
+            query_tab.sql_log_visible = !query_tab.sql_log_visible;
             cx.notify();
         }
     }
@@ -968,6 +981,17 @@ impl EditorPanel {
             )
             .child(div().flex_1())
             .child(
+                Button::new("toggle-sql-log")
+                    .outline()
+                    .small()
+                    .icon(IconName::SquareTerminal)
+                    .tooltip("Toggle SQL Log")
+                    .when(query_tab.sql_log_visible, |btn| btn.primary())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_sql_log_for_active_tab(window, cx);
+                    })),
+            )
+            .child(
                 Button::new("toggle-chat")
                     .outline()
                     .small()
@@ -1061,19 +1085,26 @@ impl EditorPanel {
                                             ),
                                     )
                                     .child(
-                                        div().flex_1().min_h_0().overflow_hidden().child(
-                                            v_resizable("results-log-split")
-                                                .with_state(&self.results_log_resize_state)
-                                                .child(
-                                                    resizable_panel()
-                                                        .child(query_tab.results_panel.clone()),
+                                        div().flex_1().min_h_0().overflow_hidden().map(|d| {
+                                            if query_tab.sql_log_visible {
+                                                d.child(
+                                                    v_resizable("results-log-split")
+                                                        .with_state(
+                                                            &self.results_log_resize_state,
+                                                        )
+                                                        .child(resizable_panel().child(
+                                                            query_tab.results_panel.clone(),
+                                                        ))
+                                                        .child(
+                                                            resizable_panel()
+                                                                .size(120.)
+                                                                .child(query_tab.sql_log.clone()),
+                                                        ),
                                                 )
-                                                .child(
-                                                    resizable_panel()
-                                                        .size(120.)
-                                                        .child(query_tab.sql_log.clone()),
-                                                ),
-                                        ),
+                                            } else {
+                                                d.child(query_tab.results_panel.clone())
+                                            }
+                                        }),
                                     )
                                     .child(self.render_row_operations_bar(query_tab, cx)),
                             ),

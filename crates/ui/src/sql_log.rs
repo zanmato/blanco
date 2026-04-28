@@ -1,10 +1,11 @@
 use gpui::{
-    Context, InteractiveElement, IntoElement, ParentElement, Render, ScrollHandle, SharedString,
-    StatefulInteractiveElement, Styled, StyledText, Window, div, px,
+    Context, HighlightStyle, InteractiveElement, IntoElement, ParentElement, Render, ScrollHandle,
+    SharedString, StatefulInteractiveElement, Styled, StyledText, Window, div, px,
 };
 use gpui_component::ActiveTheme;
 use gpui_component::highlighter::{HighlightTheme, SyntaxHighlighter};
 use gpui_component::scroll::ScrollableElement as _;
+use std::ops::Range;
 use std::sync::Arc;
 
 pub enum SqlLogMessage {
@@ -14,7 +15,7 @@ pub enum SqlLogMessage {
 
 struct LogEntry {
     text: SharedString,
-    highlighter: SyntaxHighlighter,
+    highlights: Box<[(Range<usize>, HighlightStyle)]>,
 }
 
 /// SQL Log entity for displaying SQL queries and logs with proper syntax highlighting
@@ -50,17 +51,19 @@ impl SqlLog {
             SqlLogMessage::Comment(comment) => format!("-- {}", comment),
         };
 
-        // Create a new highlighter for this entry
+        // Create a new highlighter for this entry, parse, and compute styles once.
+        // Highlight ranges are cached on the entry so render() doesn't redo this work
+        // on every frame.
         let mut highlighter = SyntaxHighlighter::new("sql");
-
-        // Create a Rope for the highlighter to parse
         let rope = ropey::Rope::from(&new_text[..]);
         highlighter.update(None, &rope, None);
+        let highlights = highlighter
+            .styles(&(0..new_text.len()), &self.theme)
+            .into_boxed_slice();
 
-        // Create the log entry
         let entry = LogEntry {
             text: SharedString::from(new_text),
-            highlighter,
+            highlights,
         };
 
         // Append the new entry
@@ -125,15 +128,10 @@ impl Render for SqlLog {
                     .text_size(px(12.))
                     .text_color(cx.theme().foreground)
                     .children(self.entries.iter().map(|entry| {
-                        let text_len = entry.text.len();
-                        let range = std::ops::Range::<usize> {
-                            start: 0,
-                            end: text_len,
-                        };
-                        let highlights = entry.highlighter.styles(&range, &self.theme);
-                        div()
-                            .mb_1()
-                            .child(StyledText::new(entry.text.clone()).with_highlights(highlights))
+                        div().mb_1().child(
+                            StyledText::new(entry.text.clone())
+                                .with_highlights(entry.highlights.iter().cloned()),
+                        )
                     })),
             )
             .vertical_scrollbar(&self.scroll_handle)
