@@ -1,5 +1,7 @@
 mod parameter_form;
 mod query_execution;
+#[cfg(test)]
+mod query_execution_test;
 mod rename_form;
 mod snippet_editor;
 mod sql_operations;
@@ -125,6 +127,19 @@ pub struct TableStructureParams {
 }
 
 impl EditorPanel {
+    #[cfg(test)]
+    pub fn active_query_tab(&self) -> Option<&QueryTab> {
+        match self.tabs.get(self.active_tab_ix) {
+            Some(TabType::Query(tab)) => Some(tab),
+            _ => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn is_loading(&self) -> bool {
+        self.loading
+    }
+
     pub fn set_sidebar_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
         self.sidebar_collapsed = collapsed;
         cx.notify();
@@ -284,8 +299,8 @@ impl EditorPanel {
 
         // Load snippet data
         let app_database = AppDatabase::global(cx);
-        if let Ok(Some(snippet_data)) =
-            smol::block_on(async { app_database.get_snippet_by_id(snippet_id).await })
+        if let Ok(Some(snippet_data)) = gpui_tokio::Tokio::handle(cx)
+            .block_on(async { app_database.get_snippet_by_id(snippet_id).await })
         {
             snippet_editor.update(cx, |editor, cx| {
                 editor.load_snippet(snippet_data, window, cx);
@@ -703,11 +718,7 @@ impl EditorPanel {
         }
     }
 
-    pub fn toggle_sql_log_for_active_tab(
-        &mut self,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn toggle_sql_log_for_active_tab(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(TabType::Query(query_tab)) = self.tabs.get_mut(self.active_tab_ix) {
             query_tab.sql_log_visible = !query_tab.sql_log_visible;
             cx.notify();
@@ -1084,28 +1095,25 @@ impl EditorPanel {
                                                     )),
                                             ),
                                     )
-                                    .child(
-                                        div().flex_1().min_h_0().overflow_hidden().map(|d| {
-                                            if query_tab.sql_log_visible {
-                                                d.child(
-                                                    v_resizable("results-log-split")
-                                                        .with_state(
-                                                            &self.results_log_resize_state,
-                                                        )
-                                                        .child(resizable_panel().child(
-                                                            query_tab.results_panel.clone(),
-                                                        ))
-                                                        .child(
-                                                            resizable_panel()
-                                                                .size(120.)
-                                                                .child(query_tab.sql_log.clone()),
-                                                        ),
-                                                )
-                                            } else {
-                                                d.child(query_tab.results_panel.clone())
-                                            }
-                                        }),
-                                    )
+                                    .child(div().flex_1().min_h_0().overflow_hidden().map(|d| {
+                                        if query_tab.sql_log_visible {
+                                            d.child(
+                                                v_resizable("results-log-split")
+                                                    .with_state(&self.results_log_resize_state)
+                                                    .child(
+                                                        resizable_panel()
+                                                            .child(query_tab.results_panel.clone()),
+                                                    )
+                                                    .child(
+                                                        resizable_panel()
+                                                            .size(120.)
+                                                            .child(query_tab.sql_log.clone()),
+                                                    ),
+                                            )
+                                        } else {
+                                            d.child(query_tab.results_panel.clone())
+                                        }
+                                    }))
                                     .child(self.render_row_operations_bar(query_tab, cx)),
                             ),
                         ),

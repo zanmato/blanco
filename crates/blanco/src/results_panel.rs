@@ -126,6 +126,11 @@ impl ResultsPanel {
         }
     }
 
+    #[cfg(test)]
+    pub fn table_state(&self) -> &Entity<TableState<ResultsTableDelegate>> {
+        &self.table_state
+    }
+
     pub fn set_query_result(
         &mut self,
         result: QueryResult,

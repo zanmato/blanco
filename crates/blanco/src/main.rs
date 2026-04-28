@@ -22,6 +22,8 @@ mod snippets_panel;
 mod sql;
 mod time_format;
 mod transformers;
+#[cfg(test)]
+mod test_harness;
 
 use assets::Assets;
 use database::DatabaseService;
@@ -45,8 +47,14 @@ fn main() {
         // Get the tokio runtime handle for automatic SSH tunnel establishment
         let runtime_handle = gpui_tokio::Tokio::handle(cx);
 
-        // Initialize app database (for query tabs, history, connections) synchronously
-        let db = smol::block_on(async { AppDatabase::new().await });
+        // Initialize app database (for query tabs, history, connections) synchronously.
+        // sqlx is built with the `runtime-tokio` feature, so all of its work
+        // must be driven on the shared tokio runtime; smol's executor would
+        // panic with "this functionality requires a Tokio context".
+        let db = runtime_handle.block_on({
+            let runtime_handle = runtime_handle.clone();
+            async move { AppDatabase::new(runtime_handle).await }
+        });
 
         match db {
             Ok(database) => cx.set_global(database),
@@ -62,8 +70,9 @@ fn main() {
 
         // Load connections from app database and add them to the database service
         let app_database = AppDatabase::global(cx).clone();
-        let connections = smol::block_on(async move { app_database.load_connections().await })
-            .unwrap_or(Vec::new());
+        let connections = runtime_handle
+            .block_on(async move { app_database.load_connections().await })
+            .unwrap_or_default();
 
         for connection in connections {
             if let Some(config) = connection.to_connection_config() {
@@ -76,8 +85,9 @@ fn main() {
         }
 
         let app_database = AppDatabase::global(cx).clone();
-        let settings = smol::block_on(async move { app_database.load_all_settings().await })
-            .unwrap_or(Vec::new());
+        let settings = runtime_handle
+            .block_on(async move { app_database.load_all_settings().await })
+            .unwrap_or_default();
 
         let app_settings = AppSettings::new(cx, Settings::from_key_values(&settings));
         cx.set_global(app_settings);

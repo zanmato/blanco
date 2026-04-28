@@ -17,9 +17,9 @@ mod tests {
     use std::env;
     use tempfile::NamedTempFile;
 
-    #[test]
-    fn test_sqlite_data_type_serialization() -> Result<(), Box<dyn std::error::Error>> {
-        smol::block_on(async {
+    #[tokio::test]
+    async fn test_sqlite_data_type_serialization() -> Result<(), Box<dyn std::error::Error>> {
+        async {
             let connection_string = env::var("SQLITE_CONNECTION_STRING").unwrap_or_else(|_| {
                 // Create a temporary file for SQLite database
                 let temp_file = NamedTempFile::new().expect("Failed to create temporary file");
@@ -196,6 +196,7 @@ mod tests {
             assert_eq!(get_val("custom_type_col"), "custom value");
 
             Ok(())
-        })
+        }
+        .await
     }
 }

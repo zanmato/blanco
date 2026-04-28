@@ -60,7 +60,7 @@ hex = "0.4"
 
 # Database dependencies
 sqlx = { version = "0.8", features = [
-    "runtime-async-std",
+    "runtime-tokio",
     "tls-native-tls",
     "sqlite",
     "postgres",
@@ -83,7 +83,6 @@ dirs = "5"
 # Additional dependencies
 env_logger = "0.11"
 smol = "2"
-async-compat = "0.2"
 async-io = "1"
 rust-embed = { version = "8", features = ["interpolate-folder-path"] }
 url = "2.5"

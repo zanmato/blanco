@@ -612,11 +612,7 @@ impl ClickhouseForm {
                         v_flex()
                             .flex_1()
                             .gap_2()
-                            .child(
-                                gpui::div()
-                                    .text_sm()
-                                    .child("Host (http:// or https://)"),
-                            )
+                            .child(gpui::div().text_sm().child("Host (http:// or https://)"))
                             .child(Input::new(&self.host_input)),
                     )
                     .child(
@@ -702,7 +698,11 @@ impl ClickhouseForm {
 
         let port = if port_str.is_empty() {
             // Host carries its own port, or we'll fall back to the scheme default.
-            if host.starts_with("https://") { 8443 } else { 8123 }
+            if host.starts_with("https://") {
+                8443
+            } else {
+                8123
+            }
         } else {
             port_str.parse::<i32>().ok()?
         };

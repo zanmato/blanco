@@ -36,4 +36,5 @@ rust_decimal = { workspace = true }
 
 [dev-dependencies]
 # Dependencies for integration tests
+tokio = { version = "1", features = ["macros", "rt"] }
 env_logger = { workspace = true }

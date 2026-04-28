@@ -1011,10 +1011,13 @@ impl TableDelegate for ResultsTableDelegate {
                     )
                 })
                 .when_some(
-                    self.table_columns
-                        .get(col_ix - 1)
-                        .and_then(|c| c.foreign_key.as_ref())
-                        .filter(|_| !is_row_number_col),
+                    if !is_row_number_col {
+                        self.table_columns
+                            .get(col_ix - 1)
+                            .and_then(|c| c.foreign_key.as_ref())
+                    } else {
+                        None
+                    },
                     |this, fk_info| {
                         let fk_info = fk_info.clone();
                         let cell_value = display_text.clone();

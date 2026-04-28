@@ -7,6 +7,7 @@ mod connection_config;
 mod factories;
 mod service;
 mod ssh_tunnel;
+mod tokio_connection;
 
 pub use connection_config::{ConnectionConfig, DatabaseType};
 pub use factories::{MysqlConnectionFactory, PostgresConnectionFactory, SqliteConnectionFactory};

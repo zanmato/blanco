@@ -113,7 +113,7 @@ impl ConnectionsPanel {
     pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
         // Load initial connections
         let app_database = AppDatabase::global(cx);
-        let connections = smol::block_on(async {
+        let connections = gpui_tokio::Tokio::handle(cx).block_on(async {
             match app_database.load_connections().await {
                 Ok(connections) => connections,
                 Err(e) => {

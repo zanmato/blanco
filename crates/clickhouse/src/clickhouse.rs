@@ -135,27 +135,18 @@ impl ClickhouseConnection {
     }
 
     async fn raw_query(&self, sql: &str, database: Option<&str>) -> Result<String> {
-        // reqwest depends on a tokio reactor being available on the current
-        // thread. Blanco's database service runs on smol, so wrap the HTTP
-        // call in `async_compat::Compat` which starts and enters a shared
-        // tokio runtime when the future is polled.
         let url = self.build_query_url(database, &[]);
-        let http = self.http.clone();
-        let body_bytes = sql.to_string();
-        async_compat::Compat::new(async move {
-            let response = http.post(&url).body(body_bytes).send().await?;
-            let status = response.status();
-            let body = response.text().await?;
-            if !status.is_success() {
-                return Err(anyhow::anyhow!(
-                    "ClickHouse query failed ({}): {}",
-                    status,
-                    body.trim()
-                ));
-            }
-            Ok(body)
-        })
-        .await
+        let response = self.http.post(&url).body(sql.to_string()).send().await?;
+        let status = response.status();
+        let body = response.text().await?;
+        if !status.is_success() {
+            return Err(anyhow::anyhow!(
+                "ClickHouse query failed ({}): {}",
+                status,
+                body.trim()
+            ));
+        }
+        Ok(body)
     }
 
     async fn raw_query_tsv(&self, sql: &str, database: Option<&str>) -> Result<TsvResult> {

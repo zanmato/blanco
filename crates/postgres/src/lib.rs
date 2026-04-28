@@ -16,9 +16,9 @@ mod tests {
     use sqlx::{Column, Row, postgres::PgPoolOptions};
     use std::env;
 
-    #[test]
-    fn test_postgres_data_type_serialization() -> Result<(), Box<dyn std::error::Error>> {
-        smol::block_on(async {
+    #[tokio::test]
+    async fn test_postgres_data_type_serialization() -> Result<(), Box<dyn std::error::Error>> {
+        async {
             let connection_string = env::var("POSTGRES_CONNECTION_STRING").unwrap_or_else(|_| {
                 "postgres://blanco:blanco@localhost:5488/blanco?sslmode=disable".to_string()
             });
@@ -228,12 +228,13 @@ mod tests {
             assert_eq!(get_val("custom_enum"), "a");
 
             Ok(())
-        })
+        }
+        .await
     }
 
-    #[test]
-    fn test_computed_column_type_detection() -> Result<(), Box<dyn std::error::Error>> {
-        smol::block_on(async {
+    #[tokio::test]
+    async fn test_computed_column_type_detection() -> Result<(), Box<dyn std::error::Error>> {
+        async {
             // Use environment variable for connection string or fallback to default
             let connection_string = env::var("POSTGRES_CONNECTION_STRING").unwrap_or_else(|_| {
                 "postgres://blanco:blanco@localhost:5488/blanco?sslmode=disable".to_string()
@@ -279,12 +280,13 @@ mod tests {
             assert_eq!(columns[1].name(), "smallint_col");
 
             Ok(())
-        })
+        }
+        .await
     }
 
-    #[test]
-    fn test_postgres_ssl_connection() -> Result<(), Box<dyn std::error::Error>> {
-        smol::block_on(async {
+    #[tokio::test]
+    async fn test_postgres_ssl_connection() -> Result<(), Box<dyn std::error::Error>> {
+        async {
             // Test SSL connection to the SSL-enabled PostgreSQL container
 
             // Get the path to the test CA certificate
@@ -334,6 +336,7 @@ mod tests {
                     Ok(())
                 }
             }
-        })
+        }
+        .await
     }
 }

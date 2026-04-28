@@ -17,6 +17,7 @@ use crate::factories::{
     SqliteConnectionFactory,
 };
 use crate::ssh_tunnel::{SshTunnel, SshTunnelConfig, TunnelInfo};
+use crate::tokio_connection::TokioConnection;
 
 // Message types for channel-based action dispatch
 #[derive(Clone, Debug)]
@@ -223,10 +224,23 @@ impl DatabaseService {
             .get(&config.db_type.to_string())
             .ok_or_else(|| {
                 anyhow::anyhow!("No factory found for connection type: {}", config.db_type)
-            })?;
+            })?
+            .clone();
 
-        let conn = factory.create_connection(&connection_string).await?;
-        let conn_arc: Arc<dyn Connection> = Arc::from(conn);
+        // Drivers (sqlx with `runtime-tokio`, reqwest, ...) require a tokio
+        // reactor on the polling thread, so we run the factory's `connect`
+        // call on the shared tokio runtime and wrap the resulting connection
+        // in `TokioConnection` so subsequent method calls also hop runtimes.
+        let connection_string_owned = connection_string.clone();
+        let runtime_handle = self.runtime_handle.clone();
+        let inner_conn = runtime_handle
+            .clone()
+            .spawn(async move { factory.create_connection(&connection_string_owned).await })
+            .await
+            .map_err(|e| anyhow::anyhow!("tokio task join failed: {}", e))??;
+        let inner_arc: Arc<dyn Connection> = Arc::from(inner_conn);
+        let conn_arc: Arc<dyn Connection> =
+            Arc::new(TokioConnection::new(inner_arc, runtime_handle));
 
         // Store in active_connections
         {
@@ -486,9 +500,16 @@ impl DatabaseService {
             .get(&config.db_type.to_string())
             .ok_or_else(|| {
                 anyhow::anyhow!("No factory found for connection type: {}", config.db_type)
-            })?;
+            })?
+            .clone();
 
-        let result = factory.create_connection(&connection_string).await;
+        // The factory's `connect` call needs a tokio reactor; run it on the
+        // shared runtime and discard the resulting connection.
+        let result = self
+            .runtime_handle
+            .spawn(async move { factory.create_connection(&connection_string).await })
+            .await
+            .map_err(|e| anyhow::anyhow!("tokio task join failed: {}", e))?;
 
         // Clean up temporary tunnel
         drop(temp_tunnel);

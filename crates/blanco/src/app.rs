@@ -241,7 +241,7 @@ impl BlancoApp {
 
         // Synchronously load tabs from database
         let app_database = AppDatabase::global(cx);
-        let saved_tabs = smol::block_on(async {
+        let saved_tabs = gpui_tokio::Tokio::handle(cx).block_on(async {
             // Database should already be initialized synchronously{
             match app_database.load_query_tabs().await {
                 Ok(tabs) => {
@@ -522,14 +522,11 @@ impl BlancoApp {
                         .child(
                             h_flex()
                                 .gap_2()
-                                .child(
-                                    Button::new("cancel")
-                                        .label("Cancel")
-                                        .outline()
-                                        .on_click(|_, window, cx| {
-                                            window.close_dialog(cx);
-                                        }),
-                                )
+                                .child(Button::new("cancel").label("Cancel").outline().on_click(
+                                    |_, window, cx| {
+                                        window.close_dialog(cx);
+                                    },
+                                ))
                                 .child(
                                     DialogAction::new()
                                         .child(Button::new("ok").primary().label("Save")),
@@ -637,14 +634,11 @@ impl BlancoApp {
                         .child(
                             h_flex()
                                 .gap_2()
-                                .child(
-                                    Button::new("cancel")
-                                        .label("Cancel")
-                                        .outline()
-                                        .on_click(|_, window, cx| {
-                                            window.close_dialog(cx);
-                                        }),
-                                )
+                                .child(Button::new("cancel").label("Cancel").outline().on_click(
+                                    |_, window, cx| {
+                                        window.close_dialog(cx);
+                                    },
+                                ))
                                 .child(
                                     DialogAction::new()
                                         .child(Button::new("ok").primary().label("Save")),

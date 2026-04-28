@@ -25,5 +25,5 @@ tempfile = "3.8"
 
 [dev-dependencies]
 # Dependencies for integration tests
-smol = { workspace = true }
+tokio = { version = "1", features = ["macros", "rt"] }
 env_logger = { workspace = true }

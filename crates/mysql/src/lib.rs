@@ -15,9 +15,9 @@ mod tests {
     use blanco_core::Connection;
     use std::env;
 
-    #[test]
-    fn test_mysql_basic_connection() -> Result<(), Box<dyn std::error::Error>> {
-        smol::block_on(async {
+    #[tokio::test]
+    async fn test_mysql_basic_connection() -> Result<(), Box<dyn std::error::Error>> {
+        async {
             let connection_string = env::var("MYSQL_CONNECTION_STRING")
                 .unwrap_or_else(|_| "mysql://root:blanco@172.19.0.2:3306/mysql".to_string());
 
@@ -59,12 +59,13 @@ mod tests {
             assert_eq!(from_table, Some("users".to_string()));
 
             Ok(())
-        })
+        }
+        .await
     }
 
-    #[test]
-    fn test_mysql_indexes() -> Result<(), Box<dyn std::error::Error>> {
-        smol::block_on(async {
+    #[tokio::test]
+    async fn test_mysql_indexes() -> Result<(), Box<dyn std::error::Error>> {
+        async {
             let connection_string = env::var("MYSQL_CONNECTION_STRING")
                 .unwrap_or_else(|_| "mysql://root:blanco@172.19.0.2:3306/mysql".to_string());
 
@@ -155,6 +156,7 @@ mod tests {
                 .await;
 
             Ok(())
-        })
+        }
+        .await
     }
 }

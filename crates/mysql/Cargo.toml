@@ -36,4 +36,5 @@ hex = "0.4"
 
 [dev-dependencies]
 # Dependencies for integration tests
+tokio = { version = "1", features = ["macros", "rt"] }
 env_logger = { workspace = true }
