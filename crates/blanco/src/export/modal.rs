@@ -1,5 +1,5 @@
 use crate::transformers::{CsvTransformer, DataTransformer, JsonTransformer, SqlTransformer};
-use chrono::Utc;
+use chrono::Local;
 use database::DatabaseService;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
@@ -395,7 +395,7 @@ impl Render for ExportModal {
 
 /// Generate a default filename based on table name and current timestamp
 fn generate_default_filename(table_name: &str, format: &ExportFormat) -> String {
-    let timestamp = Utc::now().format("%Y-%m-%d_%H-%M-%S");
+    let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S");
     format!("{}_{}.{}", table_name, timestamp, format.file_extension())
 }
 
