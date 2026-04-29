@@ -20,10 +20,10 @@ mod results_panel;
 mod settings;
 mod snippets_panel;
 mod sql;
-mod time_format;
-mod transformers;
 #[cfg(test)]
 mod test_harness;
+mod time_format;
+mod transformers;
 
 use assets::Assets;
 use database::DatabaseService;

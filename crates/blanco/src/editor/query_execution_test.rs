@@ -1,6 +1,8 @@
 use gpui::{TestAppContext, VisualTestContext};
 
-use crate::test_harness::{TestHarness, result_row_count, run_query, set_editor_text, wait_for_query};
+use crate::test_harness::{
+    TestHarness, result_row_count, run_query, set_editor_text, wait_for_query,
+};
 
 #[gpui::test]
 async fn test_execute_simple_query(cx: &mut TestAppContext) {
@@ -47,7 +49,10 @@ async fn test_execute_write_query(cx: &mut TestAppContext) {
     run_query(&harness, &mut cx);
     wait_for_query(&harness, &mut cx).await;
 
-    assert!(!crate::test_harness::is_loading(&harness, &cx), "Query should have finished");
+    assert!(
+        !crate::test_harness::is_loading(&harness, &cx),
+        "Query should have finished"
+    );
 
     set_editor_text(
         &harness,

@@ -26,8 +26,9 @@ use super::cell_edit_state::{
 };
 use super::foreign_key_popover::ForeignKeyPopover;
 use crate::app::{
-    AddRow, CopyAsCSV, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsVALUES, DeleteRow, DuplicateRow, ExportAsCSV,
-    ExportAsJSON, ExportAsMarkdown, ExportAsSQL, SetCellNull,
+    AddRow, CopyAsCSV, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CopyAsVALUES, DeleteRow,
+    DuplicateRow, ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV,
+    SetCellNull,
 };
 use crate::results_panel::ResultsPanel;
 use crate::results_panel::table_operations::{
@@ -1237,6 +1238,11 @@ impl TableDelegate for ResultsTableDelegate {
             Box::new(CopyAsCSV),
         )
         .menu_with_icon(
+            "Copy as TSV",
+            Icon::new(IconName::Sheet),
+            Box::new(CopyAsTSV),
+        )
+        .menu_with_icon(
             "Copy as JSON",
             Icon::new(IconName::Braces),
             Box::new(CopyAsJSON),
@@ -1262,6 +1268,11 @@ impl TableDelegate for ResultsTableDelegate {
             "Export as CSV",
             Icon::new(IconName::File),
             Box::new(ExportAsCSV),
+        )
+        .menu_with_icon(
+            "Export as TSV",
+            Icon::new(IconName::File),
+            Box::new(ExportAsTSV),
         )
         .menu_with_icon(
             "Export as JSON",

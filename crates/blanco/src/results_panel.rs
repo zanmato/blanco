@@ -19,8 +19,9 @@ use blanco_core::connection_trait::ColumnType;
 use database::DatabaseService;
 
 use crate::app::{
-    AddRow, CopyAsCSV, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsVALUES, DeleteRow, DuplicateRow, ExportAsCSV,
-    ExportAsJSON, ExportAsMarkdown, ExportAsSQL, SetCellNull,
+    AddRow, CopyAsCSV, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CopyAsVALUES, DeleteRow,
+    DuplicateRow, ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV,
+    SetCellNull,
 };
 use crate::export::service::{ExportResult, ExportService};
 use crate::result_ext::ResultExt;
@@ -977,6 +978,30 @@ impl ResultsPanel {
         self.copy_handler.copy_as_format(&selected_data, "csv", cx);
     }
 
+    fn on_copy_as_tsv(
+        &mut self,
+        _action: &CopyAsTSV,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let table_state = self.table_state.read(cx);
+        let mut selected_rows = table_state.selected_rows().clone();
+        let delegate = table_state.delegate();
+
+        if selected_rows.is_empty() {
+            if let Some(cell) = table_state.selected_cell() {
+                selected_rows.insert(cell.0);
+            } else {
+                tracing::error!("Failed to copy as TSV: No rows selected for copying");
+                return;
+            }
+        }
+
+        let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
+
+        self.copy_handler.copy_as_format(&selected_data, "tsv", cx);
+    }
+
     fn on_copy_as_json(
         &mut self,
         _action: &CopyAsJSON,
@@ -1046,7 +1071,8 @@ impl ResultsPanel {
 
         let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
 
-        self.copy_handler.copy_as_format(&selected_data, "values", cx);
+        self.copy_handler
+            .copy_as_format(&selected_data, "values", cx);
     }
 
     fn on_copy_as_markdown(
@@ -1129,6 +1155,15 @@ impl ResultsPanel {
         cx: &mut Context<Self>,
     ) {
         self.export_selected_as("csv", window, cx);
+    }
+
+    fn on_export_as_tsv(
+        &mut self,
+        _action: &ExportAsTSV,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.export_selected_as("tsv", window, cx);
     }
 
     fn on_export_as_json(
@@ -1348,11 +1383,13 @@ impl Render for ResultsPanel {
             .border_color(cx.theme().border)
             // Handle copy and selection actions
             .on_action(cx.listener(Self::on_copy_as_csv))
+            .on_action(cx.listener(Self::on_copy_as_tsv))
             .on_action(cx.listener(Self::on_copy_as_json))
             .on_action(cx.listener(Self::on_copy_as_sql))
             .on_action(cx.listener(Self::on_copy_as_values))
             .on_action(cx.listener(Self::on_copy_as_markdown))
             .on_action(cx.listener(Self::on_export_as_csv))
+            .on_action(cx.listener(Self::on_export_as_tsv))
             .on_action(cx.listener(Self::on_export_as_json))
             .on_action(cx.listener(Self::on_export_as_sql))
             .on_action(cx.listener(Self::on_export_as_markdown))

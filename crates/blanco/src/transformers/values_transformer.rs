@@ -116,14 +116,14 @@ impl DataTransformer for ValuesTransformer {
         let row_count = data.selected_rows.len();
 
         for (i, row) in data.selected_rows.iter().enumerate() {
-            let column_types: Vec<Option<ColumnType>> = row
-                .cells
-                .iter()
-                .map(|cell| cell.column_type)
-                .collect();
+            let column_types: Vec<Option<ColumnType>> =
+                row.cells.iter().map(|cell| cell.column_type).collect();
 
             let values = format_row_values(
-                &row.cells.iter().map(|c| c.value.clone()).collect::<Vec<_>>(),
+                &row.cells
+                    .iter()
+                    .map(|c| c.value.clone())
+                    .collect::<Vec<_>>(),
                 &column_types,
                 use_row_keyword,
             );
@@ -250,10 +250,7 @@ mod tests {
     use crate::results_panel::{SelectedCell, SelectedRow, SelectedTableData};
     use blanco_core::connection_trait::ColumnType;
 
-    fn make_data(
-        db_type: DatabaseType,
-        table_name: Option<&str>,
-    ) -> SelectedTableData {
+    fn make_data(db_type: DatabaseType, table_name: Option<&str>) -> SelectedTableData {
         SelectedTableData {
             table_name: table_name.map(|s| s.to_string()),
             db_type: Some(db_type),

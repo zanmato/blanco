@@ -113,6 +113,7 @@ pub mod csv_transformer;
 pub mod json_transformer;
 pub mod markdown_transformer;
 pub mod sql_transformer;
+pub mod tsv_transformer;
 pub mod values_transformer;
 
 // Export types for convenience
@@ -121,12 +122,14 @@ pub use csv_transformer::CsvTransformer;
 pub use json_transformer::JsonTransformer;
 pub use markdown_transformer::MarkdownTransformer;
 pub use sql_transformer::SqlTransformer;
+pub use tsv_transformer::TsvTransformer;
 pub use values_transformer::ValuesTransformer;
 
 impl Default for TransformerRegistry {
     fn default() -> Self {
         let mut registry = Self::new();
         registry.register(CsvTransformer);
+        registry.register(TsvTransformer);
         registry.register(SqlTransformer::new());
         registry.register(ValuesTransformer::new());
         registry.register(JsonTransformer::new());
@@ -204,7 +207,7 @@ mod tests {
         let registry = TransformerRegistry::default();
         let data = SelectedTableData::default();
 
-        for format in &["csv", "json", "sql", "values", "markdown"] {
+        for format in &["csv", "json", "sql", "values", "tsv", "markdown"] {
             let result = registry.transform_data(&data, format);
             assert!(
                 result.is_err(),
