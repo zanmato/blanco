@@ -8,6 +8,7 @@ edition = "2024"
 gpui = { workspace = true }
 gpui-component = { workspace = true }
 serde = { workspace = true }
+smallvec = { workspace = true }
 
 # Text handling
 ropey = { workspace = true }

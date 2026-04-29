@@ -7,6 +7,7 @@ mod snippet_editor;
 mod sql_operations;
 mod table_structure;
 
+use blanco_ui::{Tab, TabBar};
 use gpui::{
     App, AppContext, ClickEvent, Context, Entity, FocusHandle, Focusable, InteractiveElement,
     IntoElement, KeybindingKeystroke, Keystroke, ParentElement, Render, Styled, Task, WeakEntity,
@@ -19,7 +20,6 @@ use gpui_component::{
     h_flex,
     input::{Input, InputEvent, InputState, TabSize},
     resizable::{ResizableState, h_resizable, resizable_panel, v_resizable},
-    tab::{Tab, TabBar},
     v_flex,
 };
 use std::{rc::Rc, sync::Arc};
@@ -804,55 +804,90 @@ impl EditorPanel {
                 let show_close_button = self.tabs.len() > 1;
                 let tab_index = ix;
 
-                Tab::new().label(&query_tab.title).suffix(
-                    h_flex()
-                        .gap_1()
-                        .pr_1()
-                        .child(
-                            div()
-                                .pr_1()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(
-                                    query_tab
-                                        .connection_name
-                                        .clone()
-                                        .unwrap_or_else(|| "No Connection".to_string()),
-                                ),
-                        )
-                        .when_some(query_tab.environment_type, |this, env_type| {
-                            this.child(
+                let connection_label = query_tab
+                    .connection_name
+                    .clone()
+                    .unwrap_or_else(|| "No Connection".to_string());
+                let group_env_type = query_tab.environment_type;
+                let group_connection_label = connection_label.clone();
+
+                Tab::new()
+                    .label(&query_tab.title)
+                    .group(connection_label)
+                    .group_label(move |_, cx| {
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(
                                 div()
-                                    .text_size(rems(0.55))
-                                    .font_family(cx.theme().mono_font_family.clone())
-                                    .px(px(6.))
-                                    .pt_0p5()
-                                    .rounded_md()
-                                    .border_1()
-                                    .border_color(env_type.get_color(cx))
-                                    .text_color(env_type.get_color(cx))
-                                    .child(env_type.display_name()),
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(group_connection_label.clone()),
                             )
-                        })
-                        .when(show_close_button, |this| {
-                            this.child(
-                                Button::new(("close-tab", ix))
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(IconName::Close)
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.close_tab(tab_index, cx);
-                                    })),
+                            .when_some(group_env_type, |this, env_type| {
+                                this.child(
+                                    div()
+                                        .text_size(rems(0.55))
+                                        .font_family(cx.theme().mono_font_family.clone())
+                                        .px(px(6.))
+                                        .pt_0p5()
+                                        .rounded_md()
+                                        .border_1()
+                                        .border_color(env_type.get_color(cx))
+                                        .text_color(env_type.get_color(cx))
+                                        .child(env_type.display_name()),
+                                )
+                            })
+                    })
+                    .suffix(
+                        h_flex()
+                            .gap_1()
+                            .pr_1()
+                            .child(
+                                div()
+                                    .pr_1()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(
+                                        query_tab
+                                            .connection_name
+                                            .clone()
+                                            .unwrap_or_else(|| "No Connection".to_string()),
+                                    ),
                             )
-                        })
-                        .into_any_element(),
-                )
+                            .when_some(query_tab.environment_type, |this, env_type| {
+                                this.child(
+                                    div()
+                                        .text_size(rems(0.55))
+                                        .font_family(cx.theme().mono_font_family.clone())
+                                        .px(px(6.))
+                                        .pt_0p5()
+                                        .rounded_md()
+                                        .border_1()
+                                        .border_color(env_type.get_color(cx))
+                                        .text_color(env_type.get_color(cx))
+                                        .child(env_type.display_name()),
+                                )
+                            })
+                            .when(show_close_button, |this| {
+                                this.child(
+                                    Button::new(("close-tab", ix))
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(IconName::Close)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.close_tab(tab_index, cx);
+                                        })),
+                                )
+                            })
+                            .into_any_element(),
+                    )
             }
             TabType::Snippet(snippet_editor) => {
                 let label = snippet_editor.read(cx).get_title();
                 let tab_index = ix;
 
-                Tab::new().label(label).suffix(
+                Tab::new().label(label).group("Other").suffix(
                     h_flex()
                         .gap_2()
                         .items_center()
@@ -873,7 +908,7 @@ impl EditorPanel {
                 let label = settings_tab.title.clone();
                 let tab_index = ix;
 
-                Tab::new().label(label).suffix(
+                Tab::new().label(label).group("Other").suffix(
                     h_flex()
                         .gap_2()
                         .items_center()
@@ -894,7 +929,7 @@ impl EditorPanel {
                 let label = table_structure_tab.read(cx).title.clone();
                 let tab_index = ix;
 
-                Tab::new().label(label).suffix(
+                Tab::new().label(label).group("Other").suffix(
                     h_flex()
                         .gap_2()
                         .items_center()

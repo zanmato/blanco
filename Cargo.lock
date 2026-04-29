@@ -1474,6 +1474,7 @@ dependencies = [
  "gpui-component",
  "ropey",
  "serde",
+ "smallvec",
 ]
 
 [[package]]
