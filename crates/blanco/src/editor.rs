@@ -1042,6 +1042,7 @@ impl EditorPanel {
                     .outline()
                     .small()
                     .icon(IconName::Bot)
+                    .tooltip("Toggle Chat")
                     .when(query_tab.chat_enabled, |btn| btn.primary())
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.toggle_chat_for_active_tab(window, cx);
