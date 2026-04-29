@@ -526,7 +526,12 @@ impl ChatSession {
 
             let mut denied = false;
 
-            if tool_mode == ToolMode::Ask {
+            let always_allow = tool_registry
+                .as_ref()
+                .map(|r| r.always_allow(&tool_call.function.name))
+                .unwrap_or(false);
+
+            if tool_mode == ToolMode::Ask && !always_allow {
                 let (approval_tx, approval_rx) = smol::channel::bounded::<bool>(1);
 
                 let preview = tool_registry

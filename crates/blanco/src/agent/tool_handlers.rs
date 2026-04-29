@@ -37,6 +37,10 @@ pub trait AgentToolHandler: Send + Sync {
     fn as_tool(&self) -> Tool;
 
     fn call_summary(&self, arguments: &serde_json::Value, result: &ToolCall) -> String;
+
+    fn always_allow(&self) -> bool {
+        false
+    }
 }
 
 /// List tables tool handler
@@ -356,6 +360,10 @@ impl AgentToolHandler for ReadTabHandler {
             Some(end) => format!("Read Tab: lines {}-{}", start, end),
             None => "Read Tab".to_string(),
         }
+    }
+
+    fn always_allow(&self) -> bool {
+        true
     }
 }
 
@@ -857,6 +865,13 @@ impl AgentToolRegistry {
         };
 
         handler.call_summary(&arguments, &placeholder_result)
+    }
+
+    pub fn always_allow(&self, tool_name: &str) -> bool {
+        self.handlers
+            .get(tool_name)
+            .map(|h| h.always_allow())
+            .unwrap_or(false)
     }
 
     /// Execute a tool and return both the result and a human-readable summary

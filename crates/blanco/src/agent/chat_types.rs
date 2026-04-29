@@ -207,7 +207,7 @@ impl ChatMessage {
     ) -> Self {
         let content = match code_block {
             Some(code) => format!("```sql\n{}\n```", code),
-            None => arguments_preview.clone(),
+            None => String::new(),
         };
 
         Self {

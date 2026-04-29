@@ -172,18 +172,20 @@ impl Render for ChatMessageState {
                                 .when_some(status_icon, |el, icon| el.child(icon))
                                 .child(div().text_sm().child(summary_text)),
                         )
-                        .child(
-                            div().ml_6().min_w_0().child(
-                                TextView::markdown(
-                                    (self.id.clone(), "tool-req-view"),
-                                    self.message.clone(),
-                                )
-                                .text_sm()
-                                .scrollable(false)
-                                .selectable(true)
-                                .style(text_view_style()),
-                            ),
-                        )
+                        .when(!self.message.is_empty(), |el| {
+                            el.child(
+                                div().ml_6().min_w_0().child(
+                                    TextView::markdown(
+                                        (self.id.clone(), "tool-req-view"),
+                                        self.message.clone(),
+                                    )
+                                    .text_sm()
+                                    .scrollable(false)
+                                    .selectable(true)
+                                    .style(text_view_style()),
+                                ),
+                            )
+                        })
                         .when(
                             current_state.as_ref() == Some(&ApprovalState::Pending),
                             |el| {
