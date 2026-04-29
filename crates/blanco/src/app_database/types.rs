@@ -273,6 +273,40 @@ impl ConnectionData {
         }
     }
 
+    pub fn new_mssql(
+        name: String,
+        host: String,
+        port: i32,
+        database: String,
+        username: String,
+        password: String,
+    ) -> Self {
+        Self {
+            id: None,
+            name,
+            db_type: DatabaseType::MsSql,
+            host: Some(host),
+            port: Some(port),
+            database_name: Some(database),
+            username: Some(username),
+            password: Some(password),
+            database_path: None,
+            is_active: Some(true),
+            environment_type: EnvironmentType::default(),
+            last_used_at: None,
+            ssh_host: None,
+            ssh_port: None,
+            ssh_user: None,
+            ssh_password: None,
+            ssh_private_key_path: None,
+            ssh_private_key_password: None,
+            ssl_mode: None,
+            ssl_key_path: None,
+            ssl_cert_path: None,
+            ssl_ca_cert_path: None,
+        }
+    }
+
     /// Check if this connection uses SSH tunnel
     pub fn uses_ssh_tunnel(&self) -> bool {
         self.ssh_host.as_ref().is_some_and(|h| !h.trim().is_empty())
@@ -296,6 +330,7 @@ impl ConnectionData {
                     DatabaseType::PostgreSQL => 5432,
                     DatabaseType::MySQL => 3306,
                     DatabaseType::ClickHouse => 8123,
+                    DatabaseType::MsSql => 1433,
                     DatabaseType::SQLite => 0,
                 };
 

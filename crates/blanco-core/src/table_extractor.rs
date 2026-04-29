@@ -7,7 +7,7 @@ use sqlparser::{
         Expr, ObjectName, SelectItem, SelectItemQualifiedWildcardKind, SetExpr, Statement,
         TableFactor, TableObject, TableWithJoins,
     },
-    dialect::{Dialect, GenericDialect, MySqlDialect, PostgreSqlDialect},
+    dialect::{Dialect, GenericDialect, MsSqlDialect, MySqlDialect, PostgreSqlDialect},
     parser::Parser,
 };
 
@@ -28,6 +28,7 @@ impl TableExtractor {
             DriverType::PostgreSQL => Box::new(PostgreSqlDialect {}),
             DriverType::MySQL => Box::new(MySqlDialect {}),
             DriverType::ClickHouse => Box::new(GenericDialect {}),
+            DriverType::MsSql => Box::new(MsSqlDialect {}),
         };
         Self { dialect }
     }

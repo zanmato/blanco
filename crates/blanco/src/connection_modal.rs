@@ -1,7 +1,7 @@
 mod connector_forms;
 
 use connector_forms::{
-    ClickhouseForm, ConnectorType, MysqlForm, PostgresForm, SqliteForm, TestResult,
+    ClickhouseForm, ConnectorType, MssqlForm, MysqlForm, PostgresForm, SqliteForm, TestResult,
 };
 
 use gpui::{
@@ -29,6 +29,7 @@ pub struct NewConnectionModal {
     postgres_form: PostgresForm,
     mysql_form: MysqlForm,
     clickhouse_form: ClickhouseForm,
+    mssql_form: MssqlForm,
     test_result: Option<TestResult>,
     is_testing: bool,
     editing_connection_id: Option<i64>,
@@ -50,6 +51,7 @@ impl NewConnectionModal {
             "PostgreSQL".to_string(),
             "MySQL".to_string(),
             "ClickHouse".to_string(),
+            "SQL Server".to_string(),
         ];
 
         // Determine initial values and editing mode
@@ -60,6 +62,7 @@ impl NewConnectionModal {
                     database::DatabaseType::PostgreSQL => 1,
                     database::DatabaseType::MySQL => 2,
                     database::DatabaseType::ClickHouse => 3,
+                    database::DatabaseType::MsSql => 4,
                     database::DatabaseType::SQLite => 0,
                 };
                 (conn.name.clone(), Some(db_type_index), conn_id, true)
@@ -644,6 +647,71 @@ impl NewConnectionModal {
             ch_ssl_ca_cert,
         );
 
+        // Create entities for SQL Server form
+        let mssql_host = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("localhost");
+            if let Some(conn) = &connection_data
+                && conn.db_type == database::DatabaseType::MsSql
+                && let Some(host) = &conn.host
+            {
+                input.set_value(host.clone(), window, cx);
+            }
+            input
+        });
+        let mssql_port = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("1433");
+            if let Some(conn) = &connection_data
+                && conn.db_type == database::DatabaseType::MsSql
+                && let Some(port) = conn.port
+            {
+                input.set_value(port.to_string(), window, cx);
+            }
+            input
+        });
+        let mssql_database = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("Database Name");
+            if let Some(conn) = &connection_data
+                && conn.db_type == database::DatabaseType::MsSql
+                && let Some(db) = &conn.database_name
+            {
+                input.set_value(db.clone(), window, cx);
+            }
+            input
+        });
+        let mssql_username = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("sa");
+            if let Some(conn) = &connection_data
+                && conn.db_type == database::DatabaseType::MsSql
+                && let Some(user) = &conn.username
+            {
+                input.set_value(user.clone(), window, cx);
+            }
+            input
+        });
+        let mssql_password = cx.new(|cx| {
+            let mut input = InputState::new(window, cx).placeholder("Password");
+            if let Some(conn) = &connection_data
+                && conn.db_type == database::DatabaseType::MsSql
+                && let Some(pass) = &conn.password
+            {
+                input.set_value(pass.clone(), window, cx);
+            }
+            input
+        });
+
+        let mssql_encrypt_modes = vec!["Off".to_string(), "On".to_string(), "Required".to_string()];
+        let mssql_encrypt_select =
+            cx.new(|cx| SelectState::new(mssql_encrypt_modes, Some(IndexPath::new(0)), window, cx));
+
+        let mssql_form = MssqlForm::new(
+            mssql_host,
+            mssql_port,
+            mssql_database,
+            mssql_username,
+            mssql_password,
+            mssql_encrypt_select,
+        );
+
         Self {
             focus_handle: cx.focus_handle(),
             name_input,
@@ -653,6 +721,7 @@ impl NewConnectionModal {
             postgres_form,
             mysql_form,
             clickhouse_form,
+            mssql_form,
             test_result: None,
             is_testing: false,
             editing_connection_id,
@@ -767,6 +836,7 @@ impl NewConnectionModal {
             ConnectorType::PostgreSQL => self.postgres_form.validate(cx),
             ConnectorType::MySQL => self.mysql_form.validate(cx),
             ConnectorType::ClickHouse => self.clickhouse_form.validate(cx),
+            ConnectorType::MsSql => self.mssql_form.validate(cx),
         };
 
         if let Some(error) = validation_error {
@@ -815,6 +885,9 @@ impl NewConnectionModal {
                 self.clickhouse_form
                     .get_connection_data(name, environment_type, cx)
             }
+            ConnectorType::MsSql => self
+                .mssql_form
+                .get_connection_data(name, environment_type, cx),
         };
 
         let connection_data = match connection_data {
@@ -898,6 +971,10 @@ impl NewConnectionModal {
             }
             ConnectorType::ClickHouse => {
                 self.clickhouse_form
+                    .get_connection_data(name, environment_type, cx)?
+            }
+            ConnectorType::MsSql => {
+                self.mssql_form
                     .get_connection_data(name, environment_type, cx)?
             }
         };
@@ -1251,6 +1328,22 @@ impl NewConnectionModal {
             })
             .into_any_element()
     }
+
+    fn render_mssql_form(&self, cx: &mut Context<Self>) -> AnyElement {
+        let base_fields = self.mssql_form.render(cx);
+
+        v_flex()
+            .gap_3()
+            .child(base_fields)
+            .child(
+                v_flex()
+                    .flex_1()
+                    .gap_2()
+                    .child(div().text_sm().child("Encryption"))
+                    .child(Select::new(&self.mssql_form.encrypt_select)),
+            )
+            .into_any_element()
+    }
 }
 
 impl Focusable for NewConnectionModal {
@@ -1297,6 +1390,7 @@ impl Render for NewConnectionModal {
                     ConnectorType::PostgreSQL => self.render_postgres_form(cx),
                     ConnectorType::MySQL => self.render_mysql_form(cx),
                     ConnectorType::ClickHouse => self.render_clickhouse_form(cx),
+                    ConnectorType::MsSql => self.render_mssql_form(cx),
                 })
                 // Testing in progress indicator
                 .when(self.is_testing, |this| {

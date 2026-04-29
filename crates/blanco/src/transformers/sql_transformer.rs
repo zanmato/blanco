@@ -225,6 +225,7 @@ pub(crate) fn sql_identifier(name: &str, db_type: DatabaseType) -> String {
         DatabaseType::PostgreSQL | DatabaseType::SQLite | DatabaseType::ClickHouse => {
             format!("\"{}\"", name.replace('"', "\"\""))
         }
+        DatabaseType::MsSql => format!("[{}]", name.replace(']', "]]")),
     }
 }
 

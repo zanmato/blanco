@@ -15,6 +15,7 @@ postgres = { path = "../postgres" }
 mysql = { path = "../mysql" }
 sqlite = { path = "../sqlite" }
 clickhouse = { path = "../clickhouse" }
+mssql = { path = "../mssql" }
 
 # Async and utilities
 tokio = { version = "1.0", features = ["full", "net", "io-util"] }

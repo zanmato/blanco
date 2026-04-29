@@ -33,6 +33,7 @@ pub(super) enum ConnectorType {
     PostgreSQL,
     MySQL,
     ClickHouse,
+    MsSql,
 }
 
 impl ConnectorType {
@@ -41,6 +42,7 @@ impl ConnectorType {
             "PostgreSQL" => ConnectorType::PostgreSQL,
             "MySQL" => ConnectorType::MySQL,
             "ClickHouse" => ConnectorType::ClickHouse,
+            "SQL Server" => ConnectorType::MsSql,
             _ => ConnectorType::SQLite,
         }
     }
@@ -53,6 +55,7 @@ impl From<DriverType> for ConnectorType {
             DriverType::PostgreSQL => ConnectorType::PostgreSQL,
             DriverType::MySQL => ConnectorType::MySQL,
             DriverType::ClickHouse => ConnectorType::ClickHouse,
+            DriverType::MsSql => ConnectorType::MsSql,
         }
     }
 }
@@ -64,6 +67,7 @@ impl From<ConnectorType> for DriverType {
             ConnectorType::PostgreSQL => DriverType::PostgreSQL,
             ConnectorType::MySQL => DriverType::MySQL,
             ConnectorType::ClickHouse => DriverType::ClickHouse,
+            ConnectorType::MsSql => DriverType::MsSql,
         }
     }
 }
@@ -742,5 +746,134 @@ impl ClickhouseForm {
     #[allow(dead_code)]
     pub fn first_input_focus_handle(&self, cx: &App) -> FocusHandle {
         self.host_input.focus_handle(cx)
+    }
+}
+
+/// SQL Server connector form
+pub(super) struct MssqlForm {
+    pub host_input: Entity<InputState>,
+    pub port_input: Entity<InputState>,
+    pub database_input: Entity<InputState>,
+    pub username_input: Entity<InputState>,
+    pub password_input: Entity<InputState>,
+    pub encrypt_select: Entity<SelectState<Vec<String>>>,
+}
+
+impl MssqlForm {
+    pub fn new(
+        host_input: Entity<InputState>,
+        port_input: Entity<InputState>,
+        database_input: Entity<InputState>,
+        username_input: Entity<InputState>,
+        password_input: Entity<InputState>,
+        encrypt_select: Entity<SelectState<Vec<String>>>,
+    ) -> Self {
+        Self {
+            host_input,
+            port_input,
+            database_input,
+            username_input,
+            password_input,
+            encrypt_select,
+        }
+    }
+
+    pub fn render(&self, _cx: &App) -> gpui::AnyElement {
+        use gpui::{IntoElement, ParentElement, Styled};
+        use gpui_component::{h_flex, input::Input, v_flex};
+
+        v_flex()
+            .gap_3()
+            .child(
+                h_flex()
+                    .gap_3()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .gap_2()
+                            .child(gpui::div().text_sm().child("Host"))
+                            .child(Input::new(&self.host_input)),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .gap_2()
+                            .child(gpui::div().text_sm().child("Port"))
+                            .child(Input::new(&self.port_input)),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .gap_3()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .gap_2()
+                            .child(gpui::div().text_sm().child("User"))
+                            .child(Input::new(&self.username_input)),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .gap_2()
+                            .child(gpui::div().text_sm().child("Password"))
+                            .child(Input::new(&self.password_input)),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .gap_2()
+                    .child(gpui::div().text_sm().child("Database name"))
+                    .child(Input::new(&self.database_input)),
+            )
+            .into_any_element()
+    }
+
+    pub fn validate(&self, cx: &App) -> Option<String> {
+        let host = self.host_input.read(cx).value();
+        let port_str = self.port_input.read(cx).value();
+        let database = self.database_input.read(cx).value();
+        let username = self.username_input.read(cx).value();
+
+        if host.is_empty() {
+            return Some("Host is required".to_string());
+        }
+        if port_str.is_empty() {
+            return Some("Port is required".to_string());
+        }
+        if port_str.parse::<u16>().is_err() {
+            return Some("Port must be a valid number (1-65535)".to_string());
+        }
+        if database.is_empty() {
+            return Some("Database name is required".to_string());
+        }
+        if username.is_empty() {
+            return Some("Username is required".to_string());
+        }
+        None
+    }
+
+    pub fn get_connection_data(
+        &self,
+        name: String,
+        environment_type: EnvironmentType,
+        cx: &App,
+    ) -> Option<ConnectionData> {
+        let host = self.host_input.read(cx).value().to_string();
+        let port_str = self.port_input.read(cx).value();
+        let database = self.database_input.read(cx).value().to_string();
+        let username = self.username_input.read(cx).value().to_string();
+        let password = self.password_input.read(cx).value().to_string();
+
+        if host.is_empty() || database.is_empty() || username.is_empty() {
+            return None;
+        }
+
+        let port = port_str.parse::<i32>().ok()?;
+
+        let mut connection =
+            ConnectionData::new_mssql(name, host, port, database, username, password);
+        connection.environment_type = environment_type;
+        Some(connection)
     }
 }

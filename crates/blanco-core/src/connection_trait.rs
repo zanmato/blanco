@@ -67,6 +67,7 @@ pub enum DriverType {
     PostgreSQL,
     MySQL,
     ClickHouse,
+    MsSql,
 }
 
 impl DriverType {
@@ -77,6 +78,7 @@ impl DriverType {
             "PostgreSQL" => Some(Self::PostgreSQL),
             "MySQL" => Some(Self::MySQL),
             "ClickHouse" => Some(Self::ClickHouse),
+            "SQL Server" => Some(Self::MsSql),
             _ => None,
         }
     }
@@ -88,6 +90,7 @@ impl DriverType {
             Self::PostgreSQL => "PostgreSQL",
             Self::MySQL => "MySQL",
             Self::ClickHouse => "ClickHouse",
+            Self::MsSql => "SQL Server",
         }
     }
 }

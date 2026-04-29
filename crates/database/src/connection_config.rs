@@ -10,6 +10,7 @@ pub enum DatabaseType {
     PostgreSQL,
     MySQL,
     ClickHouse,
+    MsSql,
 }
 
 impl DatabaseType {
@@ -20,6 +21,7 @@ impl DatabaseType {
             DatabaseType::PostgreSQL => "PostgreSQL",
             DatabaseType::MySQL => "MySQL",
             DatabaseType::ClickHouse => "ClickHouse",
+            DatabaseType::MsSql => "SQL Server",
         }
     }
 
@@ -30,6 +32,7 @@ impl DatabaseType {
             "PostgreSQL" => Some(DatabaseType::PostgreSQL),
             "MySQL" => Some(DatabaseType::MySQL),
             "ClickHouse" => Some(DatabaseType::ClickHouse),
+            "SQL Server" => Some(DatabaseType::MsSql),
             _ => None,
         }
     }
@@ -38,9 +41,10 @@ impl DatabaseType {
     pub fn supports_database_switching(&self) -> bool {
         match self {
             DatabaseType::SQLite => false,
-            DatabaseType::PostgreSQL => true,
-            DatabaseType::MySQL => true,
-            DatabaseType::ClickHouse => true,
+            DatabaseType::PostgreSQL
+            | DatabaseType::MySQL
+            | DatabaseType::ClickHouse
+            | DatabaseType::MsSql => true,
         }
     }
 
@@ -51,6 +55,7 @@ impl DatabaseType {
             DatabaseType::PostgreSQL => "postgres",
             DatabaseType::MySQL => "mysql",
             DatabaseType::ClickHouse => "ansi",
+            DatabaseType::MsSql => "tsql",
         }
     }
 
@@ -61,6 +66,7 @@ impl DatabaseType {
             "PostgreSQL" => Some(DatabaseType::PostgreSQL),
             "MySQL" => Some(DatabaseType::MySQL),
             "ClickHouse" => Some(DatabaseType::ClickHouse),
+            "SQL Server" => Some(DatabaseType::MsSql),
             _ => None,
         }
     }
@@ -79,6 +85,7 @@ impl From<DatabaseType> for blanco_core::DriverType {
             DatabaseType::PostgreSQL => blanco_core::DriverType::PostgreSQL,
             DatabaseType::MySQL => blanco_core::DriverType::MySQL,
             DatabaseType::ClickHouse => blanco_core::DriverType::ClickHouse,
+            DatabaseType::MsSql => blanco_core::DriverType::MsSql,
         }
     }
 }
@@ -392,6 +399,37 @@ impl ConnectionConfig {
                     }
                     Err(_) => raw,
                 }
+            }
+            DatabaseType::MsSql => {
+                let mut conn_str = if let Some(password) = &self.password {
+                    if password.is_empty() {
+                        format!(
+                            "mssql://{}@{}:{}/{}",
+                            self.username, conn_host, conn_port, db_name
+                        )
+                    } else {
+                        format!(
+                            "mssql://{}:{}@{}:{}/{}",
+                            self.username, password, conn_host, conn_port, db_name
+                        )
+                    }
+                } else {
+                    format!(
+                        "mssql://{}@{}:{}/{}",
+                        self.username, conn_host, conn_port, db_name
+                    )
+                };
+
+                let mut params = Vec::new();
+                if let Some(ssl_mode) = &self.ssl_mode {
+                    params.push(format!("encrypt={}", ssl_mode));
+                }
+                params.push("trust_cert=true".to_string());
+                if !params.is_empty() {
+                    conn_str = format!("{}?{}", conn_str, params.join("&"));
+                }
+
+                conn_str
             }
         }
     }
