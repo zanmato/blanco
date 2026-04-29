@@ -163,13 +163,7 @@ impl Render for SnippetEditor {
                     .bg(cx.theme().title_bar)
                     .border_color(cx.theme().border)
                     .items_center()
-                    .child(
-                        div().flex_1().child(
-                            Input::new(&self.name_input)
-                                .small()
-                                .font_family(cx.theme().mono_font_family.clone()),
-                        ),
-                    )
+                    .child(div().flex_1().child(Input::new(&self.name_input).small()))
                     .child(
                         Button::new("save-snippet")
                             .small()
