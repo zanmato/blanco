@@ -54,14 +54,31 @@ impl SqlCompletionProvider {
         }
     }
 
+    /// Return cached tables only if a fresh entry exists. Does no IO.
+    pub fn try_get_cached_tables(&self) -> Option<Arc<Vec<QueryableEntity>>> {
+        let cache = self.cache.lock().ok()?;
+        let cached = cache.tables.as_ref()?;
+        if cached.is_expired(CACHE_TTL_SECONDS) {
+            return None;
+        }
+        Some(Arc::clone(&cached.data))
+    }
+
+    /// Return cached columns for a table only if a fresh entry exists. Does no IO.
+    pub fn try_get_cached_columns(&self, table_name: &str) -> Option<Arc<Vec<String>>> {
+        let cache = self.cache.lock().ok()?;
+        let cached = cache.columns.get(table_name)?;
+        if cached.is_expired(CACHE_TTL_SECONDS) {
+            return None;
+        }
+        Some(Arc::clone(&cached.data))
+    }
+
     /// Get cached tables or fetch them if not cached/expired
     pub async fn get_cached_tables(&self) -> Result<Arc<Vec<QueryableEntity>>> {
-        if let Ok(cache) = self.cache.lock()
-            && let Some(cached_tables) = &cache.tables
-            && !cached_tables.is_expired(CACHE_TTL_SECONDS)
-        {
+        if let Some(cached) = self.try_get_cached_tables() {
             tracing::debug!("Using cached tables for database '{}'", self.database_name);
-            return Ok(Arc::clone(&cached_tables.data));
+            return Ok(cached);
         }
 
         tracing::debug!(
@@ -84,16 +101,13 @@ impl SqlCompletionProvider {
 
     /// Get cached columns for a table or fetch them if not cached/expired
     pub async fn get_cached_columns(&self, table_name: &str) -> Result<Arc<Vec<String>>> {
-        if let Ok(cache) = self.cache.lock()
-            && let Some(cached_columns) = cache.columns.get(table_name)
-            && !cached_columns.is_expired(CACHE_TTL_SECONDS)
-        {
+        if let Some(cached) = self.try_get_cached_columns(table_name) {
             tracing::debug!(
                 "Using cached columns for table '{}', database '{}'",
                 table_name,
                 self.database_name
             );
-            return Ok(Arc::clone(&cached_columns.data));
+            return Ok(cached);
         }
 
         tracing::debug!(
@@ -129,7 +143,7 @@ impl SqlCompletionProvider {
     }
 
     /// Extract table name for column completion from the tree-sitter context
-    async fn extract_table_for_columns(&self, context: &TsCompletionContext) -> Option<String> {
+    fn extract_table_for_columns(&self, context: &TsCompletionContext) -> Option<String> {
         let table_aliases = &context.table_aliases;
 
         // Handle dot notation: "table.column" or "alias.column"
@@ -191,14 +205,11 @@ impl CompletionProvider for SqlCompletionProvider {
     ) -> Task<Result<CompletionResponse>> {
         let rope_clone = rope.clone();
         let provider_clone = self.clone();
-
-        let debounce_timer = cx.background_executor().timer(Duration::from_millis(300));
+        let background_executor = cx.background_executor().clone();
 
         // Spawn on the foreground thread so the debounce timer is cancelled when
         // a new completion request replaces this task (via _context_menu_task).
         cx.spawn_in(window, async move |_handle, cx| {
-            debounce_timer.await;
-
             cx.background_spawn(async move {
                 // Use tree-sitter to extract completion context (replaces rfind(';')
                 // and the hand-rolled parser). This correctly handles semicolons
@@ -232,6 +243,31 @@ impl CompletionProvider for SqlCompletionProvider {
                         | Some(SqlClause::Update)
                 );
 
+                // Peek the cache before debouncing. If the data we need is already
+                // cached, return immediately for snappy filtering as the user types.
+                // Otherwise wait for the debounce timer before fetching, to avoid
+                // bursts of DB roundtrips.
+                let column_table = if should_show_columns {
+                    provider_clone.extract_table_for_columns(&context)
+                } else {
+                    None
+                };
+                let cached_columns = column_table
+                    .as_ref()
+                    .and_then(|t| provider_clone.try_get_cached_columns(t));
+                let cached_tables = if should_show_tables {
+                    provider_clone.try_get_cached_tables()
+                } else {
+                    None
+                };
+                let needs_fetch = (should_show_columns
+                    && column_table.is_some()
+                    && cached_columns.is_none())
+                    || (should_show_tables && cached_tables.is_none());
+                if needs_fetch {
+                    background_executor.timer(Duration::from_millis(300)).await;
+                }
+
                 // Calculate positions for text replacement
                 let start_pos = rope_clone
                     .offset_to_position(offset.saturating_sub(context.current_word.len()));
@@ -239,9 +275,7 @@ impl CompletionProvider for SqlCompletionProvider {
 
                 // Priority: Column completion > Table completion > Keywords
                 if should_show_columns {
-                    if let Some(table_name) =
-                        provider_clone.extract_table_for_columns(&context).await
-                    {
+                    if let Some(table_name) = column_table {
                         match provider_clone.get_cached_columns(&table_name).await {
                             Ok(columns) => {
                                 let mut filtered_columns: Vec<String> =
