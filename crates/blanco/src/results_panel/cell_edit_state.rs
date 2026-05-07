@@ -152,6 +152,44 @@ impl CellEditState {
         self.pending_deleted_rows.clear();
     }
 
+    /// Remove a new row from tracking and reindex all row-dependent state.
+    /// After removing a row at `row_index`, all rows above it shift down by 1.
+    pub fn remove_new_row(&mut self, row_index: usize) {
+        self.changes.retain(|c| c.row_index != row_index);
+        for change in &mut self.changes {
+            if change.row_index > row_index {
+                change.row_index -= 1;
+            }
+        }
+
+        self.pending_new_rows.retain(|&r| r != row_index);
+        for row in &mut self.pending_new_rows {
+            if *row > row_index {
+                *row -= 1;
+            }
+        }
+
+        self.edited_values = reindex_row_keys(&self.edited_values, row_index);
+        self.original_values = reindex_row_keys(&self.original_values, row_index);
+        self.pending_deleted_rows = reindex_row_set(&self.pending_deleted_rows, row_index);
+        self.selected_rows = reindex_row_set(&self.selected_rows, row_index);
+
+        if let Some((r, _)) = self.editing_cell {
+            if r == row_index {
+                self.editing_cell = None;
+            } else if r > row_index {
+                self.editing_cell = Some((r - 1, self.editing_cell.unwrap().1));
+            }
+        }
+        if let Some((r, _)) = self.expanded_cell {
+            if r == row_index {
+                self.expanded_cell = None;
+            } else if r > row_index {
+                self.expanded_cell = Some((r - 1, self.expanded_cell.unwrap().1));
+            }
+        }
+    }
+
     pub fn is_new_row(&self, row_index: usize) -> bool {
         self.pending_new_rows.contains(&row_index)
     }
@@ -249,4 +287,22 @@ impl TableChange {
             .insert_values(insert_values)
             .build()
     }
+}
+
+fn reindex_row_keys(
+    map: &HashMap<(usize, usize), Option<String>>,
+    removed_row: usize,
+) -> HashMap<(usize, usize), Option<String>> {
+    map.iter()
+        .map(|((row, col), value)| {
+            let new_row = if *row > removed_row { *row - 1 } else { *row };
+            ((new_row, *col), value.clone())
+        })
+        .collect()
+}
+
+fn reindex_row_set(set: &HashSet<usize>, removed_row: usize) -> HashSet<usize> {
+    set.iter()
+        .map(|&r| if r > removed_row { r - 1 } else { r })
+        .collect()
 }

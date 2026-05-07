@@ -900,12 +900,8 @@ impl ResultsPanel {
 
             // Skip if this is a new row (just remove it instead)
             if delegate.edit_state.is_new_row(row_ix) {
-                // Remove the row and its changes
                 delegate.remove_row(row_ix);
-                delegate
-                    .edit_state
-                    .pending_new_rows
-                    .retain(|&r| r != row_ix);
+                delegate.edit_state.remove_new_row(row_ix);
                 state.refresh(cx);
                 return;
             }
