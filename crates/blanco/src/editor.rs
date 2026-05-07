@@ -1212,6 +1212,7 @@ impl Render for EditorPanel {
                 TabBar::new("editor-tabs")
                     .menu(true)
                     .w_full()
+                    .pt(px(4.))
                     .selected_index(self.active_tab_ix)
                     .on_click(Self::tab_bar_click_handler(cx.entity().downgrade()))
                     .prefix(

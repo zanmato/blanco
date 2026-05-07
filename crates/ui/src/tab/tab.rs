@@ -2,9 +2,9 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, ClickEvent, Div, Edges, Hsla, InteractiveElement, IntoElement, MouseButton,
-    ParentElement, Pixels, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window,
-    div, px, relative,
+    AnyElement, App, Bounds, ClickEvent, Div, Edges, Hsla, InteractiveElement, IntoElement,
+    MouseButton, ParentElement, PathBuilder, Pixels, RenderOnce, SharedString,
+    StatefulInteractiveElement, Styled, Window, canvas, div, point, px, relative,
 };
 use gpui_component::{ActiveTheme, Icon, IconName, Selectable, Sizable, Size, StyledExt, h_flex};
 
@@ -388,6 +388,74 @@ impl Default for TabStyle {
     }
 }
 
+const CHROME_TOP_RADIUS: Pixels = px(4.);
+const CHROME_FOOT_W: Pixels = px(8.);
+const CHROME_FOOT_H: Pixels = px(8.);
+
+fn chrome_tab_fill_path(bounds: &Bounds<Pixels>) -> gpui::Path<Pixels> {
+    let x = bounds.origin.x;
+    let y = bounds.origin.y;
+    let w = bounds.size.width;
+    let h = bounds.size.height;
+
+    let top_r = CHROME_TOP_RADIUS;
+    let foot_w = CHROME_FOOT_W;
+    let foot_h = CHROME_FOOT_H;
+
+    let bx = x + foot_w;
+    let bw = w - foot_w * 2.;
+
+    let mut builder = PathBuilder::fill();
+
+    builder.move_to(point(bx + top_r, y));
+    builder.line_to(point(bx + bw - top_r, y));
+    builder.curve_to(point(bx + bw, y + top_r), point(bx + bw, y));
+    builder.line_to(point(bx + bw, y + h - foot_h));
+    builder.curve_to(point(bx + bw + foot_w, y + h), point(bx + bw, y + h));
+    builder.line_to(point(bx - foot_w, y + h));
+    builder.curve_to(point(bx, y + h - foot_h), point(bx, y + h));
+    builder.line_to(point(bx, y + top_r));
+    builder.curve_to(point(bx + top_r, y), point(bx, y));
+    builder.close();
+
+    builder
+        .build()
+        .unwrap_or_else(|_| PathBuilder::fill().build().unwrap())
+}
+
+fn chrome_tab_border_path(bounds: &Bounds<Pixels>, include_left: bool) -> gpui::Path<Pixels> {
+    let x = bounds.origin.x + px(0.5);
+    let y = bounds.origin.y + px(0.5);
+    let w = bounds.size.width - px(1.);
+    let h = bounds.size.height - px(1.);
+
+    let top_r = CHROME_TOP_RADIUS;
+    let foot_w = CHROME_FOOT_W;
+    let foot_h = CHROME_FOOT_H;
+
+    let bx = x + foot_w;
+    let bw = w - foot_w * 2.;
+
+    let mut builder = PathBuilder::stroke(px(1.));
+
+    if include_left {
+        builder.move_to(point(bx - foot_w, y + h));
+        builder.curve_to(point(bx, y + h - foot_h), point(bx, y + h));
+        builder.line_to(point(bx, y + top_r));
+        builder.curve_to(point(bx + top_r, y), point(bx, y));
+    } else {
+        builder.move_to(point(bx + top_r, y));
+    }
+    builder.line_to(point(bx + bw - top_r, y));
+    builder.curve_to(point(bx + bw, y + top_r), point(bx + bw, y));
+    builder.line_to(point(bx + bw, y + h - foot_h));
+    builder.curve_to(point(bx + bw + foot_w, y + h), point(bx + bw, y + h));
+
+    builder
+        .build()
+        .unwrap_or_else(|_| PathBuilder::stroke(px(1.)).build().unwrap())
+}
+
 /// A Tab element for the [`super::TabBar`].
 #[derive(IntoElement)]
 pub struct Tab {
@@ -404,8 +472,7 @@ pub struct Tab {
     pub(super) disabled: bool,
     pub(super) selected: bool,
     pub(super) group: Option<SharedString>,
-    pub(super) group_label:
-        Option<Rc<dyn Fn(&mut Window, &mut App) -> AnyElement + 'static>>,
+    pub(super) group_label: Option<Rc<dyn Fn(&mut Window, &mut App) -> AnyElement + 'static>>,
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
 }
 
@@ -636,85 +703,127 @@ impl RenderOnce for Tab {
         let inner_height = self.variant.inner_height(self.size);
         let height = self.variant.height(self.size);
 
-        self.base
+        let use_chrome_shape = self.selected && self.variant == TabVariant::Tab && !self.disabled;
+
+        let inner_content = h_flex()
+            .flex_1()
+            .h(inner_height)
+            .line_height(relative(1.))
+            .whitespace_nowrap()
+            .items_center()
+            .justify_center()
+            .overflow_hidden()
+            .margins(inner_margins)
+            .flex_shrink_0()
+            .map(|this| match self.icon {
+                Some(icon) => this
+                    .w(inner_height * 1.25)
+                    .child(icon.map(|this| match self.size {
+                        Size::XSmall => this.size_2p5(),
+                        Size::Small => this.size_3p5(),
+                        Size::Large => this.size_4(),
+                        _ => this.size_4(),
+                    })),
+                None => this
+                    .paddings(inner_paddings)
+                    .map(|this| match self.label {
+                        Some(label) => this.child(label),
+                        None => this,
+                    })
+                    .children(self.children),
+            })
+            .bg(tab_style.inner_bg)
+            .rounded(inner_radius)
+            .when(tab_style.shadow, |this| this.shadow_xs())
+            .hover(|this| this.bg(hover_style.inner_bg).rounded(inner_radius));
+
+        let include_left = !(self.ix == 0 && !tab_bar_prefix);
+
+        let base = self
+            .base
             .id(self.ix)
             .flex()
-            .flex_wrap()
-            .gap_1()
-            .items_center()
             .flex_shrink_0()
             .h(height)
-            .overflow_hidden()
             .text_color(tab_style.fg)
             .map(|this| match self.size {
                 Size::XSmall => this.text_xs(),
                 Size::Large => this.text_base(),
                 _ => this.text_sm(),
             })
-            .bg(tab_style.bg)
-            .border_l(tab_style.borders.left)
-            .border_r(tab_style.borders.right)
-            .border_t(tab_style.borders.top)
-            .border_b(tab_style.borders.bottom)
-            .border_color(tab_style.border_color)
-            .rounded(radius)
-            .when(!self.selected && !self.disabled, |this| {
-                this.hover(|this| {
-                    this.text_color(hover_style.fg)
-                        .bg(hover_style.bg)
-                        .border_l(hover_style.borders.left)
-                        .border_r(hover_style.borders.right)
-                        .border_t(hover_style.borders.top)
-                        .border_b(hover_style.borders.bottom)
-                        .border_color(hover_style.border_color)
-                        .rounded(radius)
-                })
-            })
-            .when_some(self.prefix, |this, prefix| this.child(prefix))
-            .child(
-                h_flex()
-                    .flex_1()
-                    .h(inner_height)
-                    .line_height(relative(1.))
-                    .whitespace_nowrap()
-                    .items_center()
-                    .justify_center()
-                    .overflow_hidden()
-                    .margins(inner_margins)
-                    .flex_shrink_0()
-                    .map(|this| match self.icon {
-                        Some(icon) => {
-                            this.w(inner_height * 1.25)
-                                .child(icon.map(|this| match self.size {
-                                    Size::XSmall => this.size_2p5(),
-                                    Size::Small => this.size_3p5(),
-                                    Size::Large => this.size_4(),
-                                    _ => this.size_4(),
-                                }))
-                        }
-                        None => this
-                            .paddings(inner_paddings)
-                            .map(|this| match self.label {
-                                Some(label) => this.child(label),
-                                None => this,
-                            })
-                            .children(self.children),
-                    })
-                    .bg(tab_style.inner_bg)
-                    .rounded(inner_radius)
-                    .when(tab_style.shadow, |this| this.shadow_xs())
-                    .hover(|this| this.bg(hover_style.inner_bg).rounded(inner_radius)),
-            )
-            .when_some(self.suffix, |this, suffix| this.child(suffix))
             .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                // Stop propagation behavior, for works on TitleBar.
-                // https://github.com/longbridge/gpui-component/issues/1836
                 cx.stop_propagation();
             })
             .when(!self.disabled, |this| {
                 this.when_some(self.on_click.clone(), |this, on_click| {
                     this.on_click(move |event, window, cx| on_click(event, window, cx))
                 })
-            })
+            });
+
+        if use_chrome_shape {
+            let fill_color = tab_style.bg;
+            let stroke_color = tab_style.border_color;
+
+            base.relative()
+                .child(
+                    canvas(
+                        move |_bounds, _window, _cx| {},
+                        move |bounds, _, window, _| {
+                            let fill = chrome_tab_fill_path(&bounds);
+                            window.paint_path(fill, fill_color);
+                            let border = chrome_tab_border_path(&bounds, include_left);
+                            window.paint_path(border, stroke_color);
+                        },
+                    )
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .top_0()
+                    .h(height),
+                )
+                .child(
+                    div()
+                        .relative()
+                        .flex()
+                        .flex_wrap()
+                        .gap_1()
+                        .items_center()
+                        .size_full()
+                        .px(CHROME_FOOT_W)
+                        .when_some(self.prefix, |this, prefix| this.child(prefix))
+                        .child(inner_content)
+                        .when_some(self.suffix, |this, suffix| this.child(suffix)),
+                )
+        } else {
+            base.flex_wrap()
+                .gap_1()
+                .items_center()
+                .overflow_hidden()
+                .when(self.variant == TabVariant::Tab, |this| {
+                    this.px(CHROME_FOOT_W - px(1.))
+                })
+                .bg(tab_style.bg)
+                .border_l(tab_style.borders.left)
+                .border_r(tab_style.borders.right)
+                .border_t(tab_style.borders.top)
+                .border_b(tab_style.borders.bottom)
+                .border_color(tab_style.border_color)
+                .rounded(radius)
+                .when(!self.selected && !self.disabled, |this| {
+                    this.hover(|this| {
+                        this.text_color(hover_style.fg)
+                            .bg(hover_style.bg)
+                            .border_l(hover_style.borders.left)
+                            .border_r(hover_style.borders.right)
+                            .border_t(hover_style.borders.top)
+                            .border_b(hover_style.borders.bottom)
+                            .border_color(hover_style.border_color)
+                            .rounded(radius)
+                    })
+                })
+                .when_some(self.prefix, |this, prefix| this.child(prefix))
+                .child(inner_content)
+                .when_some(self.suffix, |this, suffix| this.child(suffix))
+        }
     }
 }
