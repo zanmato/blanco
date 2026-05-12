@@ -14,7 +14,7 @@ use gpui::{
     Window, div, prelude::FluentBuilder, px, rems,
 };
 use gpui_component::{
-    ActiveTheme, Sizable, WindowExt as _,
+    ActiveTheme, Disableable as _, Sizable, WindowExt as _,
     button::{Button, ButtonVariants as _},
     dialog::{DialogAction, DialogClose, DialogFooter},
     h_flex,
@@ -596,6 +596,20 @@ impl EditorPanel {
         };
 
         // Create query tab with the connection string
+        let results_panel = cx.new(|cx| {
+            ResultsPanel::new(
+                params.connection_id,
+                &params.database_name,
+                params.db_type,
+                window,
+                cx,
+            )
+        });
+        // Re-render the editor when the results panel notifies, so toolbar
+        // buttons that depend on panel state (e.g. Apply/Discard edits) stay
+        // in sync.
+        self._subscriptions
+            .push(cx.observe(&results_panel, |_, _, cx| cx.notify()));
         let query_tab = QueryTab {
             title: params.title.clone(),
             connection_id: params.connection_id,
@@ -606,15 +620,7 @@ impl EditorPanel {
             environment_type: params.environment_type,
             editor: editor.clone(),
             db_id: params.db_id,
-            results_panel: cx.new(|cx| {
-                ResultsPanel::new(
-                    params.connection_id,
-                    &params.database_name,
-                    params.db_type,
-                    window,
-                    cx,
-                )
-            }),
+            results_panel,
             sql_log: cx.new(|cx| SqlLog::new(10, cx.theme().highlight_theme.clone())),
             sqruff_service,
             completion_provider: Some(sql_completion_provider),
@@ -1002,7 +1008,9 @@ impl EditorPanel {
                     .outline()
                     .small()
                     .icon(IconName::Check)
-                    .label("Commit")
+                    .label("Apply edits")
+                    .tooltip("Apply pending cell edits to the database")
+                    .disabled(!query_tab.results_panel.read(cx).has_pending_edits(cx))
                     .on_click(cx.listener(|this, _, window, cx| {
                         if let Some(TabType::Query(query_tab)) =
                             this.tabs.get_mut(this.active_tab_ix)
@@ -1018,7 +1026,9 @@ impl EditorPanel {
                     .outline()
                     .small()
                     .icon(IconName::CircleX)
-                    .label("Rollback")
+                    .label("Discard edits")
+                    .tooltip("Discard pending cell edits")
+                    .disabled(!query_tab.results_panel.read(cx).has_pending_edits(cx))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.with_active_results_panel(cx, |panel, cx| {
                             panel.rollback_changes(window, cx);

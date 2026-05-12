@@ -480,6 +480,14 @@ impl ResultsPanel {
         self.table_state.read(cx).delegate().edit_state.editing_cell
     }
 
+    /// Whether there are any uncommitted cell edits, pending new rows, or pending deletions.
+    pub fn has_pending_edits(&self, cx: &App) -> bool {
+        let edit_state = &self.table_state.read(cx).delegate().edit_state;
+        !edit_state.edited_values.is_empty()
+            || !edit_state.pending_new_rows.is_empty()
+            || !edit_state.pending_deleted_rows.is_empty()
+    }
+
     pub fn update_editing_cell_value(
         &mut self,
         row: usize,
