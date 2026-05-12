@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
     ColumnInfo, Connection, QueryResult, connection_trait::ColumnType,
-    connection_trait::ForeignKeyInfo, connection_trait::IndexInfo,
+    connection_trait::ForeignKeyInfo, connection_trait::IndexInfo, connection_trait::RoutineKind,
 };
 use futures::StreamExt;
 use smol::lock::RwLock;
@@ -771,6 +771,101 @@ impl Connection for MysqlConnection {
             .collect();
 
         Ok(views)
+    }
+
+    async fn list_procedures(&self, _schema: Option<&str>) -> Result<Vec<String>, anyhow::Error> {
+        let database = self
+            .initial_database
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+        let pool = self.get_or_create_pool(database).await?;
+        let rows = sqlx::query(
+            "SELECT ROUTINE_NAME FROM information_schema.routines
+             WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = 'PROCEDURE'
+             ORDER BY ROUTINE_NAME",
+        )
+        .bind(database)
+        .fetch_all(&pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .filter_map(|r| r.try_get::<String, _>(0).ok())
+            .collect())
+    }
+
+    async fn list_functions(&self, _schema: Option<&str>) -> Result<Vec<String>, anyhow::Error> {
+        let database = self
+            .initial_database
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+        let pool = self.get_or_create_pool(database).await?;
+        let rows = sqlx::query(
+            "SELECT ROUTINE_NAME FROM information_schema.routines
+             WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = 'FUNCTION'
+             ORDER BY ROUTINE_NAME",
+        )
+        .bind(database)
+        .fetch_all(&pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .filter_map(|r| r.try_get::<String, _>(0).ok())
+            .collect())
+    }
+
+    async fn list_triggers(&self, _schema: Option<&str>) -> Result<Vec<String>, anyhow::Error> {
+        let database = self
+            .initial_database
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+        let pool = self.get_or_create_pool(database).await?;
+        let rows = sqlx::query(
+            "SELECT TRIGGER_NAME FROM information_schema.triggers
+             WHERE TRIGGER_SCHEMA = ?
+             ORDER BY TRIGGER_NAME",
+        )
+        .bind(database)
+        .fetch_all(&pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .filter_map(|r| r.try_get::<String, _>(0).ok())
+            .collect())
+    }
+
+    async fn object_ddl(
+        &self,
+        kind: RoutineKind,
+        _schema: Option<&str>,
+        name: &str,
+    ) -> Result<String, anyhow::Error> {
+        let database = self
+            .initial_database
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+        let pool = self.get_or_create_pool(database).await?;
+        // SHOW CREATE PROCEDURE/FUNCTION/TRIGGER returns a row whose second
+        // column ('Create Procedure'/'Create Function'/'SQL Original Statement')
+        // contains the DDL. The exact column name varies, so we pick by index.
+        let (stmt, ddl_col) = match kind {
+            RoutineKind::Procedure => (
+                format!("SHOW CREATE PROCEDURE `{}`.`{}`", database, name),
+                2usize,
+            ),
+            RoutineKind::Function => (
+                format!("SHOW CREATE FUNCTION `{}`.`{}`", database, name),
+                2usize,
+            ),
+            RoutineKind::Trigger => (format!("SHOW CREATE TRIGGER `{}`.`{}`", database, name), 2),
+        };
+        let row = sqlx::query(&stmt)
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| anyhow::anyhow!("SHOW CREATE failed: {}", e))?;
+        let ddl: String = row
+            .try_get::<String, _>(ddl_col)
+            .map_err(|e| anyhow::anyhow!("DDL column not found: {}", e))?;
+        Ok(ddl)
     }
 
     async fn get_queryable_entities(

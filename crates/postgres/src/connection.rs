@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
     ColumnInfo, Connection, QueryResult, connection_trait::ColumnType,
-    connection_trait::ForeignKeyInfo, connection_trait::IndexInfo,
+    connection_trait::ForeignKeyInfo, connection_trait::IndexInfo, connection_trait::RoutineKind,
 };
 use futures::{Stream, StreamExt};
 use smol::lock::RwLock;
@@ -1452,6 +1452,122 @@ impl Connection for PostgresConnection {
             .collect();
 
         Ok(matviews)
+    }
+
+    async fn list_procedures(&self, schema: Option<&str>) -> Result<Vec<String>> {
+        let schema_filter = schema.unwrap_or("public");
+        let query = "
+            SELECT p.proname
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = $1 AND p.prokind = 'p'
+            ORDER BY p.proname
+        ";
+        let result = self
+            .execute_query(
+                query,
+                self.initial_database.as_deref(),
+                Some(&[schema_filter.to_string()]),
+            )
+            .await?;
+        Ok(result
+            .rows
+            .into_iter()
+            .filter_map(|r| r.into_iter().next().flatten())
+            .collect())
+    }
+
+    async fn list_functions(&self, schema: Option<&str>) -> Result<Vec<String>> {
+        let schema_filter = schema.unwrap_or("public");
+        let query = "
+            SELECT p.proname
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = $1 AND p.prokind = 'f'
+            ORDER BY p.proname
+        ";
+        let result = self
+            .execute_query(
+                query,
+                self.initial_database.as_deref(),
+                Some(&[schema_filter.to_string()]),
+            )
+            .await?;
+        Ok(result
+            .rows
+            .into_iter()
+            .filter_map(|r| r.into_iter().next().flatten())
+            .collect())
+    }
+
+    async fn list_triggers(&self, schema: Option<&str>) -> Result<Vec<String>> {
+        let schema_filter = schema.unwrap_or("public");
+        let query = "
+            SELECT DISTINCT t.tgname
+            FROM pg_trigger t
+            JOIN pg_class c ON c.oid = t.tgrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = $1 AND NOT t.tgisinternal
+            ORDER BY t.tgname
+        ";
+        let result = self
+            .execute_query(
+                query,
+                self.initial_database.as_deref(),
+                Some(&[schema_filter.to_string()]),
+            )
+            .await?;
+        Ok(result
+            .rows
+            .into_iter()
+            .filter_map(|r| r.into_iter().next().flatten())
+            .collect())
+    }
+
+    async fn object_ddl(
+        &self,
+        kind: RoutineKind,
+        schema: Option<&str>,
+        name: &str,
+    ) -> Result<String> {
+        let schema_filter = schema.unwrap_or("public");
+        let query = match kind {
+            RoutineKind::Procedure | RoutineKind::Function => {
+                "SELECT pg_get_functiondef(p.oid)
+                 FROM pg_proc p
+                 JOIN pg_namespace n ON n.oid = p.pronamespace
+                 WHERE n.nspname = $1 AND p.proname = $2
+                 LIMIT 1"
+            }
+            RoutineKind::Trigger => {
+                "SELECT pg_get_triggerdef(t.oid, true)
+                 FROM pg_trigger t
+                 JOIN pg_class c ON c.oid = t.tgrelid
+                 JOIN pg_namespace n ON n.oid = c.relnamespace
+                 WHERE n.nspname = $1 AND t.tgname = $2 AND NOT t.tgisinternal
+                 LIMIT 1"
+            }
+        };
+        let result = self
+            .execute_query(
+                query,
+                self.initial_database.as_deref(),
+                Some(&[schema_filter.to_string(), name.to_string()]),
+            )
+            .await?;
+        result
+            .rows
+            .into_iter()
+            .next()
+            .and_then(|row| row.into_iter().next().flatten())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{} '{}.{}' not found",
+                    kind.display_name(),
+                    schema_filter,
+                    name
+                )
+            })
     }
 
     async fn get_queryable_entities(

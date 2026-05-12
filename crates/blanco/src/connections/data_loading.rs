@@ -21,12 +21,17 @@ pub struct DatabaseTable {
     pub item_type: DatabaseItemType,
 }
 
-/// Type of database item (table, view, or materialized view)
+/// Type of database item (table, view, materialized view, or stored
+/// routine/trigger). Routines and triggers share the same tree level as
+/// tables/views; an icon distinguishes them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DatabaseItemType {
     Table,
     View,
     MaterializedView,
+    Procedure,
+    Function,
+    Trigger,
 }
 
 /// Represents a database with its schemas
@@ -128,31 +133,34 @@ impl ConnectionsPanel {
                             }
                         };
 
-                        // Load tables and views for all schemas (SQLite needs this for proper tree display)
+                        // Load tables, views, and routines for all schemas
+                        // (SQLite/MySQL need this for proper tree display).
                         let mut schema_tables: Vec<(String, Vec<DatabaseTable>)> = Vec::new();
                         for schema_name in &schemas {
                             let mut all_items: Vec<DatabaseTable> = Vec::new();
-
-                            // Load tables
-                            if let Ok(table_list) = connection.get_tables(Some(schema_name)).await {
-                                for table_name in table_list {
-                                    all_items.push(DatabaseTable {
-                                        name: table_name,
+                            let push = |items: &mut Vec<DatabaseTable>, v: Vec<String>, kind| {
+                                for n in v {
+                                    items.push(DatabaseTable {
+                                        name: n,
                                         _schema: Some(schema_name.clone()),
-                                        item_type: DatabaseItemType::Table,
+                                        item_type: kind,
                                     });
                                 }
+                            };
+                            if let Ok(v) = connection.get_tables(Some(schema_name)).await {
+                                push(&mut all_items, v, DatabaseItemType::Table);
                             }
-
-                            // Load views
-                            if let Ok(view_list) = connection.get_views(Some(schema_name)).await {
-                                for view_name in view_list {
-                                    all_items.push(DatabaseTable {
-                                        name: view_name,
-                                        _schema: Some(schema_name.clone()),
-                                        item_type: DatabaseItemType::View,
-                                    });
-                                }
+                            if let Ok(v) = connection.get_views(Some(schema_name)).await {
+                                push(&mut all_items, v, DatabaseItemType::View);
+                            }
+                            if let Ok(v) = connection.list_procedures(Some(schema_name)).await {
+                                push(&mut all_items, v, DatabaseItemType::Procedure);
+                            }
+                            if let Ok(v) = connection.list_functions(Some(schema_name)).await {
+                                push(&mut all_items, v, DatabaseItemType::Function);
+                            }
+                            if let Ok(v) = connection.list_triggers(Some(schema_name)).await {
+                                push(&mut all_items, v, DatabaseItemType::Trigger);
                             }
 
                             // Sort all items alphabetically by name
@@ -359,44 +367,41 @@ impl ConnectionsPanel {
                 Ok(connection) => {
                     tracing::debug!("Loading tables, views for schema: {} in database: {} on connection {}", schema_name, database_name, connection_id);
 
-                    // Load tables, views, and materialized views
+                    // Load tables, views, materialized views, and routines.
                     let tables_result = connection.get_tables(Some(&schema_name)).await;
                     let views_result = connection.get_views(Some(&schema_name)).await;
                     let matviews_result = connection.get_materialized_views(Some(&schema_name)).await;
+                    let procs_result = connection.list_procedures(Some(&schema_name)).await;
+                    let funcs_result = connection.list_functions(Some(&schema_name)).await;
+                    let triggers_result = connection.list_triggers(Some(&schema_name)).await;
 
                     let mut all_items: Vec<DatabaseTable> = Vec::new();
-
-                    // Process tables
-                    if let Ok(table_list) = tables_result {
-                        for table_name in table_list {
-                            all_items.push(DatabaseTable {
-                                name: table_name,
+                    let push_named = |items: &mut Vec<DatabaseTable>, names: Vec<String>, kind| {
+                        for n in names {
+                            items.push(DatabaseTable {
+                                name: n,
                                 _schema: Some(schema_name.clone()),
-                                item_type: DatabaseItemType::Table,
+                                item_type: kind,
                             });
                         }
+                    };
+                    if let Ok(v) = tables_result {
+                        push_named(&mut all_items, v, DatabaseItemType::Table);
                     }
-
-                    // Process views
-                    if let Ok(view_list) = views_result {
-                        for view_name in view_list {
-                            all_items.push(DatabaseTable {
-                                name: view_name,
-                                _schema: Some(schema_name.clone()),
-                                item_type: DatabaseItemType::View,
-                            });
-                        }
+                    if let Ok(v) = views_result {
+                        push_named(&mut all_items, v, DatabaseItemType::View);
                     }
-
-                    // Process materialized views
-                    if let Ok(matview_list) = matviews_result {
-                        for matview_name in matview_list {
-                            all_items.push(DatabaseTable {
-                                name: matview_name,
-                                _schema: Some(schema_name.clone()),
-                                item_type: DatabaseItemType::MaterializedView,
-                            });
-                        }
+                    if let Ok(v) = matviews_result {
+                        push_named(&mut all_items, v, DatabaseItemType::MaterializedView);
+                    }
+                    if let Ok(v) = procs_result {
+                        push_named(&mut all_items, v, DatabaseItemType::Procedure);
+                    }
+                    if let Ok(v) = funcs_result {
+                        push_named(&mut all_items, v, DatabaseItemType::Function);
+                    }
+                    if let Ok(v) = triggers_result {
+                        push_named(&mut all_items, v, DatabaseItemType::Trigger);
                     }
 
                     // Sort all items alphabetically by name

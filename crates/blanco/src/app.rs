@@ -22,7 +22,7 @@ use crate::{
     app_settings::AppSettings,
     connection_modal::NewConnectionModal,
     connections::{ConnectionsPanel, ConnectionsPanelEvent},
-    editor::{EditorPanel, TabCreationParams, TableStructureParams},
+    editor::{EditorPanel, ObjectDdlParams, TabCreationParams, TableStructureParams},
     result_ext::ResultExt,
     snippets_panel::{RefreshSnippets, SnippetsPanel, SnippetsPanelEvent},
 };
@@ -136,6 +136,19 @@ pub struct CreateNewQueryTab {
     pub database_name: String,
     pub schema_name: Option<String>,
     pub table_name: Option<String>,
+    pub environment_type: Option<EnvironmentType>,
+}
+
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct OpenObjectDdl {
+    pub kind: blanco_core::connection_trait::RoutineKind,
+    pub connection_id: i64,
+    pub connection_name: String,
+    pub db_type: database::DatabaseType,
+    pub database_name: String,
+    pub schema_name: Option<String>,
+    pub object_name: String,
     pub environment_type: Option<EnvironmentType>,
 }
 
@@ -489,6 +502,67 @@ impl BlancoApp {
         cx.notify();
     }
 
+    fn on_open_object_ddl(
+        &mut self,
+        action: &OpenObjectDdl,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let weak_tab = self.editor_panel.update(cx, |panel, cx| {
+            panel.create_object_ddl_tab(
+                ObjectDdlParams {
+                    kind: action.kind,
+                    connection_id: action.connection_id,
+                    connection_name: action.connection_name.clone(),
+                    db_type: action.db_type,
+                    database_name: action.database_name.clone(),
+                    schema_name: action.schema_name.clone(),
+                    object_name: action.object_name.clone(),
+                    environment_type: action.environment_type,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let db_service = database::DatabaseService::global(cx).clone();
+        let connection_id = action.connection_id;
+        let database_name = action.database_name.clone();
+        let schema_name = action.schema_name.clone();
+        let object_name = action.object_name.clone();
+        let kind = action.kind;
+
+        cx.spawn_in(window, async move |_, window| {
+            use database::DatabaseServiceTrait;
+            let result = match db_service
+                .get_or_create_connection_by_id(connection_id, Some(&database_name))
+                .await
+            {
+                Ok(connection) => {
+                    connection
+                        .object_ddl(kind, schema_name.as_deref(), &object_name)
+                        .await
+                }
+                Err(e) => Err(e),
+            };
+
+            window
+                .update(|window, cx| {
+                    if let Some(tab) = weak_tab.upgrade() {
+                        tab.update(cx, |tab, cx| match result {
+                            Ok(ddl) => tab.set_ddl(ddl, cx),
+                            Err(e) => tab.set_error(e.to_string(), cx),
+                        });
+                    }
+                    let _ = window;
+                })
+                .log_err();
+        })
+        .detach();
+
+        cx.notify();
+    }
+
     fn on_new_connection_modal(
         &mut self,
         _: &OpenNewConnectionModal,
@@ -827,6 +901,7 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_settings))
             .on_action(cx.listener(Self::on_create_new_query_tab))
             .on_action(cx.listener(Self::on_open_table_structure))
+            .on_action(cx.listener(Self::on_open_object_ddl))
             .on_action(cx.listener(Self::on_new_connection_modal))
             .on_action(cx.listener(Self::on_new_snippet))
             .on_action(cx.listener(Self::on_commit_changes))

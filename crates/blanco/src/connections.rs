@@ -66,6 +66,9 @@ pub enum TreeItemKind {
     Table,
     View,
     MaterializedView,
+    Procedure,
+    Function,
+    Trigger,
 }
 
 /// Metadata for tree items to enable proper context menu actions
@@ -92,6 +95,10 @@ impl CreateNewQueryTabParams for TreeItemMetadata {
     fn create_new_query_tab_action(&self) -> Option<CreateNewQueryTab> {
         match self.kind {
             TreeItemKind::Connection => None,
+            // Procedures/Functions/Triggers don't open a query tab when
+            // double-clicked; they get a dedicated DDL tab instead, opened by
+            // the panel itself.
+            TreeItemKind::Procedure | TreeItemKind::Function | TreeItemKind::Trigger => None,
             TreeItemKind::Database
             | TreeItemKind::Schema
             | TreeItemKind::Table
@@ -395,6 +402,21 @@ impl ConnectionsPanel {
                                                     cx.theme().magenta.into(),
                                                     TreeItemKind::MaterializedView,
                                                 ),
+                                                DatabaseItemType::Procedure => (
+                                                    IconName::SquareTerminal,
+                                                    cx.theme().magenta.into(),
+                                                    TreeItemKind::Procedure,
+                                                ),
+                                                DatabaseItemType::Function => (
+                                                    IconName::Braces,
+                                                    cx.theme().cyan.into(),
+                                                    TreeItemKind::Function,
+                                                ),
+                                                DatabaseItemType::Trigger => (
+                                                    IconName::DatabaseConnected,
+                                                    cx.theme().yellow.into(),
+                                                    TreeItemKind::Trigger,
+                                                ),
                                             };
 
                                             let table_metadata = TreeItemMetadata {
@@ -463,6 +485,21 @@ impl ConnectionsPanel {
                                         IconName::LayoutDashboard,
                                         cx.theme().magenta.into(),
                                         TreeItemKind::MaterializedView,
+                                    ),
+                                    DatabaseItemType::Procedure => (
+                                        IconName::SquareTerminal,
+                                        cx.theme().magenta.into(),
+                                        TreeItemKind::Procedure,
+                                    ),
+                                    DatabaseItemType::Function => (
+                                        IconName::Braces,
+                                        cx.theme().cyan.into(),
+                                        TreeItemKind::Function,
+                                    ),
+                                    DatabaseItemType::Trigger => (
+                                        IconName::DatabaseConnected,
+                                        cx.theme().yellow.into(),
+                                        TreeItemKind::Trigger,
                                     ),
                                 };
 
@@ -600,6 +637,35 @@ impl ConnectionsPanel {
                     }
                 }
                 TreeItemKind::Table | TreeItemKind::View | TreeItemKind::MaterializedView => {}
+                TreeItemKind::Procedure | TreeItemKind::Function | TreeItemKind::Trigger => {
+                    let routine_kind = match metadata.kind {
+                        TreeItemKind::Procedure => {
+                            blanco_core::connection_trait::RoutineKind::Procedure
+                        }
+                        TreeItemKind::Function => {
+                            blanco_core::connection_trait::RoutineKind::Function
+                        }
+                        TreeItemKind::Trigger => {
+                            blanco_core::connection_trait::RoutineKind::Trigger
+                        }
+                        _ => unreachable!(),
+                    };
+                    if let Some(name) = metadata.table_name.clone() {
+                        window.dispatch_action(
+                            Box::new(crate::app::OpenObjectDdl {
+                                kind: routine_kind,
+                                connection_id: metadata.connection_id,
+                                connection_name: metadata.connection_name.clone(),
+                                db_type: metadata.db_type,
+                                database_name: metadata.database_name.clone().unwrap_or_default(),
+                                schema_name: metadata.schema_name.clone(),
+                                object_name: name,
+                                environment_type: metadata.environment_type,
+                            }),
+                            cx,
+                        );
+                    }
+                }
             }
         }
     }

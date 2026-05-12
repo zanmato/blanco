@@ -19,6 +19,26 @@ impl EntityType {
     }
 }
 
+/// Routine and trigger objects in a schema. Used by `list_procedures`,
+/// `list_functions`, and `list_triggers` on the `Connection` trait so the
+/// sidebar can render them and `object_ddl` can fetch their source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoutineKind {
+    Procedure,
+    Function,
+    Trigger,
+}
+
+impl RoutineKind {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            RoutineKind::Procedure => "Procedure",
+            RoutineKind::Function => "Function",
+            RoutineKind::Trigger => "Trigger",
+        }
+    }
+}
+
 /// A queryable database entity with its type
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct QueryableEntity {
@@ -354,6 +374,35 @@ pub trait Connection: Send + Sync {
     ) -> Result<Vec<String>, anyhow::Error> {
         // Default implementation returns empty (most databases don't support materialized views)
         Ok(Vec::new())
+    }
+
+    /// List stored procedures in a schema. Defaults to empty so drivers
+    /// without stored procedures (SQLite, ClickHouse) need not override.
+    async fn list_procedures(&self, _schema: Option<&str>) -> Result<Vec<String>, anyhow::Error> {
+        Ok(Vec::new())
+    }
+
+    /// List user-defined functions in a schema. Defaults to empty.
+    async fn list_functions(&self, _schema: Option<&str>) -> Result<Vec<String>, anyhow::Error> {
+        Ok(Vec::new())
+    }
+
+    /// List triggers in a schema. Defaults to empty.
+    async fn list_triggers(&self, _schema: Option<&str>) -> Result<Vec<String>, anyhow::Error> {
+        Ok(Vec::new())
+    }
+
+    /// Return the SQL DDL source for a routine/trigger object. Used by the
+    /// "Show DDL" tab. Drivers without source-stored objects return an error.
+    async fn object_ddl(
+        &self,
+        _kind: RoutineKind,
+        _schema: Option<&str>,
+        _name: &str,
+    ) -> Result<String, anyhow::Error> {
+        Err(anyhow::anyhow!(
+            "object_ddl is not supported by this connection type"
+        ))
     }
 
     /// Get all queryable entities (tables, views, materialized views) in a single query

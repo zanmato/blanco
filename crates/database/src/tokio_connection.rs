@@ -14,7 +14,7 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use blanco_core::{
-    connection_trait::{ColumnType, DatabaseSchemaResult, IndexInfo, QueryableEntity},
+    connection_trait::{ColumnType, DatabaseSchemaResult, IndexInfo, QueryableEntity, RoutineKind},
     ColumnInfo, Connection, QueryResult,
 };
 use futures::Stream;
@@ -172,6 +172,40 @@ impl Connection for TokioConnection {
         let inner = Arc::clone(&self.inner);
         let schema = schema.map(str::to_string);
         self.run(async move { inner.get_materialized_views(schema.as_deref()).await })
+            .await
+    }
+
+    async fn list_procedures(&self, schema: Option<&str>) -> Result<Vec<String>> {
+        let inner = Arc::clone(&self.inner);
+        let schema = schema.map(str::to_string);
+        self.run(async move { inner.list_procedures(schema.as_deref()).await })
+            .await
+    }
+
+    async fn list_functions(&self, schema: Option<&str>) -> Result<Vec<String>> {
+        let inner = Arc::clone(&self.inner);
+        let schema = schema.map(str::to_string);
+        self.run(async move { inner.list_functions(schema.as_deref()).await })
+            .await
+    }
+
+    async fn list_triggers(&self, schema: Option<&str>) -> Result<Vec<String>> {
+        let inner = Arc::clone(&self.inner);
+        let schema = schema.map(str::to_string);
+        self.run(async move { inner.list_triggers(schema.as_deref()).await })
+            .await
+    }
+
+    async fn object_ddl(
+        &self,
+        kind: RoutineKind,
+        schema: Option<&str>,
+        name: &str,
+    ) -> Result<String> {
+        let inner = Arc::clone(&self.inner);
+        let schema = schema.map(str::to_string);
+        let name = name.to_string();
+        self.run(async move { inner.object_ddl(kind, schema.as_deref(), &name).await })
             .await
     }
 

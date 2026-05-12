@@ -1,3 +1,4 @@
+mod object_ddl;
 mod parameter_form;
 mod query_execution;
 #[cfg(test)]
@@ -10,8 +11,8 @@ mod table_structure;
 use blanco_ui::{Tab, TabBar};
 use gpui::{
     App, AppContext, ClickEvent, Context, Entity, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, KeybindingKeystroke, Keystroke, ParentElement, Render, Styled, Task, WeakEntity,
-    Window, div, prelude::FluentBuilder, px, rems,
+    IntoElement, KeybindingKeystroke, Keystroke, ParentElement, Render, SharedString, Styled, Task,
+    WeakEntity, Window, div, prelude::FluentBuilder, px, rems,
 };
 use gpui_component::{
     ActiveTheme, Disableable as _, Sizable, WindowExt as _,
@@ -25,6 +26,7 @@ use gpui_component::{
 use std::{rc::Rc, sync::Arc};
 use tracing::{debug, error, info};
 
+use self::object_ddl::ObjectDdlTab;
 use self::rename_form::RenameTabForm;
 use self::snippet_editor::SnippetEditor;
 use self::table_structure::TableStructureTab;
@@ -48,6 +50,7 @@ pub enum TabType {
     Settings(SettingsTab),
     Snippet(Entity<SnippetEditor>),
     TableStructure(Entity<TableStructureTab>),
+    ObjectDdl(Entity<ObjectDdlTab>),
 }
 
 pub struct QueryTab {
@@ -116,6 +119,19 @@ pub struct TabCreationParams {
     pub connection_name: Option<String>,
     pub database_name: String,
     pub schema_name: Option<String>,
+    pub environment_type: Option<EnvironmentType>,
+}
+
+/// Parameters for creating an object DDL tab (procedures/functions/triggers).
+#[derive(Clone)]
+pub struct ObjectDdlParams {
+    pub kind: blanco_core::connection_trait::RoutineKind,
+    pub connection_id: i64,
+    pub connection_name: String,
+    pub db_type: database::DatabaseType,
+    pub database_name: String,
+    pub schema_name: Option<String>,
+    pub object_name: String,
     pub environment_type: Option<EnvironmentType>,
 }
 
@@ -346,6 +362,34 @@ impl EditorPanel {
         self.scroll_tabbar_to_the_end(window, cx);
 
         cx.notify();
+    }
+
+    pub fn create_object_ddl_tab(
+        &mut self,
+        params: ObjectDdlParams,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> WeakEntity<ObjectDdlTab> {
+        let tab = cx.new(|cx| {
+            ObjectDdlTab::new(
+                params.kind,
+                params.connection_id,
+                params.db_type,
+                Some(params.connection_name),
+                params.database_name,
+                params.schema_name,
+                params.object_name,
+                params.environment_type,
+                window,
+                cx,
+            )
+        });
+        let weak = tab.downgrade();
+        self.tabs.push(TabType::ObjectDdl(tab));
+        self.active_tab_ix = self.tabs.len() - 1;
+        self.scroll_tabbar_to_the_end(window, cx);
+        cx.notify();
+        weak
     }
 
     pub fn update_last_table_structure_tab(
@@ -947,6 +991,38 @@ impl EditorPanel {
                         ),
                 )
             }
+            TabType::ObjectDdl(object_ddl_tab) => {
+                let inner = object_ddl_tab.read(cx);
+                let label = SharedString::from(inner.title.clone());
+                let (icon, color) = match inner.kind {
+                    blanco_core::connection_trait::RoutineKind::Procedure => {
+                        (IconName::SquareTerminal, cx.theme().magenta)
+                    }
+                    blanco_core::connection_trait::RoutineKind::Function => {
+                        (IconName::Braces, cx.theme().cyan)
+                    }
+                    blanco_core::connection_trait::RoutineKind::Trigger => {
+                        (IconName::DatabaseConnected, cx.theme().yellow)
+                    }
+                };
+                let tab_index = ix;
+                Tab::new().label(label).group("Other").suffix(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .pr_1()
+                        .child(Icon::new(icon).text_color(color))
+                        .child(
+                            Button::new(("close-object-ddl-tab", ix))
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::Close)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.close_tab(tab_index, cx);
+                                })),
+                        ),
+                )
+            }
             TabType::TableStructure(table_structure_tab) => {
                 let label = table_structure_tab.read(cx).title.clone();
                 let tab_index = ix;
@@ -1306,6 +1382,13 @@ impl Render for EditorPanel {
                                 .h_full()
                                 .overflow_hidden()
                                 .child(table_structure_tab.clone()),
+                        ),
+                        TabType::ObjectDdl(object_ddl_tab) => this.child(
+                            div()
+                                .flex_1()
+                                .h_full()
+                                .overflow_hidden()
+                                .child(object_ddl_tab.clone()),
                         ),
                     }),
             )
