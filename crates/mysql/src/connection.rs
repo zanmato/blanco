@@ -635,6 +635,43 @@ impl Connection for MysqlConnection {
         })
     }
 
+    async fn execute_script(
+        &self,
+        query: &str,
+        database_name: Option<&str>,
+    ) -> Result<Vec<QueryResult>, anyhow::Error> {
+        use sqlx::Either;
+
+        let database = database_name
+            .or(self.initial_database.as_deref())
+            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+        let pool = self.get_or_create_pool(database).await?;
+        let mut results = sqlx::raw_sql(query).fetch_many(&pool);
+
+        let mut out: Vec<QueryResult> = Vec::new();
+        let mut current: Option<MysqlStmtAcc> = None;
+
+        while let Some(result) = results.next().await {
+            match result? {
+                Either::Left(exec) => {
+                    let mut acc = current.take().unwrap_or_default();
+                    acc.rows_affected += exec.rows_affected();
+                    out.push(acc.finalize());
+                }
+                Either::Right(row) => {
+                    let acc = current.get_or_insert_with(MysqlStmtAcc::default);
+                    acc.absorb_row(&row, self);
+                }
+            }
+        }
+
+        if let Some(acc) = current.take() {
+            out.push(acc.finalize());
+        }
+
+        Ok(out)
+    }
+
     async fn execute_write(
         &self,
         query: &str,
@@ -986,5 +1023,59 @@ impl Connection for MysqlConnection {
 
         tracing::debug!("Found {} indexes for table: {}", indexes.len(), table_name);
         Ok(indexes)
+    }
+}
+
+/// Per-statement accumulator used by `execute_script` to preserve result-set
+/// boundaries when running multi-statement SQL.
+#[derive(Default)]
+struct MysqlStmtAcc {
+    columns: Vec<String>,
+    column_types: Vec<ColumnType>,
+    raw_column_types: Vec<String>,
+    rows: Vec<Vec<Option<String>>>,
+    rows_affected: u64,
+}
+
+impl MysqlStmtAcc {
+    fn absorb_row(&mut self, row: &sqlx::mysql::MySqlRow, conn: &MysqlConnection) {
+        if self.columns.is_empty() {
+            self.columns = row
+                .columns()
+                .iter()
+                .map(|col| col.name().to_string())
+                .collect();
+            let (types, raw_types): (Vec<ColumnType>, Vec<String>) = row
+                .columns()
+                .iter()
+                .map(|col| {
+                    let raw_type = col.type_info().to_string();
+                    (MysqlConnection::map_mysql_type(&raw_type), raw_type)
+                })
+                .unzip();
+            self.column_types = types;
+            self.raw_column_types = raw_types;
+        }
+        let row_data: Vec<Option<String>> = (0..self.columns.len())
+            .map(|i| {
+                conn.convert_row_value_to_string(row, i, &self.column_types, &self.raw_column_types)
+            })
+            .collect();
+        self.rows.push(row_data);
+    }
+
+    fn finalize(self) -> QueryResult {
+        QueryResult {
+            columns: self.columns,
+            column_types: self.column_types,
+            rows: self.rows,
+            rows_affected: self.rows_affected,
+            query_text: None,
+            execution_time_ms: None,
+            is_error: false,
+            table_name: None,
+            connection_id: None,
+            table_columns: None,
+        }
     }
 }

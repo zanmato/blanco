@@ -245,6 +245,20 @@ pub trait Connection: Send + Sync {
         parameters: Option<&[String]>,
     ) -> Result<QueryResult, anyhow::Error>;
 
+    /// Execute a SQL script that may contain multiple statements, returning one
+    /// `QueryResult` per result-set produced by the database. Drivers that can
+    /// observe statement boundaries (sqlx `fetch_many`, tiberius `into_results`)
+    /// should override this to preserve them; the default falls back to
+    /// `execute_query` which merges everything into a single result.
+    async fn execute_script(
+        &self,
+        query: &str,
+        database_name: Option<&str>,
+    ) -> Result<Vec<QueryResult>, anyhow::Error> {
+        let result = self.execute_query(query, database_name, None).await?;
+        Ok(vec![result])
+    }
+
     /// Execute a write statement (INSERT/UPDATE/DELETE/DDL) with optional nullable parameters.
     /// Unlike `execute_query`, each parameter may be `None` to bind SQL NULL.
     /// Returns the number of rows affected. Backends that do not override this fall back

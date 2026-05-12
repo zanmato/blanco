@@ -1135,6 +1135,131 @@ impl PostgresConnection {
             table_columns: None,
         })
     }
+
+    /// Execute a script that may contain multiple statements, returning one
+    /// `QueryResult` per statement. Each `Either::Left` from sqlx marks a
+    /// statement boundary.
+    pub(crate) async fn execute_script_inner(
+        &self,
+        pool: &sqlx::PgPool,
+        sql: &str,
+    ) -> Result<Vec<QueryResult>> {
+        use sqlx::Either;
+
+        let mut results = sqlx::raw_sql(sql).fetch_many(pool);
+        let mut out: Vec<QueryResult> = Vec::new();
+        let mut current: Option<PgStatementAcc> = None;
+
+        while let Some(result) = results.next().await {
+            match result? {
+                Either::Left(execution_result) => {
+                    let mut acc = current.take().unwrap_or_default();
+                    acc.rows_affected += execution_result.rows_affected();
+                    out.push(acc.finalize(pool, self).await?);
+                }
+                Either::Right(row) => {
+                    let acc = current.get_or_insert_with(PgStatementAcc::default);
+                    acc.absorb_row(&row, self);
+                }
+            }
+        }
+
+        if let Some(acc) = current.take() {
+            out.push(acc.finalize(pool, self).await?);
+        }
+
+        Ok(out)
+    }
+}
+
+/// Per-statement accumulator used by `execute_script_inner` to keep rows,
+/// columns, and pending OID lookups isolated to a single result-set.
+#[derive(Default)]
+struct PgStatementAcc {
+    columns: Vec<String>,
+    column_types: Vec<ColumnType>,
+    raw_column_types: Vec<String>,
+    rows: Vec<Vec<Option<String>>>,
+    rows_affected: u64,
+    oids_to_resolve: Vec<(usize, usize, i32)>,
+}
+
+impl PgStatementAcc {
+    fn absorb_row(&mut self, row: &sqlx::postgres::PgRow, conn: &PostgresConnection) {
+        if self.columns.is_empty() {
+            self.columns = row
+                .columns()
+                .iter()
+                .map(|col| col.name().to_string())
+                .collect();
+            let (types, raw_types): (Vec<ColumnType>, Vec<String>) = row
+                .columns()
+                .iter()
+                .map(|col| {
+                    let raw_type = col.type_info().name().to_string();
+                    (PostgresConnection::map_postgres_type(&raw_type), raw_type)
+                })
+                .unzip();
+            self.column_types = types;
+            self.raw_column_types = raw_types;
+        }
+
+        let row_idx = self.rows.len();
+        let row_data: Vec<Option<String>> = (0..self.columns.len())
+            .map(|i| {
+                conn.convert_row_value_to_string(row, i, &self.column_types, &self.raw_column_types)
+            })
+            .collect();
+
+        for (col_idx, col_type) in self.column_types.iter().enumerate() {
+            if *col_type == ColumnType::Unknown
+                && let Ok(raw_value) = row.try_get_raw(col_idx)
+                && !raw_value.is_null()
+                && let Ok(bytes) = raw_value.as_bytes()
+                && bytes.len() >= 4
+            {
+                let oid = i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                self.oids_to_resolve.push((row_idx, col_idx, oid));
+            }
+        }
+
+        self.rows.push(row_data);
+    }
+
+    async fn finalize(
+        mut self,
+        pool: &sqlx::PgPool,
+        conn: &PostgresConnection,
+    ) -> Result<QueryResult> {
+        if !self.oids_to_resolve.is_empty() {
+            let unique_oids: Vec<i32> = self
+                .oids_to_resolve
+                .iter()
+                .map(|(_, _, oid)| *oid)
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect();
+            let oid_to_name = conn.resolve_oids_to_names(pool, &unique_oids).await?;
+            for (row_idx, col_idx, oid) in self.oids_to_resolve {
+                if let Some(name) = oid_to_name.get(&oid) {
+                    self.rows[row_idx][col_idx] = Some(name.clone());
+                }
+            }
+        }
+
+        Ok(QueryResult {
+            columns: self.columns,
+            column_types: self.column_types,
+            rows: self.rows,
+            rows_affected: self.rows_affected,
+            query_text: None,
+            execution_time_ms: None,
+            is_error: false,
+            table_name: None,
+            connection_id: None,
+            table_columns: None,
+        })
+    }
 }
 
 #[async_trait]
@@ -1194,6 +1319,24 @@ impl Connection for PostgresConnection {
             .map_err(|e| anyhow::anyhow!("PostgreSQL query execution failed: {}", e))?;
 
         Ok(result)
+    }
+
+    async fn execute_script(
+        &self,
+        query: &str,
+        database_name: Option<&str>,
+    ) -> Result<Vec<QueryResult>> {
+        let database_name = database_name.ok_or(anyhow::anyhow!("missing database"))?;
+        let pool = self.get_or_create_pool(database_name).await.map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to get connection pool for database '{}': {}",
+                database_name,
+                e
+            )
+        })?;
+        self.execute_script_inner(&pool, query)
+            .await
+            .map_err(|e| anyhow::anyhow!("PostgreSQL script execution failed: {}", e))
     }
 
     async fn execute_write(

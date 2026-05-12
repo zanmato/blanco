@@ -260,10 +260,9 @@ impl CompletionProvider for SqlCompletionProvider {
                 } else {
                     None
                 };
-                let needs_fetch = (should_show_columns
-                    && column_table.is_some()
-                    && cached_columns.is_none())
-                    || (should_show_tables && cached_tables.is_none());
+                let needs_fetch =
+                    (should_show_columns && column_table.is_some() && cached_columns.is_none())
+                        || (should_show_tables && cached_tables.is_none());
                 if needs_fetch {
                     background_executor.timer(Duration::from_millis(300)).await;
                 }

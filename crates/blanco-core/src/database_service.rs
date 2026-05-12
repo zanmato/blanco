@@ -50,6 +50,21 @@ pub trait DatabaseService: Send + Sync {
         connection.execute_query(sql, database, None).await
     }
 
+    /// Execute a script (potentially multiple statements) using the provided
+    /// connection ID. Returns one `QueryResult` per result-set the database
+    /// produces.
+    async fn execute_script(
+        &self,
+        connection_id: i64,
+        database: Option<&str>,
+        sql: &str,
+    ) -> Result<Vec<crate::QueryResult>> {
+        let connection = self
+            .get_or_create_connection_by_id(connection_id, database)
+            .await?;
+        connection.execute_script(sql, database).await
+    }
+
     /// Execute a parameterized query using the provided connection ID
     async fn execute_query_with_params(
         &self,

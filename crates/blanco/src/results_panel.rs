@@ -2,12 +2,15 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use blanco_ui::IconName;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, Styled, Subscription, Window, div, px,
+    ParentElement, Render, SharedString, Styled, Subscription, Window, div,
+    prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme, WindowExt as _,
+    ActiveTheme, Sizable as _, WindowExt as _,
+    button::{Button, ButtonVariants as _},
     input::{InputEvent, InputState},
     notification::NotificationType,
     table::{DataTable, TableEvent, TableState},
@@ -74,9 +77,27 @@ pub struct SelectedTableData {
     pub selected_rows: Vec<SelectedRow>,
 }
 
+/// One materialized result-set rendered as a sub-tab inside `ResultsPanel`.
+/// A query script with N statements produces N `ResultTab`s; each owns its own
+/// `TableState` so edit state and selection stay isolated per tab.
+pub struct ResultTab {
+    pub title: SharedString,
+    pub pinned: bool,
+    pub table_state: Entity<TableState<ResultsTableDelegate>>,
+    pub _subscriptions: Vec<Subscription>,
+}
+
 pub struct ResultsPanel {
     focus_handle: FocusHandle,
+    // Cached handle to `result_tabs[active_tab].table_state`. The 30+ existing
+    // call sites keep reading `self.table_state`; whenever `active_tab` moves
+    // we rebind this so they always see the current tab's state.
     table_state: Entity<TableState<ResultsTableDelegate>>,
+    result_tabs: Vec<ResultTab>,
+    active_tab: usize,
+    connection_id: i64,
+    database_name: String,
+    db_type: database::DatabaseType,
     editing_input: Option<Entity<InputState>>,
     editing_cell: Option<(usize, usize)>,
     copy_handler: CopyHandler,
@@ -91,9 +112,40 @@ impl ResultsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut delegate = ResultsTableDelegate::default();
+        let initial_tab = Self::build_result_tab(
+            connection_id,
+            database_name,
+            db_type,
+            SharedString::from("Result"),
+            window,
+            cx,
+        );
+        let table_state = initial_tab.table_state.clone();
 
-        // Set connection ID on delegate if provided
+        Self {
+            table_state,
+            result_tabs: vec![initial_tab],
+            active_tab: 0,
+            connection_id,
+            database_name: database_name.to_string(),
+            db_type,
+            focus_handle: cx.focus_handle(),
+            editing_input: None,
+            editing_cell: None,
+            copy_handler: CopyHandler::new(),
+            _subscriptions: vec![],
+        }
+    }
+
+    fn build_result_tab(
+        connection_id: i64,
+        database_name: &str,
+        db_type: database::DatabaseType,
+        title: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> ResultTab {
+        let mut delegate = ResultsTableDelegate::default();
         delegate.set_connection_id(connection_id, database_name, db_type);
 
         let table_state = cx.new(|cx| {
@@ -103,12 +155,15 @@ impl ResultsPanel {
                 .col_selectable(false)
         });
 
-        // Subscribe to table events
-        let _table_event_subscription = cx.subscribe_in(
+        let subscription = cx.subscribe_in(
             &table_state,
             window,
-            move |panel, _table_state, event: &TableEvent, window, cx| {
+            move |panel, table_state, event: &TableEvent, window, cx| {
                 if let TableEvent::DoubleClickedCell(row_ix, col_ix) = event {
+                    // Only handle events on the currently active tab.
+                    if panel.table_state.entity_id() != table_state.entity_id() {
+                        return;
+                    }
                     panel.table_state.update(cx, |state, _cx| {
                         state.delegate_mut().clear_selection();
                     });
@@ -117,14 +172,129 @@ impl ResultsPanel {
             },
         );
 
-        Self {
+        ResultTab {
+            title,
+            pinned: false,
             table_state,
-            focus_handle: cx.focus_handle(),
-            editing_input: None,
-            editing_cell: None,
-            copy_handler: CopyHandler::new(),
-            _subscriptions: vec![_table_event_subscription],
+            _subscriptions: vec![subscription],
         }
+    }
+
+    /// Replace all unpinned tabs with one tab per provided result. The first
+    /// newly added tab becomes active; pinned tabs are preserved at the front
+    /// of the strip.
+    pub fn set_query_results(
+        &mut self,
+        results: Vec<QueryResult>,
+        connection_id: Option<i64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Drop any tabs the user hasn't pinned.
+        self.result_tabs.retain(|tab| tab.pinned);
+
+        if results.is_empty() {
+            // Nothing new to show; if everything got cleared, leave a fresh
+            // empty tab so the panel still has something to render.
+            if self.result_tabs.is_empty() {
+                let placeholder = Self::build_result_tab(
+                    self.connection_id,
+                    &self.database_name.clone(),
+                    self.db_type,
+                    SharedString::from("Result"),
+                    window,
+                    cx,
+                );
+                self.table_state = placeholder.table_state.clone();
+                self.result_tabs.push(placeholder);
+                self.active_tab = 0;
+            }
+            cx.notify();
+            return;
+        }
+
+        let first_new_index = self.result_tabs.len();
+        let total = results.len();
+        for (i, result) in results.into_iter().enumerate() {
+            let title = if total > 1 {
+                SharedString::from(format!("Result #{}", i + 1))
+            } else {
+                SharedString::from("Result")
+            };
+            let tab = Self::build_result_tab(
+                self.connection_id,
+                &self.database_name.clone(),
+                self.db_type,
+                title,
+                window,
+                cx,
+            );
+            let query_text = result.query_text.clone();
+            tab.table_state.update(cx, |state, cx| {
+                if let Some(ref q) = query_text {
+                    state.delegate_mut().set_original_query(q.clone());
+                }
+                state.clear_selection(cx);
+                state.delegate_mut().set_query_result(result, window, cx);
+                state.refresh(cx);
+            });
+            self.result_tabs.push(tab);
+        }
+
+        self.active_tab = first_new_index;
+        self.table_state = self.result_tabs[self.active_tab].table_state.clone();
+        self.editing_input = None;
+        self.editing_cell = None;
+        let _ = connection_id; // accepted for API parity with single-result path
+        cx.notify();
+    }
+
+    pub fn activate_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index >= self.result_tabs.len() || index == self.active_tab {
+            return;
+        }
+        self.active_tab = index;
+        self.table_state = self.result_tabs[index].table_state.clone();
+        self.editing_input = None;
+        self.editing_cell = None;
+        cx.notify();
+    }
+
+    pub fn toggle_pin(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(tab) = self.result_tabs.get_mut(index) {
+            tab.pinned = !tab.pinned;
+            cx.notify();
+        }
+    }
+
+    pub fn close_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if index >= self.result_tabs.len() {
+            return;
+        }
+        self.result_tabs.remove(index);
+        if self.result_tabs.is_empty() {
+            let placeholder = Self::build_result_tab(
+                self.connection_id,
+                &self.database_name.clone(),
+                self.db_type,
+                SharedString::from("Result"),
+                window,
+                cx,
+            );
+            self.table_state = placeholder.table_state.clone();
+            self.result_tabs.push(placeholder);
+            self.active_tab = 0;
+        } else {
+            if self.active_tab >= self.result_tabs.len() {
+                self.active_tab = self.result_tabs.len() - 1;
+            } else if index < self.active_tab {
+                self.active_tab -= 1;
+            }
+            self.table_state = self.result_tabs[self.active_tab].table_state.clone();
+        }
+        self.editing_input = None;
+        self.editing_cell = None;
+        cx.notify();
     }
 
     #[cfg(test)]
@@ -132,32 +302,15 @@ impl ResultsPanel {
         &self.table_state
     }
 
+    #[allow(dead_code)]
     pub fn set_query_result(
         &mut self,
         result: QueryResult,
-        _connection_id: Option<i64>,
+        connection_id: Option<i64>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Extract query_text before consuming the result
-        let query_text = result.query_text.clone();
-
-        self.table_state.update(cx, |state, cx| {
-            // Set the original query for alias resolution
-            if let Some(ref query) = query_text {
-                state.delegate_mut().set_original_query(query.clone());
-            }
-            // Move the result into the delegate instead of cloning
-            state.clear_selection(cx);
-            state.delegate_mut().set_query_result(result, window, cx);
-            state.refresh(cx);
-        });
-
-        // Clear any panel-level editing state
-        self.editing_input = None;
-        self.editing_cell = None;
-
-        cx.notify();
+        self.set_query_results(vec![result], connection_id, window, cx);
     }
 
     pub fn cancel_current_edit(&mut self, cx: &mut Context<Self>) {
@@ -1381,10 +1534,79 @@ impl Focusable for ResultsPanel {
 
 impl Render for ResultsPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let show_strip = self.result_tabs.len() > 1 || self.result_tabs.iter().any(|t| t.pinned);
+        let active = self.active_tab;
+        let theme = cx.theme();
+        let border_color = theme.border;
+        let muted_fg = theme.muted_foreground;
+        let active_bg = theme.accent;
+        let strip_bg = theme.muted;
+
+        let mut strip = gpui_component::h_flex()
+            .id("result-tabs-strip")
+            .w_full()
+            .gap_1()
+            .px_2()
+            .py_1()
+            .border_b_1()
+            .border_color(border_color)
+            .bg(strip_bg);
+        for (idx, tab) in self.result_tabs.iter().enumerate() {
+            let is_active = idx == active;
+            let label = tab.title.clone();
+            let pinned = tab.pinned;
+            strip = strip.child(
+                gpui_component::h_flex()
+                    .id(("result-tab", idx))
+                    .gap_1()
+                    .px_2()
+                    .py_0p5()
+                    .rounded(theme.radius)
+                    .border_1()
+                    .border_color(border_color)
+                    .when(is_active, |this| {
+                        this.bg(active_bg).text_color(theme.accent_foreground)
+                    })
+                    .when(!is_active, |this| this.text_color(muted_fg))
+                    .cursor_pointer()
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(move |this, _ev, _window, cx| {
+                            this.activate_tab(idx, cx);
+                        }),
+                    )
+                    .child(label)
+                    .child(
+                        Button::new(("pin-tab", idx))
+                            .ghost()
+                            .xsmall()
+                            .icon(if pinned {
+                                IconName::PinOff
+                            } else {
+                                IconName::Pin
+                            })
+                            .tooltip(if pinned { "Unpin" } else { "Pin" })
+                            .on_click(cx.listener(move |this, _ev, _window, cx| {
+                                this.toggle_pin(idx, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new(("close-tab", idx))
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::Close)
+                            .tooltip("Close result")
+                            .on_click(cx.listener(move |this, _ev, window, cx| {
+                                this.close_tab(idx, window, cx);
+                            })),
+                    ),
+            );
+        }
+
         v_flex()
             .size_full()
             .border_t_1()
-            .border_color(cx.theme().border)
+            .border_color(border_color)
             // Handle copy and selection actions
             .on_action(cx.listener(Self::on_copy_as_csv))
             .on_action(cx.listener(Self::on_copy_as_tsv))
@@ -1401,12 +1623,13 @@ impl Render for ResultsPanel {
             .on_action(cx.listener(Self::on_duplicate_row))
             .on_action(cx.listener(Self::on_delete_row))
             .on_action(cx.listener(Self::on_set_cell_null))
+            .when(show_strip, |this| this.child(strip))
             // The table component (table should have built-in scrolling)
             .child(
                 div()
                     .id("results-table")
                     .border_b_1()
-                    .border_color(cx.theme().border)
+                    .border_color(border_color)
                     .flex_1() // Allow table to fill available space
                     .overflow_hidden()
                     .min_h(px(200.0)) // Minimum height for table

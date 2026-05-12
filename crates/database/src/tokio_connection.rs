@@ -86,6 +86,18 @@ impl Connection for TokioConnection {
         .await
     }
 
+    async fn execute_script(
+        &self,
+        query: &str,
+        database_name: Option<&str>,
+    ) -> Result<Vec<QueryResult>> {
+        let inner = Arc::clone(&self.inner);
+        let query = query.to_string();
+        let database_name = database_name.map(str::to_string);
+        self.run(async move { inner.execute_script(&query, database_name.as_deref()).await })
+            .await
+    }
+
     async fn execute_write(
         &self,
         query: &str,

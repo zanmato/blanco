@@ -351,6 +351,62 @@ impl Connection for MssqlConnection {
         })
     }
 
+    async fn execute_script(
+        &self,
+        query: &str,
+        database_name: Option<&str>,
+    ) -> Result<Vec<QueryResult>> {
+        let pool = self.get_or_create_pool(database_name).await?;
+        let mut client = pool
+            .get()
+            .await
+            .map_err(|e| anyhow::anyhow!("MSSQL connection failed: {e}"))?;
+
+        let stream = client
+            .simple_query(query)
+            .await
+            .map_err(|e| anyhow::anyhow!("MSSQL query error: {e}"))?;
+        let result_sets = stream
+            .into_results()
+            .await
+            .map_err(|e| anyhow::anyhow!("MSSQL result fetch error: {e}"))?;
+
+        let mut out: Vec<QueryResult> = Vec::with_capacity(result_sets.len());
+        for result_set in result_sets {
+            let mut columns: Vec<String> = Vec::new();
+            let mut column_types: Vec<ColumnType> = Vec::new();
+            if let Some(first_row) = result_set.first() {
+                for col in first_row.columns() {
+                    columns.push(col.name().to_string());
+                    column_types.push(Self::map_tiberius_column_type(col.column_type()));
+                }
+            }
+            let mut rows: Vec<Vec<Option<String>>> = Vec::with_capacity(result_set.len());
+            for row in &result_set {
+                let values: Vec<Option<String>> = column_types
+                    .iter()
+                    .enumerate()
+                    .map(|(i, ct)| Self::column_value_to_string(row, i, ct))
+                    .collect();
+                rows.push(values);
+            }
+            let rows_affected = rows.len() as u64;
+            out.push(QueryResult {
+                columns,
+                column_types,
+                rows,
+                rows_affected,
+                query_text: None,
+                execution_time_ms: None,
+                is_error: false,
+                table_name: None,
+                connection_id: None,
+                table_columns: None,
+            });
+        }
+        Ok(out)
+    }
+
     async fn execute_write(
         &self,
         query: &str,
@@ -433,7 +489,9 @@ impl Connection for MssqlConnection {
                 "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME",
             ),
         };
-        let result = self.execute_query(&sql, self.initial_database.as_deref(), None).await?;
+        let result = self
+            .execute_query(&sql, self.initial_database.as_deref(), None)
+            .await?;
         Ok(result
             .rows
             .into_iter()
@@ -451,7 +509,9 @@ impl Connection for MssqlConnection {
                 String::from("SELECT TABLE_NAME FROM INFORMATION_SCHEMA.VIEWS ORDER BY TABLE_NAME")
             }
         };
-        let result = self.execute_query(&sql, self.initial_database.as_deref(), None).await?;
+        let result = self
+            .execute_query(&sql, self.initial_database.as_deref(), None)
+            .await?;
         Ok(result
             .rows
             .into_iter()
@@ -487,7 +547,9 @@ impl Connection for MssqlConnection {
         schema: Option<&str>,
     ) -> Result<Vec<ColumnInfo>> {
         let sql = schema::columns_for_table_sql(table_name, schema);
-        let result = self.execute_query(&sql, self.initial_database.as_deref(), None).await?;
+        let result = self
+            .execute_query(&sql, self.initial_database.as_deref(), None)
+            .await?;
         Ok(result
             .rows
             .into_iter()
@@ -522,7 +584,9 @@ impl Connection for MssqlConnection {
         schema: Option<&str>,
     ) -> Result<Vec<IndexInfo>> {
         let sql = schema::indexes_for_table_sql(table_name, schema);
-        let result = self.execute_query(&sql, self.initial_database.as_deref(), None).await?;
+        let result = self
+            .execute_query(&sql, self.initial_database.as_deref(), None)
+            .await?;
         Ok(result
             .rows
             .into_iter()

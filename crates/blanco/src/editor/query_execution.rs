@@ -178,7 +178,7 @@ impl EditorPanel {
             let query_task = cx.background_spawn(async move {
                 let start_time = std::time::Instant::now();
                 let execution_result = db_service
-                    .execute_query(
+                    .execute_script(
                         connection_id,
                         Some(&database_name_for_background),
                         &query_clone,
@@ -198,27 +198,41 @@ impl EditorPanel {
                 let (execution_result, start_time) = query_task.await;
 
                 match execution_result {
-                    Ok(mut result) => {
+                    Ok(mut results) => {
                         let duration_ms = start_time.elapsed().as_millis() as i64;
 
-                        // Add execution metadata
-                        result.query_text = Some(query_for_metadata.clone());
-                        result.execution_time_ms = Some(duration_ms);
-                        result.is_error = false;
-                        result.connection_id = Some(connection_id);
+                        // Annotate every result with execution metadata. The
+                        // duration is recorded against the first result only;
+                        // we don't have per-statement timings here.
+                        let mut total_rows_affected: u64 = 0;
+                        for (idx, result) in results.iter_mut().enumerate() {
+                            result.query_text = Some(query_for_metadata.clone());
+                            if idx == 0 {
+                                result.execution_time_ms = Some(duration_ms);
+                            }
+                            result.is_error = false;
+                            result.connection_id = Some(connection_id);
+                            total_rows_affected = total_rows_affected.saturating_add(
+                                std::cmp::max(result.rows_affected, result.row_count() as u64),
+                            );
+                        }
 
-                        if let Ok(connection) = db_service
-                            .get_or_create_connection_by_id(connection_id, Some(&database_name))
-                            .await
+                        // Resolve table metadata only when a single statement
+                        // ran; merging FK/PK info across N statements would be
+                        // ambiguous, and the typical "edit rows in the grid"
+                        // flow targets single SELECTs anyway.
+                        if results.len() == 1
+                            && let Ok(connection) = db_service
+                                .get_or_create_connection_by_id(connection_id, Some(&database_name))
+                                .await
                         {
-                            // Extract table metadata from the query
+                            let result = &mut results[0];
                             let table_name = connection
                                 .extract_table_name_from_query(&query_for_metadata, false)
                                 .ok()
                                 .flatten();
                             result.table_name = table_name.clone();
 
-                            // Load full table metadata (including primary keys and foreign keys)
                             if let (Some(table_name), false) = (&table_name, result.rows.is_empty())
                                 && let Ok(columns) =
                                     connection.get_columns_for_table(table_name, None).await
@@ -234,15 +248,18 @@ impl EditorPanel {
                             provider.invalidate_cache();
                         }
 
-                        // Store rows_affected before moving result
-                        let rows_affected =
-                            std::cmp::max(result.rows_affected, result.row_count() as u64);
+                        let rows_affected = total_rows_affected;
 
                         window
                             .update(move |window, cx| {
                                 // Update results panel
                                 results_panel_clone.update(cx, |panel, cx| {
-                                    panel.set_query_result(result, Some(connection_id), window, cx);
+                                    panel.set_query_results(
+                                        results,
+                                        Some(connection_id),
+                                        window,
+                                        cx,
+                                    );
                                 });
 
                                 // Log execution result to SQL log
