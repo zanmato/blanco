@@ -95,6 +95,9 @@ pub struct ResultsPanel {
     table_state: Entity<TableState<ResultsTableDelegate>>,
     result_tabs: Vec<ResultTab>,
     active_tab: usize,
+    /// Whether any query has produced results yet. Used to keep the tab strip
+    /// hidden until there's something to actually render.
+    has_results: bool,
     connection_id: i64,
     database_name: String,
     db_type: database::DatabaseType,
@@ -126,6 +129,7 @@ impl ResultsPanel {
             table_state,
             result_tabs: vec![initial_tab],
             active_tab: 0,
+            has_results: false,
             connection_id,
             database_name: database_name.to_string(),
             db_type,
@@ -217,7 +221,7 @@ impl ResultsPanel {
         let total = results.len();
         for (i, result) in results.into_iter().enumerate() {
             let title = if total > 1 {
-                SharedString::from(format!("Result #{}", i + 1))
+                SharedString::from(format!("Result {}", i + 1))
             } else {
                 SharedString::from("Result")
             };
@@ -243,6 +247,7 @@ impl ResultsPanel {
 
         self.active_tab = first_new_index;
         self.table_state = self.result_tabs[self.active_tab].table_state.clone();
+        self.has_results = true;
         self.editing_input = None;
         self.editing_cell = None;
         let _ = connection_id; // accepted for API parity with single-result path
@@ -1534,20 +1539,23 @@ impl Focusable for ResultsPanel {
 
 impl Render for ResultsPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let show_strip = self.result_tabs.len() > 1 || self.result_tabs.iter().any(|t| t.pinned);
         let active = self.active_tab;
         let theme = cx.theme();
         let border_color = theme.border;
         let muted_fg = theme.muted_foreground;
-        let active_bg = theme.accent;
-        let strip_bg = theme.muted;
-
+        let active_fg = theme.table_head_foreground;
+        // Strip mimics the table itself: solid `theme.table` background, then
+        // each tab paints `theme.table_head` (active) or `theme.title_bar`
+        // (inactive) on top. The active tab composites identically to the
+        // real column header because the underlying surface matches.
+        let strip_bg = theme.table;
+        let tab_count = self.result_tabs.len();
+        let show_strip = self.has_results;
+        let show_close = tab_count > 1;
         let mut strip = gpui_component::h_flex()
             .id("result-tabs-strip")
             .w_full()
-            .gap_1()
-            .px_2()
-            .py_1()
+            .text_sm()
             .border_b_1()
             .border_color(border_color)
             .bg(strip_bg);
@@ -1555,19 +1563,26 @@ impl Render for ResultsPanel {
             let is_active = idx == active;
             let label = tab.title.clone();
             let pinned = tab.pinned;
+            let is_last = idx == tab_count - 1;
             strip = strip.child(
                 gpui_component::h_flex()
                     .id(("result-tab", idx))
+                    .flex_1()
+                    .min_w_0()
+                    .items_center()
+                    .justify_between()
                     .gap_1()
                     .px_2()
-                    .py_0p5()
-                    .rounded(theme.radius)
-                    .border_1()
-                    .border_color(border_color)
-                    .when(is_active, |this| {
-                        this.bg(active_bg).text_color(theme.accent_foreground)
+                    .py_1()
+                    .when(!is_last, |this| {
+                        this.border_r_1().border_color(border_color)
                     })
-                    .when(!is_active, |this| this.text_color(muted_fg))
+                    .when(is_active, |this| {
+                        this.bg(theme.table_head).text_color(active_fg)
+                    })
+                    .when(!is_active, |this| {
+                        this.bg(theme.title_bar).text_color(muted_fg)
+                    })
                     .cursor_pointer()
                     .on_mouse_down(
                         gpui::MouseButton::Left,
@@ -1575,30 +1590,36 @@ impl Render for ResultsPanel {
                             this.activate_tab(idx, cx);
                         }),
                     )
-                    .child(label)
+                    .child(div().flex_1().min_w_0().truncate().child(label))
                     .child(
-                        Button::new(("pin-tab", idx))
-                            .ghost()
-                            .xsmall()
-                            .icon(if pinned {
-                                IconName::PinOff
-                            } else {
-                                IconName::Pin
-                            })
-                            .tooltip(if pinned { "Unpin" } else { "Pin" })
-                            .on_click(cx.listener(move |this, _ev, _window, cx| {
-                                this.toggle_pin(idx, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new(("close-tab", idx))
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::Close)
-                            .tooltip("Close result")
-                            .on_click(cx.listener(move |this, _ev, window, cx| {
-                                this.close_tab(idx, window, cx);
-                            })),
+                        gpui_component::h_flex()
+                            .gap_1()
+                            .child(
+                                Button::new(("pin-tab", idx))
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(if pinned {
+                                        IconName::PinOff
+                                    } else {
+                                        IconName::Pin
+                                    })
+                                    .tooltip(if pinned { "Unpin" } else { "Pin" })
+                                    .on_click(cx.listener(move |this, _ev, _window, cx| {
+                                        this.toggle_pin(idx, cx);
+                                    })),
+                            )
+                            .when(show_close, |this| {
+                                this.child(
+                                    Button::new(("close-tab", idx))
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(IconName::Close)
+                                        .tooltip("Close result")
+                                        .on_click(cx.listener(move |this, _ev, window, cx| {
+                                            this.close_tab(idx, window, cx);
+                                        })),
+                                )
+                            }),
                     ),
             );
         }
