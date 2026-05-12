@@ -80,6 +80,38 @@ impl EditorPanel {
         }
     }
 
+    /// Wrap the statement at the cursor in an EXPLAIN appropriate to the
+    /// active connection's dialect and run it. The plan lands as a normal
+    /// result tab (multi-result aware) so the user can pin it.
+    pub fn on_explain_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tab_index = self.active_tab_ix;
+        let Some(TabType::Query(query_tab)) = self.tabs.get(tab_index) else {
+            return;
+        };
+        let editor = query_tab.editor.read(cx);
+        let full_text = editor.text().to_string();
+        let cursor_pos = editor.cursor();
+        let selected_text = editor.selected_text().to_string();
+        let connection_id = query_tab.connection_id;
+        let database_name = query_tab.database_name.clone();
+        let db_type = query_tab._db_type;
+
+        let raw = if !selected_text.trim().is_empty() {
+            selected_text
+        } else {
+            let full = Rope::from_str(&full_text);
+            extract_statement_info(&full, cursor_pos)
+                .map(|info| info.text)
+                .unwrap_or_default()
+        };
+        if raw.trim().is_empty() {
+            window.push_notification((NotificationType::Error, "No query to explain"), cx);
+            return;
+        }
+        let wrapped = crate::sql::explain::wrap_explain(db_type, &raw);
+        self.execute_query(wrapped, connection_id, &database_name, window, cx);
+    }
+
     /// Execute a query with the given parameters
     pub(super) fn execute_query(
         &mut self,

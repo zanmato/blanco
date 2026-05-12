@@ -1,4 +1,5 @@
 pub mod completion;
+pub mod explain;
 pub mod formatting;
 pub mod selection_range_provider;
 pub mod statement_parser;

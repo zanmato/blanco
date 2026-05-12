@@ -1336,6 +1336,24 @@ impl EditorPanel {
                                                     )
                                                 } else {
                                                     this.child(
+                                                        Button::new("explain-query")
+                                                            .outline()
+                                                            .small()
+                                                            .icon(IconName::Map)
+                                                            .label("Explain")
+                                                            .tooltip(
+                                                                "Run EXPLAIN on the statement \
+                                                                 at the cursor",
+                                                            )
+                                                            .on_click(cx.listener(
+                                                                |panel, _, window, cx| {
+                                                                    panel.on_explain_query(
+                                                                        window, cx,
+                                                                    )
+                                                                },
+                                                            )),
+                                                    )
+                                                    .child(
                                                         Button::new("run-query")
                                                             .outline()
                                                             .small()
