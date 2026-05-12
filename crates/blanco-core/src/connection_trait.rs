@@ -279,43 +279,6 @@ pub trait Connection: Send + Sync {
         Ok(vec![result])
     }
 
-    /// Whether this connection type supports explicit BEGIN/COMMIT/ROLLBACK
-    /// transactions. Drivers that don't (ClickHouse, etc.) return false and
-    /// the UI suppresses the transaction toolbar.
-    fn supports_transactions(&self) -> bool {
-        false
-    }
-
-    /// Start a transaction on the given database. After this call subsequent
-    /// `execute_query` / `execute_script` calls on the same database should
-    /// run on the same backend connection, so that they see one another's
-    /// uncommitted writes. Drivers without sticky-connection support return
-    /// an error.
-    async fn begin(&self, _database_name: Option<&str>) -> Result<(), anyhow::Error> {
-        Err(anyhow::anyhow!(
-            "explicit transactions are not supported by this connection type"
-        ))
-    }
-
-    /// Commit the in-flight transaction for `database_name`.
-    async fn commit(&self, _database_name: Option<&str>) -> Result<(), anyhow::Error> {
-        Err(anyhow::anyhow!(
-            "explicit transactions are not supported by this connection type"
-        ))
-    }
-
-    /// Roll back the in-flight transaction for `database_name`.
-    async fn rollback(&self, _database_name: Option<&str>) -> Result<(), anyhow::Error> {
-        Err(anyhow::anyhow!(
-            "explicit transactions are not supported by this connection type"
-        ))
-    }
-
-    /// Whether a transaction is currently open on `database_name`.
-    async fn in_transaction(&self, _database_name: Option<&str>) -> bool {
-        false
-    }
-
     /// Execute a write statement (INSERT/UPDATE/DELETE/DDL) with optional nullable parameters.
     /// Unlike `execute_query`, each parameter may be `None` to bind SQL NULL.
     /// Returns the number of rows affected. Backends that do not override this fall back

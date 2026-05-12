@@ -45,21 +45,6 @@ use blanco_ui::{IconName, SqlLog};
 use database::{DatabaseService, DatabaseServiceTrait};
 use gpui_component::Icon;
 
-#[derive(Clone, Copy)]
-enum TxAction {
-    Commit,
-    Rollback,
-}
-
-impl TxAction {
-    fn label(&self) -> &'static str {
-        match self {
-            TxAction::Commit => "COMMIT",
-            TxAction::Rollback => "ROLLBACK",
-        }
-    }
-}
-
 pub enum TabType {
     Query(Box<QueryTab>),
     Settings(SettingsTab),
@@ -86,10 +71,6 @@ pub struct QueryTab {
     pub sql_log_visible: bool,
     pub sqruff_service: Option<Arc<SqruffService>>,
     pub completion_provider: Option<SqlCompletionProvider>,
-    /// Cached "is a SQL transaction in flight on this tab's connection".
-    /// Refreshed after every query run and every Commit/Rollback Tx click.
-    pub in_transaction: bool,
-    pub connection_supports_transactions: bool,
 }
 
 pub struct SettingsTab {
@@ -697,8 +678,6 @@ impl EditorPanel {
             chat_enabled: false,
             chat_panel: None,
             sql_log_visible: true,
-            in_transaction: false,
-            connection_supports_transactions: true,
         };
 
         self.tabs.push(TabType::Query(Box::new(query_tab)));
@@ -716,64 +695,6 @@ impl EditorPanel {
                 scroll_handle.set_offset(gpui::point(-max_offset.x, gpui::px(0.0)));
             })
         });
-    }
-
-    /// Run BEGIN/COMMIT/ROLLBACK on the active tab's connection. The kind
-    /// argument selects which.
-    fn run_tx_action(&mut self, action: TxAction, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(TabType::Query(query_tab)) = self.tabs.get(self.active_tab_ix) else {
-            return;
-        };
-        let connection_id = query_tab.connection_id;
-        let database_name = query_tab.database_name.clone();
-        let tab_index = self.active_tab_ix;
-        let sql_log = query_tab.sql_log.clone();
-        let db_service = DatabaseService::global(cx).clone();
-        cx.spawn_in(window, async move |editor_panel, window| {
-            let result = match db_service
-                .get_or_create_connection_by_id(connection_id, Some(&database_name))
-                .await
-            {
-                Ok(connection) => match action {
-                    TxAction::Commit => connection.commit(Some(&database_name)).await,
-                    TxAction::Rollback => connection.rollback(Some(&database_name)).await,
-                },
-                Err(e) => Err(e),
-            };
-            // Commit/rollback success ends the transaction; failure leaves it
-            // open. Drivers without sticky-connection support always return an
-            // error here, so the cached flag won't lie.
-            let in_transaction = result.is_err();
-            let message = match (&result, action) {
-                (Ok(_), TxAction::Commit) => "COMMIT".to_string(),
-                (Ok(_), TxAction::Rollback) => "ROLLBACK".to_string(),
-                (Err(e), _) => format!("{} failed: {}", action.label(), e),
-            };
-            window
-                .update(|_window, cx| {
-                    sql_log.update(cx, |log, cx| {
-                        log.append_text(&blanco_ui::SqlLogMessage::Comment(message), cx);
-                    });
-                    editor_panel
-                        .update(cx, |panel, cx| {
-                            if let Some(TabType::Query(qt)) = panel.tabs.get_mut(tab_index) {
-                                qt.in_transaction = in_transaction;
-                            }
-                            cx.notify();
-                        })
-                        .ok();
-                })
-                .log_err();
-        })
-        .detach();
-    }
-
-    pub fn commit_active_transaction(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.run_tx_action(TxAction::Commit, window, cx);
-    }
-
-    pub fn rollback_active_transaction(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.run_tx_action(TxAction::Rollback, window, cx);
     }
 
     /// Cancel the query currently running for the active tab. Drops the
@@ -1174,32 +1095,6 @@ impl EditorPanel {
                         });
                     })),
             )
-            .when(query_tab.connection_supports_transactions, |this| {
-                this.child(
-                    Button::new("commit-tx")
-                        .outline()
-                        .small()
-                        .icon(IconName::Check)
-                        .label("Commit Tx")
-                        .tooltip("COMMIT the in-flight SQL transaction")
-                        .disabled(!query_tab.in_transaction)
-                        .on_click(cx.listener(|panel, _, window, cx| {
-                            panel.commit_active_transaction(window, cx);
-                        })),
-                )
-                .child(
-                    Button::new("rollback-tx")
-                        .outline()
-                        .small()
-                        .icon(IconName::CircleX)
-                        .label("Rollback Tx")
-                        .tooltip("ROLLBACK the in-flight SQL transaction")
-                        .disabled(!query_tab.in_transaction)
-                        .on_click(cx.listener(|panel, _, window, cx| {
-                            panel.rollback_active_transaction(window, cx);
-                        })),
-                )
-            })
             .child(
                 Button::new("commit-changes")
                     .outline()

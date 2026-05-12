@@ -197,15 +197,6 @@ pub struct DatabaseSettings {
     pub max_rows: u32,
     pub auto_limit_results: bool,
     pub show_connection_notifications: bool,
-    /// When true (default), each statement run from the editor commits
-    /// immediately. When false, the first statement implicitly opens a
-    /// transaction that the user must Commit Tx or Rollback Tx to end.
-    #[serde(default = "default_auto_commit")]
-    pub auto_commit: bool,
-}
-
-fn default_auto_commit() -> bool {
-    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -255,7 +246,6 @@ impl Default for DatabaseSettings {
             max_rows: 1000,
             auto_limit_results: true,
             show_connection_notifications: true,
-            auto_commit: true,
         }
     }
 }
