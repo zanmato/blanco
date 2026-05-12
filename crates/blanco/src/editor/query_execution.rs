@@ -174,7 +174,12 @@ impl EditorPanel {
             let database_name = database_name.to_string();
             let database_name_for_background = database_name.clone();
 
-            // Spawn background task for query execution (keeps UI responsive)
+            // The background task drives the actual database call and reports
+            // its result back via a oneshot channel. We keep its `Task` handle
+            // in `abort_query_task` so the user can cancel: dropping the task
+            // cancels the in-flight future, which causes `tx` to be dropped
+            // and the foreground task sees `rx.await` return `Err(Canceled)`.
+            let (tx, rx) = futures::channel::oneshot::channel();
             let query_task = cx.background_spawn(async move {
                 let start_time = std::time::Instant::now();
                 let execution_result = db_service
@@ -184,8 +189,9 @@ impl EditorPanel {
                         &query_clone,
                     )
                     .await;
-                (execution_result, start_time)
+                let _ = tx.send((execution_result, start_time));
             });
+            self.abort_query_task = Some(query_task);
 
             // Spawn foreground task to handle the result and update UI
             let results_panel_clone = query_tab.results_panel.clone();
@@ -195,7 +201,30 @@ impl EditorPanel {
             let completion_provider = query_tab.completion_provider.clone();
 
             self._run_query_task = cx.spawn_in(window, async move |editor_panel_entity, window| {
-                let (execution_result, start_time) = query_task.await;
+                let Ok((execution_result, start_time)) = rx.await else {
+                    // Background task was dropped (user clicked Abort).
+                    window
+                        .update(|window, cx| {
+                            sql_log_clone.update(cx, |sql_log, cx| {
+                                sql_log.append_text(
+                                    &blanco_ui::SqlLogMessage::Comment(
+                                        "query cancelled by user".to_string(),
+                                    ),
+                                    cx,
+                                );
+                            });
+                            editor_panel_entity
+                                .update(cx, |editor_panel, cx| {
+                                    editor_panel.loading = false;
+                                    editor_panel.abort_query_task = None;
+                                    cx.notify();
+                                })
+                                .ok();
+                            let _ = window;
+                        })
+                        .log_err();
+                    return;
+                };
 
                 match execution_result {
                     Ok(mut results) => {
@@ -279,6 +308,7 @@ impl EditorPanel {
                                 editor_panel_entity
                                     .update(cx, |editor_panel, cx| {
                                         editor_panel.loading = false;
+                                        editor_panel.abort_query_task = None;
                                         cx.notify();
                                     })
                                     .ok();
@@ -303,6 +333,7 @@ impl EditorPanel {
                                 editor_panel_entity
                                     .update(cx, |editor_panel, cx| {
                                         editor_panel.loading = false;
+                                        editor_panel.abort_query_task = None;
                                         cx.notify();
                                     })
                                     .ok();

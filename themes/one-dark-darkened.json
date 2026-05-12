@@ -8,9 +8,11 @@
       "is_default": false,
       "name": "One Dark - Darkened",
       "mode": "dark",
-      "fonts": {
-        "family": "Ubuntu Sans",
-        "mono": "Fira Code"
+      "font": {
+        "family": "Ubuntu Sans"
+      },
+      "mono_font": {
+        "family": "Fira Code"
       },
       "colors": {
         "accent.background": "#2b3038ff",
@@ -124,6 +126,7 @@
         "editor.active_line.background": "#2a2f38bf",
         "editor.line_number": "#dadde259",
         "editor.active_line_number": "#e5e7eaff",
+        "editor.invisible": "#acb2be66",
         "conflict": "#dec184ff",
         "created": "#a1c181ff",
         "hidden": "#696B77ff",

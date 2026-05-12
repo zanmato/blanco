@@ -90,6 +90,11 @@ pub struct EditorPanel {
     loading: bool,
     linting_enabled: bool,
     _run_query_task: Task<()>,
+    /// Background task that actually drives the database call. Held separately
+    /// from `_run_query_task` so an Abort click can drop just the background
+    /// future (cancelling the query) while the foreground task keeps running
+    /// to report the cancellation back to the UI.
+    abort_query_task: Option<Task<()>>,
     _lint_debounce_task: Task<()>,
 }
 
@@ -399,6 +404,7 @@ impl EditorPanel {
             loading: false,
             linting_enabled: false,
             _run_query_task: Task::ready(()),
+            abort_query_task: None,
             _lint_debounce_task: Task::ready(()),
         };
 
@@ -645,6 +651,16 @@ impl EditorPanel {
                 scroll_handle.set_offset(gpui::point(-max_offset.x, gpui::px(0.0)));
             })
         });
+    }
+
+    /// Cancel the query currently running for the active tab. Drops the
+    /// background task driving the database call, which (for sqlx-backed
+    /// drivers) cancels the in-flight statement on the next yield point. The
+    /// foreground task observes the dropped sender and reports the cancel.
+    pub fn abort_running_query(&mut self, cx: &mut Context<Self>) {
+        if self.abort_query_task.take().is_some() {
+            cx.notify();
+        }
     }
 
     /// Commit current changes in the active tab's results panel
@@ -1122,24 +1138,40 @@ impl EditorPanel {
                                                         },
                                                     )),
                                             )
-                                            .child(
-                                                Button::new("run-query")
-                                                    .outline()
-                                                    .small()
-                                                    .icon(IconName::Play)
-                                                    .label("Run Current")
-                                                    .loading(self.loading)
-                                                    .loading_icon(IconName::LoaderCircle)
-                                                    .tooltip(format!(
-                                                        "Run Current ({})",
-                                                        self.run_query_keystroke
-                                                    ))
-                                                    .on_click(cx.listener(
-                                                        |panel, _, window, cx| {
-                                                            panel.on_run_query(window, cx)
-                                                        },
-                                                    )),
-                                            ),
+                                            .map(|this| {
+                                                if self.loading {
+                                                    this.child(
+                                                        Button::new("abort-query")
+                                                            .danger()
+                                                            .small()
+                                                            .icon(IconName::SquareStop)
+                                                            .label("Stop")
+                                                            .tooltip("Abort the running query")
+                                                            .on_click(cx.listener(
+                                                                |panel, _, _window, cx| {
+                                                                    panel.abort_running_query(cx);
+                                                                },
+                                                            )),
+                                                    )
+                                                } else {
+                                                    this.child(
+                                                        Button::new("run-query")
+                                                            .outline()
+                                                            .small()
+                                                            .icon(IconName::Play)
+                                                            .label("Run Current")
+                                                            .tooltip(format!(
+                                                                "Run Current ({})",
+                                                                self.run_query_keystroke
+                                                            ))
+                                                            .on_click(cx.listener(
+                                                                |panel, _, window, cx| {
+                                                                    panel.on_run_query(window, cx)
+                                                                },
+                                                            )),
+                                                    )
+                                                }
+                                            }),
                                     )
                                     .child(div().flex_1().min_h_0().overflow_hidden().map(|d| {
                                         if query_tab.sql_log_visible {

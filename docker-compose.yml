@@ -5,6 +5,7 @@ services:
       MARIADB_USER: blanco
       MARIADB_PASSWORD: blanco
       MARIADB_ROOT_PASSWORD: blanco
+      MARIADB_DATABASE: blanco
     restart: unless-stopped
     volumes:
       # Uses a tmpfs volume to make tests extremely fast. The data in test
@@ -13,3 +14,53 @@ services:
         target: /var/lib/mysql
     ports:
       - "3306:3306"
+
+  # PostgreSQL with SSL enabled for testing SSL connections
+  postgrestestdb_ssl:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: blanco
+      POSTGRES_PASSWORD: blanco
+      POSTGRES_DB: blanco
+    command: >
+      bash -c "
+        cp /test_certs/server.crt /var/lib/postgresql/server.crt &&
+        cp /test_certs/server.key /var/lib/postgresql/server.key &&
+        chmod 600 /var/lib/postgresql/server.key &&
+        chown postgres:postgres /var/lib/postgresql/server.crt /var/lib/postgresql/server.key &&
+        exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/var/lib/postgresql/server.crt -c ssl_key_file=/var/lib/postgresql/server.key
+      "
+    volumes:
+      - ./crates/postgres/test_certs:/test_certs:ro
+      - type: tmpfs
+        target: /var/lib/postgresql/data
+    ports:
+      - "5488:5432"
+
+  # ClickHouse for testing
+  clickhousetestdb:
+    image: clickhouse/clickhouse-server:latest
+    environment:
+      CLICKHOUSE_USER: blanco
+      CLICKHOUSE_PASSWORD: blanco
+      CLICKHOUSE_DB: blanco
+    volumes:
+      - type: tmpfs
+        target: /var/lib/clickhouse
+    ports:
+      - "8124:8123"
+      - "9000:9000"
+
+  # SQL Server for testing
+  mssqltestdb:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Blanco_Passw0rd!"
+      MSSQL_PID: "Developer"
+    restart: unless-stopped
+    volumes:
+      - type: tmpfs
+        target: /var/opt/mssql
+    ports:
+      - "1433:1433"
