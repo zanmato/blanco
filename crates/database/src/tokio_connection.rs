@@ -86,6 +86,40 @@ impl Connection for TokioConnection {
         .await
     }
 
+    fn supports_transactions(&self) -> bool {
+        self.inner.supports_transactions()
+    }
+
+    async fn begin(&self, database: Option<&str>) -> Result<()> {
+        let inner = Arc::clone(&self.inner);
+        let database = database.map(str::to_string);
+        self.run(async move { inner.begin(database.as_deref()).await })
+            .await
+    }
+
+    async fn commit(&self, database: Option<&str>) -> Result<()> {
+        let inner = Arc::clone(&self.inner);
+        let database = database.map(str::to_string);
+        self.run(async move { inner.commit(database.as_deref()).await })
+            .await
+    }
+
+    async fn rollback(&self, database: Option<&str>) -> Result<()> {
+        let inner = Arc::clone(&self.inner);
+        let database = database.map(str::to_string);
+        self.run(async move { inner.rollback(database.as_deref()).await })
+            .await
+    }
+
+    async fn in_transaction(&self, database: Option<&str>) -> bool {
+        let inner = Arc::clone(&self.inner);
+        let database = database.map(str::to_string);
+        self.runtime
+            .spawn(async move { inner.in_transaction(database.as_deref()).await })
+            .await
+            .unwrap_or(false)
+    }
+
     async fn execute_script(
         &self,
         query: &str,

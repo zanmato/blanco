@@ -279,6 +279,18 @@ impl EditorPanel {
 
                         let rows_affected = total_rows_affected;
 
+                        // After the query ran, ask the connection whether a
+                        // transaction is now in flight. Drivers without
+                        // sticky-connection support always return false.
+                        let in_transaction = if let Ok(connection) = db_service
+                            .get_or_create_connection_by_id(connection_id, Some(&database_name))
+                            .await
+                        {
+                            connection.in_transaction(Some(&database_name)).await
+                        } else {
+                            false
+                        };
+
                         window
                             .update(move |window, cx| {
                                 // Update results panel
@@ -309,6 +321,11 @@ impl EditorPanel {
                                     .update(cx, |editor_panel, cx| {
                                         editor_panel.loading = false;
                                         editor_panel.abort_query_task = None;
+                                        if let Some(super::TabType::Query(qt)) =
+                                            editor_panel.tabs.get_mut(editor_panel.active_tab_ix)
+                                        {
+                                            qt.in_transaction = in_transaction;
+                                        }
                                         cx.notify();
                                     })
                                     .ok();

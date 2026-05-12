@@ -74,6 +74,12 @@ pub struct PostgresConnection {
     initial_database: Option<String>, // Original database from connection string
     ssh_config: Option<PostgresSshConfig>, // SSH tunnel configuration
     local_tunnel_port: Option<u16>,   // Local port for SSH tunnel (if configured)
+    /// Pool connections held across query calls so that BEGIN/COMMIT/ROLLBACK
+    /// have somewhere to run. While a database name has an entry here, every
+    /// query for that database runs on this connection instead of acquiring a
+    /// new one from the pool, so subsequent statements see the in-flight
+    /// transaction's uncommitted writes.
+    tx_conns: Arc<smol::lock::Mutex<HashMap<String, sqlx::pool::PoolConnection<sqlx::Postgres>>>>,
 }
 
 /// SSH configuration for PostgreSQL connections
@@ -236,6 +242,7 @@ impl PostgresConnection {
 
         Ok(Self {
             pools: Arc::new(RwLock::new(HashMap::new())),
+            tx_conns: Arc::new(smol::lock::Mutex::new(HashMap::new())),
             server_key,
             display_name,
             server_connection_string: connection_string.to_string(),
@@ -251,6 +258,7 @@ impl PostgresConnection {
 
         Self {
             pools: Arc::new(RwLock::new(HashMap::new())),
+            tx_conns: Arc::new(smol::lock::Mutex::new(HashMap::new())),
             server_key,
             display_name,
             server_connection_string: String::new(), // Will be set during connect
@@ -270,6 +278,7 @@ impl PostgresConnection {
 
         Self {
             pools: Arc::new(RwLock::new(HashMap::new())),
+            tx_conns: Arc::new(smol::lock::Mutex::new(HashMap::new())),
             server_key,
             display_name,
             server_connection_string: String::new(), // Will be set during connect
@@ -288,6 +297,7 @@ impl PostgresConnection {
 
         Self {
             pools: Arc::new(RwLock::new(HashMap::new())),
+            tx_conns: Arc::new(smol::lock::Mutex::new(HashMap::new())),
             server_key,
             display_name,
             server_connection_string: String::new(), // Will be set during connect
@@ -1170,6 +1180,43 @@ impl PostgresConnection {
 
         Ok(out)
     }
+
+    /// Variant of `execute_script_inner` that drives the stream on a
+    /// caller-supplied `PgConnection`. Used when a transaction is in flight
+    /// so subsequent statements see uncommitted writes. OID resolution still
+    /// runs on the pool (system catalog reads, no need to be in-transaction).
+    pub(crate) async fn execute_script_on_conn(
+        &self,
+        conn: &mut sqlx::pool::PoolConnection<sqlx::Postgres>,
+        pool: &sqlx::PgPool,
+        sql: &str,
+    ) -> Result<Vec<QueryResult>> {
+        use sqlx::Either;
+
+        let mut results = sqlx::raw_sql(sql).fetch_many(&mut **conn);
+        let mut out: Vec<QueryResult> = Vec::new();
+        let mut current: Option<PgStatementAcc> = None;
+
+        while let Some(result) = results.next().await {
+            match result? {
+                Either::Left(execution_result) => {
+                    let mut acc = current.take().unwrap_or_default();
+                    acc.rows_affected += execution_result.rows_affected();
+                    out.push(acc.finalize(pool, self).await?);
+                }
+                Either::Right(row) => {
+                    let acc = current.get_or_insert_with(PgStatementAcc::default);
+                    acc.absorb_row(&row, self);
+                }
+            }
+        }
+
+        if let Some(acc) = current.take() {
+            out.push(acc.finalize(pool, self).await?);
+        }
+
+        Ok(out)
+    }
 }
 
 /// Per-statement accumulator used by `execute_script_inner` to keep rows,
@@ -1334,9 +1381,67 @@ impl Connection for PostgresConnection {
                 e
             )
         })?;
+        // When this database has a held transaction connection, route the
+        // script through that connection so it sees the in-flight BEGIN.
+        let mut tx_conns = self.tx_conns.lock().await;
+        if let Some(conn) = tx_conns.get_mut(database_name) {
+            return self
+                .execute_script_on_conn(conn, &pool, query)
+                .await
+                .map_err(|e| anyhow::anyhow!("PostgreSQL script execution failed: {}", e));
+        }
+        drop(tx_conns);
         self.execute_script_inner(&pool, query)
             .await
             .map_err(|e| anyhow::anyhow!("PostgreSQL script execution failed: {}", e))
+    }
+
+    fn supports_transactions(&self) -> bool {
+        true
+    }
+
+    async fn begin(&self, database_name: Option<&str>) -> Result<()> {
+        let database_name = database_name.ok_or(anyhow::anyhow!("missing database"))?;
+        let pool = self.get_or_create_pool(database_name).await?;
+        let mut tx_conns = self.tx_conns.lock().await;
+        if tx_conns.contains_key(database_name) {
+            return Err(anyhow::anyhow!(
+                "transaction already in progress for database '{}'",
+                database_name
+            ));
+        }
+        let mut conn = pool.acquire().await?;
+        sqlx::query("BEGIN").execute(&mut *conn).await?;
+        tx_conns.insert(database_name.to_string(), conn);
+        Ok(())
+    }
+
+    async fn commit(&self, database_name: Option<&str>) -> Result<()> {
+        let database_name = database_name.ok_or(anyhow::anyhow!("missing database"))?;
+        let mut tx_conns = self.tx_conns.lock().await;
+        let mut conn = tx_conns
+            .remove(database_name)
+            .ok_or_else(|| anyhow::anyhow!("no transaction in progress for '{}'", database_name))?;
+        sqlx::query("COMMIT").execute(&mut *conn).await?;
+        Ok(())
+    }
+
+    async fn rollback(&self, database_name: Option<&str>) -> Result<()> {
+        let database_name = database_name.ok_or(anyhow::anyhow!("missing database"))?;
+        let mut tx_conns = self.tx_conns.lock().await;
+        let mut conn = tx_conns
+            .remove(database_name)
+            .ok_or_else(|| anyhow::anyhow!("no transaction in progress for '{}'", database_name))?;
+        sqlx::query("ROLLBACK").execute(&mut *conn).await?;
+        Ok(())
+    }
+
+    async fn in_transaction(&self, database_name: Option<&str>) -> bool {
+        let Some(database_name) = database_name else {
+            return false;
+        };
+        let tx_conns = self.tx_conns.lock().await;
+        tx_conns.contains_key(database_name)
     }
 
     async fn execute_write(
@@ -1987,6 +2092,7 @@ impl Clone for PostgresConnection {
     fn clone(&self) -> Self {
         Self {
             pools: Arc::clone(&self.pools),
+            tx_conns: Arc::clone(&self.tx_conns),
             server_key: self.server_key.clone(),
             display_name: self.display_name.clone(),
             server_connection_string: self.server_connection_string.clone(),
