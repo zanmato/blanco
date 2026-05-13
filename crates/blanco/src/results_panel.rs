@@ -548,36 +548,6 @@ impl ResultsPanel {
         cx.notify();
     }
 
-    pub fn get_changes(&self, cx: &App) -> Vec<TableChange> {
-        let table_read = self.table_state.read(cx);
-        let _delegate = table_read.delegate();
-        // Get changes directly from edited values in delegate
-        let mut changes = Vec::new();
-        let table_read = self.table_state.read(cx);
-        let delegate = table_read.delegate();
-
-        for ((row, col), new_value) in &delegate.edit_state.edited_values {
-            if let Some(original_value) = delegate.edit_state.original_values.get(&(*row, *col)) {
-                changes.push(TableChange::new(
-                    ChangeType::UpdateCell,
-                    delegate.table_name.clone().unwrap_or_default(),
-                    *row,
-                    Some(*col),
-                    original_value.clone(),
-                    new_value.clone(),
-                    Vec::new(), // primary_key_values
-                    None,       // No insert_values for UpdateCell operations
-                ));
-            }
-        }
-
-        tracing::info!(
-            "Commit Changes: Got {} changes from edited_values",
-            changes.len()
-        );
-        changes
-    }
-
     pub fn clear_changes(&mut self, cx: &mut Context<Self>) {
         self.table_state.update(cx, |state, cx| {
             state.delegate_mut().edit_state.clear_changes();
@@ -644,6 +614,18 @@ impl ResultsPanel {
         !edit_state.edited_values.is_empty()
             || !edit_state.pending_new_rows.is_empty()
             || !edit_state.pending_deleted_rows.is_empty()
+    }
+
+    /// Generate the SQL statements that would be executed by Apply edits,
+    /// without committing or executing anything.
+    pub fn preview_pending_sql(&self, cx: &App) -> Vec<String> {
+        self.table_state
+            .read(cx)
+            .delegate()
+            .create_change_operations()
+            .iter()
+            .map(|op| op.to_sql_query())
+            .collect()
     }
 
     pub fn update_editing_cell_value(
@@ -897,9 +879,15 @@ impl ResultsPanel {
 
     /// Rollback all pending changes
     pub fn rollback_changes(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let changes = self.get_changes(cx);
+        let changes = self
+            .table_state
+            .read(cx)
+            .delegate()
+            .edit_state
+            .changes
+            .clone();
 
-        if changes.is_empty() {
+        if changes.is_empty() && !self.has_pending_edits(cx) {
             return;
         }
 
@@ -917,7 +905,9 @@ impl ResultsPanel {
             table_name
         );
 
-        // Restore all original values from changes
+        // Restore non-insert changes first; remove inserted rows last in reverse
+        // index order so removals don't shift the indices of surviving inserts.
+        let mut insert_rows: Vec<usize> = Vec::new();
         for change in &changes {
             match change.change_type {
                 ChangeType::UpdateCell => {
@@ -933,11 +923,7 @@ impl ResultsPanel {
                     }
                 }
                 ChangeType::InsertRow => {
-                    // Remove inserted rows (reverse order to maintain indices)
-                    let row = change.row_index;
-                    self.table_state.update(cx, |state, _cx| {
-                        state.delegate_mut().remove_row(row);
-                    });
+                    insert_rows.push(change.row_index);
                 }
                 ChangeType::DeleteRow => {
                     // Remove deletion mark, the row stays in the table
@@ -951,6 +937,13 @@ impl ResultsPanel {
                     });
                 }
             }
+        }
+
+        insert_rows.sort_unstable();
+        for row in insert_rows.into_iter().rev() {
+            self.table_state.update(cx, |state, _cx| {
+                state.delegate_mut().remove_row(row);
+            });
         }
 
         // Clear all changes

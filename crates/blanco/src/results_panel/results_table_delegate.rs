@@ -1085,12 +1085,10 @@ impl TableDelegate for ResultsTableDelegate {
                 .items_center() // Center vertically
                 .when(is_deleted, |this| {
                     this.when(is_row_number_col, |this| {
-                        this.font_weight(FontWeight::BOLD) // Bold row numbers
-                            .text_color(cx.theme().muted_foreground) // Muted color for row numbers
-                            .cursor_pointer() // Pointer cursor for row selection
-                            .when(self.edit_state.is_new_row(row_ix), |this| {
-                                this.border_l_3().border_color(cx.theme().red)
-                            })
+                        this.font_weight(FontWeight::BOLD)
+                            .text_color(cx.theme().red)
+                            .bg(cx.theme().red.opacity(0.3))
+                            .cursor_pointer()
                     })
                 })
                 .when(!is_deleted, |this| {

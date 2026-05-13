@@ -20,9 +20,12 @@ use gpui_component::{
     dialog::{DialogAction, DialogClose, DialogFooter},
     h_flex,
     input::{Input, InputEvent, InputState, TabSize},
+    popover::{Popover, PopoverState},
     resizable::{ResizableState, h_resizable, resizable_panel, v_resizable},
+    scroll::ScrollableElement as _,
     v_flex,
 };
+use gpui::{AnyElement, FontWeight};
 use std::{rc::Rc, sync::Arc};
 use tracing::{debug, error, info};
 
@@ -1095,24 +1098,7 @@ impl EditorPanel {
                         });
                     })),
             )
-            .child(
-                Button::new("commit-changes")
-                    .outline()
-                    .small()
-                    .icon(IconName::Check)
-                    .label("Apply edits")
-                    .tooltip("Apply pending cell edits to the database")
-                    .disabled(!query_tab.results_panel.read(cx).has_pending_edits(cx))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        if let Some(TabType::Query(query_tab)) =
-                            this.tabs.get_mut(this.active_tab_ix)
-                        {
-                            query_tab.results_panel.update(cx, |panel, cx| {
-                                panel.commit_changes_with_sql_log(window, &query_tab.sql_log, cx);
-                            });
-                        }
-                    })),
-            )
+            .child(self.render_apply_edits_button(query_tab, cx))
             .child(
                 Button::new("rollback-changes")
                     .outline()
@@ -1150,6 +1136,110 @@ impl EditorPanel {
                         this.toggle_chat_for_active_tab(window, cx);
                     })),
             )
+    }
+
+    fn render_apply_edits_button(
+        &self,
+        query_tab: &QueryTab,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let has_pending = query_tab.results_panel.read(cx).has_pending_edits(cx);
+        let button = Button::new("commit-changes")
+            .outline()
+            .small()
+            .icon(IconName::Check)
+            .label("Apply edits")
+            .tooltip("Apply pending cell edits to the database")
+            .disabled(!has_pending);
+
+        if !has_pending {
+            return button.into_any_element();
+        }
+
+        let preview_sql: SharedString = {
+            let statements = query_tab.results_panel.read(cx).preview_pending_sql(cx);
+            if statements.is_empty() {
+                SharedString::from("-- no statements to apply")
+            } else {
+                let mut joined = statements.join(";\n\n");
+                joined.push(';');
+                SharedString::from(joined)
+            }
+        };
+        let results_panel = query_tab.results_panel.clone();
+        let sql_log = query_tab.sql_log.clone();
+        let mono_font = cx.theme().mono_font_family.clone();
+
+        Popover::new("commit-changes-popover")
+            .trigger(button)
+            .content(move |_state, _window, cx| {
+                let preview_sql = preview_sql.clone();
+                let results_panel = results_panel.clone();
+                let sql_log = sql_log.clone();
+                let mono_font = mono_font.clone();
+                v_flex()
+                    .p_3()
+                    .gap_2()
+                    .w(px(520.))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::BOLD)
+                            .child("Preview SQL"),
+                    )
+                    .child(
+                        div()
+                            .font_family(mono_font)
+                            .text_xs()
+                            .max_h(px(280.))
+                            .overflow_y_scrollbar()
+                            .p_2()
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .rounded(cx.theme().radius)
+                            .bg(cx.theme().muted)
+                            .child(preview_sql),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .justify_end()
+                            .child(
+                                Button::new("preview-cancel")
+                                    .outline()
+                                    .small()
+                                    .label("Cancel")
+                                    .on_click(cx.listener(
+                                        |state: &mut PopoverState, _, window, cx| {
+                                            state.dismiss(window, cx);
+                                        },
+                                    )),
+                            )
+                            .child(
+                                Button::new("preview-confirm")
+                                    .primary()
+                                    .small()
+                                    .icon(IconName::Check)
+                                    .label("Confirm")
+                                    .on_click({
+                                        let results_panel = results_panel.clone();
+                                        let sql_log = sql_log.clone();
+                                        cx.listener(
+                                            move |state: &mut PopoverState, _, window, cx| {
+                                                results_panel.update(cx, |panel, cx| {
+                                                    panel.commit_changes_with_sql_log(
+                                                        window, &sql_log, cx,
+                                                    );
+                                                });
+                                                state.dismiss(window, cx);
+                                            },
+                                        )
+                                    }),
+                            ),
+                    )
+                    .into_any_element()
+            })
+            .into_any_element()
     }
 
     fn render_query_tab_content(
