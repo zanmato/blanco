@@ -713,8 +713,21 @@ impl PostgresConnection {
             }
             // Interval
             "interval" => {
-                if let Ok(val) = row.try_get::<Option<String>, _>(column_index) {
-                    return val;
+                // sqlx's PgInterval decoder only handles the binary protocol, but
+                // `raw_sql` queries come back in text mode. Read the raw value and
+                // fall back to the binary decoder when needed.
+                if let Ok(raw_value) = row.try_get_raw(column_index) {
+                    if raw_value.is_null() {
+                        return None;
+                    }
+                    if let Ok(text) = raw_value.as_str() {
+                        return Some(text.to_string());
+                    }
+                }
+                if let Ok(val) =
+                    row.try_get::<Option<sqlx::postgres::types::PgInterval>, _>(column_index)
+                {
+                    return val.map(format_pg_interval);
                 }
             }
             _ => {}
@@ -965,6 +978,69 @@ impl PostgresConnection {
 
         Ok(oid_to_name)
     }
+}
+
+fn format_pg_interval(interval: sqlx::postgres::types::PgInterval) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let years = interval.months / 12;
+    let months = interval.months % 12;
+    if years != 0 {
+        parts.push(format!(
+            "{} {}",
+            years,
+            if years== 1 { "year" } else { "years" }
+        ));
+    }
+    if months != 0 {
+        parts.push(format!(
+            "{} {}",
+            months,
+            if months== 1 { "mon" } else { "mons" }
+        ));
+    }
+    if interval.days != 0 {
+        parts.push(format!(
+            "{} {}",
+            interval.days,
+            if interval.days== 1 {
+                "day"
+            } else {
+                "days"
+            }
+        ));
+    }
+
+    if interval.microseconds != 0 || parts.is_empty() {
+        let negative = interval.microseconds < 0;
+        let total = interval.microseconds.unsigned_abs();
+        let micros_per_second: u64 = 1_000_000;
+        let micros_per_minute: u64 = 60 * micros_per_second;
+        let micros_per_hour: u64 = 60 * micros_per_minute;
+        let hours = total / micros_per_hour;
+        let minutes = (total % micros_per_hour) / micros_per_minute;
+        let seconds = (total % micros_per_minute) / micros_per_second;
+        let micros = total % micros_per_second;
+        let time = if micros == 0 {
+            format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+        } else {
+            format!(
+                "{:02}:{:02}:{:02}.{:06}",
+                hours,
+                minutes,
+                seconds,
+                micros
+            )
+            .trim_end_matches('0')
+            .to_string()
+        };
+        parts.push(if negative {
+            format!("-{}", time)
+        } else {
+            time
+        });
+    }
+
+    parts.join(" ")
 }
 
 impl PostgresConnection {

@@ -73,6 +73,9 @@ mod tests {
                     time_col TIME,
                     timestamp_col TIMESTAMP,
                     timestamp_with_time_zone_col TIMESTAMP WITH TIME ZONE,
+                    interval_col INTERVAL,
+                    interval_zero_col INTERVAL,
+                    interval_neg_col INTERVAL,
 
                     -- UUID type
                     uuid_col UUID,
@@ -108,12 +111,16 @@ mod tests {
                     real_col, double_precision_col, smallserial_col, serial_col, bigserial_col, money_col,
                     char_col, varchar_col, text_col, bool_col,
                     date_col, time_col, timestamp_col, timestamp_with_time_zone_col,
+                    interval_col, interval_zero_col, interval_neg_col,
                     uuid_col, json_col, jsonb_col, int_array_col, text_array_col, uuid_array_col, regclass_col, custom_enum
                 ) VALUES (
                     32767, 2147483647, 9223372036854775807, 12345.67, 98765.43210,
                     123.456, 987654321.123456789, 100, 1000, 1000000, 12345.67,
                     'fixed_len  ', 'variable_string', 'This is a test text with unicode: ñiño 你好 🚀', true,
                     CURRENT_DATE, CURRENT_TIME, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
+                    INTERVAL '1 year 2 months 3 days 04:05:06.789',
+                    INTERVAL '0',
+                    INTERVAL '-1 day -02:30:00',
                     '550e8400-e29b-41d4-a716-446655440000',
                     '{"name": "test", "value": 42, "active": true}',
                     '{"nested": {"array": [1,2,3], "text": "hello"}}',
@@ -205,6 +212,14 @@ mod tests {
                     || ts_tz.contains("Z")
                     || ts_tz.contains("T")
             );
+
+            // Test interval, must render as text rather than NULL
+            assert_eq!(
+                get_val("interval_col"),
+                "1 year 2 mons 3 days 04:05:06.789"
+            );
+            assert_eq!(get_val("interval_zero_col"), "00:00:00");
+            assert_eq!(get_val("interval_neg_col"), "-1 days -02:30:00");
 
             // Test UUID
             assert_eq!(get_val("uuid_col"), "550e8400-e29b-41d4-a716-446655440000");
