@@ -81,7 +81,7 @@ fn text_view_style() -> TextViewStyle {
             4 => rem_size * 0.9,
             _ => rem_size * 0.8,
         })
-        .code_block(StyleRefinement::default().text_size(px(11.)))
+        .code_block(StyleRefinement::default().text_size(px(11.)).my_0())
 }
 
 impl Render for ChatMessageState {
@@ -245,21 +245,17 @@ impl Render for ChatMessageState {
                             },
                         )
                 }
-                MessageRole::Tool => v_flex()
-                    .gap_1()
+                MessageRole::Tool => h_flex()
+                    .gap_2()
+                    .items_start()
+                    .text_color(cx.theme().muted_foreground)
                     .child(
-                        h_flex()
-                            .gap_2()
-                            .items_center()
+                        Icon::new(IconName::Wrench)
                             .text_color(cx.theme().muted_foreground)
-                            .child(
-                                Icon::new(IconName::Wrench)
-                                    .text_color(cx.theme().muted_foreground)
-                                    .size(px(16.)),
-                            ),
+                            .size(px(16.)),
                     )
                     .child(
-                        div().ml_6().min_w_0().child(
+                        div().min_w_0().flex_1().child(
                             TextView::markdown(
                                 (self.id.clone(), "tool-view"),
                                 self.message.clone(),
@@ -271,7 +267,8 @@ impl Render for ChatMessageState {
                         ),
                     ),
                 MessageRole::User => div()
-                    .p_3()
+                    .px_3()
+                    .py_2()
                     .rounded_md()
                     .border_1()
                     .border_color(cx.theme().border)

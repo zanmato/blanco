@@ -9,6 +9,7 @@ mod sql_operations;
 mod table_structure;
 
 use blanco_ui::{Tab, TabBar};
+use gpui::{AnyElement, FontWeight};
 use gpui::{
     App, AppContext, ClickEvent, Context, Entity, FocusHandle, Focusable, InteractiveElement,
     IntoElement, KeybindingKeystroke, Keystroke, ParentElement, Render, SharedString, Styled, Task,
@@ -25,7 +26,6 @@ use gpui_component::{
     scroll::ScrollableElement as _,
     v_flex,
 };
-use gpui::{AnyElement, FontWeight};
 use std::{rc::Rc, sync::Arc};
 use tracing::{debug, error, info};
 
@@ -44,7 +44,7 @@ use crate::result_ext::ResultExt;
 use crate::results_panel::ResultsPanel;
 use crate::settings::SettingsView;
 use crate::sql::{SqlCompletionProvider, SqlSelectionRangeProvider, SqruffService};
-use blanco_ui::{IconName, SqlLog};
+use blanco_ui::{IconName, SqlLog, SqlLogMessage};
 use database::{DatabaseService, DatabaseServiceTrait};
 use gpui_component::Icon;
 
@@ -1156,29 +1156,29 @@ impl EditorPanel {
             return button.into_any_element();
         }
 
-        let preview_sql: SharedString = {
-            let statements = query_tab.results_panel.read(cx).preview_pending_sql(cx);
+        let statements = query_tab.results_panel.read(cx).preview_pending_sql(cx);
+        let preview_log = cx.new(|cx| {
+            let mut log = SqlLog::new(usize::MAX, cx.theme().highlight_theme.clone());
             if statements.is_empty() {
-                SharedString::from("-- no statements to apply")
+                log.append_text(&SqlLogMessage::Comment("no statements to apply".into()), cx);
             } else {
-                let mut joined = statements.join(";\n\n");
-                joined.push(';');
-                SharedString::from(joined)
+                for statement in statements {
+                    log.append_text(&SqlLogMessage::SqlStatement(statement), cx);
+                }
             }
-        };
+            log
+        });
         let results_panel = query_tab.results_panel.clone();
         let sql_log = query_tab.sql_log.clone();
-        let mono_font = cx.theme().mono_font_family.clone();
 
         Popover::new("commit-changes-popover")
             .trigger(button)
             .content(move |_state, _window, cx| {
-                let preview_sql = preview_sql.clone();
                 let results_panel = results_panel.clone();
                 let sql_log = sql_log.clone();
-                let mono_font = mono_font.clone();
+                let preview_log = preview_log.clone();
                 v_flex()
-                    .p_3()
+                    .p_2()
                     .gap_2()
                     .w(px(520.))
                     .child(
@@ -1187,19 +1187,7 @@ impl EditorPanel {
                             .font_weight(FontWeight::BOLD)
                             .child("Preview SQL"),
                     )
-                    .child(
-                        div()
-                            .font_family(mono_font)
-                            .text_xs()
-                            .max_h(px(280.))
-                            .overflow_y_scrollbar()
-                            .p_2()
-                            .border_1()
-                            .border_color(cx.theme().border)
-                            .rounded(cx.theme().radius)
-                            .bg(cx.theme().muted)
-                            .child(preview_sql),
-                    )
+                    .child(div().h(px(280.)).child(preview_log))
                     .child(
                         h_flex()
                             .gap_2()

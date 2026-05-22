@@ -1,7 +1,8 @@
 use blanco_core::connection_trait::RoutineKind;
+use blanco_ui::{SqlLog, SqlLogMessage};
 use gpui::{
-    App, Context, FocusHandle, Focusable, InteractiveElement, IntoElement, ParentElement, Render,
-    SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder as _,
+    App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
+    Render, SharedString, Styled, Window, div, prelude::FluentBuilder as _,
 };
 use gpui_component::{ActiveTheme, v_flex};
 
@@ -17,7 +18,7 @@ pub struct ObjectDdlTab {
     pub _schema_name: Option<String>,
     pub _object_name: String,
     pub _environment_type: Option<EnvironmentType>,
-    ddl: SharedString,
+    sql_log: Entity<SqlLog>,
     focus_handle: FocusHandle,
     loading: bool,
     error: Option<String>,
@@ -38,6 +39,8 @@ impl ObjectDdlTab {
         cx: &mut Context<Self>,
     ) -> Self {
         let title = format!("{}: {}", kind.display_name().to_lowercase(), object_name);
+        let highlight_theme = cx.theme().highlight_theme.clone();
+        let sql_log = cx.new(|_| SqlLog::new(1, highlight_theme));
         Self {
             title,
             kind,
@@ -48,7 +51,7 @@ impl ObjectDdlTab {
             _schema_name: schema_name,
             _object_name: object_name,
             _environment_type: environment_type,
-            ddl: SharedString::from(""),
+            sql_log,
             focus_handle: cx.focus_handle(),
             loading: true,
             error: None,
@@ -58,7 +61,10 @@ impl ObjectDdlTab {
     pub fn set_ddl(&mut self, ddl: String, cx: &mut Context<Self>) {
         self.loading = false;
         self.error = None;
-        self.ddl = SharedString::from(ddl);
+        self.sql_log.update(cx, |log, cx| {
+            log.clear(cx);
+            log.append_text(&SqlLogMessage::SqlStatement(ddl), cx);
+        });
         cx.notify();
     }
 
@@ -108,16 +114,9 @@ impl Render for ObjectDdlTab {
             })
             .child(
                 div()
-                    .id("object-ddl-body")
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .px_3()
-                    .py_2()
-                    .font_family("monospace")
-                    .text_color(theme.foreground)
-                    .whitespace_normal()
-                    .child(self.ddl.clone()),
+                    .child(self.sql_log.clone()),
             )
     }
 }
