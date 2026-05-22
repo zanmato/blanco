@@ -315,8 +315,11 @@ impl BlancoApp {
         );
         subscriptions.push(subscription);
 
+        let focus_handle = cx.focus_handle();
+        window.focus(&focus_handle, cx);
+
         Self {
-            focus_handle: cx.focus_handle(),
+            focus_handle,
             sidebar,
             snippets_panel,
             editor_panel,
@@ -893,6 +896,8 @@ impl Render for BlancoApp {
         let notification_layer = Root::render_notification_layer(window, cx);
 
         div()
+            .track_focus(&self.focus_handle)
+            .key_context("BroquestApp")
             .flex()
             .flex_col()
             .on_action(cx.listener(Self::on_quit))
