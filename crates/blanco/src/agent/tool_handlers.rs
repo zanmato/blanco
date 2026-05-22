@@ -10,10 +10,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use blanco_core::DatabaseService;
+use blanco_core::connection_trait::{DatabaseSchemaResult, TableSchemaInfo};
 use llm::{
     FunctionCall, ToolCall, chat::FunctionTool, chat::ParameterProperty, chat::ParametersSchema,
     chat::Tool,
 };
+use std::fmt::Write as _;
 
 /// Context for executing tools with GPUI/database access
 pub struct ToolContext {
@@ -83,10 +85,7 @@ impl AgentToolHandler for ListTablesHandler {
                 call_type: "function".to_string(),
                 function: FunctionCall {
                     name: "list-tables".to_string(),
-                    arguments: serde_json::json!({
-                        "error": "No database connection available. Please connect to a database first."
-                    })
-                    .to_string(),
+                    arguments: "Error: no database connection available. Please connect to a database first.".to_string(),
                 },
             };
         };
@@ -103,30 +102,20 @@ impl AgentToolHandler for ListTablesHandler {
                     )
                     .await
                 {
-                    Ok(result) => {
-                        let json_result = serde_json::json!({
-                            "connection_type": result.connection_type,
-                            "display_name": result.display_name,
-                            "tables": result.tables,
-                            "pagination": result.pagination
-                        });
-
-                        ToolCall {
-                            id: "list-tables".to_string(),
-                            call_type: "function".to_string(),
-                            function: FunctionCall {
-                                name: "list-tables".to_string(),
-                                arguments: serde_json::to_string(&json_result)
-                                    .unwrap_or_else(|_| "Invalid JSON result".to_string()),
-                            },
-                        }
-                    }
+                    Ok(result) => ToolCall {
+                        id: "list-tables".to_string(),
+                        call_type: "function".to_string(),
+                        function: FunctionCall {
+                            name: "list-tables".to_string(),
+                            arguments: format_schema_markdown(&result),
+                        },
+                    },
                     Err(e) => ToolCall {
                         id: "list-tables".to_string(),
                         call_type: "function".to_string(),
                         function: FunctionCall {
                             name: "list-tables".to_string(),
-                            arguments: serde_json::json!({"error": format!("Failed to query database schema: {}", e)}).to_string(),
+                            arguments: format!("Error: failed to query database schema: {}", e),
                         },
                     },
                 }
@@ -136,7 +125,7 @@ impl AgentToolHandler for ListTablesHandler {
                 call_type: "function".to_string(),
                 function: FunctionCall {
                     name: "list-tables".to_string(),
-                    arguments: serde_json::json!({"error": format!("Failed to get database connection: {}", e)}).to_string(),
+                    arguments: format!("Error: failed to get database connection: {}", e),
                 },
             },
         }
@@ -177,7 +166,7 @@ impl AgentToolHandler for ListTablesHandler {
             tool_type: "function".to_string(),
             function: FunctionTool {
                 name: "list-tables".to_string(),
-                description: "List detailed schema information for user-created tables. Returns object type, columns, constraints, indexes, triggers, owner, and comment as JSON. Supports pagination with limit and offset parameters.".to_string(),
+                description: "List detailed schema information for user-created tables. Returns a Markdown document with one section per table containing the columns (name, type, nullable, primary key, default), a `Foreign keys` section listing outgoing references as `column -> referenced_table.referenced_column`, and a `Referenced by` section listing inbound references from other tables as `from_table.from_column -> column`. Use both sections to reason about how tables relate to each other in either direction. Supports pagination with limit and offset parameters.".to_string(),
                 parameters: serde_json::to_value(ParametersSchema {
                     schema_type: "object".to_string(),
                     properties,
@@ -202,6 +191,301 @@ impl AgentToolHandler for ListTablesHandler {
                 format!("List Tables: {}, ...", names[0..3].join(", "))
             } else {
                 format!("List Tables: {}", names.join(", "))
+            }
+        }
+    }
+}
+
+/// Lightweight discovery tool: returns table names + relationships, no column detail
+pub struct ExploreTablesHandler;
+
+#[async_trait(?Send)]
+impl AgentToolHandler for ExploreTablesHandler {
+    async fn execute(
+        &self,
+        arguments: serde_json::Value,
+        context: &ToolContext,
+        _cx: &mut AsyncWindowContext,
+    ) -> ToolCall {
+        let table_names = arguments
+            .get("table_names")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let limit = arguments
+            .get("limit")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(100);
+
+        let offset = arguments
+            .get("offset")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+
+        let conn_result = if let Some(conn_id) = context.connection_id {
+            let database_name_ref = context.database_name.as_deref();
+            context
+                .db_service
+                .get_or_create_connection_by_id(conn_id, database_name_ref)
+                .await
+        } else {
+            return ToolCall {
+                id: "explore-tables".to_string(),
+                call_type: "function".to_string(),
+                function: FunctionCall {
+                    name: "explore-tables".to_string(),
+                    arguments: "Error: no database connection available. Please connect to a database first.".to_string(),
+                },
+            };
+        };
+
+        match conn_result {
+            Ok(conn) => match conn
+                .get_database_schema_paginated(
+                    context.database_name.as_deref(),
+                    table_names.as_deref(),
+                    Some(limit),
+                    Some(offset),
+                )
+                .await
+            {
+                Ok(result) => ToolCall {
+                    id: "explore-tables".to_string(),
+                    call_type: "function".to_string(),
+                    function: FunctionCall {
+                        name: "explore-tables".to_string(),
+                        arguments: format_explore_markdown(&result),
+                    },
+                },
+                Err(e) => ToolCall {
+                    id: "explore-tables".to_string(),
+                    call_type: "function".to_string(),
+                    function: FunctionCall {
+                        name: "explore-tables".to_string(),
+                        arguments: format!("Error: failed to query database schema: {}", e),
+                    },
+                },
+            },
+            Err(e) => ToolCall {
+                id: "explore-tables".to_string(),
+                call_type: "function".to_string(),
+                function: FunctionCall {
+                    name: "explore-tables".to_string(),
+                    arguments: format!("Error: failed to get database connection: {}", e),
+                },
+            },
+        }
+    }
+
+    fn as_tool(&self) -> Tool {
+        let mut properties = HashMap::new();
+        properties.insert(
+            "table_names".to_string(),
+            ParameterProperty {
+                property_type: "string".to_string(),
+                description: "Optional comma-separated list of table name patterns to filter, with SQL LIKE wildcards (% and _). If omitted, lists all user tables.".to_string(),
+                items: None,
+                enum_list: None,
+            },
+        );
+        properties.insert(
+            "limit".to_string(),
+            ParameterProperty {
+                property_type: "integer".to_string(),
+                description: "Maximum number of tables to return. Default: 100.".to_string(),
+                items: None,
+                enum_list: None,
+            },
+        );
+        properties.insert(
+            "offset".to_string(),
+            ParameterProperty {
+                property_type: "integer".to_string(),
+                description: "Number of tables to skip for pagination. Default: 0.".to_string(),
+                items: None,
+                enum_list: None,
+            },
+        );
+
+        Tool {
+            tool_type: "function".to_string(),
+            function: FunctionTool {
+                name: "explore-tables".to_string(),
+                description: "Lightweight discovery tool. Returns a compact Markdown list of tables with only their outgoing foreign keys (`-> other_table.col`) and inbound foreign keys (`<- from_table.col`). Use this FIRST when exploring an unfamiliar schema to find which tables are relevant and how they relate. Once you know which specific tables you need, call `list-tables` for full column-level detail. This tool returns no column names, types, or defaults.".to_string(),
+                parameters: serde_json::to_value(ParametersSchema {
+                    schema_type: "object".to_string(),
+                    properties,
+                    required: vec![],
+                }).unwrap_or_default(),
+            },
+        }
+    }
+
+    fn call_summary(&self, arguments: &serde_json::Value, _result: &ToolCall) -> String {
+        let table_names = arguments
+            .get("table_names")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if table_names.is_empty() {
+            "Explore Tables".to_string()
+        } else {
+            let names: Vec<&str> = table_names.split(',').map(|s| s.trim()).collect();
+            if names.len() > 3 {
+                format!("Explore Tables: {}, ...", names[0..3].join(", "))
+            } else {
+                format!("Explore Tables: {}", names.join(", "))
+            }
+        }
+    }
+}
+
+fn format_explore_markdown(result: &DatabaseSchemaResult) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "# Tables in {}", result.display_name);
+    let pagination = &result.pagination;
+    let _ = writeln!(
+        out,
+        "_Pagination: limit={}, offset={}, has_more={}_",
+        pagination
+            .limit
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        pagination
+            .offset
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        pagination.has_more,
+    );
+
+    if result.tables.is_empty() {
+        out.push_str("\nNo tables matched.\n");
+        return out;
+    }
+
+    for table in &result.tables {
+        out.push('\n');
+        let _ = writeln!(out, "## {}.{}", table.schema, table.name);
+        for col in &table.columns {
+            if let Some(fk) = &col.foreign_key {
+                let _ = writeln!(
+                    out,
+                    "- {} -> {}.{}",
+                    col.name, fk.foreign_table_name, fk.foreign_column_name
+                );
+            }
+        }
+        for inbound in &table.referenced_by {
+            let _ = writeln!(
+                out,
+                "- {} <- {}.{}",
+                inbound.to_column, inbound.from_table, inbound.from_column
+            );
+        }
+    }
+    out
+}
+
+fn format_schema_markdown(result: &DatabaseSchemaResult) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "# Tables in {}", result.display_name);
+    let _ = writeln!(out, "_Connection type: {}_", result.connection_type);
+    let pagination = &result.pagination;
+    let _ = writeln!(
+        out,
+        "_Pagination: limit={}, offset={}, has_more={}_",
+        pagination
+            .limit
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        pagination
+            .offset
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        pagination.has_more,
+    );
+
+    if result.tables.is_empty() {
+        out.push_str("\nNo tables matched.\n");
+        return out;
+    }
+
+    for table in &result.tables {
+        out.push('\n');
+        format_table_markdown(&mut out, table);
+    }
+    out
+}
+
+fn format_table_markdown(out: &mut String, table: &TableSchemaInfo) {
+    let _ = writeln!(
+        out,
+        "## {}.{} ({})",
+        table.schema, table.name, table.object_type
+    );
+    out.push_str("| column | type | nullable | pk | default |\n");
+    out.push_str("|--------|------|----------|----|---------|\n");
+    for col in &table.columns {
+        let default = col
+            .default_value
+            .as_deref()
+            .map(|d| d.replace('|', "\\|").replace('\n', " "))
+            .unwrap_or_default();
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} | {} | {} |",
+            col.name,
+            col.data_type,
+            if col.is_nullable { "yes" } else { "no" },
+            if col.is_primary_key { "yes" } else { "no" },
+            default,
+        );
+    }
+
+    let fks: Vec<_> = table
+        .columns
+        .iter()
+        .filter_map(|c| c.foreign_key.as_ref().map(|fk| (c.name.as_str(), fk)))
+        .collect();
+    if !fks.is_empty() {
+        out.push_str("\nForeign keys:\n");
+        for (column, fk) in fks {
+            match &fk.constraint_name {
+                Some(name) => {
+                    let _ = writeln!(
+                        out,
+                        "- {} -> {}.{} ({})",
+                        column, fk.foreign_table_name, fk.foreign_column_name, name
+                    );
+                }
+                None => {
+                    let _ = writeln!(
+                        out,
+                        "- {} -> {}.{}",
+                        column, fk.foreign_table_name, fk.foreign_column_name
+                    );
+                }
+            }
+        }
+    }
+
+    if !table.referenced_by.is_empty() {
+        out.push_str("\nReferenced by:\n");
+        for inbound in &table.referenced_by {
+            match &inbound.constraint_name {
+                Some(name) => {
+                    let _ = writeln!(
+                        out,
+                        "- {}.{} -> {} ({})",
+                        inbound.from_table, inbound.from_column, inbound.to_column, name
+                    );
+                }
+                None => {
+                    let _ = writeln!(
+                        out,
+                        "- {}.{} -> {}",
+                        inbound.from_table, inbound.from_column, inbound.to_column
+                    );
+                }
             }
         }
     }
@@ -825,6 +1109,7 @@ impl AgentToolRegistry {
             handlers: HashMap::new(),
         };
 
+        registry.register(Box::new(ExploreTablesHandler));
         registry.register(Box::new(ListTablesHandler));
         registry.register(Box::new(ReadTabHandler));
         registry.register(Box::new(WriteTabHandler));

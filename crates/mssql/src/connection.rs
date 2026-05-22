@@ -3,8 +3,8 @@ use async_trait::async_trait;
 use blanco_core::{
     ColumnInfo, Connection, QueryResult,
     connection_trait::{
-        ColumnType, DatabaseSchemaResult, EntityType, ForeignKeyInfo, IndexInfo, PaginationInfo,
-        QueryableEntity, TableSchemaInfo,
+        ColumnType, DatabaseSchemaResult, EntityType, ForeignKeyInfo, InboundForeignKey, IndexInfo,
+        PaginationInfo, QueryableEntity, TableSchemaInfo,
     },
 };
 use futures::Stream;
@@ -252,6 +252,77 @@ impl Clone for MssqlConnection {
             display_name: self.display_name.clone(),
             initial_database: self.initial_database.clone(),
         }
+    }
+}
+
+impl MssqlConnection {
+    async fn fetch_inbound_foreign_keys(
+        &self,
+        database_name: Option<&str>,
+        tables: &[TableSchemaInfo],
+    ) -> Result<HashMap<(String, String), Vec<InboundForeignKey>>> {
+        if tables.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let pairs: Vec<String> = tables
+            .iter()
+            .map(|t| {
+                format!(
+                    "('{}', '{}')",
+                    t.schema.replace('\'', "''"),
+                    t.name.replace('\'', "''"),
+                )
+            })
+            .collect();
+        let pair_list = pairs.join(",");
+
+        let sql = format!(
+            r#"
+            WITH targets(schema_name, table_name) AS (
+                SELECT v.schema_name, v.table_name FROM (VALUES {pair_list}) AS v(schema_name, table_name)
+            )
+            SELECT
+                ts.name           AS target_schema,
+                tt.name           AS target_table,
+                tc.name           AS target_column,
+                ss.name + '.' + st.name AS from_table,
+                sc.name           AS from_column,
+                fk.name           AS constraint_name
+            FROM sys.foreign_keys fk
+            JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
+            JOIN sys.tables st  ON st.object_id = fkc.parent_object_id
+            JOIN sys.schemas ss ON ss.schema_id = st.schema_id
+            JOIN sys.columns sc ON sc.object_id = fkc.parent_object_id AND sc.column_id = fkc.parent_column_id
+            JOIN sys.tables tt  ON tt.object_id = fkc.referenced_object_id
+            JOIN sys.schemas ts ON ts.schema_id = tt.schema_id
+            JOIN sys.columns tc ON tc.object_id = fkc.referenced_object_id AND tc.column_id = fkc.referenced_column_id
+            JOIN targets t ON t.schema_name = ts.name AND t.table_name = tt.name
+            ORDER BY ts.name, tt.name, ss.name, st.name, fkc.constraint_column_id
+            "#
+        );
+
+        let result = self.execute_query(&sql, database_name, None).await?;
+        let mut map: HashMap<(String, String), Vec<InboundForeignKey>> = HashMap::new();
+        for row in result.rows {
+            if row.len() >= 6 {
+                let target_schema = row[0].clone().unwrap_or_default();
+                let target_table = row[1].clone().unwrap_or_default();
+                let target_column = row[2].clone().unwrap_or_default();
+                let from_table = row[3].clone().unwrap_or_default();
+                let from_column = row[4].clone().unwrap_or_default();
+                let constraint_name = row[5].clone().filter(|s| !s.is_empty());
+                map.entry((target_schema, target_table))
+                    .or_default()
+                    .push(InboundForeignKey {
+                        from_table,
+                        from_column,
+                        to_column: target_column,
+                        constraint_name,
+                    });
+            }
+        }
+        Ok(map)
     }
 }
 
@@ -649,7 +720,19 @@ impl Connection for MssqlConnection {
                 object_type,
                 columns,
                 column_count,
+                referenced_by: Vec::new(),
             });
+        }
+
+        if !tables.is_empty() {
+            let inbound = self
+                .fetch_inbound_foreign_keys(database_name, &tables)
+                .await?;
+            for table in &mut tables {
+                if let Some(list) = inbound.get(&(table.schema.clone(), table.name.clone())) {
+                    table.referenced_by = list.clone();
+                }
+            }
         }
 
         Ok(DatabaseSchemaResult {

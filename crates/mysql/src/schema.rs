@@ -3,7 +3,36 @@
 use crate::connection::MysqlConnection;
 use anyhow::Result;
 use blanco_core::Connection;
-use blanco_core::connection_trait::{ColumnInfo, TableSchemaInfo};
+use blanco_core::connection_trait::{
+    ColumnInfo, ForeignKeyInfo, InboundForeignKey, TableSchemaInfo,
+};
+
+fn parse_referenced_by(table_info: &serde_json::Value) -> Vec<InboundForeignKey> {
+    table_info
+        .get("referenced_by")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| {
+                    let from_table = item.get("from_table").and_then(|v| v.as_str())?;
+                    let from_column = item.get("from_column").and_then(|v| v.as_str())?;
+                    let to_column = item.get("to_column").and_then(|v| v.as_str())?;
+                    let constraint_name = item
+                        .get("constraint_name")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string());
+                    Some(InboundForeignKey {
+                        from_table: from_table.to_string(),
+                        from_column: from_column.to_string(),
+                        to_column: to_column.to_string(),
+                        constraint_name,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 impl MysqlConnection {
     /// Get MySQL database schema with pagination using a single JSON aggregation query
@@ -60,6 +89,27 @@ impl MysqlConnection {
                                 .get("character_maximum_length")
                                 .and_then(|v| v.as_u64())
                                 .map(|v| v as i32);
+                            let fk_table = col_json
+                                .get("fk_table")
+                                .and_then(|v| v.as_str())
+                                .filter(|s| !s.is_empty());
+                            let fk_column = col_json
+                                .get("fk_column")
+                                .and_then(|v| v.as_str())
+                                .filter(|s| !s.is_empty());
+                            let fk_constraint = col_json
+                                .get("fk_constraint")
+                                .and_then(|v| v.as_str())
+                                .filter(|s| !s.is_empty())
+                                .map(|s| s.to_string());
+                            let foreign_key = match (fk_table, fk_column) {
+                                (Some(table), Some(column)) => Some(ForeignKeyInfo {
+                                    foreign_table_name: table.to_string(),
+                                    foreign_column_name: column.to_string(),
+                                    constraint_name: fk_constraint,
+                                }),
+                                _ => None,
+                            };
 
                             columns.push(ColumnInfo {
                                 name: name.to_string(),
@@ -68,17 +118,19 @@ impl MysqlConnection {
                                 is_primary_key: primary_key,
                                 default_value,
                                 character_maximum_length,
-                                foreign_key: None,
+                                foreign_key,
                             });
                         }
                     }
 
+                    let referenced_by = parse_referenced_by(&table_info_json);
                     tables.push(TableSchemaInfo {
                         name: table_name.to_string(),
                         schema: self.get_display_name(),
                         object_type: "TABLE".to_string(),
                         columns,
                         column_count,
+                        referenced_by,
                     });
                 }
             }
@@ -134,14 +186,34 @@ impl MysqlConnection {
                             'nullable', c.is_nullable = 'YES',
                             'primary_key', c.column_key = 'PRI',
                             'default_value', c.column_default,
-                            'character_maximum_length', c.character_maximum_length
+                            'character_maximum_length', c.character_maximum_length,
+                            'fk_table', kcu.referenced_table_name,
+                            'fk_column', kcu.referenced_column_name,
+                            'fk_constraint', kcu.constraint_name
                         )
                     ),
-                    'column_count', COUNT(c.column_name)
+                    'column_count', COUNT(c.column_name),
+                    'referenced_by', (
+                        SELECT JSON_ARRAYAGG(JSON_OBJECT(
+                            'from_table', ref.table_name,
+                            'from_column', ref.column_name,
+                            'to_column', ref.referenced_column_name,
+                            'constraint_name', ref.constraint_name
+                        ))
+                        FROM information_schema.key_column_usage ref
+                        WHERE ref.referenced_table_schema = t.table_schema
+                          AND ref.referenced_table_name = t.table_name
+                          AND ref.referenced_table_name IS NOT NULL
+                    )
                 ) as table_info
             FROM information_schema.tables t
             LEFT JOIN information_schema.columns c ON t.table_name = c.table_name
                 AND t.table_schema = c.table_schema
+            LEFT JOIN information_schema.key_column_usage kcu
+                ON kcu.table_schema = c.table_schema
+                AND kcu.table_name = c.table_name
+                AND kcu.column_name = c.column_name
+                AND kcu.referenced_table_name IS NOT NULL
             WHERE {}
             GROUP BY t.table_name
             ORDER BY t.table_name

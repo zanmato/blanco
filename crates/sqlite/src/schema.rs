@@ -3,7 +3,10 @@
 use crate::connection::SqliteConnection;
 use anyhow::Result;
 use blanco_core::Connection;
-use blanco_core::connection_trait::{ColumnInfo, TableSchemaInfo};
+use blanco_core::connection_trait::{
+    ColumnInfo, ForeignKeyInfo, InboundForeignKey, TableSchemaInfo,
+};
+use std::collections::{HashMap, HashSet};
 
 impl SqliteConnection {
     /// Get SQLite schema using optimized JSON aggregation queries with pagination
@@ -46,6 +49,28 @@ impl SqliteConnection {
                 );
 
                 let columns_result = self.execute_query(&columns_query, None, None).await?;
+
+                let fk_query = format!("PRAGMA foreign_key_list({})", table_name);
+                let fk_result = self.execute_query(&fk_query, None, None).await?;
+                let mut foreign_keys: HashMap<String, ForeignKeyInfo> = HashMap::new();
+                for row in fk_result.rows {
+                    if row.len() >= 5
+                        && let (
+                            Some(Some(from_column)),
+                            Some(Some(to_table)),
+                            Some(Some(to_column)),
+                        ) = (row.get(3), row.get(2), row.get(4))
+                    {
+                        foreign_keys.insert(
+                            from_column.clone(),
+                            ForeignKeyInfo {
+                                foreign_table_name: to_table.clone(),
+                                foreign_column_name: to_column.clone(),
+                                constraint_name: None,
+                            },
+                        );
+                    }
+                }
 
                 let columns_json = columns_result
                     .rows
@@ -96,6 +121,7 @@ impl SqliteConnection {
                                             }
                                         });
 
+                                    let foreign_key = foreign_keys.get(name).cloned();
                                     Some(ColumnInfo {
                                         name: name.to_string(),
                                         data_type,
@@ -103,7 +129,7 @@ impl SqliteConnection {
                                         is_primary_key: primary_key,
                                         default_value,
                                         character_maximum_length: None, // SQLite doesn't specify this in pragma_table_info
-                                        foreign_key: None,
+                                        foreign_key,
                                     })
                                 } else {
                                     None
@@ -123,11 +149,58 @@ impl SqliteConnection {
                     object_type: "TABLE".to_string(),
                     columns,
                     column_count: column_count as usize,
+                    referenced_by: Vec::new(),
                 });
             }
         }
 
+        if !tables.is_empty() {
+            let target_names: HashSet<String> = tables.iter().map(|t| t.name.clone()).collect();
+            let inbound = self.fetch_inbound_foreign_keys(&target_names).await?;
+            for table in &mut tables {
+                if let Some(list) = inbound.get(&table.name) {
+                    table.referenced_by = list.clone();
+                }
+            }
+        }
+
         Ok(tables)
+    }
+
+    async fn fetch_inbound_foreign_keys(
+        &self,
+        targets: &HashSet<String>,
+    ) -> Result<HashMap<String, Vec<InboundForeignKey>>> {
+        let all_tables_query =
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'";
+        let all_tables = self.execute_query(all_tables_query, None, None).await?;
+
+        let mut map: HashMap<String, Vec<InboundForeignKey>> = HashMap::new();
+        for row in all_tables.rows {
+            let from_table = match row.first().and_then(|c| c.clone()) {
+                Some(name) => name,
+                None => continue,
+            };
+            let fk_query = format!("PRAGMA foreign_key_list({})", from_table);
+            let fk_result = self.execute_query(&fk_query, None, None).await?;
+            for fk_row in fk_result.rows {
+                if fk_row.len() >= 5
+                    && let (Some(Some(to_table)), Some(Some(from_column)), Some(Some(to_column))) =
+                        (fk_row.get(2), fk_row.get(3), fk_row.get(4))
+                    && targets.contains(to_table)
+                {
+                    map.entry(to_table.clone())
+                        .or_default()
+                        .push(InboundForeignKey {
+                            from_table: from_table.clone(),
+                            from_column: from_column.clone(),
+                            to_column: to_column.clone(),
+                            constraint_name: None,
+                        });
+                }
+            }
+        }
+        Ok(map)
     }
 
     /// Build the tables query string and parameters for SQLite

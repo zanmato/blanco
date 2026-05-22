@@ -140,6 +140,15 @@ pub struct ForeignKeyInfo {
     pub constraint_name: Option<String>,
 }
 
+/// Information about an inbound foreign key (a row in another table that references this one)
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct InboundForeignKey {
+    pub from_table: String,
+    pub from_column: String,
+    pub to_column: String,
+    pub constraint_name: Option<String>,
+}
+
 /// Information about a database index
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct IndexInfo {
@@ -171,6 +180,8 @@ pub struct TableSchemaInfo {
     pub object_type: String,
     pub columns: Vec<ColumnInfo>,
     pub column_count: usize,
+    #[serde(default)]
+    pub referenced_by: Vec<InboundForeignKey>,
 }
 
 /// Result of paginated database schema query

@@ -656,6 +656,7 @@ impl Connection for ClickhouseConnection {
                 object_type,
                 columns,
                 column_count,
+                referenced_by: Vec::new(),
             });
         }
 

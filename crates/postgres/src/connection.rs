@@ -988,25 +988,21 @@ fn format_pg_interval(interval: sqlx::postgres::types::PgInterval) -> String {
         parts.push(format!(
             "{} {}",
             years,
-            if years== 1 { "year" } else { "years" }
+            if years == 1 { "year" } else { "years" }
         ));
     }
     if months != 0 {
         parts.push(format!(
             "{} {}",
             months,
-            if months== 1 { "mon" } else { "mons" }
+            if months == 1 { "mon" } else { "mons" }
         ));
     }
     if interval.days != 0 {
         parts.push(format!(
             "{} {}",
             interval.days,
-            if interval.days== 1 {
-                "day"
-            } else {
-                "days"
-            }
+            if interval.days == 1 { "day" } else { "days" }
         ));
     }
 
@@ -1023,21 +1019,11 @@ fn format_pg_interval(interval: sqlx::postgres::types::PgInterval) -> String {
         let time = if micros == 0 {
             format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
         } else {
-            format!(
-                "{:02}:{:02}:{:02}.{:06}",
-                hours,
-                minutes,
-                seconds,
-                micros
-            )
-            .trim_end_matches('0')
-            .to_string()
+            format!("{:02}:{:02}:{:02}.{:06}", hours, minutes, seconds, micros)
+                .trim_end_matches('0')
+                .to_string()
         };
-        parts.push(if negative {
-            format!("-{}", time)
-        } else {
-            time
-        });
+        parts.push(if negative { format!("-{}", time) } else { time });
     }
 
     parts.join(" ")
@@ -1222,25 +1208,36 @@ impl PostgresConnection {
     ) -> Result<Vec<QueryResult>> {
         use sqlx::Either;
 
-        let mut results = sqlx::raw_sql(sql).fetch_many(pool);
-        let mut out: Vec<QueryResult> = Vec::new();
+        // Collect statement accumulators first, then finalize after the stream
+        // is fully consumed. Finalization may issue a follow-up pg_class lookup
+        // for regclass OIDs, and the pool is configured with a single
+        // connection; doing that lookup while `fetch_many` still holds the
+        // connection would deadlock.
+        let mut accs: Vec<PgStatementAcc> = Vec::new();
         let mut current: Option<PgStatementAcc> = None;
 
-        while let Some(result) = results.next().await {
-            match result? {
-                Either::Left(execution_result) => {
-                    let mut acc = current.take().unwrap_or_default();
-                    acc.rows_affected += execution_result.rows_affected();
-                    out.push(acc.finalize(pool, self).await?);
+        {
+            let mut results = sqlx::raw_sql(sql).fetch_many(pool);
+            while let Some(result) = results.next().await {
+                match result? {
+                    Either::Left(execution_result) => {
+                        let mut acc = current.take().unwrap_or_default();
+                        acc.rows_affected += execution_result.rows_affected();
+                        accs.push(acc);
+                    }
+                    Either::Right(row) => {
+                        let acc = current.get_or_insert_with(PgStatementAcc::default);
+                        acc.absorb_row(&row, self);
+                    }
                 }
-                Either::Right(row) => {
-                    let acc = current.get_or_insert_with(PgStatementAcc::default);
-                    acc.absorb_row(&row, self);
-                }
+            }
+            if let Some(acc) = current.take() {
+                accs.push(acc);
             }
         }
 
-        if let Some(acc) = current.take() {
+        let mut out: Vec<QueryResult> = Vec::with_capacity(accs.len());
+        for acc in accs {
             out.push(acc.finalize(pool, self).await?);
         }
 
