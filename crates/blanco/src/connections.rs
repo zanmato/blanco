@@ -84,6 +84,11 @@ pub struct TreeItemMetadata {
     pub icon: TreeItemIcon,
     pub environment_type: Option<EnvironmentType>,
     pub loading: bool, // Whether this item is currently loading
+    /// Reported physical size in bytes; `None` if the backend did not report a
+    /// size for this object.
+    pub size_bytes: Option<u64>,
+    /// Log-normalized size against schema siblings in `[0.0, 1.0]`.
+    pub relative_size: Option<f32>,
 }
 
 /// Trait to convert metadata into CreateNewQueryTab actions
@@ -307,6 +312,8 @@ impl ConnectionsPanel {
             icon: self.get_connection_icon(connection_id, cx),
             environment_type: Some(connection.environment_type),
             loading: false,
+            size_bytes: None,
+            relative_size: None,
         };
 
         // Use hierarchical key: "connection:123" for connections
@@ -342,6 +349,8 @@ impl ConnectionsPanel {
                             },
                             environment_type: Some(connection.environment_type),
                             loading: false,
+                            size_bytes: None,
+                            relative_size: None,
                         };
 
                         let schema_items: Vec<TreeItem<TreeItemMetadata>> = database
@@ -368,6 +377,8 @@ impl ConnectionsPanel {
                                     },
                                     environment_type: Some(connection.environment_type),
                                     loading: false,
+                                    size_bytes: None,
+                                    relative_size: None,
                                 };
 
                                 let table_items: Vec<TreeItem<TreeItemMetadata>> = if schema
@@ -430,6 +441,8 @@ impl ConnectionsPanel {
                                                 icon: TreeItemIcon { icon, color },
                                                 environment_type: Some(connection.environment_type),
                                                 loading: false,
+                                                size_bytes: table.size_bytes,
+                                                relative_size: table.relative_size,
                                             };
 
                                             TreeItem::new(
@@ -514,6 +527,8 @@ impl ConnectionsPanel {
                                     icon: TreeItemIcon { icon, color },
                                     environment_type: Some(connection.environment_type),
                                     loading: false,
+                                    size_bytes: table.size_bytes,
+                                    relative_size: table.relative_size,
                                 };
 
                                 TreeItem::new(table_key, table.name.clone(), table_metadata)

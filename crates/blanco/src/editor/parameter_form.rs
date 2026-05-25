@@ -29,6 +29,7 @@ impl ParameterForm {
     pub fn new(
         original_query: String,
         parameters: Vec<QueryParameter>,
+        initial_values: &HashMap<String, String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -53,9 +54,16 @@ impl ParameterForm {
                 // Add this offset to the existing parameter
                 existing.byte_offsets.push(byte_offset);
             } else {
-                // Create new parameter input
+                // Create new parameter input, prefilling with the last value
+                // entered for this label in the current session, if any.
+                let initial = initial_values.get(&label).cloned();
                 let input = cx.new(|cx| {
-                    InputState::new(window, cx).placeholder(format!("Value for {}", label))
+                    let mut state = InputState::new(window, cx)
+                        .placeholder(format!("Value for {}", label));
+                    if let Some(value) = initial {
+                        state = state.default_value(value);
+                    }
+                    state
                 });
 
                 param_map.insert(
@@ -126,6 +134,15 @@ impl ParameterForm {
         }
 
         result
+    }
+
+    /// Returns a map of parameter label to the value currently entered in
+    /// the form. Used to persist the last entered values on the owning tab.
+    pub fn current_values(&self, cx: &App) -> HashMap<String, String> {
+        self.parameters
+            .iter()
+            .map(|p| (p.label.clone(), p.input.read(cx).value().to_string()))
+            .collect()
     }
 }
 

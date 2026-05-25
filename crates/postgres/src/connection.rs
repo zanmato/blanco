@@ -1597,6 +1597,42 @@ impl Connection for PostgresConnection {
             .collect())
     }
 
+    async fn get_object_sizes(
+        &self,
+        schema: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, u64>> {
+        let schema_filter = schema.unwrap_or("public");
+        let query = "
+            SELECT c.relname,
+                   pg_total_relation_size(c.oid)::bigint AS size_bytes
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = $1 AND c.relkind IN ('r', 'm', 'p')
+        ";
+        let result = self
+            .execute_query(
+                query,
+                self.initial_database.as_deref(),
+                Some(&[schema_filter.to_string()]),
+            )
+            .await?;
+        let mut sizes = std::collections::HashMap::new();
+        for row in result.rows {
+            let mut cells = row.into_iter();
+            let name = match cells.next().flatten() {
+                Some(n) => n,
+                None => continue,
+            };
+            if let Some(size_str) = cells.next().flatten()
+                && let Ok(size) = size_str.parse::<i64>()
+                && size >= 0
+            {
+                sizes.insert(name, size as u64);
+            }
+        }
+        Ok(sizes)
+    }
+
     async fn object_ddl(
         &self,
         kind: RoutineKind,

@@ -23,10 +23,9 @@ use gpui_component::{
     input::{Input, InputEvent, InputState, TabSize},
     popover::{Popover, PopoverState},
     resizable::{ResizableState, h_resizable, resizable_panel, v_resizable},
-    scroll::ScrollableElement as _,
     v_flex,
 };
-use std::{rc::Rc, sync::Arc};
+use std::{collections::HashMap, rc::Rc, sync::Arc};
 use tracing::{debug, error, info};
 
 use self::object_ddl::ObjectDdlTab;
@@ -74,6 +73,11 @@ pub struct QueryTab {
     pub sql_log_visible: bool,
     pub sqruff_service: Option<Arc<SqruffService>>,
     pub completion_provider: Option<SqlCompletionProvider>,
+    /// In-memory cache of the last values entered for query parameters in
+    /// this tab, keyed by parameter label (e.g. "$1" or ":user_id"). Used
+    /// to prefill the parameter modal on subsequent runs within the same
+    /// session.
+    pub last_parameter_values: HashMap<String, String>,
 }
 
 pub struct SettingsTab {
@@ -681,6 +685,7 @@ impl EditorPanel {
             chat_enabled: false,
             chat_panel: None,
             sql_log_visible: true,
+            last_parameter_values: HashMap::new(),
         };
 
         self.tabs.push(TabType::Query(Box::new(query_tab)));

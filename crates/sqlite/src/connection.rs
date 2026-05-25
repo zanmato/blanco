@@ -377,6 +377,44 @@ impl Connection for SqliteConnection {
         Ok(views)
     }
 
+    async fn get_object_sizes(
+        &self,
+        schema: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, u64>> {
+        let schema_filter = schema.unwrap_or("main");
+        // dbstat is a virtual table built into the default SQLite amalgamation;
+        // it exposes per-page byte usage for each table/index. If it's not
+        // available (older builds, or when the dbstat extension wasn't
+        // compiled in), fall through silently to an empty result.
+        let query = format!(
+            "SELECT name, SUM(pgsize) AS size_bytes
+             FROM {}.dbstat
+             GROUP BY name",
+            schema_filter
+        );
+        let result = match self.execute_query(&query, None, None).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::debug!("dbstat unavailable, skipping table sizes: {}", e);
+                return Ok(std::collections::HashMap::new());
+            }
+        };
+        let mut sizes = std::collections::HashMap::new();
+        for row in result.rows {
+            let mut cells = row.into_iter();
+            let Some(name) = cells.next().flatten() else {
+                continue;
+            };
+            if let Some(size_str) = cells.next().flatten()
+                && let Ok(size) = size_str.parse::<i64>()
+                && size > 0
+            {
+                sizes.insert(name, size as u64);
+            }
+        }
+        Ok(sizes)
+    }
+
     async fn get_queryable_entities(
         &self,
         schema: Option<&str>,

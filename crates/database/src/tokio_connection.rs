@@ -196,6 +196,16 @@ impl Connection for TokioConnection {
             .await
     }
 
+    async fn get_object_sizes(
+        &self,
+        schema: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, u64>> {
+        let inner = Arc::clone(&self.inner);
+        let schema = schema.map(str::to_string);
+        self.run(async move { inner.get_object_sizes(schema.as_deref()).await })
+            .await
+    }
+
     async fn object_ddl(
         &self,
         kind: RoutineKind,

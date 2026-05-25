@@ -833,6 +833,57 @@ impl Connection for MysqlConnection {
             .collect())
     }
 
+    async fn get_object_sizes(
+        &self,
+        _schema: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, u64>, anyhow::Error> {
+        let database = self
+            .initial_database
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+        let pool = self.get_or_create_pool(database).await?;
+        // DATA_LENGTH/INDEX_LENGTH are BIGINT UNSIGNED in information_schema.
+        // Their sum returns DECIMAL on older MySQL/MariaDB versions, which
+        // sqlx-mysql can't decode into i64/u64 directly. Casting to SIGNED
+        // gives a plain BIGINT we can pull as i64.
+        let rows = sqlx::query(
+            "SELECT TABLE_NAME,
+                    CAST(COALESCE(DATA_LENGTH, 0) + COALESCE(INDEX_LENGTH, 0) AS SIGNED)
+                        AS size_bytes
+             FROM information_schema.TABLES
+             WHERE TABLE_SCHEMA = ?
+               AND TABLE_TYPE = 'BASE TABLE'",
+        )
+        .bind(database)
+        .fetch_all(&pool)
+        .await?;
+        let mut sizes = std::collections::HashMap::new();
+        for row in rows {
+            let name: String = match row.try_get(0) {
+                Ok(n) => n,
+                Err(e) => {
+                    tracing::warn!("MySQL get_object_sizes: failed to decode name: {}", e);
+                    continue;
+                }
+            };
+            match row.try_get::<i64, _>(1) {
+                Ok(size) if size > 0 => {
+                    sizes.insert(name, size as u64);
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        "MySQL get_object_sizes: failed to decode size for {}: {}",
+                        name,
+                        e
+                    );
+                }
+            }
+        }
+        tracing::debug!("MySQL sizes for {}: {} entries", database, sizes.len());
+        Ok(sizes)
+    }
+
     async fn object_ddl(
         &self,
         kind: RoutineKind,

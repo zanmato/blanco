@@ -403,6 +403,17 @@ pub trait Connection: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Return physical sizes in bytes for tables and materialized views in a
+    /// schema, keyed by object name. Names not present in the map are treated
+    /// as having no reported size. Defaults to empty; drivers that can report
+    /// storage size should override.
+    async fn get_object_sizes(
+        &self,
+        _schema: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, u64>, anyhow::Error> {
+        Ok(std::collections::HashMap::new())
+    }
+
     /// Return the SQL DDL source for a routine/trigger object. Used by the
     /// "Show DDL" tab. Drivers without source-stored objects return an error.
     async fn object_ddl(

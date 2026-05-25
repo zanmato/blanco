@@ -5,6 +5,24 @@ use crate::result_ext::ResultExt;
 
 use super::ConnectionsPanel;
 
+/// Populate `DatabaseTable::relative_size` for items in a single schema using
+/// linear normalization.
+pub(super) fn compute_relative_sizes(items: &mut [DatabaseTable]) {
+    let max = items
+        .iter()
+        .filter_map(|item| item.size_bytes)
+        .max()
+        .unwrap_or(0);
+    if max == 0 {
+        return;
+    }
+    for item in items.iter_mut() {
+        if let Some(size) = item.size_bytes {
+            item.relative_size = Some((size as f64 / max as f64) as f32);
+        }
+    }
+}
+
 /// Represents a database schema with its tables
 #[derive(Debug, Clone)]
 pub struct DatabaseSchema {
@@ -19,6 +37,13 @@ pub struct DatabaseTable {
     pub name: String,
     pub _schema: Option<String>,
     pub item_type: DatabaseItemType,
+    /// Physical size in bytes as reported by the database. `None` for object
+    /// types that don't have a meaningful size (views, functions, ...) or for
+    /// backends that don't report size.
+    pub size_bytes: Option<u64>,
+    /// Size normalized against siblings within the same schema, on a `log2`
+    /// scale in `[0.0, 1.0]`. `None` when no siblings reported a size.
+    pub relative_size: Option<f32>,
 }
 
 /// Type of database item (table, view, materialized view, or stored
@@ -138,33 +163,53 @@ impl ConnectionsPanel {
                         let mut schema_tables: Vec<(String, Vec<DatabaseTable>)> = Vec::new();
                         for schema_name in &schemas {
                             let mut all_items: Vec<DatabaseTable> = Vec::new();
-                            let push = |items: &mut Vec<DatabaseTable>, v: Vec<String>, kind| {
+                            let sizes = connection
+                                .get_object_sizes(Some(schema_name))
+                                .await
+                                .unwrap_or_default();
+                            let push = |items: &mut Vec<DatabaseTable>,
+                                        v: Vec<String>,
+                                        kind: DatabaseItemType,
+                                        sizes: &std::collections::HashMap<String, u64>| {
                                 for n in v {
+                                    let size_bytes = if matches!(
+                                        kind,
+                                        DatabaseItemType::Table
+                                            | DatabaseItemType::MaterializedView
+                                    ) {
+                                        sizes.get(&n).copied()
+                                    } else {
+                                        None
+                                    };
                                     items.push(DatabaseTable {
                                         name: n,
                                         _schema: Some(schema_name.clone()),
                                         item_type: kind,
+                                        size_bytes,
+                                        relative_size: None,
                                     });
                                 }
                             };
                             if let Ok(v) = connection.get_tables(Some(schema_name)).await {
-                                push(&mut all_items, v, DatabaseItemType::Table);
+                                push(&mut all_items, v, DatabaseItemType::Table, &sizes);
                             }
                             if let Ok(v) = connection.get_views(Some(schema_name)).await {
-                                push(&mut all_items, v, DatabaseItemType::View);
+                                push(&mut all_items, v, DatabaseItemType::View, &sizes);
                             }
                             if let Ok(v) = connection.list_procedures(Some(schema_name)).await {
-                                push(&mut all_items, v, DatabaseItemType::Procedure);
+                                push(&mut all_items, v, DatabaseItemType::Procedure, &sizes);
                             }
                             if let Ok(v) = connection.list_functions(Some(schema_name)).await {
-                                push(&mut all_items, v, DatabaseItemType::Function);
+                                push(&mut all_items, v, DatabaseItemType::Function, &sizes);
                             }
                             if let Ok(v) = connection.list_triggers(Some(schema_name)).await {
-                                push(&mut all_items, v, DatabaseItemType::Trigger);
+                                push(&mut all_items, v, DatabaseItemType::Trigger, &sizes);
                             }
 
                             // Sort all items alphabetically by name
                             all_items.sort_by(|a, b| a.name.cmp(&b.name));
+
+                            compute_relative_sizes(&mut all_items);
 
                             schema_tables.push((schema_name.clone(), all_items));
                         }
@@ -375,37 +420,57 @@ impl ConnectionsPanel {
                     let funcs_result = connection.list_functions(Some(&schema_name)).await;
                     let triggers_result = connection.list_triggers(Some(&schema_name)).await;
 
+                    let sizes = connection
+                        .get_object_sizes(Some(&schema_name))
+                        .await
+                        .unwrap_or_default();
+
                     let mut all_items: Vec<DatabaseTable> = Vec::new();
-                    let push_named = |items: &mut Vec<DatabaseTable>, names: Vec<String>, kind| {
+                    let push_named = |items: &mut Vec<DatabaseTable>,
+                                      names: Vec<String>,
+                                      kind: DatabaseItemType,
+                                      sizes: &std::collections::HashMap<String, u64>| {
                         for n in names {
+                            let size_bytes = if matches!(
+                                kind,
+                                DatabaseItemType::Table | DatabaseItemType::MaterializedView
+                            ) {
+                                sizes.get(&n).copied()
+                            } else {
+                                None
+                            };
                             items.push(DatabaseTable {
                                 name: n,
                                 _schema: Some(schema_name.clone()),
                                 item_type: kind,
+                                size_bytes,
+                                relative_size: None,
                             });
                         }
                     };
                     if let Ok(v) = tables_result {
-                        push_named(&mut all_items, v, DatabaseItemType::Table);
+                        push_named(&mut all_items, v, DatabaseItemType::Table, &sizes);
                     }
                     if let Ok(v) = views_result {
-                        push_named(&mut all_items, v, DatabaseItemType::View);
+                        push_named(&mut all_items, v, DatabaseItemType::View, &sizes);
                     }
                     if let Ok(v) = matviews_result {
-                        push_named(&mut all_items, v, DatabaseItemType::MaterializedView);
+                        push_named(&mut all_items, v, DatabaseItemType::MaterializedView, &sizes);
                     }
                     if let Ok(v) = procs_result {
-                        push_named(&mut all_items, v, DatabaseItemType::Procedure);
+                        push_named(&mut all_items, v, DatabaseItemType::Procedure, &sizes);
                     }
                     if let Ok(v) = funcs_result {
-                        push_named(&mut all_items, v, DatabaseItemType::Function);
+                        push_named(&mut all_items, v, DatabaseItemType::Function, &sizes);
                     }
                     if let Ok(v) = triggers_result {
-                        push_named(&mut all_items, v, DatabaseItemType::Trigger);
+                        push_named(&mut all_items, v, DatabaseItemType::Trigger, &sizes);
                     }
 
                     // Sort all items alphabetically by name
                     all_items.sort_by(|a, b| a.name.cmp(&b.name));
+
+                    compute_relative_sizes(&mut all_items);
 
                     // Update the panel with loaded items
                     this_handle.update(cx, |this, cx| {

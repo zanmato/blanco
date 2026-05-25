@@ -112,11 +112,6 @@ impl Render for ObjectDdlTab {
                         .child(msg),
                 )
             })
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .child(self.sql_log.clone()),
-            )
+            .child(div().flex_1().min_h_0().child(self.sql_log.clone()))
     }
 }

@@ -1,6 +1,6 @@
 use gpui::{
-    App, Entity, InteractiveElement, ParentElement, StatefulInteractiveElement as _, Styled,
-    Window, div, prelude::FluentBuilder, px, rems,
+    App, Entity, InteractiveElement, ParentElement, SharedString, StatefulInteractiveElement as _,
+    Styled, Window, div, prelude::FluentBuilder, px, rems,
 };
 use gpui_component::{
     ActiveTheme as _, Icon, h_flex,
@@ -16,7 +16,7 @@ use crate::connections::{
 };
 
 use blanco_ui::{
-    IconName,
+    IconName, SizeIndicator,
     tree::{TreeDelegate, TreeEntry},
 };
 
@@ -32,6 +32,55 @@ impl ConnectionsTreeDelegate {
         }
     }
 }
+
+/// Format a byte count as a short human-readable string using IEC base-1024
+/// units (KB / MB / GB / TB). Matches the unit naming most DB tools display.
+fn format_size_short(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB", "PB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        return format!("{}{}", bytes, UNITS[0]);
+    }
+    let decimals = if value >= 100.0 {
+        0
+    } else if value >= 10.0 {
+        1
+    } else {
+        2
+    };
+    let mut formatted = format!("{:.*}", decimals, value);
+    if formatted.contains('.') {
+        while formatted.ends_with('0') {
+            formatted.pop();
+        }
+        if formatted.ends_with('.') {
+            formatted.pop();
+        }
+    }
+    format!("{}{}", formatted, UNITS[unit])
+}
+
+/// Format a byte count with thousands separators for the dot tooltip.
+fn format_bytes_exact(bytes: u64) -> String {
+    let s = bytes.to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, ch) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out.chars().rev().collect()
+}
+
+/// Total width of the bordered size indicator rectangle, including border.
+const SIZE_BAR_WIDTH_PX: f32 = 48.0;
+const SIZE_BAR_HEIGHT_PX: f32 = 16.0;
 
 impl TreeDelegate for ConnectionsTreeDelegate {
     type Metadata = TreeItemMetadata;
@@ -93,6 +142,33 @@ impl TreeDelegate for ConnectionsTreeDelegate {
         let item_id: gpui::SharedString = item.id.clone();
         let tooltip_label = item.label.clone();
 
+        let size_indicator = metadata.relative_size.map(|relative| {
+            let size_text = metadata
+                .size_bytes
+                .map(format_size_short)
+                .unwrap_or_default();
+            let tooltip_text: SharedString = metadata
+                .size_bytes
+                .map(|b| format!("{} bytes", format_bytes_exact(b)))
+                .unwrap_or_else(|| "unknown size".to_string())
+                .into();
+            let theme = cx.theme();
+            let bar = SizeIndicator::new(("tree-item-size", ix), size_text, relative)
+                .size(px(SIZE_BAR_WIDTH_PX), px(SIZE_BAR_HEIGHT_PX))
+                .fill_color(theme.blue.opacity(0.35))
+                .border_color(theme.border)
+                .text_color(theme.muted_foreground)
+                .fill_text_color(theme.foreground)
+                .font(theme.mono_font_family.clone(), px(10.))
+                .corner_radius(px(3.));
+            h_flex()
+                .id(("tree-item-size-wrap", ix))
+                .items_center()
+                .flex_shrink_0()
+                .tooltip(move |window, cx| Tooltip::new(tooltip_text.clone()).build(window, cx))
+                .child(bar)
+        });
+
         ListItem::new(ix)
             .selected(selected)
             .w_full()
@@ -116,6 +192,7 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                             .child(item.label.clone()),
                     )
                     .when_some(environment_label, |this, label| this.child(label))
+                    .when_some(size_indicator, |this, indicator| this.child(indicator))
                     .when(
                         (entry.is_folder() || metadata.kind == TreeItemKind::Connection)
                             && !metadata.loading,

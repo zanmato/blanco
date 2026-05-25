@@ -392,7 +392,13 @@ impl EditorPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let param_form = cx.new(|cx| ParameterForm::new(query.clone(), params, window, cx));
+        let initial_values = match self.tabs.get(self.active_tab_ix) {
+            Some(TabType::Query(query_tab)) => query_tab.last_parameter_values.clone(),
+            _ => Default::default(),
+        };
+        let param_form = cx.new(|cx| {
+            ParameterForm::new(query.clone(), params, &initial_values, window, cx)
+        });
 
         let weak_editor_panel = cx.entity().downgrade();
         window.open_dialog(cx, move |modal, _, _| {
@@ -414,8 +420,14 @@ impl EditorPanel {
                     let weak_editor_panel = weak_editor_panel.clone();
                     move |_event, window, cx| {
                         let substituted_query = param_form.read(cx).get_substituted_query(cx);
+                        let entered_values = param_form.read(cx).current_values(cx);
                         weak_editor_panel
                             .update(cx, |editor_panel, cx| {
+                                if let Some(TabType::Query(query_tab)) =
+                                    editor_panel.tabs.get_mut(editor_panel.active_tab_ix)
+                                {
+                                    query_tab.last_parameter_values = entered_values;
+                                }
                                 editor_panel.execute_query(
                                     substituted_query,
                                     connection_id,
