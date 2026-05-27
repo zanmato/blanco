@@ -36,7 +36,7 @@ impl ForeignKeyPopover {
         let table_name_clone = table_name.to_owned();
         let column_name_clone = column_name.to_owned();
         let reference_value_clone = reference_value.to_owned();
-        let database_name_clone = database_name.clone();
+        let database_name_clone = database_name;
 
         cx.spawn(
             async move |weak_this: WeakEntity<Self>, cx: &mut AsyncApp| {

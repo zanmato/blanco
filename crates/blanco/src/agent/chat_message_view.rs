@@ -121,7 +121,7 @@ impl Render for ChatMessageState {
 
                                     h_flex()
                                         .gap_1()
-                                        .child(Clipboard::new((id, "copy")).value(code.clone()))
+                                        .child(Clipboard::new((id, "copy")).value(code))
                                 }),
                         )
                         .when_some(token_info, |el, info| {

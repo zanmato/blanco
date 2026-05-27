@@ -1024,7 +1024,7 @@ pub fn formatter_page(
                             .require_final_semicolon
                     },
                     {
-                        let view_handle = view_handle.clone();
+                        let view_handle = view_handle;
                         move |val: bool, cx: &mut App| {
                             AppSettings::global_mut(cx)
                                 .settings

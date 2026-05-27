@@ -609,7 +609,7 @@ impl BlancoApp {
                         ),
                 )
                 .on_ok({
-                    let content = content_clone.clone();
+                    let content = content_clone;
                     let sidebar = sidebar.clone();
                     move |_, window, cx| {
                         if let Some(conn_data) = content.read(cx).get_connection_data(cx) {
@@ -721,7 +721,7 @@ impl BlancoApp {
                         ),
                 )
                 .on_ok({
-                    let content = content_clone.clone();
+                    let content = content_clone;
                     let conn_data_ref = connection_data_clone.clone();
                     let sidebar = sidebar.clone();
                     move |_, window, cx| {

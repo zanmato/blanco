@@ -737,7 +737,7 @@ impl RenderOnce for Tab {
             .when(tab_style.shadow, |this| this.shadow_xs())
             .hover(|this| this.bg(hover_style.inner_bg).rounded(inner_radius));
 
-        let include_left = !(self.ix == 0 && !tab_bar_prefix);
+        let include_left = self.ix != 0 || tab_bar_prefix;
 
         let base = self
             .base

@@ -239,7 +239,7 @@ impl PostgresConnection {
             server_key,
             display_name,
             server_connection_string: connection_string.to_string(),
-            initial_database: Some(connection_key.database.clone()),
+            initial_database: Some(connection_key.database),
             ssh_config: None,
             local_tunnel_port: None,
         })
@@ -273,7 +273,7 @@ impl PostgresConnection {
             server_key,
             display_name,
             server_connection_string: String::new(), // Will be set during connect
-            initial_database: Some(connection_key.database.clone()),
+            initial_database: Some(connection_key.database),
             ssh_config: Some(ssh_config),
             local_tunnel_port: None,
         }
@@ -501,9 +501,7 @@ impl PostgresConnection {
             _ => {
                 // Fallback: try to get as string and parse as PostgreSQL array format
                 if let Ok(array_val) = row.try_get::<Option<String>, _>(column_index) {
-                    return array_val.map(|v| {
-                        v
-                    });
+                    return array_val;
                 }
             }
         }

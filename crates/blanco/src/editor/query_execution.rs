@@ -136,7 +136,7 @@ impl EditorPanel {
             let tab_data = QueryTabData {
                 id: query_tab.db_id,
                 title: query_tab.title.clone(),
-                content: content.clone(),
+                content: content,
                 position: tab_index as i32,
                 connection_id: Some(query_tab.connection_id),
                 connection_type,
@@ -229,7 +229,7 @@ impl EditorPanel {
             let results_panel_clone = query_tab.results_panel.clone();
             let sql_log_clone = query_tab.sql_log.clone();
             let db_service = DatabaseService::global(cx).clone();
-            let query_for_metadata = query.clone();
+            let query_for_metadata = query;
             let completion_provider = query_tab.completion_provider.clone();
 
             self._run_query_task = cx.spawn_in(window, async move |editor_panel_entity, window| {

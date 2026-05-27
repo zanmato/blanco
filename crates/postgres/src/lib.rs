@@ -11,6 +11,7 @@ pub mod schema;
 pub use connection::{PgConnectionKey, PostgresConnection};
 
 #[cfg(test)]
+#[allow(clippy::print_stdout, clippy::print_stderr)]
 mod tests {
     use blanco_core::Connection;
     use sqlx::{Column, Row, postgres::PgPoolOptions};

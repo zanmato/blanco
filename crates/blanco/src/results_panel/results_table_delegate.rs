@@ -707,7 +707,7 @@ impl TableDelegate for ResultsTableDelegate {
             .font_family(cx.theme().mono_font_family.clone())
             .text_size(px(12.))
             .pt(px(1.))
-            .id(tooltip_id.clone())
+            .id(tooltip_id)
             .when_some(col_info, |this, col_info| {
                 // Clone all needed values before the closure
                 let col_name = col.name.to_string();
@@ -812,7 +812,7 @@ impl TableDelegate for ResultsTableDelegate {
             if let Some(input) = self.edit_state.get_editing_input() {
                 let is_expanded = self.edit_state.is_expanded(row_ix, col_ix);
                 let is_json = self.column_types.get(col_ix - 1) == Some(&ColumnType::Json);
-                let input = input.clone();
+                let input = input;
 
                 if is_expanded {
                     // Expanded mode: absolute positioned input with larger size

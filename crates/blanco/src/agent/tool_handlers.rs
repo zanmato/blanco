@@ -1119,7 +1119,7 @@ impl AgentToolRegistry {
     }
 
     pub fn register(&mut self, handler: Box<dyn AgentToolHandler>) {
-        let name = handler.as_tool().function.name.clone();
+        let name = handler.as_tool().function.name;
         self.handlers.insert(name, handler);
     }
 

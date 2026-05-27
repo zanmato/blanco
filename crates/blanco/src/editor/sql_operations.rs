@@ -165,7 +165,7 @@ impl EditorPanel {
         };
 
         let statement_text = statement_info.text.clone();
-        let byte_range = statement_info.byte_range.clone();
+        let byte_range = statement_info.byte_range;
 
         // Format in background
         let sqruff_service = if let Some(sqruff_service) = &query_tab.sqruff_service {

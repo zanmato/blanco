@@ -20,3 +20,6 @@ url = { workspace = true }
 
 [dev-dependencies]
 smol = { workspace = true }
+
+[lints]
+workspace = true

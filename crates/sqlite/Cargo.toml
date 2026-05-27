@@ -27,3 +27,6 @@ tempfile = "3.8"
 # Dependencies for integration tests
 tokio = { version = "1", features = ["macros", "rt"] }
 env_logger = { workspace = true }
+
+[lints]
+workspace = true

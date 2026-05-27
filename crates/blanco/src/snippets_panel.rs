@@ -114,7 +114,7 @@ impl SnippetsPanel {
             parent_id: snippet.parent_id,
         };
 
-        let mut item = TreeItem::new(id.clone(), label.clone()).expanded(true);
+        let mut item = TreeItem::new(id, label).expanded(true);
 
         if snippet.is_group {
             let children: Vec<TreeItem> = all_snippets

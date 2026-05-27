@@ -11,6 +11,7 @@ pub mod schema;
 pub use connection::{MysqlConnection, MysqlConnectionKey};
 
 #[cfg(test)]
+#[allow(clippy::print_stdout, clippy::print_stderr)]
 mod tests {
     use blanco_core::Connection;
     use std::env;

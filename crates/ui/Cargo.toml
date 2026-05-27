@@ -12,3 +12,6 @@ smallvec = { workspace = true }
 
 # Text handling
 ropey = { workspace = true }
+
+[lints]
+workspace = true

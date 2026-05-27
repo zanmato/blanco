@@ -817,7 +817,7 @@ impl EditorPanel {
 
                     // Open rename modal on double click
                     let form = RenameTabForm::new(tab_title, window, cx);
-                    let form_for_modal = form.clone();
+                    let form_for_modal = form;
                     let tab_index = *ix;
 
                     window.open_dialog(cx, move |modal, _window, _cx| {
@@ -839,7 +839,7 @@ impl EditorPanel {
                                     ),
                             )
                             .on_ok({
-                                let form = form_clone.clone();
+                                let form = form_clone;
                                 move |_modal, window, cx| {
                                     // Get the current value from the form
                                     let new_name = form.read(cx).get_value(cx);
@@ -1210,8 +1210,8 @@ impl EditorPanel {
                                     .icon(IconName::Check)
                                     .label("Confirm")
                                     .on_click({
-                                        let results_panel = results_panel.clone();
-                                        let sql_log = sql_log.clone();
+                                        let results_panel = results_panel;
+                                        let sql_log = sql_log;
                                         cx.listener(
                                             move |state: &mut PopoverState, _, window, cx| {
                                                 results_panel.update(cx, |panel, cx| {

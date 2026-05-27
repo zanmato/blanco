@@ -401,7 +401,7 @@ impl ResultsPanel {
                     .delegate_mut()
                     .edit_state
                     .edited_values
-                    .insert((row_clone, col_clone), Some(new_text.clone()));
+                    .insert((row_clone, col_clone), Some(new_text));
 
                 // Debug: Input change handled in edited_values for commit_cell_edit
                 // Note: Can't refresh here due to borrowing issues
@@ -682,7 +682,7 @@ impl ResultsPanel {
 
         let delegate = self.table_state.read(cx).delegate();
 
-        let change_operations_for_pipeline = change_operations.clone();
+        let change_operations_for_pipeline = change_operations;
         let connection_id_for_pipeline = delegate.connection_id;
         let database_name = delegate.database_name.clone();
 
@@ -835,7 +835,7 @@ impl ResultsPanel {
                 // Handle failed operations, show error but keep edits for retry
                 if let Some(sql_log) = sql_log_response_entity {
                     let error_message_clone = response.error_message.clone();
-                    let sql_queries_clone = response.sql_queries.clone();
+                    let sql_queries_clone = response.sql_queries;
                     sql_log.update(cx, |log, cx| {
                         // Log each SQL query that was attempted
                         for sql_query in &sql_queries_clone {
@@ -984,7 +984,7 @@ impl ResultsPanel {
             let delegate = state.delegate_mut();
             if let Some(row_to_duplicate) = delegate.rows.get(row_ix).cloned() {
                 // Add the duplicated row
-                delegate.rows.push(row_to_duplicate.clone());
+                delegate.rows.push(row_to_duplicate);
 
                 // Mark this as a pending new row
                 let new_row_index = delegate.rows.len() - 1;
@@ -1362,7 +1362,7 @@ impl ResultsPanel {
         let path = cx.prompt_for_new_path(&home_dir, Some(&default_filename));
 
         let format_owned = format.to_string();
-        let table_name_for_sql = table_name.clone();
+        let table_name_for_sql = table_name;
         let db_type = selected_data
             .db_type
             .unwrap_or(database::DatabaseType::PostgreSQL);

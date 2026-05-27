@@ -117,6 +117,14 @@ style = { level = "allow", priority = -1 }
 todo = "deny"
 type_complexity = "allow"
 
+# Footguns we want to catch
+await_holding_lock = "deny"
+inherent_to_string_shadow_display = "deny"
+print_stdout = "warn"
+print_stderr = "warn"
+large_enum_variant = "warn"
+redundant_clone = "warn"
+
 [profile.release]
 opt-level = 3
 

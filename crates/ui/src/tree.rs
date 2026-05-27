@@ -400,7 +400,7 @@ impl<D: TreeDelegate> Render for TreeState<D> {
             .size_full()
             .relative()
             .context_menu({
-                let view = cx.entity().clone();
+                let view = cx.entity();
                 move |this, window: &mut Window, cx: &mut Context<PopupMenu>| {
                     if let Some(ix) = view.read(cx).right_clicked_index {
                         view.update(cx, |state, cx| {

@@ -490,7 +490,7 @@ impl SettingsView {
                     SettingItem::new(
                         "UI Font",
                         SettingField::render({
-                            let ui_font_select = ui_font_select.clone();
+                            let ui_font_select = ui_font_select;
                             move |options, _window, cx| {
                                 let theme_font = cx.theme().font_family.to_string();
                                 if let Some(state) = &ui_font_select {
@@ -512,7 +512,7 @@ impl SettingsView {
                     SettingItem::new(
                         "Editor Font",
                         SettingField::render({
-                            let mono_font_select = mono_font_select.clone();
+                            let mono_font_select = mono_font_select;
                             move |options, _window, cx| {
                                 let theme_font = cx.theme().mono_font_family.to_string();
                                 if let Some(state) = &mono_font_select {
@@ -627,7 +627,7 @@ impl SettingsView {
                                 )
                             },
                             {
-                                let view_handle = view_handle.clone();
+                                let view_handle = view_handle;
                                 move |val: SharedString, cx: &mut App| {
                                     let base_url = val.to_string();
                                     AppSettings::global_mut(cx).settings.chat.base_url =

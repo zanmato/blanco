@@ -35,3 +35,6 @@ url = { workspace = true }
 
 [dev-dependencies]
 tokio-test = "0.4"
+
+[lints]
+workspace = true

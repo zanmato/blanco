@@ -697,6 +697,7 @@ fn parse_rows_affected(body: &str) -> u64 {
 }
 
 #[cfg(test)]
+#[allow(clippy::print_stdout, clippy::print_stderr)]
 mod tests {
     use super::*;
     use std::env;

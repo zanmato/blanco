@@ -148,7 +148,7 @@ impl ChatSession {
         cx: &mut Context<Self>,
     ) {
         let message = ChatMessage::user(user_message.clone());
-        self.add_message(message.clone(), cx);
+        self.add_message(message, cx);
 
         // Check if this is a command
         if let Some(command) = ChatCommand::parse(&user_message) {

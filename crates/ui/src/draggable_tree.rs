@@ -562,7 +562,7 @@ impl<D: DraggableTreeDelegate> Render for DraggableTreeState<D> {
             .size_full()
             .relative()
             .context_menu({
-                let view = cx.entity().clone();
+                let view = cx.entity();
                 move |this, window: &mut Window, cx: &mut Context<PopupMenu>| {
                     let ix = view.read(cx).right_clicked_index;
                     view.update(cx, |state, cx| {

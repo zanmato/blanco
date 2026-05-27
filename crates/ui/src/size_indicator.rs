@@ -115,7 +115,7 @@ impl RenderOnce for SizeIndicator {
                         font_size,
                         corner_radius,
                         horizontal_padding,
-                        text.clone(),
+                        text,
                         window,
                         cx,
                     );
@@ -184,7 +184,7 @@ fn paint_size_indicator(
     let text_len = text.len();
     let muted_run = TextRun {
         len: text_len,
-        font: text_font.clone(),
+        font: text_font,
         color: text_color,
         background_color: None,
         underline: None,
@@ -200,7 +200,7 @@ fn paint_size_indicator(
     let shaped_contrast =
         window
             .text_system()
-            .shape_line(text.clone(), font_size, &[contrast_run], None);
+            .shape_line(text, font_size, &[contrast_run], None);
 
     // Right-align text inside the bar with `horizontal_padding` of right inset.
     let text_origin = point(

@@ -4,9 +4,10 @@ pub mod schema;
 pub use connection::MssqlConnection;
 
 #[cfg(test)]
+#[allow(clippy::print_stdout, clippy::print_stderr)]
 mod tests {
     use super::*;
-    use blanco_core::{Connection, connection_trait::ColumnType};
+    use blanco_core::{ColumnType, Connection};
     use std::env;
 
     fn default_connection_string() -> String {

@@ -909,7 +909,7 @@ impl ConnectionsPanel {
                                     .label("Export")
                                     .loading(is_exporting)
                                     .on_click({
-                                        let modal_for_button = modal_clone.clone();
+                                        let modal_for_button = modal_clone;
                                         move |_, window, cx| {
                                             modal_for_button.update(cx, |modal, cx| {
                                                 modal.start_export(window, cx);
