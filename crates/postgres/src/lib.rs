@@ -275,6 +275,85 @@ mod tests {
         .await
     }
 
+    /// Round-trips the broader PostgreSQL type catalog through blanco's
+    /// decoder: network addresses, bit strings, geometric types, ranges,
+    /// full-text search, identifier aliases, xml, jsonpath, pg_lsn, and the
+    /// OID-family integers. The test asserts each cell is non-NULL and that
+    /// it doesn't contain the `[!...]` decode-failure marker. The shape of
+    /// each rendering (e.g. "(1,2)" vs "POINT(1 2)") is driver-defined, so
+    /// the assertions look for substrings rather than exact equality.
+    #[tokio::test]
+    async fn test_postgres_extended_type_coverage() -> Result<(), Box<dyn std::error::Error>> {
+        let connection_string = default_connection_string();
+        let mut conn = crate::PostgresConnection::from_connection_string(&connection_string)?;
+        if let Err(e) = conn.connect(&connection_string).await {
+            return handle_unreachable("test_postgres_extended_type_coverage", &e);
+        }
+        let database = Some("blanco");
+
+        let query = "SELECT
+              '192.168.1.0/24'::cidr            AS cidr_col,
+              '10.0.0.1'::inet                  AS inet_col,
+              '08:00:2b:01:02:03'::macaddr      AS macaddr_col,
+              '08:00:2b:01:02:03:04:05'::macaddr8 AS macaddr8_col,
+              B'10101'::bit(5)                  AS bit_col,
+              B'1100'::varbit                   AS varbit_col,
+              '(1,2)'::point                    AS point_col,
+              '{1,2,3}'::line                   AS line_col,
+              '[(0,0),(1,1)]'::lseg             AS lseg_col,
+              '(0,0),(1,1)'::box                AS box_col,
+              '[(0,0),(1,1),(2,2)]'::path       AS path_col,
+              '((0,0),(1,1),(2,0))'::polygon    AS polygon_col,
+              '<(0,0),1>'::circle               AS circle_col,
+              '<a/>'::xml                       AS xml_col,
+              '[1,5)'::int4range                AS int4range_col,
+              '[100,200)'::int8range            AS int8range_col,
+              '[1.5,2.5)'::numrange             AS numrange_col,
+              '[2025-01-01,2025-12-31)'::daterange AS daterange_col,
+              '{[1,5),[10,20)}'::int4multirange AS int4multirange_col,
+              '1 2 3'::tsvector                 AS tsv_col,
+              'foo & bar'::tsquery              AS tsq_col,
+              '$.foo'::jsonpath                 AS jp_col,
+              '0/16B374D8'::pg_lsn              AS pg_lsn_col,
+              'pg_catalog.text'::regtype        AS regtype_col,
+              'pg_catalog'::regnamespace        AS regnamespace_col,
+              42::oid                           AS oid_col,
+              'A'::\"char\"                     AS char_byte_col
+        ";
+
+        let result = conn.execute_query(query, database, None).await?;
+        assert_eq!(result.rows.len(), 1);
+        let row = result.rows.first().unwrap();
+        let cells: std::collections::HashMap<String, Option<String>> = result
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.clone(), row[i].clone()))
+            .collect();
+
+        for (col, val) in &cells {
+            let v = val
+                .as_deref()
+                .unwrap_or_else(|| panic!("column {col} unexpectedly decoded as SQL NULL"));
+            assert!(
+                !v.starts_with("[!"),
+                "column {col} decoded as failure marker {v:?}"
+            );
+        }
+
+        let get = |k: &str| cells.get(k).and_then(|v| v.as_deref()).unwrap_or("");
+        assert!(get("cidr_col").contains("192.168.1.0/24"));
+        assert!(get("inet_col").contains("10.0.0.1"));
+        assert!(get("macaddr_col").contains("08:00:2b"));
+        assert!(get("xml_col").contains("<a"));
+        assert!(get("tsq_col").contains("foo"));
+        assert!(get("pg_lsn_col").contains("0/16B374D8") || get("pg_lsn_col").contains("16b374d8"));
+        assert!(get("regtype_col").contains("text"));
+        assert_eq!(get("oid_col"), "42");
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_computed_column_type_detection() -> Result<(), Box<dyn std::error::Error>> {
         async {

@@ -65,35 +65,116 @@ impl PostgresConnection {
         array_type.strip_suffix("[]")
     }
 
-    /// Check if a value is NULL without attempting type conversion
+    /// Check if a value is NULL without attempting type conversion.
+    ///
+    /// Returns `true` only when the wire value is definitively NULL. If we
+    /// cannot even acquire the raw value, treat the cell as non-NULL so the
+    /// decoder still gets a chance and we don't silently turn decode errors
+    /// into NULLs.
     fn is_null_value(row: &sqlx::postgres::PgRow, column_index: usize) -> bool {
-        if let Ok(raw_value) = row.try_get_raw(column_index) {
-            raw_value.is_null()
-        } else {
-            false
+        match row.try_get_raw(column_index) {
+            Ok(raw_value) => raw_value.is_null(),
+            Err(_) => false,
         }
     }
 
-    /// Map PostgreSQL type name to ColumnType enum
+    /// Read the column's raw bytes as text. Used as a last-chance decoder
+    /// for non-NULL values that none of the typed decoders handled. Returns
+    /// `Some(string)` if the bytes are valid UTF-8, or a visible
+    /// `[!type: ...]` marker carrying a hex preview otherwise. Never
+    /// returns `None` for a non-NULL value, so a real SQL NULL and a decode
+    /// failure are always distinguishable in the UI.
+    fn as_text_or_marker(
+        row: &sqlx::postgres::PgRow,
+        column_index: usize,
+        column_type: &str,
+    ) -> Option<String> {
+        let raw_value = match row.try_get_raw(column_index) {
+            Ok(v) => v,
+            Err(e) => {
+                return Some(format!("[!{column_type}: cannot read raw value: {e}]"));
+            }
+        };
+        if raw_value.is_null() {
+            return None;
+        }
+        if let Ok(text) = raw_value.as_str() {
+            return Some(text.to_string());
+        }
+        match raw_value.as_bytes() {
+            Ok(bytes) => match std::str::from_utf8(bytes) {
+                Ok(s) => Some(s.to_string()),
+                Err(_) => {
+                    let hex_preview: String = bytes
+                        .iter()
+                        .take(20)
+                        .map(|b| format!("{:02x}", b))
+                        .collect();
+                    Some(format!(
+                        "[!{column_type}: {} bytes, hex {}{}]",
+                        bytes.len(),
+                        hex_preview,
+                        if bytes.len() > 20 { "..." } else { "" }
+                    ))
+                }
+            },
+            Err(e) => Some(format!("[!{column_type}: cannot read bytes: {e}]")),
+        }
+    }
+
+    /// Map PostgreSQL type name to ColumnType enum.
+    ///
+    /// The set of types here is the result of comparing what
+    /// `pg_catalog.pg_type` exposes against what we used to handle. Many
+    /// PostgreSQL types (network, geometric, ranges, ts*, regX OID aliases,
+    /// xml, bit strings, jsonpath, pg_lsn, etc.) come back over the wire as
+    /// readable text. Mapping them to `Text` (rather than `Unknown`) routes
+    /// them through the string decoder, which is fast and avoids a
+    /// "unknown column type" warning per row.
     pub(super) fn map_postgres_type(type_name: &str) -> ColumnType {
-        match type_name.to_lowercase().as_str() {
-            "smallint" | "int2" | "int" | "int4" | "integer" | "bigint" | "int8" | "serial"
-            | "bigserial" => ColumnType::Integer,
+        let lower = type_name.to_lowercase();
+        match lower.as_str() {
+            // Integers (signed + serial)
+            "smallint" | "int2" | "smallserial" | "int" | "int4" | "integer" | "serial"
+            | "bigint" | "int8" | "bigserial" => ColumnType::Integer,
+            // PostgreSQL object identifier integers
+            "oid" | "xid" | "xid8" | "cid" | "tid" => ColumnType::Integer,
+            // Numerics
             "real" | "float4" | "double precision" | "float8" | "numeric" | "decimal" | "money" => {
                 ColumnType::Numeric
             }
             "boolean" | "bool" => ColumnType::Boolean,
-            "text" | "varchar" | "character varying" | "char" | "bpchar" | "name" => {
+            // Character / text family (note: "char" is the 1-byte type, char is bpchar)
+            "text" | "varchar" | "character varying" | "char" | "\"char\"" | "bpchar"
+            | "character" | "name" => ColumnType::Text,
+            // Date / time
+            "timestamp" | "timestamp without time zone" | "timestamptz"
+            | "timestamp with time zone" | "date" | "time" | "time without time zone" | "timetz"
+            | "time with time zone" | "interval" => ColumnType::DateTime,
+            "uuid" => ColumnType::Uuid,
+            "json" | "jsonb" | "jsonpath" => ColumnType::Json,
+            "bytea" => ColumnType::Binary,
+            "array" => ColumnType::Array,
+            _ if lower.ends_with("[]") => ColumnType::Array,
+            // Network address types: come back as text
+            "inet" | "cidr" | "macaddr" | "macaddr8" => ColumnType::Text,
+            // Bit strings: text representation is "1010..."
+            "bit" | "varbit" | "bit varying" => ColumnType::Text,
+            // Geometric types: rendered as text like "(1,2),(3,4)"
+            "point" | "line" | "lseg" | "box" | "path" | "polygon" | "circle" => ColumnType::Text,
+            // Full-text search
+            "tsvector" | "tsquery" | "gtsvector" => ColumnType::Text,
+            // Ranges and multiranges (built-in)
+            "int4range" | "int8range" | "numrange" | "daterange" | "tsrange" | "tstzrange"
+            | "int4multirange" | "int8multirange" | "nummultirange" | "datemultirange"
+            | "tsmultirange" | "tstzmultirange" => ColumnType::Text,
+            // System catalog identifier aliases (regclass, regtype, etc.)
+            "regclass" | "regcollation" | "regconfig" | "regdictionary" | "regnamespace"
+            | "regoper" | "regoperator" | "regproc" | "regprocedure" | "regrole" | "regtype" => {
                 ColumnType::Text
             }
-            "timestamp" | "timestamptz" | "date" | "time" | "timetz" | "interval" => {
-                ColumnType::DateTime
-            }
-            "uuid" => ColumnType::Uuid,
-            "json" | "jsonb" => ColumnType::Json,
-            "array" => ColumnType::Array,
-            _ if type_name.to_lowercase().ends_with("[]") => ColumnType::Array,
-            "bytea" => ColumnType::Binary,
+            // Misc text-renderable
+            "xml" | "pg_lsn" | "aclitem" | "pg_snapshot" | "txid_snapshot" => ColumnType::Text,
             _ => ColumnType::Unknown,
         }
     }
@@ -244,10 +325,15 @@ impl PostgresConnection {
         &self,
         row: &sqlx::postgres::PgRow,
         column_index: usize,
-        _column_type: &str,
+        column_type: &str,
     ) -> Option<String> {
-        row.try_get::<Option<String>, _>(column_index)
-            .unwrap_or_default()
+        if let Ok(val) = row.try_get::<Option<String>, _>(column_index) {
+            return val;
+        }
+        // Many types route to ColumnType::Text but sqlx doesn't have a typed
+        // String decoder for them (xml, inet, point, ranges, ...). Fall back
+        // to reading raw bytes so they still display.
+        Self::as_text_or_marker(row, column_index, column_type)
     }
 
     fn handle_bool_type(
@@ -445,51 +531,7 @@ impl PostgresConnection {
         column_index: usize,
         column_type: &str,
     ) -> Option<String> {
-        if let Ok(raw_value) = row.try_get_raw(column_index) {
-            if raw_value.is_null() {
-                return None;
-            }
-
-            match raw_value.as_str() {
-                Ok(text_val) => Some(text_val.to_string()),
-                Err(_) => match raw_value.as_bytes() {
-                    Ok(bytes) => match String::from_utf8(bytes.to_vec()) {
-                        Ok(string_val) => Some(string_val),
-                        Err(_) => {
-                            let hex_repr = bytes
-                                .iter()
-                                .map(|b| format!("{:02x}", b))
-                                .collect::<String>();
-                            tracing::warn!(
-                                "Unable to convert column type '{}' to valid UTF-8, showing hex: {}...",
-                                column_type,
-                                &hex_repr[..hex_repr.len().min(40)]
-                            );
-                            Some(format!(
-                                "[binary data: {} bytes, starts with: {}]",
-                                bytes.len(),
-                                &hex_repr[..hex_repr.len().min(20)]
-                            ))
-                        }
-                    },
-                    Err(_) => {
-                        tracing::warn!(
-                            "Unable to access raw bytes for column type '{}' at index {}, falling back to NULL",
-                            column_type,
-                            column_index
-                        );
-                        None
-                    }
-                },
-            }
-        } else {
-            tracing::warn!(
-                "Unmatched PostgreSQL column type '{}' at index {}, falling back to NULL",
-                column_type,
-                column_index
-            );
-            None
-        }
+        Self::as_text_or_marker(row, column_index, column_type)
     }
 
     /// Convert a PostgreSQL row value to string representation. `None` means SQL NULL.
@@ -514,7 +556,7 @@ impl PostgresConnection {
             return None;
         }
 
-        match column_type {
+        let decoded = match column_type {
             ColumnType::Array => self.handle_array_type(row, column_index, raw_type),
             ColumnType::Integer | ColumnType::UnsignedInteger => {
                 self.handle_integer_type(row, column_index, raw_type)
@@ -526,10 +568,12 @@ impl PostgresConnection {
             ColumnType::Uuid => self.handle_uuid_type(row, column_index, raw_type),
             ColumnType::Json => self.handle_json_type(row, column_index, raw_type),
             ColumnType::Binary => self.handle_unknown_type(row, column_index, raw_type),
-            ColumnType::Unknown => {
-                tracing::warn!("Unknown column type falling back to raw value access");
-                self.handle_unknown_type(row, column_index, raw_type)
-            }
-        }
+            ColumnType::Unknown => self.handle_unknown_type(row, column_index, raw_type),
+        };
+
+        // The cell is known to be non-NULL (we checked above). If a typed
+        // decoder returned None it means the typed decode failed — fall back
+        // to raw text so we never conflate decode failure with SQL NULL.
+        decoded.or_else(|| Self::as_text_or_marker(row, column_index, raw_type))
     }
 }
