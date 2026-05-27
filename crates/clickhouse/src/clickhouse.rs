@@ -849,6 +849,23 @@ mod tests {
         assert_eq!(conn.database, "default");
     }
 
+    /// Decide whether to fail or skip a test when the ClickHouse server is
+    /// not reachable. `BLANCO_RUN_DB_TESTS=1` makes missing servers a hard
+    /// failure; otherwise prints a skip message and returns `Ok(())`.
+    fn require_db_or_skip(
+        test_name: &str,
+        err: &dyn std::fmt::Display,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if env::var("BLANCO_RUN_DB_TESTS").as_deref() == Ok("1") {
+            Err(format!("{test_name}: ClickHouse unreachable: {err}").into())
+        } else {
+            eprintln!(
+                "skip {test_name}: ClickHouse unreachable ({err}). Set BLANCO_RUN_DB_TESTS=1 to require."
+            );
+            Ok(())
+        }
+    }
+
     #[test]
     fn test_clickhouse_data_type_serialization() -> Result<(), Box<dyn std::error::Error>> {
         let rt = tokio::runtime::Runtime::new()?;
@@ -859,15 +876,8 @@ mod tests {
 
             let mut conn = ClickhouseConnection::from_connection_string(&connection_string)?;
 
-            if conn.connect(&connection_string).await.is_err() {
-                println!(
-                    "Skipping ClickHouse serialization test - server not available at {}",
-                    connection_string
-                );
-                println!(
-                    "To run this test, start the container with: docker-compose up -d clickhousetestdb"
-                );
-                return Ok(());
+            if let Err(e) = conn.connect(&connection_string).await {
+                return require_db_or_skip("test_clickhouse_data_type_serialization", &e);
             }
 
             // Drop table if exists

@@ -16,29 +16,46 @@ mod tests {
         })
     }
 
-    async fn connect_or_skip() -> Option<MssqlConnection> {
+    /// Decide whether to fail or skip a test when the SQL Server is not
+    /// reachable. `BLANCO_RUN_DB_TESTS=1` makes missing servers a hard
+    /// failure; otherwise prints a skip message and returns Err so the
+    /// caller can early-return `Ok(())`.
+    fn require_db_or_skip(
+        test_name: &str,
+        err: &dyn std::fmt::Display,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if env::var("BLANCO_RUN_DB_TESTS").as_deref() == Ok("1") {
+            Err(format!("{test_name}: MSSQL unreachable: {err}").into())
+        } else {
+            eprintln!(
+                "skip {test_name}: MSSQL unreachable ({err}). Set BLANCO_RUN_DB_TESTS=1 to require."
+            );
+            Ok(())
+        }
+    }
+
+    enum ConnectOutcome {
+        Connected(MssqlConnection),
+        Skip(Result<(), Box<dyn std::error::Error>>),
+    }
+
+    async fn connect_or_skip(test_name: &str) -> ConnectOutcome {
         let connection_string = default_connection_string();
         let mut conn = match MssqlConnection::from_connection_string(&connection_string) {
             Ok(c) => c,
-            Err(e) => {
-                println!("Skipping MSSQL test - failed to parse connection string: {e}");
-                return None;
-            }
+            Err(e) => return ConnectOutcome::Skip(require_db_or_skip(test_name, &e)),
         };
         match Connection::connect(&mut conn, &connection_string).await {
-            Ok(()) => Some(conn),
-            Err(e) => {
-                println!("Skipping MSSQL test - server not reachable at {connection_string}: {e}");
-                println!("To run this test, start the container: docker compose up -d mssqltestdb");
-                None
-            }
+            Ok(()) => ConnectOutcome::Connected(conn),
+            Err(e) => ConnectOutcome::Skip(require_db_or_skip(test_name, &e)),
         }
     }
 
     #[tokio::test]
     async fn test_mssql_data_type_serialization() -> Result<(), Box<dyn std::error::Error>> {
-        let Some(conn) = connect_or_skip().await else {
-            return Ok(());
+        let conn = match connect_or_skip("test_mssql_data_type_serialization").await {
+            ConnectOutcome::Connected(c) => c,
+            ConnectOutcome::Skip(r) => return r,
         };
 
         let _ = conn
@@ -172,8 +189,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_mssql_null_handling() -> Result<(), Box<dyn std::error::Error>> {
-        let Some(conn) = connect_or_skip().await else {
-            return Ok(());
+        let conn = match connect_or_skip("test_mssql_null_handling").await {
+            ConnectOutcome::Connected(c) => c,
+            ConnectOutcome::Skip(r) => return r,
         };
 
         let _ = conn
@@ -212,8 +230,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_mssql_schema_introspection() -> Result<(), Box<dyn std::error::Error>> {
-        let Some(conn) = connect_or_skip().await else {
-            return Ok(());
+        let conn = match connect_or_skip("test_mssql_schema_introspection").await {
+            ConnectOutcome::Connected(c) => c,
+            ConnectOutcome::Skip(r) => return r,
         };
 
         let _ = conn
@@ -273,8 +292,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_mssql_write_and_rows_affected() -> Result<(), Box<dyn std::error::Error>> {
-        let Some(conn) = connect_or_skip().await else {
-            return Ok(());
+        let conn = match connect_or_skip("test_mssql_write_and_rows_affected").await {
+            ConnectOutcome::Connected(c) => c,
+            ConnectOutcome::Skip(r) => return r,
         };
 
         let _ = conn
