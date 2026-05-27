@@ -409,29 +409,14 @@ impl ResultsPanel {
                 // Save current edit to edited_values when input loses focus
                 // Get the current editing cell and value
                 let editing_cell = table.delegate_mut().edit_state.editing_cell;
-                tracing::info!("Blur event triggered for editing_cell: {:?}", editing_cell);
 
                 if let Some((row, col)) = editing_cell {
-                    // Ignore blur if the cell is in expanded mode
                     if table.delegate_mut().edit_state.is_expanded(row, col) {
-                        tracing::info!(
-                            "Blur: ignoring blur for expanded cell at ({}, {})",
-                            row,
-                            col
-                        );
                         return;
                     }
 
-                    let new_value = input.read(cx).text().to_string();
-                    tracing::info!("Blur: saving value '{}' at ({}, {})", new_value, row, col);
-
-                    // Commit the cell edit to create a TableChange entry
-                    tracing::info!("Blur: committing cell edit at ({}, {})", row, col);
                     table.delegate_mut().commit_cell_edit(row, col);
                     table.refresh(cx);
-                    tracing::info!("Blur: cell edit committed and table refreshed");
-                } else {
-                    tracing::info!("Blur: no editing cell found");
                 }
             }
         })
@@ -453,7 +438,6 @@ impl ResultsPanel {
             let delegate = state.delegate_mut();
 
             if !delegate.is_editable() {
-                tracing::info!("Table is not editable, bailing commit");
                 delegate.edit_state.editing_cell = None;
                 return;
             }
@@ -688,12 +672,11 @@ impl ResultsPanel {
             .create_change_operations();
 
         if change_operations.is_empty() {
-            tracing::info!("Commit Changes: No changes to commit");
             return;
         }
 
-        tracing::info!(
-            "Commit Changes: Sending {} operations to async pipeline",
+        tracing::debug!(
+            "committing {} table operation(s)",
             change_operations.len()
         );
 
@@ -702,8 +685,6 @@ impl ResultsPanel {
         let change_operations_for_pipeline = change_operations.clone();
         let connection_id_for_pipeline = delegate.connection_id;
         let database_name = delegate.database_name.clone();
-
-        tracing::info!("Commit Changes: Starting table operations execution");
 
         // Spawn background task to execute table operations
         let db_service = DatabaseService::global(cx).clone();
@@ -719,8 +700,6 @@ impl ResultsPanel {
                 .await
             {
                 Ok(connection) => {
-                    tracing::info!("Got connection for table operations");
-
                     // Convert table operations to SQL and execute them
                     let mut total_rows_affected = 0u64;
                     let mut operations_executed = 0;
@@ -776,8 +755,8 @@ impl ResultsPanel {
                 }
             };
 
-            tracing::info!(
-                "Table operations completed in {:?}, success: {}",
+            tracing::debug!(
+                "table operations completed in {:?}, success: {}",
                 start_time.elapsed(),
                 result.success
             );
@@ -790,8 +769,8 @@ impl ResultsPanel {
         cx.spawn(async move |entity, cx| {
             let response = table_operations_task.await;
 
-            tracing::info!(
-                "Received table operation response: success={}, rows_affected={:?}",
+            tracing::debug!(
+                "received table operation response: success={}, rows_affected={:?}",
                 response.success,
                 response.rows_affected
             );
@@ -899,8 +878,8 @@ impl ResultsPanel {
             .table_name
             .clone()
             .unwrap_or_else(|| "unknown".to_string());
-        tracing::info!(
-            "Rollback Changes: Rolling back {} changes on table {}",
+        tracing::debug!(
+            "rolling back {} change(s) on table {}",
             changes.len(),
             table_name
         );
@@ -949,11 +928,6 @@ impl ResultsPanel {
         // Clear all changes
         self.clear_changes(cx);
 
-        let changes_count = changes.len();
-        tracing::info!(
-            "Rollback Changes: Successfully rolled back {} changes",
-            changes_count
-        );
         cx.notify();
     }
 

@@ -413,11 +413,6 @@ impl PostgresConnection {
                                 .collect::<Vec<_>>()
                                 .join(",")
                         );
-                        tracing::debug!(
-                            "Successfully converted array to Vec<i32> for column type '{}': {}",
-                            column_type,
-                            result
-                        );
                         result
                     });
                 }
@@ -431,11 +426,6 @@ impl PostgresConnection {
                                 .map(|x| x.to_string())
                                 .collect::<Vec<_>>()
                                 .join(",")
-                        );
-                        tracing::debug!(
-                            "Successfully converted array to Vec<i64> for column type '{}': {}",
-                            column_type,
-                            result
                         );
                         result
                     });
@@ -451,11 +441,6 @@ impl PostgresConnection {
                                 .collect::<Vec<_>>()
                                 .join(",")
                         );
-                        tracing::debug!(
-                            "Successfully converted array to Vec<i16> for column type '{}': {}",
-                            column_type,
-                            result
-                        );
                         result
                     });
                 }
@@ -469,11 +454,6 @@ impl PostgresConnection {
                                 .map(|x| x.to_string())
                                 .collect::<Vec<_>>()
                                 .join(",")
-                        );
-                        tracing::debug!(
-                            "Successfully converted array to Vec<f32> for column type '{}': {}",
-                            column_type,
-                            result
                         );
                         result
                     });
@@ -489,11 +469,6 @@ impl PostgresConnection {
                                 .collect::<Vec<_>>()
                                 .join(",")
                         );
-                        tracing::debug!(
-                            "Successfully converted array to Vec<f64> for column type '{}': {}",
-                            column_type,
-                            result
-                        );
                         result
                     });
                 }
@@ -508,11 +483,6 @@ impl PostgresConnection {
                                 .collect::<Vec<_>>()
                                 .join(",")
                         );
-                        tracing::debug!(
-                            "Successfully converted array to Vec<bool> for column type '{}': {}",
-                            column_type,
-                            result
-                        );
                         result
                     });
                 }
@@ -524,7 +494,6 @@ impl PostgresConnection {
                             .map(|x| x.to_string())
                             .collect::<Vec<_>>()
                             .join(","));
-                        tracing::debug!("Successfully converted array to Vec<uuid::Uuid> for column type '{}': {}", column_type, result);
                         result
                     });
                 }
@@ -533,11 +502,6 @@ impl PostgresConnection {
                 // Fallback: try to get as string and parse as PostgreSQL array format
                 if let Ok(array_val) = row.try_get::<Option<String>, _>(column_index) {
                     return array_val.map(|v| {
-                        tracing::debug!(
-                            "Successfully converted array '{}' to String for column type '{}'",
-                            v,
-                            column_type
-                        );
                         v
                     });
                 }
@@ -809,11 +773,6 @@ impl PostgresConnection {
             // Try to extract as text using raw value
             match raw_value.as_str() {
                 Ok(text_val) => {
-                    tracing::debug!(
-                        "Successfully converted unknown type '{}' to string via raw access: {}",
-                        column_type,
-                        text_val
-                    );
                     Some(text_val.to_string())
                 }
                 Err(_) => {
@@ -823,11 +782,6 @@ impl PostgresConnection {
                             // Try UTF-8 conversion first
                             match String::from_utf8(bytes.to_vec()) {
                                 Ok(string_val) => {
-                                    tracing::debug!(
-                                        "Successfully converted unknown type '{}' to string via bytes: {}",
-                                        column_type,
-                                        string_val
-                                    );
                                     Some(string_val)
                                 }
                                 Err(_) => {

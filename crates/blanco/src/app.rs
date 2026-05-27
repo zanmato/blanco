@@ -31,7 +31,6 @@ actions!(
     blanco_app,
     [
         Quit,
-        About,
         OpenConnection,
         OpenSettings,
         OpenNewConnectionModal,
@@ -334,10 +333,6 @@ impl BlancoApp {
 
     fn on_quit(&mut self, _: &Quit, _window: &mut Window, cx: &mut Context<Self>) {
         cx.quit();
-    }
-
-    fn on_about(&mut self, _: &About, _: &mut Window, _: &mut Context<Self>) {
-        println!("Blanco SQL Editor v0.1.0");
     }
 
     fn toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
@@ -901,7 +896,6 @@ impl Render for BlancoApp {
             .flex()
             .flex_col()
             .on_action(cx.listener(Self::on_quit))
-            .on_action(cx.listener(Self::on_about))
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::on_settings))
             .on_action(cx.listener(Self::on_create_new_query_tab))
