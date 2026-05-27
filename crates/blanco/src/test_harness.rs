@@ -116,6 +116,44 @@ pub fn result_row_count(harness: &TestHarness, cx: &VisualTestContext) -> Option
     })
 }
 
+pub fn result_columns(harness: &TestHarness, cx: &VisualTestContext) -> Option<Vec<String>> {
+    harness.editor_panel.read_with(cx, |panel, cx| {
+        let tab = panel.active_query_tab()?;
+        Some(tab.results_panel.read_with(cx, |results, cx| {
+            results.table_state().read_with(cx, |state, _cx| {
+                state
+                    .delegate()
+                    .columns
+                    .iter()
+                    .map(|c| c.name.to_string())
+                    .collect()
+            })
+        }))
+    })
+}
+
+pub fn result_cell(
+    harness: &TestHarness,
+    row: usize,
+    col: usize,
+    cx: &VisualTestContext,
+) -> Option<Option<String>> {
+    harness.editor_panel.read_with(cx, |panel, cx| {
+        let tab = panel.active_query_tab()?;
+        Some(tab.results_panel.read_with(cx, |results, cx| {
+            results.table_state().read_with(cx, |state, _cx| {
+                state
+                    .delegate()
+                    .rows
+                    .get(row)
+                    .and_then(|r| r.get(col))
+                    .cloned()
+                    .unwrap_or(None)
+            })
+        }))
+    })
+}
+
 pub fn is_loading(harness: &TestHarness, cx: &VisualTestContext) -> bool {
     harness
         .editor_panel
