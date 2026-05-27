@@ -18,7 +18,7 @@ use gpui_component::{
 };
 
 use blanco_core::QueryResult;
-use blanco_core::connection_trait::ColumnType;
+use blanco_core::ColumnType;
 use database::DatabaseService;
 
 use crate::app::{

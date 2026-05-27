@@ -104,7 +104,7 @@ impl DriverType {
     }
 
     /// Convert to string representation
-    pub fn to_string(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Self::SQLite => "SQLite",
             Self::PostgreSQL => "PostgreSQL",
@@ -112,6 +112,12 @@ impl DriverType {
             Self::ClickHouse => "ClickHouse",
             Self::MsSql => "SQL Server",
         }
+    }
+}
+
+impl std::fmt::Display for DriverType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 /// Result of a database query

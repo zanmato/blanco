@@ -1682,7 +1682,7 @@ impl Connection for PostgresConnection {
     async fn get_queryable_entities(
         &self,
         schema: Option<&str>,
-    ) -> Result<Vec<blanco_core::connection_trait::QueryableEntity>, anyhow::Error> {
+    ) -> Result<Vec<blanco_core::QueryableEntity>, anyhow::Error> {
         let schema_filter = schema.unwrap_or("public");
         let query = "
             SELECT table_name, entity_type
@@ -1710,7 +1710,7 @@ impl Connection for PostgresConnection {
             )
             .await?;
 
-        use blanco_core::connection_trait::{EntityType, QueryableEntity};
+        use blanco_core::{EntityType, QueryableEntity};
         let entities: Vec<QueryableEntity> = result
             .rows
             .into_iter()
@@ -1942,7 +1942,7 @@ impl Connection for PostgresConnection {
         table_names: Option<&str>,
         limit: Option<i64>,
         offset: Option<i64>,
-    ) -> Result<blanco_core::connection_trait::DatabaseSchemaResult> {
+    ) -> Result<blanco_core::DatabaseSchemaResult> {
         let limit = limit.unwrap_or(20).min(100); // Default 20, max 100
         let offset = offset.unwrap_or(0);
 
@@ -1951,11 +1951,11 @@ impl Connection for PostgresConnection {
             .await?;
         let table_count = tables.len();
 
-        Ok(blanco_core::connection_trait::DatabaseSchemaResult {
+        Ok(blanco_core::DatabaseSchemaResult {
             connection_type: self.get_connection_type().to_string(),
             display_name: self.get_display_name(),
             tables,
-            pagination: blanco_core::connection_trait::PaginationInfo {
+            pagination: blanco_core::PaginationInfo {
                 limit: Some(limit),
                 offset: Some(offset),
                 has_more: table_count == limit as usize,

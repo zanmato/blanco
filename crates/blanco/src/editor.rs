@@ -8,6 +8,7 @@ mod snippet_editor;
 mod sql_operations;
 mod table_structure;
 
+use blanco_core::{ColumnInfo, IndexInfo, RoutineKind};
 use blanco_ui::{Tab, TabBar};
 use gpui::{AnyElement, FontWeight};
 use gpui::{
@@ -132,7 +133,7 @@ pub struct TabCreationParams {
 /// Parameters for creating an object DDL tab (procedures/functions/triggers).
 #[derive(Clone)]
 pub struct ObjectDdlParams {
-    pub kind: blanco_core::connection_trait::RoutineKind,
+    pub kind: RoutineKind,
     pub connection_id: i64,
     pub connection_name: String,
     pub db_type: database::DatabaseType,
@@ -401,8 +402,8 @@ impl EditorPanel {
 
     pub fn update_last_table_structure_tab(
         &mut self,
-        columns: Vec<blanco_core::connection_trait::ColumnInfo>,
-        indexes: Vec<blanco_core::connection_trait::IndexInfo>,
+        columns: Vec<ColumnInfo>,
+        indexes: Vec<IndexInfo>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1003,15 +1004,9 @@ impl EditorPanel {
                 let inner = object_ddl_tab.read(cx);
                 let label = SharedString::from(inner.title.clone());
                 let (icon, color) = match inner.kind {
-                    blanco_core::connection_trait::RoutineKind::Procedure => {
-                        (IconName::SquareTerminal, cx.theme().magenta)
-                    }
-                    blanco_core::connection_trait::RoutineKind::Function => {
-                        (IconName::Braces, cx.theme().cyan)
-                    }
-                    blanco_core::connection_trait::RoutineKind::Trigger => {
-                        (IconName::DatabaseConnected, cx.theme().yellow)
-                    }
+                    RoutineKind::Procedure => (IconName::SquareTerminal, cx.theme().magenta),
+                    RoutineKind::Function => (IconName::Braces, cx.theme().cyan),
+                    RoutineKind::Trigger => (IconName::DatabaseConnected, cx.theme().yellow),
                 };
                 let tab_index = ix;
                 Tab::new().label(label).group("Other").suffix(

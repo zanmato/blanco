@@ -1,4 +1,4 @@
-use blanco_core::connection_trait::ColumnInfo;
+use blanco_core::ColumnInfo;
 use database::DatabaseType;
 
 #[derive(Debug, Clone, Copy, PartialEq)]

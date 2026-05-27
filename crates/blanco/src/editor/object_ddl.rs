@@ -1,4 +1,4 @@
-use blanco_core::connection_trait::RoutineKind;
+use blanco_core::RoutineKind;
 use blanco_ui::{SqlLog, SqlLogMessage};
 use gpui::{
     App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,

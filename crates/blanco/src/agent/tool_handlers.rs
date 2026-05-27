@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use blanco_core::DatabaseService;
-use blanco_core::connection_trait::{DatabaseSchemaResult, TableSchemaInfo};
+use blanco_core::{DatabaseSchemaResult, TableSchemaInfo};
 use llm::{
     FunctionCall, ToolCall, chat::FunctionTool, chat::ParameterProperty, chat::ParametersSchema,
     chat::Tool,

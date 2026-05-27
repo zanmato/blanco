@@ -2,7 +2,7 @@ use crate::transformers::sql_transformer::{
     should_quote_value, sql_escape_string_to, sql_identifier,
 };
 use crate::transformers::{DataTransformer, SelectedTableData, TransformError};
-use blanco_core::connection_trait::ColumnType;
+use blanco_core::ColumnType;
 use database::DatabaseType;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -248,7 +248,7 @@ impl DataTransformer for ValuesTransformer {
 mod tests {
     use super::*;
     use crate::results_panel::{SelectedCell, SelectedRow, SelectedTableData};
-    use blanco_core::connection_trait::ColumnType;
+    use blanco_core::ColumnType;
 
     fn make_data(db_type: DatabaseType, table_name: Option<&str>) -> SelectedTableData {
         SelectedTableData {

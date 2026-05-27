@@ -1,5 +1,5 @@
 use crate::transformers::{DataTransformer, SelectedTableData, TransformError};
-use blanco_core::connection_trait::ColumnType;
+use blanco_core::ColumnType;
 
 pub struct TsvTransformer;
 

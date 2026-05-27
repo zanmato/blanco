@@ -48,7 +48,7 @@ pub struct ResultsTableDelegate {
     pub db_type: Option<database::DatabaseType>,
     pub original_query: Option<String>,
     /// Column metadata for tooltips and rendering
-    table_columns: Vec<blanco_core::connection_trait::ColumnInfo>,
+    table_columns: Vec<blanco_core::ColumnInfo>,
 }
 
 impl ResultsTableDelegate {
@@ -1390,7 +1390,7 @@ mod tests {
 
     #[test]
     fn test_primary_key_update_preserves_original_value() {
-        use blanco_core::connection_trait::ColumnInfo;
+        use blanco_core::ColumnInfo;
 
         let mut delegate = ResultsTableDelegate {
             table_name: Some("test_table".to_string()),

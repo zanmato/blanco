@@ -1,4 +1,4 @@
-use blanco_core::connection_trait::DriverType;
+use blanco_core::DriverType;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum ConnectorType {

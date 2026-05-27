@@ -922,7 +922,7 @@ impl Connection for MysqlConnection {
     async fn get_queryable_entities(
         &self,
         _schema: Option<&str>,
-    ) -> Result<Vec<blanco_core::connection_trait::QueryableEntity>, anyhow::Error> {
+    ) -> Result<Vec<blanco_core::QueryableEntity>, anyhow::Error> {
         let database = self
             .initial_database
             .as_ref()
@@ -940,7 +940,7 @@ impl Connection for MysqlConnection {
 
         let rows = sqlx::query(query).bind(database).fetch_all(&pool).await?;
 
-        use blanco_core::connection_trait::{EntityType, QueryableEntity};
+        use blanco_core::{EntityType, QueryableEntity};
         let entities: Vec<QueryableEntity> = rows
             .iter()
             .filter_map(|row| {
@@ -1048,7 +1048,7 @@ impl Connection for MysqlConnection {
         table_names: Option<&str>,
         limit: Option<i64>,
         offset: Option<i64>,
-    ) -> Result<blanco_core::connection_trait::DatabaseSchemaResult> {
+    ) -> Result<blanco_core::DatabaseSchemaResult> {
         let limit = limit.unwrap_or(20).min(100) as i32; // Default 20, max 100
         let offset = offset.unwrap_or(0) as i32;
 
@@ -1057,11 +1057,11 @@ impl Connection for MysqlConnection {
             .await?;
         let table_count = tables.len();
 
-        Ok(blanco_core::connection_trait::DatabaseSchemaResult {
+        Ok(blanco_core::DatabaseSchemaResult {
             connection_type: self.get_connection_type().to_string(),
             display_name: self.get_display_name(),
             tables,
-            pagination: blanco_core::connection_trait::PaginationInfo {
+            pagination: blanco_core::PaginationInfo {
                 limit: Some(limit as i64),
                 offset: Some(offset as i64),
                 has_more: table_count == limit as usize,

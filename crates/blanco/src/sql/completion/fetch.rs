@@ -1,5 +1,5 @@
 use anyhow::Result;
-use blanco_core::connection_trait::QueryableEntity;
+use blanco_core::QueryableEntity;
 use database::DatabaseServiceTrait;
 
 /// Fetch all queryable entities (tables, views, materialized views) using the DbService

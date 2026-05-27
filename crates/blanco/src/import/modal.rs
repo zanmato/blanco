@@ -7,7 +7,7 @@ use crate::import::service::{
     DEFAULT_BATCH_SIZE, ImportError, ImportReport, ImportRequest, run_import,
 };
 use crate::result_ext::ResultExt;
-use blanco_core::connection_trait::ColumnInfo;
+use blanco_core::ColumnInfo;
 use database::{DatabaseService, DatabaseType};
 use encoding_rs::Encoding;
 use gpui::{

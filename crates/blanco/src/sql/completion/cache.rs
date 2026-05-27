@@ -1,4 +1,4 @@
-use blanco_core::connection_trait::QueryableEntity;
+use blanco_core::QueryableEntity;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};

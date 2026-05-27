@@ -2,7 +2,7 @@ mod cache;
 mod context;
 mod fetch;
 
-use blanco_core::connection_trait::QueryableEntity;
+use blanco_core::QueryableEntity;
 pub use cache::{CacheEntry, MetadataCache};
 pub use context::{generate_table_abbreviation, resolve_table_alias};
 pub use fetch::{fetch_columns, fetch_queryable_entities};

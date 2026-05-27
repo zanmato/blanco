@@ -655,13 +655,13 @@ impl ConnectionsPanel {
                 TreeItemKind::Procedure | TreeItemKind::Function | TreeItemKind::Trigger => {
                     let routine_kind = match metadata.kind {
                         TreeItemKind::Procedure => {
-                            blanco_core::connection_trait::RoutineKind::Procedure
+                            blanco_core::RoutineKind::Procedure
                         }
                         TreeItemKind::Function => {
-                            blanco_core::connection_trait::RoutineKind::Function
+                            blanco_core::RoutineKind::Function
                         }
                         TreeItemKind::Trigger => {
-                            blanco_core::connection_trait::RoutineKind::Trigger
+                            blanco_core::RoutineKind::Trigger
                         }
                         _ => unreachable!(),
                     };

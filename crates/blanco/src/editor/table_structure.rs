@@ -10,7 +10,7 @@ use gpui_component::{
 };
 
 use crate::app_database::EnvironmentType;
-use blanco_core::connection_trait::{ColumnInfo, IndexInfo};
+use blanco_core::{ColumnInfo, IndexInfo};
 
 pub struct TableStructureTab {
     pub title: String,

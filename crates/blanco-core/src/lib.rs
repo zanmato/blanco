@@ -11,7 +11,8 @@ pub mod table_extractor;
 // Re-export main types for convenience
 pub use connection_trait::{
     ColumnInfo, ColumnType, Connection, ConnectionFactory, DatabaseSchemaResult, DriverType,
-    PaginationInfo, QueryResult, TableMetadata, TableSchemaInfo,
+    EntityType, ForeignKeyInfo, InboundForeignKey, IndexInfo, PaginationInfo, QueryResult,
+    QueryableEntity, RoutineKind, TableMetadata, TableSchemaInfo,
 };
 
 pub use database_service::{ConnectionStatus, DatabaseService};

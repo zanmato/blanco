@@ -142,7 +142,7 @@ pub struct CreateNewQueryTab {
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
 pub struct OpenObjectDdl {
-    pub kind: blanco_core::connection_trait::RoutineKind,
+    pub kind: blanco_core::RoutineKind,
     pub connection_id: i64,
     pub connection_name: String,
     pub db_type: database::DatabaseType,

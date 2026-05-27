@@ -76,7 +76,7 @@ impl Default for CopyHandler {
 mod tests {
     use super::*;
     use crate::results_panel::{SelectedCell, SelectedRow, SelectedTableData};
-    use blanco_core::connection_trait::ColumnType;
+    use blanco_core::ColumnType;
 
     fn create_test_data() -> SelectedTableData {
         SelectedTableData {

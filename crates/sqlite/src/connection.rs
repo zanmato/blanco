@@ -418,7 +418,7 @@ impl Connection for SqliteConnection {
     async fn get_queryable_entities(
         &self,
         schema: Option<&str>,
-    ) -> Result<Vec<blanco_core::connection_trait::QueryableEntity>, anyhow::Error> {
+    ) -> Result<Vec<blanco_core::QueryableEntity>, anyhow::Error> {
         let schema_filter = schema.unwrap_or("main");
         let query = format!(
             "SELECT name, \
@@ -431,7 +431,7 @@ impl Connection for SqliteConnection {
 
         let result = self.execute_query(&query, None, None).await?;
 
-        use blanco_core::connection_trait::{EntityType, QueryableEntity};
+        use blanco_core::{EntityType, QueryableEntity};
         let entities: Vec<QueryableEntity> = result
             .rows
             .into_iter()
@@ -616,7 +616,7 @@ impl Connection for SqliteConnection {
         table_names: Option<&str>,
         limit: Option<i64>,
         offset: Option<i64>,
-    ) -> Result<blanco_core::connection_trait::DatabaseSchemaResult> {
+    ) -> Result<blanco_core::DatabaseSchemaResult> {
         let limit = limit.unwrap_or(20).min(100); // Default 20, max 100
         let offset = offset.unwrap_or(0);
 
@@ -625,11 +625,11 @@ impl Connection for SqliteConnection {
             .await?;
         let table_count = tables.len();
 
-        Ok(blanco_core::connection_trait::DatabaseSchemaResult {
+        Ok(blanco_core::DatabaseSchemaResult {
             connection_type: self.get_connection_type().to_string(),
             display_name: self.get_display_name(),
             tables,
-            pagination: blanco_core::connection_trait::PaginationInfo {
+            pagination: blanco_core::PaginationInfo {
                 limit: Some(limit),
                 offset: Some(offset),
                 has_more: table_count == limit as usize,

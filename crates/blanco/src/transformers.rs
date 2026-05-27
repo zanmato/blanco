@@ -1,4 +1,4 @@
-use blanco_core::connection_trait::ColumnType;
+use blanco_core::ColumnType;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;

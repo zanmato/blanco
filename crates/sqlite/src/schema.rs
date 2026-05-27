@@ -3,7 +3,7 @@
 use crate::connection::SqliteConnection;
 use anyhow::Result;
 use blanco_core::Connection;
-use blanco_core::connection_trait::{
+use blanco_core::{
     ColumnInfo, ForeignKeyInfo, InboundForeignKey, TableSchemaInfo,
 };
 use std::collections::{HashMap, HashSet};

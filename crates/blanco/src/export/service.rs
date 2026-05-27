@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::modal::ExportOptions;
 use crate::{results_panel::SelectedTableData, transformers::DataTransformer};
-use blanco_core::connection_trait::ColumnType;
+use blanco_core::ColumnType;
 
 /// Progress information for export operations
 #[derive(Clone, Debug)]

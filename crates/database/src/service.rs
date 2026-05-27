@@ -565,7 +565,7 @@ impl DatabaseServiceTrait for DatabaseService {
             let configs = self.connection_configs.read().await;
             configs
                 .get(&connection_id)
-                .map(|config| DriverType::from(config.db_type).to_string().to_owned())
+                .map(|config| DriverType::from(config.db_type).to_string())
                 .unwrap_or_else(|| "Unknown".to_string())
         };
 
