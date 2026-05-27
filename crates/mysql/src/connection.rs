@@ -156,7 +156,7 @@ impl MysqlConnection {
             "tinyint" | "smallint" | "mediumint" | "int" | "bigint" => ColumnType::Integer,
             "float" | "double" | "decimal" | "numeric" => ColumnType::Numeric,
             "char" | "varchar" | "text" => ColumnType::Text,
-            "date" | "datetime" | "timestamp" | "time" => ColumnType::DateTime,
+            "date" | "datetime" | "timestamp" | "time" | "year" => ColumnType::DateTime,
             "json" => ColumnType::Json,
             "binary" | "varbinary" | "blob" => ColumnType::Binary,
             "boolean" => ColumnType::Boolean,
@@ -415,18 +415,30 @@ impl MysqlConnection {
             return Some(v.format("%H:%M:%S").to_string());
         }
 
-        // DATETIME, TIMESTAMP
-        if (raw_type.contains("DATETIME") || raw_type.contains("TIMESTAMP"))
+        // DATETIME, TIMESTAMP — sqlx decodes TIMESTAMP as DateTime<Utc>
+        // (since TIMESTAMP is stored as UTC), and DATETIME as NaiveDateTime.
+        if raw_type.contains("TIMESTAMP")
+            && let Ok(Some(v)) = row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>(column_index)
+        {
+            return Some(v.format("%Y-%m-%d %H:%M:%S").to_string());
+        }
+        if raw_type.contains("DATETIME")
             && let Ok(Some(v)) = row.try_get::<Option<chrono::NaiveDateTime>, _>(column_index)
         {
             return Some(v.format("%Y-%m-%d %H:%M:%S").to_string());
         }
 
-        // YEAR
-        if raw_type.contains("YEAR")
-            && let Ok(Some(v)) = row.try_get::<Option<i16>, _>(column_index)
-        {
-            return Some(v.to_string());
+        // YEAR — sqlx may decode as u16, i16, i32, or u32 depending on driver version.
+        if raw_type.contains("YEAR") {
+            if let Ok(Some(v)) = row.try_get::<Option<u16>, _>(column_index) {
+                return Some(v.to_string());
+            }
+            if let Ok(Some(v)) = row.try_get::<Option<i16>, _>(column_index) {
+                return Some(v.to_string());
+            }
+            if let Ok(Some(v)) = row.try_get::<Option<i32>, _>(column_index) {
+                return Some(v.to_string());
+            }
         }
 
         // Fallback: try string conversion
