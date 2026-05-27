@@ -7,6 +7,11 @@ mod rename_form;
 mod snippet_editor;
 mod sql_operations;
 mod table_structure;
+mod tabs;
+
+pub use tabs::{
+    ObjectDdlParams, QueryTab, SettingsTab, TabCreationParams, TabType, TableStructureParams,
+};
 
 use blanco_core::{ColumnInfo, IndexInfo, RoutineKind};
 use blanco_ui::{Tab, TabBar};
@@ -38,7 +43,7 @@ use crate::app::RenameTab;
 use crate::app::ToggleSidebar;
 use crate::app::{ExecuteSubstitutedQuery, FormatQuery};
 use crate::app_database::AppDatabase;
-use crate::app_database::{EnvironmentType, QueryTabData};
+use crate::app_database::QueryTabData;
 use crate::app_settings::AppSettings;
 use crate::result_ext::ResultExt;
 use crate::results_panel::ResultsPanel;
@@ -47,44 +52,6 @@ use crate::sql::{SqlCompletionProvider, SqlSelectionRangeProvider, SqruffService
 use blanco_ui::{IconName, SqlLog, SqlLogMessage};
 use database::{DatabaseService, DatabaseServiceTrait};
 use gpui_component::Icon;
-
-pub enum TabType {
-    Query(Box<QueryTab>),
-    Settings(SettingsTab),
-    Snippet(Entity<SnippetEditor>),
-    TableStructure(Entity<TableStructureTab>),
-    ObjectDdl(Entity<ObjectDdlTab>),
-}
-
-pub struct QueryTab {
-    pub title: String,
-    pub connection_id: i64,               // Connection ID from app database
-    pub _db_type: database::DatabaseType, // Database type for this connection
-    pub connection_name: Option<String>,  // Connection name from database
-    pub database_name: String,            // Database name this tab is connected to
-    pub schema_name: Option<String>,      // Optional schema name for context
-    pub environment_type: Option<EnvironmentType>, // Environment type from connection
-    pub editor: Entity<InputState>,
-    pub db_id: Option<i64>,                  // Database ID for persistence
-    pub results_panel: Entity<ResultsPanel>, // Each tab has its own results
-    pub sql_log: Entity<SqlLog>,             // SQL log for this tab
-    // Chat functionality
-    pub chat_enabled: bool,
-    pub chat_panel: Option<Entity<ChatPanel>>,
-    pub sql_log_visible: bool,
-    pub sqruff_service: Option<Arc<SqruffService>>,
-    pub completion_provider: Option<SqlCompletionProvider>,
-    /// In-memory cache of the last values entered for query parameters in
-    /// this tab, keyed by parameter label (e.g. "$1" or ":user_id"). Used
-    /// to prefill the parameter modal on subsequent runs within the same
-    /// session.
-    pub last_parameter_values: HashMap<String, String>,
-}
-
-pub struct SettingsTab {
-    pub title: String,
-    pub settings_view: Entity<SettingsView>,
-}
 
 pub struct EditorPanel {
     focus_handle: FocusHandle,
@@ -115,45 +82,6 @@ const LINT_DEBOUNCE_MS: u64 = 500;
 /// Maximum length of SQL query to log in the SQL log panel
 /// Queries longer than this will be truncated to avoid performance issues
 const SQL_QUERY_LOG_MAX_LENGTH: usize = 2000;
-
-/// Parameters for creating a new tab with connection
-#[derive(Clone)]
-pub struct TabCreationParams {
-    pub title: String,
-    pub content: Option<String>,
-    pub db_id: Option<i64>,
-    pub connection_id: i64,
-    pub db_type: database::DatabaseType,
-    pub connection_name: Option<String>,
-    pub database_name: String,
-    pub schema_name: Option<String>,
-    pub environment_type: Option<EnvironmentType>,
-}
-
-/// Parameters for creating an object DDL tab (procedures/functions/triggers).
-#[derive(Clone)]
-pub struct ObjectDdlParams {
-    pub kind: RoutineKind,
-    pub connection_id: i64,
-    pub connection_name: String,
-    pub db_type: database::DatabaseType,
-    pub database_name: String,
-    pub schema_name: Option<String>,
-    pub object_name: String,
-    pub environment_type: Option<EnvironmentType>,
-}
-
-/// Parameters for creating a table structure tab
-#[derive(Clone)]
-pub struct TableStructureParams {
-    pub connection_id: i64,
-    pub connection_name: String,
-    pub db_type: database::DatabaseType,
-    pub database_name: String,
-    pub schema_name: Option<String>,
-    pub table_name: String,
-    pub environment_type: Option<EnvironmentType>,
-}
 
 impl EditorPanel {
     #[cfg(test)]
