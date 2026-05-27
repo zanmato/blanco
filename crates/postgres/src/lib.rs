@@ -17,17 +17,44 @@ mod tests {
     use sqlx::{Column, Row, postgres::PgPoolOptions};
     use std::env;
 
+    fn default_connection_string() -> String {
+        env::var("POSTGRES_CONNECTION_STRING").unwrap_or_else(|_| {
+            "postgres://blanco:blanco@localhost:5488/blanco?sslmode=disable".to_string()
+        })
+    }
+
+    /// Decide whether to fail or skip a test when the PostgreSQL server is
+    /// not reachable. `BLANCO_RUN_DB_TESTS=1` turns missing servers into a
+    /// hard failure; otherwise tests print a skip message and return Ok.
+    fn handle_unreachable(
+        test_name: &str,
+        err: &dyn std::fmt::Display,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if env::var("BLANCO_RUN_DB_TESTS").as_deref() == Ok("1") {
+            Err(format!("{test_name}: PostgreSQL unreachable: {err}").into())
+        } else {
+            eprintln!(
+                "skip {test_name}: PostgreSQL unreachable ({err}). Set BLANCO_RUN_DB_TESTS=1 to require."
+            );
+            Ok(())
+        }
+    }
+
     #[tokio::test]
     async fn test_postgres_data_type_serialization() -> Result<(), Box<dyn std::error::Error>> {
         async {
-            let connection_string = env::var("POSTGRES_CONNECTION_STRING").unwrap_or_else(|_| {
-                "postgres://blanco:blanco@localhost:5488/blanco?sslmode=disable".to_string()
-            });
+            let connection_string = default_connection_string();
 
-            let test_pool = PgPoolOptions::new()
+            let test_pool = match PgPoolOptions::new()
                 .max_connections(5)
                 .connect(&connection_string)
-                .await?;
+                .await
+            {
+                Ok(pool) => pool,
+                Err(e) => {
+                    return handle_unreachable("test_postgres_data_type_serialization", &e);
+                }
+            };
 
             sqlx::query("DROP TYPE IF EXISTS custom_enum CASCADE")
                 .execute(&test_pool)
@@ -251,15 +278,16 @@ mod tests {
     #[tokio::test]
     async fn test_computed_column_type_detection() -> Result<(), Box<dyn std::error::Error>> {
         async {
-            // Use environment variable for connection string or fallback to default
-            let connection_string = env::var("POSTGRES_CONNECTION_STRING").unwrap_or_else(|_| {
-                "postgres://blanco:blanco@localhost:5488/blanco?sslmode=disable".to_string()
-            });
+            let connection_string = default_connection_string();
 
-            let test_pool = PgPoolOptions::new()
+            let test_pool = match PgPoolOptions::new()
                 .max_connections(5)
                 .connect(&connection_string)
-                .await?;
+                .await
+            {
+                Ok(pool) => pool,
+                Err(e) => return handle_unreachable("test_computed_column_type_detection", &e),
+            };
 
             // Create test table if it doesn't exist
             sqlx::query("DROP TABLE IF EXISTS computed_test")
@@ -324,12 +352,10 @@ mod tests {
 
             match pool_result {
                 Ok(pool) => {
-                    // Simple query to verify connection works
                     let row: sqlx::postgres::PgRow =
                         sqlx::query("SELECT 1 as value").fetch_one(&pool).await?;
                     assert_eq!(row.get::<i32, _>(0), 1);
 
-                    // Check SSL is in use via pg_stat_ssl
                     let ssl_row: sqlx::postgres::PgRow =
                         sqlx::query("SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()")
                             .fetch_one(&pool)
@@ -337,20 +363,9 @@ mod tests {
                     assert!(ssl_row.get::<bool, _>(0), "SSL should be in use");
 
                     pool.close().await;
-                    println!("SSL connection test passed with CA verification!");
                     Ok(())
                 }
-                Err(e) => {
-                    // Skip test if SSL PostgreSQL container is not running
-                    println!(
-                        "Skipping SSL test - SSL PostgreSQL container not available: {}",
-                        e
-                    );
-                    println!(
-                        "To run this test, start the container with: docker-compose up -d postgrestestdb_ssl"
-                    );
-                    Ok(())
-                }
+                Err(e) => handle_unreachable("test_postgres_ssl_connection", &e),
             }
         }
         .await

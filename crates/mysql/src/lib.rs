@@ -21,13 +21,25 @@ mod tests {
             .unwrap_or_else(|_| "mysql://root:blanco@127.0.0.1:3306/blanco".to_string())
     }
 
+    /// Decide whether to fail or skip a test when the MySQL server is not
+    /// reachable. When `BLANCO_RUN_DB_TESTS=1` is set, an unreachable server
+    /// is a hard failure; otherwise the test prints a skip message and
+    /// returns Ok(()).
+    fn handle_unreachable(test_name: &str, err: &dyn std::fmt::Display) -> Result<(), Box<dyn std::error::Error>> {
+        if env::var("BLANCO_RUN_DB_TESTS").as_deref() == Ok("1") {
+            Err(format!("{test_name}: MySQL unreachable: {err}").into())
+        } else {
+            eprintln!("skip {test_name}: MySQL unreachable ({err}). Set BLANCO_RUN_DB_TESTS=1 to require.");
+            Ok(())
+        }
+    }
+
     #[tokio::test]
     async fn test_mysql_data_type_serialization() -> Result<(), Box<dyn std::error::Error>> {
         let connection_string = default_connection_string();
         let mut conn = crate::MysqlConnection::from_connection_string(&connection_string)?;
-        if conn.connect(&connection_string).await.is_err() {
-            eprintln!("skip: MySQL not reachable at {connection_string}");
-            return Ok(());
+        if let Err(e) = conn.connect(&connection_string).await {
+            return handle_unreachable("test_mysql_data_type_serialization", &e);
         }
         let database = Some("blanco");
 
@@ -202,69 +214,48 @@ mod tests {
 
     #[tokio::test]
     async fn test_mysql_basic_connection() -> Result<(), Box<dyn std::error::Error>> {
-        async {
-            let connection_string = env::var("MYSQL_CONNECTION_STRING")
-                .unwrap_or_else(|_| "mysql://root:blanco@172.19.0.2:3306/mysql".to_string());
+        let connection_string = default_connection_string();
+        let mysql_connection = crate::MysqlConnection::from_connection_string(&connection_string)?;
 
-            let mysql_connection =
-                crate::MysqlConnection::from_connection_string(&connection_string)?;
-
-            // Test basic query that should work without creating tables
-            let simple_result = mysql_connection
-                .execute_query("SELECT 1 as test_value, 'hello' as test_text", None, None)
-                .await;
-
-            match simple_result {
-                Ok(result) => {
-                    assert!(
-                        !result.rows.is_empty(),
-                        "Simple query should return results"
-                    );
-                    assert_eq!(result.columns.len(), 2);
-                    assert_eq!(result.columns[0], "test_value");
-                    assert_eq!(result.columns[1], "test_text");
-                    println!("MySQL connection successful");
-                }
-                Err(e) => {
-                    println!(
-                        "MySQL connection failed (this is expected if database is not accessible): {}",
-                        e
-                    );
-                    return Ok(());
-                }
+        match mysql_connection
+            .execute_query("SELECT 1 as test_value, 'hello' as test_text", None, None)
+            .await
+        {
+            Ok(result) => {
+                assert!(
+                    !result.rows.is_empty(),
+                    "Simple query should return results"
+                );
+                assert_eq!(result.columns.len(), 2);
+                assert_eq!(result.columns[0], "test_value");
+                assert_eq!(result.columns[1], "test_text");
             }
-
-            // Test connection metadata
-            assert_eq!(mysql_connection.get_connection_type(), "MySQL");
-            assert!(mysql_connection.get_display_name().contains("MySQL"));
-
-            // Test table extraction
-            let from_table = mysql_connection
-                .extract_table_name_from_query("SELECT * FROM users WHERE id = 1", false)?;
-            assert_eq!(from_table, Some("users".to_string()));
-
-            Ok(())
+            Err(e) => return handle_unreachable("test_mysql_basic_connection", &e),
         }
-        .await
+
+        assert_eq!(mysql_connection.get_connection_type(), "MySQL");
+        assert!(mysql_connection.get_display_name().contains("MySQL"));
+
+        let from_table = mysql_connection
+            .extract_table_name_from_query("SELECT * FROM users WHERE id = 1", false)?;
+        assert_eq!(from_table, Some("users".to_string()));
+
+        Ok(())
     }
 
     #[tokio::test]
     async fn test_mysql_indexes() -> Result<(), Box<dyn std::error::Error>> {
         async {
-            let connection_string = env::var("MYSQL_CONNECTION_STRING")
-                .unwrap_or_else(|_| "mysql://root:blanco@172.19.0.2:3306/mysql".to_string());
+            let connection_string = default_connection_string();
 
             let mysql_connection =
                 crate::MysqlConnection::from_connection_string(&connection_string)?;
 
-            // Test basic connection first
-            let simple_result = mysql_connection
+            if let Err(e) = mysql_connection
                 .execute_query("SELECT 1 as test_value", None, None)
-                .await;
-
-            if simple_result.is_err() {
-                println!("MySQL connection failed, skipping index test");
-                return Ok(());
+                .await
+            {
+                return handle_unreachable("test_mysql_indexes", &e);
             }
 
             // Drop test table if exists
