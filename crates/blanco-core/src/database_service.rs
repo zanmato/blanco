@@ -29,13 +29,9 @@ pub trait DatabaseService: Send + Sync {
     /// The database parameter allows switching databases for connections that support it (e.g., PostgreSQL)
     async fn get_or_create_connection_by_id(
         &self,
-        _connection_id: i64,
-        _database: Option<&str>,
-    ) -> Result<Arc<dyn Connection>> {
-        Err(anyhow::anyhow!(
-            "get_or_create_connection_by_id not implemented - trait default only"
-        ))
-    }
+        connection_id: i64,
+        database: Option<&str>,
+    ) -> Result<Arc<dyn Connection>>;
 
     /// Execute a query using the provided connection ID and optional database
     async fn execute_query(
@@ -117,22 +113,14 @@ pub trait DatabaseService: Send + Sync {
     /// Get connection status for UI display
     async fn get_connection_status(
         &self,
-        _connection_id: i64,
-        _database_name: Option<&str>,
-    ) -> Result<ConnectionStatus> {
-        Err(anyhow::anyhow!(
-            "get_connection_status not implemented - trait default only"
-        ))
-    }
+        connection_id: i64,
+        database_name: Option<&str>,
+    ) -> Result<ConnectionStatus>;
 
     /// Get all active connection statuses for UI tree
     async fn get_active_connection_statuses(
         &self,
-    ) -> Result<HashMap<(i64, String), ConnectionStatus>> {
-        Err(anyhow::anyhow!(
-            "get_active_connection_statuses not implemented - trait default only"
-        ))
-    }
+    ) -> Result<HashMap<(i64, String), ConnectionStatus>>;
 
     /// Perform a foreign key lookup that returns all rows for small tables
     /// or just the referenced row for large tables
