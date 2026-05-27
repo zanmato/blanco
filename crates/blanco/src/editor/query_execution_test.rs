@@ -1,4 +1,5 @@
-use gpui::{TestAppContext, VisualTestContext};
+use gpui::{AppContext, TestAppContext, VisualTestContext};
+use std::collections::HashMap;
 
 use crate::test_harness::{
     TestHarness, result_cell, result_columns, result_row_count, run_query, set_editor_text,
@@ -181,4 +182,125 @@ async fn test_empty_result_set(cx: &mut TestAppContext) {
     // Worth fixing separately; for now the test just guards against panics.
     let columns = result_columns(&harness, &cx).expect("should have columns");
     assert!(!columns.is_empty(), "got {columns:?}");
+}
+
+/// Build a ParameterForm directly and confirm the substituted query is
+/// produced by walking byte offsets in descending order. Skips the modal UI
+/// since that goes through gpui_component's dialog system which is awkward to
+/// drive headlessly; this targets the substitution logic itself.
+#[gpui::test]
+async fn test_parameter_form_substitutes_named_params(cx: &mut TestAppContext) {
+    use crate::editor::parameter_form::ParameterForm;
+    use crate::sql::statement_parser::{ParameterStyle, QueryParameter};
+
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    let query = "SELECT * FROM users WHERE id = :uid AND status = :st";
+    let params = vec![
+        QueryParameter {
+            style: ParameterStyle::Named("uid".into()),
+            raw_text: ":uid".into(),
+            byte_offset: query.find(":uid").unwrap(),
+        },
+        QueryParameter {
+            style: ParameterStyle::Named("st".into()),
+            raw_text: ":st".into(),
+            byte_offset: query.find(":st").unwrap(),
+        },
+    ];
+    let initial = HashMap::from([
+        (":uid".to_string(), "42".to_string()),
+        (":st".to_string(), "active".to_string()),
+    ]);
+
+    let form = harness
+        .editor_panel
+        .update_in(&mut cx, |_panel, window, cx| {
+            cx.new(|cx| ParameterForm::new(query.to_string(), params, &initial, window, cx))
+        });
+
+    let substituted = form.read_with(&cx, |f, cx| f.get_substituted_query(cx));
+    assert_eq!(
+        substituted,
+        "SELECT * FROM users WHERE id = 42 AND status = active",
+        "named parameters should be substituted in-place"
+    );
+
+    let values = form.read_with(&cx, |f, cx| f.current_values(cx));
+    assert_eq!(values.get(":uid").map(String::as_str), Some("42"));
+    assert_eq!(values.get(":st").map(String::as_str), Some("active"));
+}
+
+/// Same parameter appearing twice in a query must be substituted at both
+/// offsets, not just one. Regression guard for the byte-offset walk.
+#[gpui::test]
+async fn test_parameter_form_substitutes_repeated_param(cx: &mut TestAppContext) {
+    use crate::editor::parameter_form::ParameterForm;
+    use crate::sql::statement_parser::{ParameterStyle, QueryParameter};
+
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    let query = "SELECT :x, :x + 1, :x * 2";
+    let mut params = Vec::new();
+    let mut search_from = 0;
+    while let Some(pos) = query[search_from..].find(":x") {
+        let offset = search_from + pos;
+        params.push(QueryParameter {
+            style: ParameterStyle::Named("x".into()),
+            raw_text: ":x".into(),
+            byte_offset: offset,
+        });
+        search_from = offset + 2;
+    }
+    assert_eq!(params.len(), 3, "test setup: expected three :x occurrences");
+
+    let initial = HashMap::from([(":x".to_string(), "7".to_string())]);
+    let form = harness
+        .editor_panel
+        .update_in(&mut cx, |_panel, window, cx| {
+            cx.new(|cx| ParameterForm::new(query.to_string(), params, &initial, window, cx))
+        });
+
+    let substituted = form.read_with(&cx, |f, cx| f.get_substituted_query(cx));
+    assert_eq!(substituted, "SELECT 7, 7 + 1, 7 * 2");
+}
+
+/// Positional parameters ($1, $2) must substitute the way SQL clients expect
+/// (the index, not the dollar sign, stays).
+#[gpui::test]
+async fn test_parameter_form_substitutes_positional_params(cx: &mut TestAppContext) {
+    use crate::editor::parameter_form::ParameterForm;
+    use crate::sql::statement_parser::{ParameterStyle, QueryParameter};
+
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    let query = "SELECT $1, $2";
+    let params = vec![
+        QueryParameter {
+            style: ParameterStyle::Positional(1),
+            raw_text: "$1".into(),
+            byte_offset: query.find("$1").unwrap(),
+        },
+        QueryParameter {
+            style: ParameterStyle::Positional(2),
+            raw_text: "$2".into(),
+            byte_offset: query.find("$2").unwrap(),
+        },
+    ];
+    let initial = HashMap::from([
+        ("$1".to_string(), "'alice'".to_string()),
+        ("$2".to_string(), "100".to_string()),
+    ]);
+
+    let form = harness
+        .editor_panel
+        .update_in(&mut cx, |_panel, window, cx| {
+            cx.new(|cx| ParameterForm::new(query.to_string(), params, &initial, window, cx))
+        });
+
+    let substituted = form.read_with(&cx, |f, cx| f.get_substituted_query(cx));
+    assert_eq!(substituted, "SELECT 'alice', 100");
 }
