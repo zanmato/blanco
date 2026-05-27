@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use blanco_ui::IconName;
@@ -9,32 +8,25 @@ use gpui::{
     prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme, Sizable as _, WindowExt as _,
+    ActiveTheme, Sizable as _,
     button::{Button, ButtonVariants as _},
     input::{InputEvent, InputState},
-    notification::NotificationType,
     table::{DataTable, TableEvent, TableState},
     v_flex,
 };
 
-use blanco_core::QueryResult;
 use blanco_core::ColumnType;
+use blanco_core::QueryResult;
 use database::DatabaseService;
 
-use crate::app::{
-    AddRow, CopyAsCSV, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CopyAsVALUES, DeleteRow,
-    DuplicateRow, ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV,
-    SetCellNull,
-};
-use crate::export::service::{ExportResult, ExportService};
+use crate::app::{AddRow, DeleteRow, DuplicateRow, SetCellNull};
 use crate::result_ext::ResultExt;
 use crate::time_format;
-use crate::transformers::{
-    CopyHandler, CsvTransformer, DataTransformer, JsonTransformer, MarkdownTransformer,
-    SqlTransformer,
-};
+use crate::transformers::CopyHandler;
 
 mod cell_edit_state;
+mod clipboard;
+mod export_actions;
 mod foreign_key_popover;
 mod results_table_delegate;
 mod table_operations;
@@ -1081,153 +1073,7 @@ impl ResultsPanel {
         cx.notify();
     }
 
-    // Copy and selection action handlers
-
-    fn on_copy_as_csv(
-        &mut self,
-        _action: &CopyAsCSV,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let table_state = self.table_state.read(cx);
-        let mut selected_rows = table_state.selected_rows().clone();
-        let delegate = table_state.delegate();
-
-        if selected_rows.is_empty() {
-            if let Some(cell) = table_state.selected_cell() {
-                selected_rows.insert(cell.0);
-            } else {
-                tracing::error!("Failed to copy as CSV: No rows selected for copying");
-                return;
-            }
-        }
-
-        let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
-
-        self.copy_handler.copy_as_format(&selected_data, "csv", cx);
-    }
-
-    fn on_copy_as_tsv(
-        &mut self,
-        _action: &CopyAsTSV,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let table_state = self.table_state.read(cx);
-        let mut selected_rows = table_state.selected_rows().clone();
-        let delegate = table_state.delegate();
-
-        if selected_rows.is_empty() {
-            if let Some(cell) = table_state.selected_cell() {
-                selected_rows.insert(cell.0);
-            } else {
-                tracing::error!("Failed to copy as TSV: No rows selected for copying");
-                return;
-            }
-        }
-
-        let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
-
-        self.copy_handler.copy_as_format(&selected_data, "tsv", cx);
-    }
-
-    fn on_copy_as_json(
-        &mut self,
-        _action: &CopyAsJSON,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let table_state = self.table_state.read(cx);
-        let mut selected_rows = table_state.selected_rows().clone();
-        let delegate = table_state.delegate();
-
-        if selected_rows.is_empty() {
-            if let Some(cell) = table_state.selected_cell() {
-                selected_rows.insert(cell.0);
-            } else {
-                tracing::error!("Failed to copy as JSON: No rows selected for copying");
-                return;
-            }
-        }
-
-        let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
-
-        self.copy_handler.copy_as_format(&selected_data, "json", cx);
-    }
-
-    fn on_copy_as_sql(
-        &mut self,
-        _action: &CopyAsSQL,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let table_state = self.table_state.read(cx);
-        let mut selected_rows = table_state.selected_rows().clone();
-        let delegate = table_state.delegate();
-
-        if selected_rows.is_empty() {
-            if let Some(cell) = table_state.selected_cell() {
-                selected_rows.insert(cell.0);
-            } else {
-                tracing::error!("Failed to copy as SQL: No rows selected for copying");
-                return;
-            }
-        }
-
-        let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
-
-        self.copy_handler.copy_as_format(&selected_data, "sql", cx);
-    }
-
-    fn on_copy_as_values(
-        &mut self,
-        _action: &CopyAsVALUES,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let table_state = self.table_state.read(cx);
-        let mut selected_rows = table_state.selected_rows().clone();
-        let delegate = table_state.delegate();
-
-        if selected_rows.is_empty() {
-            if let Some(cell) = table_state.selected_cell() {
-                selected_rows.insert(cell.0);
-            } else {
-                tracing::error!("Failed to copy as VALUES: No rows selected for copying");
-                return;
-            }
-        }
-
-        let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
-
-        self.copy_handler
-            .copy_as_format(&selected_data, "values", cx);
-    }
-
-    fn on_copy_as_markdown(
-        &mut self,
-        _action: &CopyAsMarkdown,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let table_state = self.table_state.read(cx);
-        let mut selected_rows = table_state.selected_rows().clone();
-        let delegate = table_state.delegate();
-
-        if selected_rows.is_empty() {
-            if let Some(cell) = table_state.selected_cell() {
-                selected_rows.insert(cell.0);
-            } else {
-                tracing::error!("Failed to copy as Markdown: No rows selected for copying");
-                return;
-            }
-        }
-
-        let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
-
-        self.copy_handler
-            .copy_as_format(&selected_data, "markdown", cx);
-    }
+    // Row action handlers
 
     fn on_add_row(&mut self, _action: &AddRow, _window: &mut Window, cx: &mut Context<Self>) {
         self.add_new_row(cx);
@@ -1275,187 +1121,6 @@ impl ResultsPanel {
         });
 
         cx.notify();
-    }
-
-    fn on_export_as_csv(
-        &mut self,
-        _action: &ExportAsCSV,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.export_selected_as("csv", window, cx);
-    }
-
-    fn on_export_as_tsv(
-        &mut self,
-        _action: &ExportAsTSV,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.export_selected_as("tsv", window, cx);
-    }
-
-    fn on_export_as_json(
-        &mut self,
-        _action: &ExportAsJSON,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.export_selected_as("json", window, cx);
-    }
-
-    fn on_export_as_sql(
-        &mut self,
-        _action: &ExportAsSQL,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.export_selected_as("sql", window, cx);
-    }
-
-    fn on_export_as_markdown(
-        &mut self,
-        _action: &ExportAsMarkdown,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.export_selected_as("markdown", window, cx);
-    }
-
-    /// Export selected data in the specified format
-    fn export_selected_as(&mut self, format: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let table_state = self.table_state.read(cx);
-        let selected_rows = table_state.selected_rows().clone();
-        let delegate = table_state.delegate();
-
-        if selected_rows.is_empty() {
-            tracing::error!(
-                "Failed to export as {}: No rows selected for exporting",
-                format
-            );
-            return;
-        }
-
-        let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
-        let table_name = selected_data
-            .table_name
-            .clone()
-            .unwrap_or_else(|| "export".to_string());
-
-        // Get file extension
-        let extension = match format {
-            "csv" => "csv",
-            "json" => "json",
-            "sql" => "sql",
-            "markdown" => "md",
-            _ => "txt",
-        };
-
-        // Suggest default filename
-        let timestamp = chrono::Utc::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-        let default_filename = format!("{}_{}.{}", table_name, timestamp, extension);
-
-        // Get home directory as default directory
-        let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-
-        // Prompt for file save location using prompt_for_new_path
-        let path = cx.prompt_for_new_path(&home_dir, Some(&default_filename));
-
-        let format_owned = format.to_string();
-        let table_name_for_sql = table_name;
-        let db_type = selected_data
-            .db_type
-            .unwrap_or(database::DatabaseType::PostgreSQL);
-
-        cx.spawn_in(window, async move |entity, cx| {
-            let outer_result = path.await;
-
-            // Handle the outer Result (Canceled or inner Result)
-            let inner_result = match outer_result {
-                Ok(inner) => inner,
-                Err(_) => return, // Canceled
-            };
-
-            // Extract the path from Result<Option<PathBuf>>
-            let file_path = match inner_result {
-                Ok(Some(path_buf)) => path_buf,
-                _ => return, // User cancelled or error
-            };
-
-            // Get transformer
-            let transformer: Box<dyn DataTransformer> = match format_owned.as_str() {
-                "csv" => Box::new(CsvTransformer),
-                "json" => Box::new(JsonTransformer::new()),
-                "sql" => Box::new(SqlTransformer::with_table_name(
-                    table_name_for_sql.clone(),
-                    db_type,
-                )),
-                "markdown" => Box::new(MarkdownTransformer),
-                _ => {
-                    tracing::error!("Unknown format: {}", format_owned);
-                    return;
-                }
-            };
-
-            // Create export service
-            let export_service = ExportService::new();
-
-            // Execute export
-            match export_service
-                .export_selected_data(&selected_data, transformer.as_ref(), &file_path)
-                .await
-            {
-                Ok(result) => {
-                    match result {
-                        ExportResult::Success {
-                            file_path,
-                            rows_exported,
-                            ..
-                        } => {
-                            tracing::info!(
-                                "Export completed successfully: {} -> {} ({} rows)",
-                                format_owned,
-                                file_path,
-                                rows_exported
-                            );
-                            // Show success notification via entity update
-                            entity
-                                .update_in(cx, |_panel, window, cx| {
-                                    window.push_notification(
-                                        (
-                                            NotificationType::Success,
-                                            SharedString::from(format!(
-                                                "Exported {} rows to {}",
-                                                rows_exported, file_path
-                                            )),
-                                        ),
-                                        cx,
-                                    );
-                                })
-                                .log_err();
-                        }
-                        ExportResult::Cancelled => {
-                            tracing::info!("Export cancelled by user");
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("Export failed: {}", e);
-                    entity
-                        .update_in(cx, |_panel, window, cx| {
-                            window.push_notification(
-                                (
-                                    NotificationType::Error,
-                                    SharedString::from(format!("Export failed: {}", e)),
-                                ),
-                                cx,
-                            );
-                        })
-                        .log_err();
-                }
-            }
-        })
-        .detach();
     }
 
     pub fn get_selected_data_for_rows(
