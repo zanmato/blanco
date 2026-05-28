@@ -116,9 +116,12 @@ impl ResultsTableDelegate {
     /// Convert table changes to database-agnostic TableChangeOperations
     /// This method consolidates multiple changes to the same row into single operations.
     pub fn create_change_operations(&self) -> Vec<TableChangeOperation> {
-        // Map to consolidate changes by (table_name, sorted PK pairs)
+        // Map to consolidate changes by (table_name, sorted PK pairs). `update_order`
+        // records first-seen keys so the emitted UPDATEs keep a stable order; a plain
+        // HashMap iteration would reshuffle them on every render of the SQL preview.
         type UpdateKey = (String, Vec<(String, String)>);
         let mut update_operations: HashMap<UpdateKey, Vec<ColumnChange>> = HashMap::new();
+        let mut update_order: Vec<UpdateKey> = Vec::new();
         let mut insert_operations: Vec<TableChangeOperation> = Vec::new();
         let mut delete_operations: Vec<TableChangeOperation> = Vec::new();
 
@@ -164,10 +167,14 @@ impl ResultsTableDelegate {
                         new_value: change.new_value.clone(),
                     };
 
-                    let mut key = pk_columns.clone();
-                    key.sort_by(|a, b| a.0.cmp(&b.0));
+                    let mut sorted_pk = pk_columns.clone();
+                    sorted_pk.sort_by(|a, b| a.0.cmp(&b.0));
+                    let key = (change.table_name.clone(), sorted_pk);
+                    if !update_operations.contains_key(&key) {
+                        update_order.push(key.clone());
+                    }
                     update_operations
-                        .entry((change.table_name.clone(), key))
+                        .entry(key)
                         .or_default()
                         .push(column_change);
                 }
@@ -210,7 +217,11 @@ impl ResultsTableDelegate {
         }
 
         let mut operations = Vec::new();
-        for ((table_name, pk_columns), column_changes) in update_operations {
+        for key in update_order {
+            let Some(column_changes) = update_operations.remove(&key) else {
+                continue;
+            };
+            let (table_name, pk_columns) = key;
             operations.push(TableChangeOperation {
                 operation_type: OperationType::Update,
                 table_name,

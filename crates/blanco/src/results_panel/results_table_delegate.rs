@@ -251,7 +251,9 @@ impl ResultsTableDelegate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::results_panel::table_operations::{OperationType, RowIdentifier};
+    use crate::results_panel::table_operations::{
+        OperationType, RowIdentifier, TableChangeOperation,
+    };
 
     #[test]
     fn test_cell_edit_state() {
@@ -398,6 +400,64 @@ mod tests {
             }
         } else {
             panic!("Expected Update operation");
+        }
+    }
+
+    /// Consolidated UPDATE operations must come out in a stable, first-seen order
+    /// across repeated calls. The SQL preview popover recomputes this on every
+    /// render, so a HashMap-iteration order would visibly reshuffle the statements.
+    #[test]
+    fn test_update_operations_order_is_deterministic() {
+        use crate::results_panel::cell_edit_state::{ChangeType, TableChange};
+
+        let mut delegate = ResultsTableDelegate {
+            table_name: Some("t".to_string()),
+            columns: vec![
+                Column::new("row_number".to_string(), "#".to_string()),
+                Column::new("id".to_string(), "id".to_string()),
+                Column::new("name".to_string(), "name".to_string()),
+            ],
+            ..Default::default()
+        };
+
+        // Updates to several distinct rows, recorded in a known order.
+        for (row, pk) in [(0usize, "10"), (1, "20"), (2, "30"), (3, "40"), (4, "50")] {
+            delegate.edit_state.add_change(TableChange::new(
+                ChangeType::UpdateCell,
+                "t".to_string(),
+                row,
+                Some(2), // "name" column
+                Some("old".to_string()),
+                Some(format!("new{pk}")),
+                vec![("id".to_string(), Some(pk.to_string()))],
+                None,
+            ));
+        }
+
+        let pk_order = |ops: &[TableChangeOperation]| -> Vec<String> {
+            ops.iter()
+                .filter_map(|op| {
+                    if let RowIdentifier::PrimaryKey { columns } = &op.row_identifier {
+                        columns.first().map(|c| c.1.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+
+        let expected = vec![
+            "10".to_string(),
+            "20".to_string(),
+            "30".to_string(),
+            "40".to_string(),
+            "50".to_string(),
+        ];
+        assert_eq!(pk_order(&delegate.create_change_operations()), expected);
+
+        // Recompute many times; the order must be identical every time.
+        for _ in 0..50 {
+            assert_eq!(pk_order(&delegate.create_change_operations()), expected);
         }
     }
 }
