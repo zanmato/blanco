@@ -3,9 +3,7 @@
 use crate::connection::MysqlConnection;
 use anyhow::Result;
 use blanco_core::Connection;
-use blanco_core::{
-    ColumnInfo, ForeignKeyInfo, InboundForeignKey, TableSchemaInfo,
-};
+use blanco_core::{ColumnInfo, ForeignKeyInfo, InboundForeignKey, TableSchemaInfo};
 
 fn parse_referenced_by(table_info: &serde_json::Value) -> Vec<InboundForeignKey> {
     table_info

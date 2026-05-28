@@ -148,9 +148,16 @@ impl PostgresConnection {
             "text" | "varchar" | "character varying" | "char" | "\"char\"" | "bpchar"
             | "character" | "name" => ColumnType::Text,
             // Date / time
-            "timestamp" | "timestamp without time zone" | "timestamptz"
-            | "timestamp with time zone" | "date" | "time" | "time without time zone" | "timetz"
-            | "time with time zone" | "interval" => ColumnType::DateTime,
+            "timestamp"
+            | "timestamp without time zone"
+            | "timestamptz"
+            | "timestamp with time zone"
+            | "date"
+            | "time"
+            | "time without time zone"
+            | "timetz"
+            | "time with time zone"
+            | "interval" => ColumnType::DateTime,
             "uuid" => ColumnType::Uuid,
             "json" | "jsonb" | "jsonpath" => ColumnType::Json,
             "bytea" => ColumnType::Binary,

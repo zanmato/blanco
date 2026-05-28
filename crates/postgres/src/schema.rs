@@ -2,9 +2,7 @@
 
 use crate::connection::{PostgresConnection, QueryParam};
 use anyhow::Result;
-use blanco_core::{
-    ColumnInfo, ForeignKeyInfo, InboundForeignKey, TableSchemaInfo,
-};
+use blanco_core::{ColumnInfo, ForeignKeyInfo, InboundForeignKey, TableSchemaInfo};
 
 fn parse_referenced_by(table_info: &serde_json::Value) -> Vec<InboundForeignKey> {
     table_info

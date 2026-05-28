@@ -25,11 +25,16 @@ mod tests {
     /// reachable. When `BLANCO_RUN_DB_TESTS=1` is set, an unreachable server
     /// is a hard failure; otherwise the test prints a skip message and
     /// returns Ok(()).
-    fn handle_unreachable(test_name: &str, err: &dyn std::fmt::Display) -> Result<(), Box<dyn std::error::Error>> {
+    fn handle_unreachable(
+        test_name: &str,
+        err: &dyn std::fmt::Display,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if env::var("BLANCO_RUN_DB_TESTS").as_deref() == Ok("1") {
             Err(format!("{test_name}: MySQL unreachable: {err}").into())
         } else {
-            eprintln!("skip {test_name}: MySQL unreachable ({err}). Set BLANCO_RUN_DB_TESTS=1 to require.");
+            eprintln!(
+                "skip {test_name}: MySQL unreachable ({err}). Set BLANCO_RUN_DB_TESTS=1 to require."
+            );
             Ok(())
         }
     }
@@ -169,13 +174,37 @@ mod tests {
         let bool_val = get_val("bool_col");
         assert!(bool_val == "1" || bool_val == "true");
 
-        assert!(get_val("binary_col").to_lowercase().starts_with("0x48656c6c6f"));
-        assert!(get_val("varbinary_col").to_lowercase().contains("48656c6c6f20576f726c64"));
-        assert!(get_val("blob_col").to_lowercase().contains("48656c6c6f20576f726c64"));
+        assert!(
+            get_val("binary_col")
+                .to_lowercase()
+                .starts_with("0x48656c6c6f")
+        );
+        assert!(
+            get_val("varbinary_col")
+                .to_lowercase()
+                .contains("48656c6c6f20576f726c64")
+        );
+        assert!(
+            get_val("blob_col")
+                .to_lowercase()
+                .contains("48656c6c6f20576f726c64")
+        );
 
-        assert!(get_val("date_col").contains("2025"), "date_col: {:?}", get_val("date_col"));
-        assert!(get_val("time_col").contains("20:41"), "time_col: {:?}", get_val("time_col"));
-        assert!(get_val("datetime_col").contains("2025"), "datetime_col: {:?}", get_val("datetime_col"));
+        assert!(
+            get_val("date_col").contains("2025"),
+            "date_col: {:?}",
+            get_val("date_col")
+        );
+        assert!(
+            get_val("time_col").contains("20:41"),
+            "time_col: {:?}",
+            get_val("time_col")
+        );
+        assert!(
+            get_val("datetime_col").contains("2025"),
+            "datetime_col: {:?}",
+            get_val("datetime_col")
+        );
         assert!(
             get_val("timestamp_col").contains("2025"),
             "timestamp_col: {:?}",
@@ -189,9 +218,7 @@ mod tests {
         let json_val = get_val("json_col");
         assert!(
             json_val.contains("\"name\"")
-                || json_val
-                    .to_lowercase()
-                    .contains(&hex::encode(b"\"name\"")),
+                || json_val.to_lowercase().contains(&hex::encode(b"\"name\"")),
             "json_col: {:?}",
             value_map.get("json_col")
         );
@@ -200,7 +227,10 @@ mod tests {
         assert_eq!(get_val("set_col"), "x,z");
 
         assert!(
-            value_map.get("null_col").map(|v| v.is_none()).unwrap_or(false),
+            value_map
+                .get("null_col")
+                .map(|v| v.is_none())
+                .unwrap_or(false),
             "null_col should be SQL NULL, got {:?}",
             value_map.get("null_col")
         );
