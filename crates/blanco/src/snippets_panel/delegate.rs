@@ -140,11 +140,11 @@ impl DraggableTreeDelegate for SnippetsTreeDelegate {
             .menu("New Snippet", Box::new(NewSnippet))
             .menu("New Group", Box::new(CreateGroup));
 
-        if entry.is_none() {
+        let Some(entry) = entry else {
             return context_menu;
-        }
+        };
 
-        let item_id = entry.unwrap().item().id.as_ref();
+        let item_id = entry.item().id.as_ref();
         let metadata = self.get_snippet_metadata(item_id, cx);
 
         context_menu = context_menu.separator();

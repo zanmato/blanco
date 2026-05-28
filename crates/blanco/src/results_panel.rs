@@ -667,10 +667,7 @@ impl ResultsPanel {
             return;
         }
 
-        tracing::debug!(
-            "committing {} table operation(s)",
-            change_operations.len()
-        );
+        tracing::debug!("committing {} table operation(s)", change_operations.len());
 
         let delegate = self.table_state.read(cx).delegate();
 

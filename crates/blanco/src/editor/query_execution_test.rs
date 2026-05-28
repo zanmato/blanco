@@ -222,8 +222,7 @@ async fn test_parameter_form_substitutes_named_params(cx: &mut TestAppContext) {
 
     let substituted = form.read_with(&cx, |f, cx| f.get_substituted_query(cx));
     assert_eq!(
-        substituted,
-        "SELECT * FROM users WHERE id = 42 AND status = active",
+        substituted, "SELECT * FROM users WHERE id = 42 AND status = active",
         "named parameters should be substituted in-place"
     );
 

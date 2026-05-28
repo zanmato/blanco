@@ -58,8 +58,8 @@ impl ParameterForm {
                 // entered for this label in the current session, if any.
                 let initial = initial_values.get(&label).cloned();
                 let input = cx.new(|cx| {
-                    let mut state = InputState::new(window, cx)
-                        .placeholder(format!("Value for {}", label));
+                    let mut state =
+                        InputState::new(window, cx).placeholder(format!("Value for {}", label));
                     if let Some(value) = initial {
                         state = state.default_value(value);
                     }

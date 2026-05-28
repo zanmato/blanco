@@ -64,17 +64,13 @@ impl EditorPanel {
             }
 
             // Check if query has parameters
-            let has_params = statement_info
-                .as_ref()
-                .map(|info| !info.parameters.is_empty())
-                .unwrap_or(false);
+            let params = statement_info
+                .map(|info| info.parameters)
+                .unwrap_or_default();
 
-            if has_params {
-                // Show parameter modal instead of executing directly
-                let params = statement_info.unwrap().parameters;
+            if !params.is_empty() {
                 self.show_parameter_modal(query, params, connection_id, database_name, window, cx);
             } else {
-                // Execute directly
                 self.execute_query(query, connection_id, &database_name, window, cx);
             }
         }
@@ -396,9 +392,8 @@ impl EditorPanel {
             Some(TabType::Query(query_tab)) => query_tab.last_parameter_values.clone(),
             _ => Default::default(),
         };
-        let param_form = cx.new(|cx| {
-            ParameterForm::new(query.clone(), params, &initial_values, window, cx)
-        });
+        let param_form =
+            cx.new(|cx| ParameterForm::new(query.clone(), params, &initial_values, window, cx));
 
         let weak_editor_panel = cx.entity().downgrade();
         window.open_dialog(cx, move |modal, _, _| {

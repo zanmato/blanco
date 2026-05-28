@@ -401,15 +401,9 @@ impl ConnectionsPanel {
                 TreeItemKind::Table | TreeItemKind::View | TreeItemKind::MaterializedView => {}
                 TreeItemKind::Procedure | TreeItemKind::Function | TreeItemKind::Trigger => {
                     let routine_kind = match metadata.kind {
-                        TreeItemKind::Procedure => {
-                            blanco_core::RoutineKind::Procedure
-                        }
-                        TreeItemKind::Function => {
-                            blanco_core::RoutineKind::Function
-                        }
-                        TreeItemKind::Trigger => {
-                            blanco_core::RoutineKind::Trigger
-                        }
+                        TreeItemKind::Procedure => blanco_core::RoutineKind::Procedure,
+                        TreeItemKind::Function => blanco_core::RoutineKind::Function,
+                        TreeItemKind::Trigger => blanco_core::RoutineKind::Trigger,
                         _ => unreachable!(),
                     };
                     if let Some(name) = metadata.table_name.clone() {

@@ -254,7 +254,11 @@ impl SshTunnel {
         );
 
         // Wrap the session in Arc<TokioMutex<>> so it can be shared between connection tasks
-        let session = Arc::new(tokio::sync::Mutex::new(self.session.take().unwrap()));
+        let session = self
+            .session
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("SSH session must be established before forwarding"))?;
+        let session = Arc::new(tokio::sync::Mutex::new(session));
         let active_connections = Arc::clone(&self.active_connections);
 
         tracing::debug!("Using tokio runtime handle for SSH tunnel spawn");

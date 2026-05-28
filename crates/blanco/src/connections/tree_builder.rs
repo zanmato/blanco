@@ -114,10 +114,7 @@ impl ConnectionsPanel {
                                     .map(|table| {
                                         let table_key = format!(
                                             "table:{}:{}:{}:{}",
-                                            connection_id,
-                                            database.name,
-                                            schema.name,
-                                            table.name
+                                            connection_id, database.name, schema.name, table.name
                                         );
 
                                         let (icon, color, kind) =
@@ -138,11 +135,7 @@ impl ConnectionsPanel {
                                             relative_size: table.relative_size,
                                         };
 
-                                        TreeItem::new(
-                                            table_key,
-                                            table.name.clone(),
-                                            table_metadata,
-                                        )
+                                        TreeItem::new(table_key, table.name.clone(), table_metadata)
                                     })
                                     .collect()
                             } else {
@@ -171,10 +164,8 @@ impl ConnectionsPanel {
                         .tables
                         .iter()
                         .map(|table| {
-                            let table_key = format!(
-                                "table:{}:{}:{}",
-                                connection_id, schema.name, table.name
-                            );
+                            let table_key =
+                                format!("table:{}:{}:{}", connection_id, schema.name, table.name);
 
                             let (icon, color, kind) = icon_for_item_type(table.item_type, cx);
 

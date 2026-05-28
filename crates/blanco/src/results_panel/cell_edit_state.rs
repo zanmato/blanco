@@ -174,18 +174,18 @@ impl CellEditState {
         self.pending_deleted_rows = reindex_row_set(&self.pending_deleted_rows, row_index);
         self.selected_rows = reindex_row_set(&self.selected_rows, row_index);
 
-        if let Some((r, _)) = self.editing_cell {
+        if let Some((r, c)) = self.editing_cell {
             if r == row_index {
                 self.editing_cell = None;
             } else if r > row_index {
-                self.editing_cell = Some((r - 1, self.editing_cell.unwrap().1));
+                self.editing_cell = Some((r - 1, c));
             }
         }
-        if let Some((r, _)) = self.expanded_cell {
+        if let Some((r, c)) = self.expanded_cell {
             if r == row_index {
                 self.expanded_cell = None;
             } else if r > row_index {
-                self.expanded_cell = Some((r - 1, self.expanded_cell.unwrap().1));
+                self.expanded_cell = Some((r - 1, c));
             }
         }
     }

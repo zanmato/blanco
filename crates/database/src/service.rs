@@ -408,10 +408,20 @@ impl DatabaseService {
         tracing::info!("Creating SSH tunnel for connection config {}", config.id);
 
         let local_port = self.assign_local_port();
+        let ssh_host = config
+            .ssh_host
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("SSH host is required to build an SSH tunnel"))?
+            .clone();
+        let ssh_user = config
+            .ssh_user
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("SSH user is required to build an SSH tunnel"))?
+            .clone();
         let ssh_config = SshTunnelConfig {
-            ssh_host: config.ssh_host.as_ref().unwrap().clone(),
+            ssh_host,
             ssh_port: config.ssh_port(),
-            ssh_user: config.ssh_user.as_ref().unwrap().clone(),
+            ssh_user,
             ssh_password: config.ssh_password.clone(),
             ssh_private_key_path: config.ssh_private_key_path.clone(),
             ssh_private_key_password: config.ssh_private_key_password.clone(),
@@ -621,5 +631,117 @@ impl DatabaseService {
     /// Get the global DatabaseService instance
     pub fn global(cx: &gpui::App) -> &Self {
         cx.global::<Self>()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::connection_config::ConnectionConfig;
+
+    fn sqlite_config(id: i64, path: &std::path::Path) -> ConnectionConfig {
+        ConnectionConfig::new_sqlite(
+            id,
+            format!("test-{id}"),
+            path.to_string_lossy().into_owned(),
+        )
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_connection_config_roundtrip() {
+        let service = DatabaseService::new(tokio::runtime::Handle::current());
+        let dir = tempfile::tempdir().expect("temp dir");
+        let config = sqlite_config(1, &dir.path().join("roundtrip.db"));
+
+        assert!(service.get_connection_config(1).await.is_none());
+        service.add_connection_config(config.clone()).await;
+
+        let fetched = service
+            .get_connection_config(1)
+            .await
+            .expect("config present");
+        assert_eq!(fetched.id, config.id);
+        assert_eq!(fetched.name, config.name);
+        assert_eq!(fetched.path, config.path);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_get_or_create_connection_caches_by_key() {
+        let service = DatabaseService::new(tokio::runtime::Handle::current());
+        let dir = tempfile::tempdir().expect("temp dir");
+        service
+            .add_connection_config(sqlite_config(1, &dir.path().join("cache.db")))
+            .await;
+
+        let first = service
+            .get_or_create_connection(1, None)
+            .await
+            .expect("first connection");
+        let second = service
+            .get_or_create_connection(1, None)
+            .await
+            .expect("second connection");
+
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "same (config_id, database) must return the cached connection"
+        );
+        assert_eq!(service.get_active_connections().await.len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_get_or_create_connection_distinct_databases() {
+        let service = DatabaseService::new(tokio::runtime::Handle::current());
+        let dir = tempfile::tempdir().expect("temp dir");
+        service
+            .add_connection_config(sqlite_config(1, &dir.path().join("distinct.db")))
+            .await;
+
+        let default_db = service
+            .get_or_create_connection(1, None)
+            .await
+            .expect("default connection");
+        let named_db = service
+            .get_or_create_connection(1, Some("other"))
+            .await
+            .expect("named connection");
+
+        assert!(
+            !Arc::ptr_eq(&default_db, &named_db),
+            "different database names must key distinct cache entries"
+        );
+        assert_eq!(service.get_active_connections().await.len(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_disconnect_evicts_cached_connection() {
+        let service = DatabaseService::new(tokio::runtime::Handle::current());
+        let dir = tempfile::tempdir().expect("temp dir");
+        service
+            .add_connection_config(sqlite_config(1, &dir.path().join("evict.db")))
+            .await;
+
+        let first = service
+            .get_or_create_connection(1, None)
+            .await
+            .expect("first connection");
+        service.disconnect(1, None).await.expect("disconnect");
+        assert!(service.get_active_connections().await.is_empty());
+
+        let recreated = service
+            .get_or_create_connection(1, None)
+            .await
+            .expect("recreated connection");
+        assert!(
+            !Arc::ptr_eq(&first, &recreated),
+            "after disconnect a fresh connection must be created, not the evicted one"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_get_or_create_connection_unknown_config_errors() {
+        let service = DatabaseService::new(tokio::runtime::Handle::current());
+        let result = service.get_or_create_connection(999, None).await;
+        assert!(result.is_err(), "unknown config id must error, not panic");
     }
 }
