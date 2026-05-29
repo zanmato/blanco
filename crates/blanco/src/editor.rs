@@ -488,6 +488,7 @@ impl EditorPanel {
         let sql_completion_provider = SqlCompletionProvider::new(
             params.connection_id,
             params.database_name.clone(),
+            params.schema_name.clone(),
             db_service,
         );
 

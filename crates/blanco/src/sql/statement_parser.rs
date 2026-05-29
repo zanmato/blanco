@@ -309,7 +309,7 @@ pub fn extract_statement_info(text: &Rope, cursor_pos: usize) -> Option<Statemen
 }
 
 /// The SQL clause the cursor is currently in
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SqlClause {
     Select,
     From,
@@ -796,7 +796,7 @@ fn determine_clause_from_keywords(source: &str, cursor_byte_pos: usize) -> Optio
 
             if before_ok && after_ok && best_pos.is_none_or(|bp| pos > bp) {
                 best_pos = Some(pos);
-                best_clause = Some(clause.clone());
+                best_clause = Some(*clause);
             }
         }
     }

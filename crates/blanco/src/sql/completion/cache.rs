@@ -31,23 +31,40 @@ impl<T> CacheEntry<T> {
     }
 }
 
-/// Metadata cache for tables and columns
+/// Key used for caching columns: schema-qualified table name.
+pub fn columns_key(schema: &str, table: &str) -> String {
+    format!("{schema}.{table}")
+}
+
+/// Metadata cache for schemas, tables, and columns.
+///
+/// Tables are keyed by schema name and columns by `schema.table` so that the
+/// same connection can serve completions for any schema without collisions
+/// (e.g. `public.customers` vs `sales.customers`).
 #[derive(Debug, Clone)]
 pub struct MetadataCache {
-    pub tables: Option<CacheEntry<Vec<QueryableEntity>>>,
+    pub schemas: Option<CacheEntry<Vec<String>>>,
+    /// Whether the backend supports schemas (false for MySQL/SQLite). Cached
+    /// alongside `schemas` since they are fetched together.
+    pub supports_schemas: Option<bool>,
+    pub tables_by_schema: HashMap<String, CacheEntry<Vec<QueryableEntity>>>,
     pub columns: HashMap<String, CacheEntry<Vec<String>>>,
 }
 
 impl MetadataCache {
     pub fn new() -> Self {
         Self {
-            tables: None,
+            schemas: None,
+            supports_schemas: None,
+            tables_by_schema: HashMap::new(),
             columns: HashMap::new(),
         }
     }
 
     pub fn invalidate_all(&mut self) {
-        self.tables = None;
+        self.schemas = None;
+        self.supports_schemas = None;
+        self.tables_by_schema.clear();
         self.columns.clear();
     }
 }
