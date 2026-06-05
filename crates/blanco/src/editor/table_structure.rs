@@ -149,7 +149,7 @@ impl Render for TableStructureTab {
                             .gap_4()
                             .child(
                                 v_flex()
-                                    .flex_grow()
+                                    .flex_grow(1.)
                                     .flex_basis(px(300.))
                                     .min_h(px(150.))
                                     .gap_2()
@@ -174,7 +174,7 @@ impl Render for TableStructureTab {
                             )
                             .child(
                                 v_flex()
-                                    .flex_grow()
+                                    .flex_grow(1.)
                                     .flex_basis(px(150.))
                                     .min_h(px(80.))
                                     .gap_2()

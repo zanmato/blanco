@@ -186,7 +186,7 @@ impl ResultsTableDelegate {
             let editor = InputState::new(window, cx)
                 .multi_line(true)
                 .soft_wrap(true)
-                .show_context_menu(false);
+                .context_menu(false);
 
             if is_json {
                 // Prettify JSON if valid

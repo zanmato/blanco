@@ -1040,12 +1040,12 @@ impl Render for ImportModal {
                     .gap_2()
                     .justify_end()
                     .child(
-                        div().flex_shrink().child(
+                        div().flex_shrink(1.).child(
                             DialogClose::new().child(
                                 Button::new("import-cancel")
                                     .label("Cancel")
                                     .outline()
-                                    .flex_shrink(),
+                                    .flex_shrink(1.),
                             ),
                         ),
                     )

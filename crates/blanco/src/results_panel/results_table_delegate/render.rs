@@ -230,7 +230,7 @@ impl ResultsTableDelegate {
                             .group_hover("", |this| this.visible())
                             .child(
                                 Popover::new(popover_id.clone())
-                                    .anchor(gpui::Corner::BottomRight)
+                                    .anchor(gpui::Anchor::BottomRight)
                                     .trigger(
                                         Button::new(format!("fk-trigger-{}", popover_id))
                                             .icon(IconName::Search)

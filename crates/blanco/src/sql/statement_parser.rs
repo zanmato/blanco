@@ -426,7 +426,7 @@ fn find_statement_at_cursor<'a>(
     }
 
     // Check ERROR nodes at the root level that might contain partial statements
-    for i in 0..root_node.child_count() {
+    for i in 0..root_node.child_count() as u32 {
         if let Some(child) = root_node.child(i) {
             let range = child.byte_range();
             if range.start <= cursor_byte_pos && cursor_byte_pos <= range.end {
@@ -473,7 +473,7 @@ fn collect_table_aliases(node: Node, source: &str, aliases: &mut Vec<TableAlias>
         let mut table_name: Option<String> = None;
         let mut alias: Option<String> = None;
 
-        for i in 0..node.child_count() {
+        for i in 0..node.child_count() as u32 {
             if let Some(child) = node.child(i) {
                 match child.kind() {
                     "object_reference" => {
@@ -504,7 +504,7 @@ fn collect_table_aliases(node: Node, source: &str, aliases: &mut Vec<TableAlias>
     }
 
     // Recurse into children
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i) {
             collect_table_aliases(child, source, aliases);
         }
@@ -625,14 +625,14 @@ fn find_clause_in_error_nodes(
     let mut best_clause: Option<SqlClause> = None;
     let mut best_pos: usize = 0;
 
-    for i in 0..root_node.child_count() {
+    for i in 0..root_node.child_count() as u32 {
         if let Some(child) = root_node.child(i) {
             // Only look at ERROR nodes that are at or before the cursor
             if child.kind() != "ERROR" || child.byte_range().start > cursor_byte_pos {
                 continue;
             }
             // Scan keyword children within the ERROR node
-            for j in 0..child.child_count() {
+            for j in 0..child.child_count() as u32 {
                 if let Some(kw_node) = child.child(j) {
                     let range = kw_node.byte_range();
                     if range.start > cursor_byte_pos || range.end > source.len() {
@@ -672,7 +672,7 @@ fn find_clause_in_error_nodes(
 /// Find the deepest named node at or just before the cursor position.
 fn find_deepest_node_at(node: Node, cursor_byte_pos: usize) -> Node {
     let mut best = node;
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i) {
             let range = child.byte_range();
             // Allow nodes that start at or before cursor and end at or after cursor,
@@ -696,7 +696,7 @@ fn find_specific_clause_in_from(
     _source: &str,
     cursor_byte_pos: usize,
 ) -> Option<SqlClause> {
-    for i in 0..from_node.child_count() {
+    for i in 0..from_node.child_count() as u32 {
         if let Some(child) = from_node.child(i) {
             let range = child.byte_range();
             if range.start <= cursor_byte_pos && cursor_byte_pos <= range.end {
@@ -728,7 +728,7 @@ fn find_specific_clause_in_from(
 
 /// Check if cursor is within the ON part of a JOIN
 fn is_cursor_in_on_clause(join_node: Node, cursor_byte_pos: usize) -> bool {
-    for i in 0..join_node.child_count() {
+    for i in 0..join_node.child_count() as u32 {
         if let Some(child) = join_node.child(i)
             && child.kind() == "keyword_on"
             && cursor_byte_pos > child.byte_range().end

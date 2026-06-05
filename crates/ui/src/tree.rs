@@ -451,7 +451,7 @@ impl<D: TreeDelegate> Render for TreeState<D> {
                         items
                     })
                 })
-                .flex_grow()
+                .flex_grow(1.)
                 .size_full()
                 .track_scroll(&self.scroll_handle)
                 .with_sizing_behavior(ListSizingBehavior::Auto)

@@ -544,7 +544,7 @@ impl EditorPanel {
                 if this.linting_enabled {
                     this.lint_current_query_debounced(*range, cx);
                 }
-            } else if let InputEvent::PressEnter { secondary } = event
+            } else if let InputEvent::PressEnter { secondary, .. } = event
                 && *secondary
             {
                 this.on_run_query(window, cx);

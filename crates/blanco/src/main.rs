@@ -43,6 +43,7 @@ fn main() {
     app.run(move |cx| {
         gpui_component::init(cx);
         gpui_tokio::init(cx);
+        sql::register_languages();
 
         // Get the tokio runtime handle for automatic SSH tunnel establishment
         let runtime_handle = gpui_tokio::Tokio::handle(cx);
@@ -131,6 +132,7 @@ fn main() {
             display_id: None,
             window_background: gpui::WindowBackgroundAppearance::Opaque,
             app_id: Some("com.blanco.sql-editor".into()),
+            icon: None,
         };
 
         cx.spawn(async move |cx| {

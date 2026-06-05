@@ -89,7 +89,7 @@ impl Focusable for ForeignKeyPopover {
 impl Render for ForeignKeyPopover {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
-            .flex_grow()
+            .flex_grow(1.)
             .gap_2()
             .child(
                 div()
@@ -189,7 +189,7 @@ impl ForeignKeyPopover {
         div()
             .grid()
             .grid_cols_min_content(col_count)
-            .flex_grow()
+            .flex_grow(1.)
             .bg(cx.theme().table)
             .gap_0()
             .border_1()

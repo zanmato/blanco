@@ -379,18 +379,6 @@ impl EditorPanel {
             return button.into_any_element();
         }
 
-        let statements = query_tab.results_panel.read(cx).preview_pending_sql(cx);
-        let preview_log = cx.new(|cx| {
-            let mut log = SqlLog::new(usize::MAX, cx.theme().highlight_theme.clone());
-            if statements.is_empty() {
-                log.append_text(&SqlLogMessage::Comment("no statements to apply".into()), cx);
-            } else {
-                for statement in statements {
-                    log.append_text(&SqlLogMessage::SqlStatement(statement), cx);
-                }
-            }
-            log
-        });
         let results_panel = query_tab.results_panel.clone();
         let sql_log = query_tab.sql_log.clone();
 
@@ -399,7 +387,21 @@ impl EditorPanel {
             .content(move |_state, _window, cx| {
                 let results_panel = results_panel.clone();
                 let sql_log = sql_log.clone();
-                let preview_log = preview_log.clone();
+                let statements = results_panel.read(cx).preview_pending_sql(cx);
+                let preview_log = cx.new(|cx| {
+                    let mut log = SqlLog::new(usize::MAX, cx.theme().highlight_theme.clone());
+                    if statements.is_empty() {
+                        log.append_text(
+                            &SqlLogMessage::Comment("no statements to apply".into()),
+                            cx,
+                        );
+                    } else {
+                        for statement in statements {
+                            log.append_text(&SqlLogMessage::SqlStatement(statement), cx);
+                        }
+                    }
+                    log
+                });
                 v_flex()
                     .p_2()
                     .gap_2()
@@ -410,7 +412,7 @@ impl EditorPanel {
                             .font_weight(FontWeight::BOLD)
                             .child("Preview SQL"),
                     )
-                    .child(div().h(px(280.)).child(preview_log))
+                    .child(div().h(px(280.)).overflow_hidden().child(preview_log))
                     .child(
                         h_flex()
                             .gap_2()

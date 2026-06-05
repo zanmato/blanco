@@ -190,7 +190,7 @@ impl ChatPanel {
             &input_state,
             window,
             |this, _input_state, event, window, cx| {
-                if let InputEvent::PressEnter { secondary } = event
+                if let InputEvent::PressEnter { secondary, .. } = event
                     && *secondary
                 {
                     this.send_message(window, cx);
