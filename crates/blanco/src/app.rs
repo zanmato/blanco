@@ -1,3 +1,4 @@
+use blanco_ui::{Tab, TabBar};
 use gpui::{
     Action, App, AppContext, BorrowAppContext, Context, Entity, FocusHandle, Focusable,
     InteractiveElement, IntoElement, Menu, MenuItem, ParentElement, Render, Styled, Subscription,
@@ -11,7 +12,7 @@ use gpui_component::{
     h_flex,
     menu::AppMenuBar,
     notification::NotificationType,
-    resizable::{ResizableState, h_resizable, resizable_panel, v_resizable},
+    resizable::{ResizableState, h_resizable, resizable_panel},
 };
 use serde::Deserialize;
 use smol::channel;
@@ -201,6 +202,13 @@ impl From<database::DatabaseConnectedMessage> for DatabaseConnected {
     }
 }
 
+/// Which view is active in the sidebar's segmented tab bar.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SidebarTab {
+    Connections,
+    Snippets,
+}
+
 pub struct BlancoApp {
     focus_handle: FocusHandle,
     sidebar: Entity<ConnectionsPanel>,
@@ -208,9 +216,9 @@ pub struct BlancoApp {
     editor_panel: Entity<EditorPanel>,
     command_palette: Entity<CommandPalette>,
     sidebar_collapsed: bool,
+    sidebar_tab: SidebarTab,
     app_menu_bar: Entity<AppMenuBar>,
     main_resize_state: Entity<ResizableState>,
-    sidebar_resize_state: Entity<ResizableState>,
     _subscriptions: Vec<Subscription>,
     _action_task: Task<()>,
 }
@@ -260,7 +268,6 @@ impl BlancoApp {
         let sidebar = cx.new(|cx| ConnectionsPanel::new(window, cx));
         let snippets_panel = cx.new(|cx| SnippetsPanel::new(window, cx));
         let main_resize_state = cx.new(|_| ResizableState::default());
-        let sidebar_resize_state = cx.new(|_| ResizableState::default());
 
         // Load saved tabs from database
         info!("Loading saved tabs from database");
@@ -336,9 +343,9 @@ impl BlancoApp {
             editor_panel,
             command_palette,
             sidebar_collapsed: false,
+            sidebar_tab: SidebarTab::Connections,
             app_menu_bar,
             main_resize_state,
-            sidebar_resize_state,
             _subscriptions: subscriptions,
             _action_task: action_task,
         }
@@ -1009,24 +1016,56 @@ impl Render for BlancoApp {
                                     .child(
                                         div()
                                             .w_full()
+                                            .h_full()
+                                            .flex()
+                                            .flex_col()
                                             .pb_6()
                                             .overflow_hidden()
                                             .border_r_1()
                                             .border_color(cx.theme().border)
                                             .child(
-                                                v_resizable("sidebar-layout")
-                                                    .with_state(&self.sidebar_resize_state)
-                                                    .child(
-                                                        resizable_panel()
-                                                            .child(self.sidebar.clone()),
-                                                    )
-                                                    .child(
-                                                        resizable_panel()
-                                                            .size(px(280.))
-                                                            .size_range(px(120.)..px(600.))
-                                                            .child(self.snippets_panel.clone()),
-                                                    ),
-                                            ),
+                                                div().flex_none().px_2().py_1p5().child(
+                                                    TabBar::new("sidebar-tabs")
+                                                        .segmented()
+                                                        .w_full()
+                                                        .selected_index(match self.sidebar_tab {
+                                                            SidebarTab::Connections => 0,
+                                                            SidebarTab::Snippets => 1,
+                                                        })
+                                                        .on_click({
+                                                            let view = cx.entity().downgrade();
+                                                            move |ix: &usize, _, _, cx| {
+                                                                let tab = match ix {
+                                                                    1 => SidebarTab::Snippets,
+                                                                    _ => SidebarTab::Connections,
+                                                                };
+                                                                view.update(cx, |this, cx| {
+                                                                    this.sidebar_tab = tab;
+                                                                    cx.notify();
+                                                                })
+                                                                .log_err();
+                                                            }
+                                                        })
+                                                        .child(
+                                                            Tab::new()
+                                                                .label("Connections")
+                                                                .flex_1(),
+                                                        )
+                                                        .child(
+                                                            Tab::new().label("Snippets").flex_1(),
+                                                        ),
+                                                ),
+                                            )
+                                            .child(div().flex_1().min_h_0().overflow_hidden().map(
+                                                |this| match self.sidebar_tab {
+                                                    SidebarTab::Connections => {
+                                                        this.child(self.sidebar.clone())
+                                                    }
+                                                    SidebarTab::Snippets => {
+                                                        this.child(self.snippets_panel.clone())
+                                                    }
+                                                },
+                                            )),
                                     ),
                             )
                         })

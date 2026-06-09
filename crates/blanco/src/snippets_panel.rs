@@ -9,13 +9,11 @@ use blanco_ui::draggable_tree::{DraggableTree, DraggableTreeState, TreeItem};
 use gpui::{
     AppContext, ClipboardItem, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
     KeyDownEvent, ParentElement, Render, SharedString, Styled, Window, actions,
-    prelude::FluentBuilder, px,
+    prelude::FluentBuilder,
 };
 use gpui_component::input::Input;
 use gpui_component::scroll::ScrollableElement as _;
-use gpui_component::{
-    ActiveTheme as _, StyledExt, h_flex, input::InputState, label::Label, v_flex,
-};
+use gpui_component::{ActiveTheme as _, h_flex, input::InputState, v_flex};
 
 actions!(snippets, [CreateGroup, RefreshSnippets]);
 
@@ -311,29 +309,12 @@ impl Render for SnippetsPanel {
             .size_full()
             .flex_col()
             .gap_2()
-            .border_t_1()
-            .border_color(cx.theme().border)
             .on_action(cx.listener(|_this, _: &NewSnippet, window, cx| {
                 window.dispatch_action(Box::new(OpenSnippetEditor { snippet_id: None }), cx);
             }))
             .on_action(cx.listener(|this, _: &CreateGroup, window, cx| {
                 this.start_creating_group(window, cx);
             }))
-            .child(
-                h_flex()
-                    .px_3()
-                    .py(px(6.))
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        Label::new("Snippets")
-                            .font_bold()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground),
-                    ),
-            )
             .child(
                 v_flex()
                     .id("snippets-tree-container")

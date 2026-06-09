@@ -19,10 +19,9 @@ use gpui::{
     Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme as _, StyledExt, WindowExt,
+    ActiveTheme as _, WindowExt,
     button::{Button, ButtonVariants as _},
     dialog::{DialogAction, DialogClose, DialogFooter},
-    label::Label,
 };
 
 #[derive(Clone, Debug)]
@@ -654,22 +653,6 @@ impl ConnectionsPanel {
         cx.notify();
     }
 
-    fn render_header_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .gap_2()
-            .px_3()
-            .pt(px(10.))
-            .pb(px(5.))
-            .border_b_1()
-            .border_color(cx.theme().border)
-            .child(
-                Label::new("Connections")
-                    .font_bold()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground),
-            )
-    }
-
     fn render_connections_tree(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         Tree::new(&self.tree_state)
     }
@@ -865,8 +848,6 @@ impl Render for ConnectionsPanel {
             .flex_col()
             .size_full()
             .gap_2()
-            .bg(cx.theme().sidebar_primary_foreground)
-            .child(self.render_header_section(cx))
             .child(self.render_connections_tree(cx))
     }
 }
