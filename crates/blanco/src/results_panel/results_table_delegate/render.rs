@@ -97,7 +97,7 @@ impl ResultsTableDelegate {
         col_ix: usize,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let column_type = self.column_types.get(col_ix - 1).copied();
+        let column_type = self.column_types.get(col_ix).copied();
         let is_json = column_type == Some(ColumnType::Json);
 
         div()
@@ -153,9 +153,8 @@ impl ResultsTableDelegate {
         col_ix: usize,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let is_row_number_col = col_ix == 0;
-        let is_edited = self.edit_state.is_edited(row_ix, col_ix) && !is_row_number_col;
-        let is_editable = self.is_editable() && !is_row_number_col;
+        let is_edited = self.edit_state.is_edited(row_ix, col_ix);
+        let is_editable = self.is_editable();
 
         let current_value: Option<String> = if is_edited {
             self.edit_state
@@ -175,12 +174,11 @@ impl ResultsTableDelegate {
             format_value_for_display(current_value.as_deref().unwrap_or(""))
         };
 
-        // Check if this is a numeric column for right-alignment (adjust for row number column)
-        let is_numeric = !is_row_number_col
-            && self
-                .column_types
-                .get(col_ix - 1)
-                .is_some_and(|ct| ct.is_numeric());
+        // Check if this is a numeric column for right-alignment
+        let is_numeric = self
+            .column_types
+            .get(col_ix)
+            .is_some_and(|ct| ct.is_numeric());
 
         let cell_content = h_flex()
             .items_center()
@@ -194,25 +192,19 @@ impl ResultsTableDelegate {
                     .overflow_hidden()
                     .child(display_text.clone()),
             )
-            .when(!is_row_number_col, |this| {
-                this.child(
-                    div()
-                        .invisible()
-                        .group_hover("", |this| this.visible())
-                        .child(
-                            Clipboard::new(format!("cell-clipboard-{}-{}", row_ix, col_ix))
-                                .value(display_text.clone()),
-                        ),
-                )
-            })
+            .child(
+                div()
+                    .invisible()
+                    .group_hover("", |this| this.visible())
+                    .child(
+                        Clipboard::new(format!("cell-clipboard-{}-{}", row_ix, col_ix))
+                            .value(display_text.clone()),
+                    ),
+            )
             .when_some(
-                if !is_row_number_col {
-                    self.table_columns
-                        .get(col_ix - 1)
-                        .and_then(|c| c.foreign_key.as_ref())
-                } else {
-                    None
-                },
+                self.table_columns
+                    .get(col_ix)
+                    .and_then(|c| c.foreign_key.as_ref()),
                 |this, fk_info| {
                     let fk_info = fk_info.clone();
                     let cell_value = display_text.clone();
@@ -275,44 +267,25 @@ impl ResultsTableDelegate {
             .size_full() // Fill the entire cell container
             .flex() // Enable flexbox layout
             .items_center() // Center vertically
-            .when(is_deleted, |this| {
-                this.when(is_row_number_col, |this| {
-                    this.font_weight(FontWeight::BOLD)
-                        .text_color(cx.theme().red)
-                        .bg(cx.theme().red.opacity(0.3))
-                        .cursor_pointer()
-                })
-            })
-            .when(!is_deleted, |this| {
-                this.when(is_row_number_col, |this| {
-                    this.font_weight(FontWeight::BOLD) // Bold row numbers
-                        .text_color(cx.theme().muted_foreground) // Muted color for row numbers
-                        .cursor_pointer() // Pointer cursor for row selection
-                        .when(self.edit_state.is_new_row(row_ix), |this| {
-                            this.border_l_3().border_color(cx.theme().yellow)
-                        })
-                })
-            })
-            .when(is_numeric && !is_row_number_col, |this| {
+            .when(is_numeric, |this| {
                 this.text_align(gpui::TextAlign::Right)
                     .justify_end() // Right-align numeric columns
                     .text_color(cx.theme().foreground) // Ensure numeric text is visible
             })
             .when(
-                !is_row_number_col && self.column_types.get(col_ix - 1) == Some(&ColumnType::Uuid),
+                self.column_types.get(col_ix) == Some(&ColumnType::Uuid),
                 |this| {
                     this.text_color(cx.theme().blue) // Blue color for UUIDs
                 },
             )
             .when(
-                !is_row_number_col
-                    && self.column_types.get(col_ix - 1) == Some(&ColumnType::DateTime),
+                self.column_types.get(col_ix) == Some(&ColumnType::DateTime),
                 |this| {
                     this.text_color(cx.theme().green) // Green color for timestamps
                 },
             )
             .when(
-                !is_row_number_col && self.column_types.get(col_ix - 1) == Some(&ColumnType::Json),
+                self.column_types.get(col_ix) == Some(&ColumnType::Json),
                 |this| {
                     this.text_color(cx.theme().yellow) // Yellow color for JSON
                 },
@@ -326,10 +299,16 @@ impl ResultsTableDelegate {
             .when(is_null, |this| {
                 this.text_color(cx.theme().muted_foreground).italic()
             })
-            // Only show visual feedback for editable cells when hovering
-            .when(!is_row_number_col && !is_null && is_editable, |this| {
-                this.cursor_pointer()
+            // Deleted rows are tinted red with a strikethrough across every cell,
+            // since the row header no longer carries the per-row delete indicator.
+            // Applied last so it overrides the column-type colors above.
+            .when(is_deleted, |this| {
+                this.line_through()
+                    .text_color(cx.theme().red)
+                    .bg(cx.theme().red.opacity(0.15))
             })
+            // Only show visual feedback for editable cells when hovering
+            .when(!is_null && is_editable, |this| this.cursor_pointer())
             .py_1()
             .child(cell_content)
     }
@@ -357,19 +336,13 @@ impl TableDelegate for ResultsTableDelegate {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let is_row_number_col = col_ix == 0;
         let col = &self.columns[col_ix];
-        let col_info = if !is_row_number_col {
-            self.table_columns.get(col_ix - 1)
-        } else {
-            None
-        };
+        let col_info = self.table_columns.get(col_ix);
         let has_fk = col_info.is_some_and(|c| c.foreign_key.is_some());
-        let is_pk = !is_row_number_col
-            && self
-                .table_columns
-                .iter()
-                .any(|c| c.is_primary_key && c.name == col.name);
+        let is_pk = self
+            .table_columns
+            .iter()
+            .any(|c| c.is_primary_key && c.name == col.name);
         let is_nullable = col_info.is_some_and(|c| c.is_nullable);
 
         let tooltip_id = format!("col-tooltip-{}", col_ix);
@@ -453,11 +426,10 @@ impl TableDelegate for ResultsTableDelegate {
         _window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let is_row_number_col = col_ix == 0;
-        let is_editing = self.edit_state.is_editing(row_ix, col_ix) && !is_row_number_col;
+        let is_editing = self.edit_state.is_editing(row_ix, col_ix);
 
         if is_editing {
-            // Embed Input directly in the cell (not for row number column)
+            // Embed Input directly in the cell
             match self.edit_state.get_editing_input() {
                 Some(input) if self.edit_state.is_expanded(row_ix, col_ix) => self
                     .render_expanded_cell(input, row_ix, col_ix, cx)
@@ -480,15 +452,10 @@ impl TableDelegate for ResultsTableDelegate {
         _: &mut Window,
         _: &mut Context<TableState<Self>>,
     ) {
-        // Don't sort by row number column
-        if col_ix == 0 {
-            return;
-        }
-
-        // Get the column type (adjust for row number column)
+        // Get the column type
         let col_type = self
             .column_types
-            .get(col_ix - 1)
+            .get(col_ix)
             .copied()
             .unwrap_or(ColumnType::Unknown);
         let is_numeric = col_type.is_numeric();
@@ -509,13 +476,6 @@ impl TableDelegate for ResultsTableDelegate {
                 _ => ordering,
             }
         });
-
-        // Update row numbers after sorting
-        for (index, row) in self.rows.iter_mut().enumerate() {
-            if let Some(row_num_cell) = row.get_mut(0) {
-                *row_num_cell = Some((index + 1).to_string());
-            }
-        }
     }
 
     fn visible_rows_changed(
@@ -551,12 +511,11 @@ impl TableDelegate for ResultsTableDelegate {
         _window: &mut Window,
         _cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
-        // Check if the column is nullable (cell.1 is column index, 0 is row number column)
-        let is_nullable = cell.1 > 0
-            && self
-                .table_columns
-                .get(cell.1 - 1)
-                .is_some_and(|c| c.is_nullable);
+        // Check if the column is nullable (cell.1 is the 0-based data column index)
+        let is_nullable = self
+            .table_columns
+            .get(cell.1)
+            .is_some_and(|c| c.is_nullable);
 
         menu.menu_with_icon(
             "Copy as CSV",

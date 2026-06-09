@@ -133,3 +133,7 @@ debug = true
 
 [patch.crates-io]
 tree-sitter-sequel = { path = "../tree-sitter-sql" }
+
+[patch."https://github.com/zanmato/gpui-component"]
+gpui-component = { path = "../gpui-component/crates/ui" }
+gpui-component-macros = { path = "../gpui-component/crates/macros" }

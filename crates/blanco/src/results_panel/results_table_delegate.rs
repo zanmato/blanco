@@ -78,7 +78,7 @@ impl ResultsTableDelegate {
         let sample_rows: Vec<Vec<Option<String>>> = result.rows.iter().take(5).cloned().collect();
 
         // Calculate column widths based on actual text measurement
-        let mut column_widths: Vec<f64> = result
+        let column_widths: Vec<f64> = result
             .columns
             .iter()
             .enumerate()
@@ -158,37 +158,21 @@ impl ResultsTableDelegate {
             })
             .collect();
 
-        // Add row number column width at the beginning
-        let row_num_width = 50.0; // Fixed width for row numbers
-        column_widths.insert(0, row_num_width);
-
-        // Build columns from result with calculated widths, starting with row number column
-        let mut columns = vec![
-            Column::new("row_number".to_string(), "#".to_string())
-                .width(row_num_width)
-                .resizable(false),
-        ];
-
-        columns.extend(result.columns.iter().enumerate().map(|(i, name)| {
-            Column::new(format!("col_{}", i + 1), name)
-                .width(column_widths.get(i + 1).copied().unwrap_or(150.0))
-                .resizable(true)
-                .sortable()
-        }));
-
-        self.columns = columns;
-
-        // Add row numbers to the beginning of each row
-        self.rows = result
-            .rows
-            .into_iter()
+        // Build columns from result with calculated widths. Row numbers are rendered
+        // by the table's row header column, so there is no dedicated "#" data column.
+        self.columns = result
+            .columns
+            .iter()
             .enumerate()
-            .map(|(row_index, mut row)| {
-                let mut new_row = vec![Some((row_index + 1).to_string())];
-                new_row.append(&mut row);
-                new_row
+            .map(|(i, name)| {
+                Column::new(format!("col_{}", i + 1), name)
+                    .width(column_widths.get(i).copied().unwrap_or(150.0))
+                    .resizable(true)
+                    .sortable()
             })
             .collect();
+
+        self.rows = result.rows;
 
         // Use table metadata from QueryResult if available
         let old_table_name = self.table_name.clone();
@@ -220,7 +204,7 @@ impl ResultsTableDelegate {
         }
 
         // Store table columns metadata for tooltips and rendering
-        self.table_columns = result.table_columns.clone().unwrap_or_default();
+        self.table_columns = result.table_columns.unwrap_or_default();
 
         // Warn if PK columns are missing from the result set (disables editing)
         if !self.table_columns.is_empty() {
@@ -232,7 +216,6 @@ impl ResultsTableDelegate {
                         !self
                             .columns
                             .iter()
-                            .skip(1)
                             .any(|col| col.name.as_str() == **pk_name)
                     })
                     .copied()
@@ -353,20 +336,15 @@ mod tests {
                 },
             ],
             columns: vec![
-                Column::new("row_number".to_string(), "#".to_string()),
                 Column::new("id".to_string(), "id".to_string()),
                 Column::new("name".to_string(), "name".to_string()),
             ],
-            rows: vec![vec![
-                Some("1".to_string()),
-                Some("2".to_string()),
-                Some("test".to_string()),
-            ]],
+            rows: vec![vec![Some("2".to_string()), Some("test".to_string())]],
             ..Default::default()
         };
 
         let row = 0;
-        let col = 1;
+        let col = 0;
 
         delegate
             .edit_state
@@ -413,7 +391,6 @@ mod tests {
         let mut delegate = ResultsTableDelegate {
             table_name: Some("t".to_string()),
             columns: vec![
-                Column::new("row_number".to_string(), "#".to_string()),
                 Column::new("id".to_string(), "id".to_string()),
                 Column::new("name".to_string(), "name".to_string()),
             ],
@@ -426,7 +403,7 @@ mod tests {
                 ChangeType::UpdateCell,
                 "t".to_string(),
                 row,
-                Some(2), // "name" column
+                Some(1), // "name" column
                 Some("old".to_string()),
                 Some(format!("new{pk}")),
                 vec![("id".to_string(), Some(pk.to_string()))],

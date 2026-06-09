@@ -10,6 +10,7 @@ mod app;
 mod app_database;
 mod app_settings;
 mod assets;
+mod command_palette;
 mod connection_modal;
 mod connections;
 mod editor;
@@ -43,6 +44,7 @@ fn main() {
     app.run(move |cx| {
         gpui_component::init(cx);
         gpui_tokio::init(cx);
+        command_palette::CommandPalette::init(cx);
         sql::register_languages();
 
         // Get the tokio runtime handle for automatic SSH tunnel establishment

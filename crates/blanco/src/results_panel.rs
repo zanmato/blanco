@@ -147,6 +147,7 @@ impl ResultsPanel {
                 .row_selectable(true)
                 .cell_selectable(true)
                 .col_selectable(false)
+                .row_numbers(true)
         });
 
         let subscription = cx.subscribe_in(
@@ -450,12 +451,10 @@ impl ResultsPanel {
                     .primary_key_column_names()
                     .into_iter()
                     .filter_map(|pk_name: &str| {
-                        let pk_col_index = delegate
+                        let full_index = delegate
                             .columns
                             .iter()
-                            .skip(1)
                             .position(|c| c.name.as_str() == pk_name)?;
-                        let full_index = pk_col_index + 1;
                         let value = if full_index == col {
                             delegate
                                 .edit_state
@@ -632,12 +631,11 @@ impl ResultsPanel {
                 let cells: Vec<SelectedCell> = row_data
                     .iter()
                     .enumerate()
-                    .filter(|&(col, _)| col > 0) // Skip row number column
                     .map(|(col, value)| SelectedCell {
-                        col: col - 1, // Adjust for row number column
+                        col,
                         value: value.clone(),
                         column_name: delegate.columns.get(col).map(|c| c.name.to_string()),
-                        column_type: delegate.column_types.get(col - 1).cloned(), // Adjust for row number column
+                        column_type: delegate.column_types.get(col).cloned(),
                     })
                     .collect();
 
@@ -651,7 +649,6 @@ impl ResultsPanel {
             columns: delegate
                 .columns
                 .iter()
-                .skip(1)
                 .map(|c| c.name.to_string())
                 .collect::<Vec<_>>(),
             selected_rows: selected_rows_data,

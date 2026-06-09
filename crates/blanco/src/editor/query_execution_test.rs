@@ -84,23 +84,23 @@ async fn test_results_panel_renders_columns_and_cells(cx: &mut TestAppContext) {
     wait_for_query(&harness, &mut cx).await;
 
     let columns = result_columns(&harness, &cx).expect("should have columns");
-    // Column 0 is the synthetic row-number column the table delegate prepends.
-    assert!(columns.len() >= 4, "got {columns:?}");
-    assert_eq!(columns[1], "id");
-    assert_eq!(columns[2], "greeting");
-    assert_eq!(columns[3], "missing");
+    // Row numbers live in the table's row header column now, so the delegate
+    // exposes only the user's columns starting at index 0.
+    assert!(columns.len() >= 3, "got {columns:?}");
+    assert_eq!(columns[0], "id");
+    assert_eq!(columns[1], "greeting");
+    assert_eq!(columns[2], "missing");
 
-    // Row-number column is index 0 → user columns start at 1.
     assert_eq!(
-        result_cell(&harness, 0, 1, &cx).expect("cell present"),
+        result_cell(&harness, 0, 0, &cx).expect("cell present"),
         Some("7".to_string())
     );
     assert_eq!(
-        result_cell(&harness, 0, 2, &cx).expect("cell present"),
+        result_cell(&harness, 0, 1, &cx).expect("cell present"),
         Some("hello".to_string())
     );
     assert_eq!(
-        result_cell(&harness, 0, 3, &cx).expect("cell present"),
+        result_cell(&harness, 0, 2, &cx).expect("cell present"),
         None,
         "NULL should round-trip as None, not the literal string"
     );
@@ -140,19 +140,19 @@ async fn test_ddl_then_dml_then_select(cx: &mut TestAppContext) {
 
     assert_eq!(result_row_count(&harness, &cx), Some(2));
     assert_eq!(
-        result_cell(&harness, 0, 1, &cx).expect("cell"),
+        result_cell(&harness, 0, 0, &cx).expect("cell"),
         Some("1".to_string())
     );
     assert_eq!(
-        result_cell(&harness, 0, 2, &cx).expect("cell"),
+        result_cell(&harness, 0, 1, &cx).expect("cell"),
         Some("one".to_string())
     );
     assert_eq!(
-        result_cell(&harness, 1, 1, &cx).expect("cell"),
+        result_cell(&harness, 1, 0, &cx).expect("cell"),
         Some("2".to_string())
     );
     assert_eq!(
-        result_cell(&harness, 1, 2, &cx).expect("cell"),
+        result_cell(&harness, 1, 1, &cx).expect("cell"),
         Some("two".to_string())
     );
 }
@@ -178,10 +178,10 @@ async fn test_empty_result_set(cx: &mut TestAppContext) {
 
     assert_eq!(result_row_count(&harness, &cx), Some(0));
     // Note: column metadata is currently lost for empty result sets in the
-    // stream-collect path; only the synthetic row-number column survives.
-    // Worth fixing separately; for now the test just guards against panics.
-    let columns = result_columns(&harness, &cx).expect("should have columns");
-    assert!(!columns.is_empty(), "got {columns:?}");
+    // stream-collect path, so the delegate ends up with no columns. Worth fixing
+    // separately; for now the test just guards against panics during rendering.
+    let columns = result_columns(&harness, &cx).expect("columns vec should be present");
+    assert!(columns.is_empty(), "got {columns:?}");
 }
 
 /// Build a ParameterForm directly and confirm the substituted query is

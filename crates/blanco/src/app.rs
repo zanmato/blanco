@@ -20,6 +20,7 @@ use tracing::{debug, error, info};
 use crate::{
     app_database::{AppDatabase, ConnectionData, EnvironmentType},
     app_settings::AppSettings,
+    command_palette::CommandPalette,
     connection_modal::NewConnectionModal,
     connections::{ConnectionsPanel, ConnectionsPanelEvent},
     editor::{EditorPanel, ObjectDdlParams, TabCreationParams, TableStructureParams},
@@ -52,8 +53,17 @@ actions!(
         ClearSelection,
         ToggleRenderWhitespace,
         ToggleWordWrap,
+        RunQuery,
+        ExplainQuery,
+        ToggleCommandPalette,
     ]
 );
+
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct ConnectToConnection {
+    pub connection_id: i64,
+}
 
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
 #[action(namespace = blanco_app, no_json)]
@@ -196,6 +206,7 @@ pub struct BlancoApp {
     sidebar: Entity<ConnectionsPanel>,
     snippets_panel: Entity<SnippetsPanel>,
     editor_panel: Entity<EditorPanel>,
+    command_palette: Entity<CommandPalette>,
     sidebar_collapsed: bool,
     app_menu_bar: Entity<AppMenuBar>,
     main_resize_state: Entity<ResizableState>,
@@ -281,6 +292,7 @@ impl BlancoApp {
 
         let editor_panel =
             cx.new(|cx| EditorPanel::new_with_saved_tabs(window, cx, false, saved_tabs));
+        let command_palette = cx.new(|cx| CommandPalette::new(sidebar.downgrade(), window, cx));
         let app_menu_bar = AppMenuBar::new(cx);
 
         // Set up event subscriptions using subscribe_in pattern
@@ -322,6 +334,7 @@ impl BlancoApp {
             sidebar,
             snippets_panel,
             editor_panel,
+            command_palette,
             sidebar_collapsed: false,
             app_menu_bar,
             main_resize_state,
@@ -329,6 +342,16 @@ impl BlancoApp {
             _subscriptions: subscriptions,
             _action_task: action_task,
         }
+    }
+
+    #[cfg(test)]
+    pub fn command_palette(&self) -> &Entity<CommandPalette> {
+        &self.command_palette
+    }
+
+    #[cfg(test)]
+    pub fn sidebar_collapsed(&self) -> bool {
+        self.sidebar_collapsed
     }
 
     fn on_quit(&mut self, _: &Quit, _window: &mut Window, cx: &mut Context<Self>) {
@@ -876,6 +899,41 @@ impl BlancoApp {
 
         cx.notify();
     }
+
+    fn on_run_query(&mut self, _: &RunQuery, window: &mut Window, cx: &mut Context<Self>) {
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.on_run_query(window, cx);
+        });
+    }
+
+    fn on_explain_query(&mut self, _: &ExplainQuery, window: &mut Window, cx: &mut Context<Self>) {
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.on_explain_query(window, cx);
+        });
+    }
+
+    fn on_connect_to_connection(
+        &mut self,
+        action: &ConnectToConnection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let connection_id = action.connection_id;
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.expand_connection(connection_id, window, cx);
+        });
+    }
+
+    fn on_toggle_command_palette(
+        &mut self,
+        _: &ToggleCommandPalette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.command_palette.update(cx, |palette, cx| {
+            palette.toggle(window, cx);
+        });
+    }
 }
 
 impl Focusable for BlancoApp {
@@ -911,6 +969,10 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_refresh_snippets))
             .on_action(cx.listener(Self::on_toggle_render_whitespace))
             .on_action(cx.listener(Self::on_toggle_word_wrap))
+            .on_action(cx.listener(Self::on_run_query))
+            .on_action(cx.listener(Self::on_explain_query))
+            .on_action(cx.listener(Self::on_connect_to_connection))
+            .on_action(cx.listener(Self::on_toggle_command_palette))
             .size_full()
             .overflow_hidden()
             .bg(cx.theme().background)
@@ -981,6 +1043,7 @@ impl Render for BlancoApp {
                         ),
                 ),
             )
+            .child(self.command_palette.clone())
             .children(sheet_layer)
             .children(dialog_layer)
             .children(notification_layer)
@@ -996,6 +1059,8 @@ fn init_menus(cx: &mut App) {
         gpui::KeyBinding::new("super-shift-r", RollbackChanges, None),
         // Register keyboard shortcut for formatting SQL
         gpui::KeyBinding::new("shift-alt-f", FormatQuery, None),
+        // Register keyboard shortcut for the command palette
+        gpui::KeyBinding::new("secondary-k", ToggleCommandPalette, None),
         #[cfg(target_os = "macos")]
         gpui::KeyBinding::new("cmd-q", Quit, None),
         #[cfg(not(target_os = "macos"))]

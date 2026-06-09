@@ -20,12 +20,9 @@ impl ResultsTableDelegate {
         if pk_names.is_empty() {
             return false;
         }
-        pk_names.iter().all(|pk_name| {
-            self.columns
-                .iter()
-                .skip(1)
-                .any(|col| col.name.as_str() == *pk_name)
-        })
+        pk_names
+            .iter()
+            .all(|pk_name| self.columns.iter().any(|col| col.name.as_str() == *pk_name))
     }
 
     fn primary_key_column_indices(&self) -> Option<Vec<usize>> {
@@ -38,7 +35,6 @@ impl ResultsTableDelegate {
             .filter_map(|pk_name| {
                 self.columns
                     .iter()
-                    .skip(1)
                     .position(|col| col.name.as_str() == pk_name)
             })
             .collect();
@@ -49,7 +45,7 @@ impl ResultsTableDelegate {
         }
     }
 
-    /// Get column names for INSERT operations, excluding row number and primary key (for new rows)
+    /// Get column names for INSERT operations, excluding primary key (for new rows)
     pub fn get_insert_column_names(&self, exclude_primary_key: bool) -> Vec<String> {
         let pk_indices = if exclude_primary_key {
             self.primary_key_column_indices()
@@ -59,7 +55,6 @@ impl ResultsTableDelegate {
 
         self.columns
             .iter()
-            .skip(1)
             .enumerate()
             .filter_map(|(data_index, col)| {
                 if exclude_primary_key
@@ -73,7 +68,7 @@ impl ResultsTableDelegate {
             .collect()
     }
 
-    /// Get column values for INSERT operations, excluding row number and primary key (for new rows)
+    /// Get column values for INSERT operations, excluding primary key (for new rows)
     pub fn get_insert_values(
         &self,
         row_index: usize,
@@ -87,7 +82,6 @@ impl ResultsTableDelegate {
 
         if let Some(row) = self.rows.get(row_index) {
             row.iter()
-                .skip(1) // Skip row number column
                 .enumerate()
                 .filter_map(|(data_index, val)| {
                     if exclude_primary_key
@@ -98,9 +92,8 @@ impl ResultsTableDelegate {
                     }
 
                     // Check if there's an edited value for this cell
-                    let display_col = data_index + 1; // +1 for row number column
                     if let Some(edited_value) =
-                        self.edit_state.edited_values.get(&(row_index, display_col))
+                        self.edit_state.edited_values.get(&(row_index, data_index))
                     {
                         return Some(edited_value.clone());
                     }
@@ -182,15 +175,12 @@ impl ResultsTableDelegate {
                     let pk_col_indices = self.primary_key_column_indices();
                     let exclude_primary_key = pk_col_indices.as_ref().is_some_and(|indices| {
                         indices.iter().all(|&idx| {
-                            let display_col = idx + 1;
                             let pk_value = self
                                 .edit_state
                                 .edited_values
-                                .get(&(change.row_index, display_col))
+                                .get(&(change.row_index, idx))
                                 .or_else(|| {
-                                    self.rows
-                                        .get(change.row_index)
-                                        .and_then(|row| row.get(display_col))
+                                    self.rows.get(change.row_index).and_then(|row| row.get(idx))
                                 });
                             pk_value.is_none_or(|v| v.as_ref().is_none_or(|s| s.is_empty()))
                         })

@@ -51,12 +51,10 @@ impl ResultsTableDelegate {
                         .primary_key_column_names()
                         .into_iter()
                         .filter_map(|pk_name| {
-                            let pk_col_index = self
+                            let full_index = self
                                 .columns
                                 .iter()
-                                .skip(1)
                                 .position(|c| c.name.as_str() == pk_name)?;
-                            let full_index = pk_col_index + 1;
                             let value = if full_index == col {
                                 self.edit_state
                                     .original_values

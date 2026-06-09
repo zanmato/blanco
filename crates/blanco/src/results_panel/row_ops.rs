@@ -17,7 +17,7 @@ impl ResultsPanel {
             let new_row_index = delegate.rows.len() - 1;
             delegate.edit_state.pending_new_rows.push(new_row_index);
 
-            // Track the INSERT change with NULL values (excluding row number and primary key columns)
+            // Track the INSERT change with NULL values (excluding primary key columns)
             if let Some(table_name) = &delegate.table_name {
                 // For new rows, exclude primary key to avoid UPDATE/INSERT confusion
                 let column_names = delegate.get_insert_column_names(true); // exclude_primary_key = true
@@ -63,7 +63,7 @@ impl ResultsPanel {
                 let new_row_index = delegate.rows.len() - 1;
                 delegate.edit_state.pending_new_rows.push(new_row_index);
 
-                // Track the INSERT change with proper column values (excluding row number and primary key columns)
+                // Track the INSERT change with proper column values (excluding primary key columns)
                 if let Some(table_name) = &delegate.table_name {
                     // For new rows (duplicated rows), exclude primary key to avoid UPDATE/INSERT confusion
                     let _column_names = delegate.get_insert_column_names(true); // exclude_primary_key = true
@@ -119,13 +119,11 @@ impl ResultsPanel {
                     let pk_col_idx = delegate
                         .columns
                         .iter()
-                        .skip(1)
                         .position(|c| c.name.as_str() == pk_name)?;
-                    let display_col = pk_col_idx + 1;
                     let value = delegate
                         .rows
                         .get(row_ix)
-                        .and_then(|row| row.get(display_col))
+                        .and_then(|row| row.get(pk_col_idx))
                         .and_then(|v| v.clone());
                     Some((pk_name.to_string(), value))
                 })
