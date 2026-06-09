@@ -12,7 +12,7 @@ use gpui_component::ActiveTheme as _;
 
 use crate::app_database::ConnectionData;
 
-use super::data_loading::DatabaseItemType;
+use super::data_loading::{DatabaseItemType, DatabaseTable};
 use super::{ConnectionsPanel, TreeItemIcon, TreeItemKind, TreeItemMetadata};
 
 impl ConnectionsPanel {
@@ -106,9 +106,10 @@ impl ConnectionsPanel {
                                 relative_size: None,
                             };
 
-                            let table_items: Vec<TreeItem<TreeItemMetadata>> = if schema.is_expanded
+                            let category_items: Vec<TreeItem<TreeItemMetadata>> = if schema
+                                .is_expanded
                             {
-                                schema
+                                let children = schema
                                     .tables
                                     .iter()
                                     .map(|table| {
@@ -116,35 +117,38 @@ impl ConnectionsPanel {
                                             "table:{}:{}:{}:{}",
                                             connection_id, database.name, schema.name, table.name
                                         );
-
-                                        let (icon, color, kind) =
-                                            icon_for_item_type(table.item_type, cx);
-
-                                        let table_metadata = TreeItemMetadata {
+                                        build_object_item(
+                                            connection,
                                             connection_id,
-                                            connection_name: connection.display_name(),
-                                            kind,
                                             db_type,
-                                            database_name: Some(database.name.clone()),
-                                            schema_name: Some(schema.name.clone()),
-                                            table_name: Some(table.name.clone()),
-                                            icon: TreeItemIcon { icon, color },
-                                            environment_type: Some(connection.environment_type),
-                                            loading: false,
-                                            size_bytes: table.size_bytes,
-                                            relative_size: table.relative_size,
-                                        };
-
-                                        TreeItem::new(table_key, table.name.clone(), table_metadata)
+                                            Some(database.name.clone()),
+                                            Some(schema.name.clone()),
+                                            table_key,
+                                            table,
+                                            cx,
+                                        )
                                     })
-                                    .collect()
+                                    .collect();
+                                self.group_into_categories(
+                                    connection,
+                                    connection_id,
+                                    db_type,
+                                    Some(database.name.clone()),
+                                    Some(schema.name.clone()),
+                                    &format!(
+                                        "category:{}:{}:{}",
+                                        connection_id, database.name, schema.name
+                                    ),
+                                    children,
+                                    cx,
+                                )
                             } else {
                                 Vec::new()
                             };
 
                             TreeItem::new(schema_key, schema.name.clone(), schema_metadata)
                                 .expanded(schema.is_expanded && !schema.tables.is_empty())
-                                .children(table_items)
+                                .children(category_items)
                         })
                         .collect();
 
@@ -155,8 +159,10 @@ impl ConnectionsPanel {
                 .collect();
             base_item.children(database_items)
         } else {
-            // MySQL/SQLite: connection -> tables (no schema level)
-            let table_items: Vec<TreeItem<TreeItemMetadata>> = metadata
+            // MySQL/SQLite: connection -> category folders -> objects (no
+            // schema level). Objects across all schemas are merged, then split
+            // into per-type category folders.
+            let children = metadata
                 .schemas
                 .iter()
                 .flat_map(|schema| {
@@ -166,32 +172,147 @@ impl ConnectionsPanel {
                         .map(|table| {
                             let table_key =
                                 format!("table:{}:{}:{}", connection_id, schema.name, table.name);
-
-                            let (icon, color, kind) = icon_for_item_type(table.item_type, cx);
-
-                            let table_metadata = TreeItemMetadata {
+                            build_object_item(
+                                connection,
                                 connection_id,
-                                connection_name: connection.display_name(),
-                                kind,
                                 db_type,
-                                database_name: Some(schema.name.clone()),
-                                schema_name: None,
-                                table_name: Some(table.name.clone()),
-                                icon: TreeItemIcon { icon, color },
-                                environment_type: Some(connection.environment_type),
-                                loading: false,
-                                size_bytes: table.size_bytes,
-                                relative_size: table.relative_size,
-                            };
-
-                            TreeItem::new(table_key, table.name.clone(), table_metadata)
+                                Some(schema.name.clone()),
+                                None,
+                                table_key,
+                                table,
+                                cx,
+                            )
                         })
                         .collect::<Vec<_>>()
                 })
                 .collect();
-            base_item.children(table_items)
+            let category_items = self.group_into_categories(
+                connection,
+                connection_id,
+                db_type,
+                None,
+                None,
+                &format!("category:{}", connection_id),
+                children,
+                cx,
+            );
+            base_item.children(category_items)
         }
     }
+
+    /// Group leaf object items into per-type category folders (Tables, Views,
+    /// ...). Each leaf is paired with its `DatabaseItemType` so it can be sorted
+    /// into the matching folder. Empty categories are omitted.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn group_into_categories(
+        &self,
+        connection: &ConnectionData,
+        connection_id: i64,
+        db_type: database::DatabaseType,
+        database_name: Option<String>,
+        schema_name: Option<String>,
+        category_key_prefix: &str,
+        children: Vec<(DatabaseItemType, TreeItem<TreeItemMetadata>)>,
+        cx: &Context<Self>,
+    ) -> Vec<TreeItem<TreeItemMetadata>> {
+        CATEGORY_ORDER
+            .iter()
+            .copied()
+            .filter_map(|(item_type, label, slug)| {
+                let category_children: Vec<TreeItem<TreeItemMetadata>> = children
+                    .iter()
+                    .filter(|(kind, _)| *kind == item_type)
+                    .map(|(_, item)| item.clone())
+                    .collect();
+                if category_children.is_empty() {
+                    return None;
+                }
+
+                let category_key = format!("{category_key_prefix}:{slug}");
+                // Tables are expanded by default; everything else is collapsed.
+                // `expanded_categories` records categories the user has toggled
+                // away from that default, so membership XORs the default.
+                let default_expanded = item_type == DatabaseItemType::Table;
+                let is_expanded =
+                    default_expanded ^ self.expanded_categories.contains(&category_key);
+
+                // Match the folder's icon and color to the objects it holds so
+                // the grouping reads as "more of these".
+                let (icon, color, _) = icon_for_item_type(item_type, cx);
+                let category_metadata = TreeItemMetadata {
+                    connection_id,
+                    connection_name: connection.display_name(),
+                    kind: TreeItemKind::Category,
+                    db_type,
+                    database_name: database_name.clone(),
+                    schema_name: schema_name.clone(),
+                    table_name: None,
+                    icon: TreeItemIcon { icon, color },
+                    environment_type: Some(connection.environment_type),
+                    loading: false,
+                    size_bytes: None,
+                    relative_size: None,
+                };
+
+                Some(
+                    TreeItem::new(category_key, label, category_metadata)
+                        .expanded(is_expanded)
+                        .children(category_children),
+                )
+            })
+            .collect()
+    }
+}
+
+/// Object types grouped into category folders, in display order. The third
+/// field is a stable slug used to build the category tree item id.
+const CATEGORY_ORDER: &[(DatabaseItemType, &str, &str)] = &[
+    (DatabaseItemType::Table, "Tables", "tables"),
+    (DatabaseItemType::View, "Views", "views"),
+    (
+        DatabaseItemType::MaterializedView,
+        "Materialized Views",
+        "matviews",
+    ),
+    (DatabaseItemType::Function, "Functions", "functions"),
+    (DatabaseItemType::Procedure, "Procedures", "procedures"),
+    (DatabaseItemType::Trigger, "Triggers", "triggers"),
+];
+
+/// Build a leaf tree item for a single database object, paired with its type so
+/// it can later be grouped into the matching category folder.
+#[allow(clippy::too_many_arguments)]
+fn build_object_item(
+    connection: &ConnectionData,
+    connection_id: i64,
+    db_type: database::DatabaseType,
+    database_name: Option<String>,
+    schema_name: Option<String>,
+    item_key: String,
+    table: &DatabaseTable,
+    cx: &Context<ConnectionsPanel>,
+) -> (DatabaseItemType, TreeItem<TreeItemMetadata>) {
+    let (icon, color, kind) = icon_for_item_type(table.item_type, cx);
+
+    let metadata = TreeItemMetadata {
+        connection_id,
+        connection_name: connection.display_name(),
+        kind,
+        db_type,
+        database_name,
+        schema_name,
+        table_name: Some(table.name.clone()),
+        icon: TreeItemIcon { icon, color },
+        environment_type: Some(connection.environment_type),
+        loading: false,
+        size_bytes: table.size_bytes,
+        relative_size: table.relative_size,
+    };
+
+    (
+        table.item_type,
+        TreeItem::new(item_key, table.name.clone(), metadata),
+    )
 }
 
 /// Pick the icon, color, and metadata kind to render for a given object kind.
@@ -221,10 +342,6 @@ fn icon_for_item_type(
             cx.theme().cyan.into(),
             TreeItemKind::Function,
         ),
-        DatabaseItemType::Trigger => (
-            IconName::DatabaseConnected,
-            cx.theme().yellow.into(),
-            TreeItemKind::Trigger,
-        ),
+        DatabaseItemType::Trigger => (IconName::Zap, cx.theme().red.into(), TreeItemKind::Trigger),
     }
 }

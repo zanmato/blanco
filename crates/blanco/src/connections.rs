@@ -56,6 +56,9 @@ pub struct ConnectionsPanel {
     tree_state: Entity<TreeState<ConnectionsTreeDelegate>>,
     pub loaded_connections: std::collections::HashSet<i64>,
     expanded_connections: std::collections::HashSet<i64>, // Track which connections are expanded
+    // Track which object-type category folders (Tables, Views, ...) are
+    // expanded, keyed by the category tree item id.
+    expanded_categories: std::collections::HashSet<String>,
 }
 
 /// Type of tree item in the metadata context
@@ -70,6 +73,9 @@ pub enum TreeItemKind {
     Procedure,
     Function,
     Trigger,
+    /// A grouping folder for one object type (Tables, Views, Functions, ...)
+    /// inserted between a schema/connection and its objects.
+    Category,
 }
 
 /// Metadata for tree items to enable proper context menu actions
@@ -100,7 +106,7 @@ pub trait CreateNewQueryTabParams {
 impl CreateNewQueryTabParams for TreeItemMetadata {
     fn create_new_query_tab_action(&self) -> Option<CreateNewQueryTab> {
         match self.kind {
-            TreeItemKind::Connection => None,
+            TreeItemKind::Connection | TreeItemKind::Category => None,
             // Procedures/Functions/Triggers don't open a query tab when
             // double-clicked; they get a dedicated DDL tab instead, opened by
             // the panel itself.
@@ -139,6 +145,7 @@ impl ConnectionsPanel {
         let database_metadata = std::collections::HashMap::new();
         let loaded_connections = std::collections::HashSet::new();
         let expanded_connections = std::collections::HashSet::new();
+        let expanded_categories = std::collections::HashSet::new();
 
         // Create delegate with parent reference
         let panel_entity = cx.entity();
@@ -153,6 +160,7 @@ impl ConnectionsPanel {
             tree_state,
             loaded_connections,
             expanded_connections,
+            expanded_categories,
         };
 
         cx.spawn(async |this_handle, cx| {
@@ -301,10 +309,21 @@ impl ConnectionsPanel {
         None
     }
 
-    fn get_connection_icon(&self, _connection_id: i64, cx: &Context<Self>) -> TreeItemIcon {
-        TreeItemIcon {
-            icon: IconName::Database,
-            color: cx.theme().foreground.into(),
+    fn get_connection_icon(&self, connection_id: i64, cx: &Context<Self>) -> TreeItemIcon {
+        // Reflect the known connected state at build time so rebuilding the tree
+        // (on every expand/collapse) doesn't momentarily flip a connected node
+        // back to the disconnected icon before `update_connection_status_in_tree`
+        // reconciles it. A loaded connection is, by definition, connected.
+        if self.loaded_connections.contains(&connection_id) {
+            TreeItemIcon {
+                icon: IconName::DatabaseConnected,
+                color: cx.theme().primary.into(),
+            }
+        } else {
+            TreeItemIcon {
+                icon: IconName::Database,
+                color: cx.theme().foreground.into(),
+            }
         }
     }
 
@@ -399,6 +418,15 @@ impl ConnectionsPanel {
                     }
                 }
                 TreeItemKind::Table | TreeItemKind::View | TreeItemKind::MaterializedView => {}
+                TreeItemKind::Category => {
+                    // The tree widget toggles the clicked folder's expansion
+                    // itself (on mouse-down, before this click handler). We only
+                    // persist the resulting state so it survives later tree
+                    // rebuilds. We must NOT rebuild here: a full rebuild
+                    // re-applies stored state to every folder and would reopen
+                    // unrelated ones.
+                    self.record_category_expansion(item_id, cx);
+                }
                 TreeItemKind::Procedure | TreeItemKind::Function | TreeItemKind::Trigger => {
                     let routine_kind = match metadata.kind {
                         TreeItemKind::Procedure => blanco_core::RoutineKind::Procedure,
@@ -423,6 +451,25 @@ impl ConnectionsPanel {
                     }
                 }
             }
+        }
+    }
+
+    /// Expand (and connect) a connection idempotently, mirroring the click path
+    /// used when a connection node is activated in the tree. Loads the
+    /// connection's children on first use (which establishes the DB connection),
+    /// and otherwise just ensures the node is expanded.
+    pub fn expand_connection(
+        &mut self,
+        connection_id: i64,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.loaded_connections.contains(&connection_id) {
+            self.set_item_loading(&format!("connection:{}", connection_id), true, cx);
+            self.load_connection_children(connection_id, true, cx);
+        } else if !self.expanded_connections.contains(&connection_id) {
+            self.expanded_connections.insert(connection_id);
+            self.update_tree_items(cx);
         }
     }
 
@@ -497,6 +544,28 @@ impl ConnectionsPanel {
 
             // Rebuild tree with updated expansion state
             self.update_tree_items(cx);
+        }
+    }
+
+    /// Record an object-type category folder's expansion after the tree widget
+    /// has toggled it, so the state survives future tree rebuilds. The set
+    /// stores only categories toggled *away* from their default (Tables open,
+    /// the rest closed), matching the XOR used when building the tree.
+    fn record_category_expansion(&mut self, category_key: &str, cx: &mut Context<Self>) {
+        let expanded = self
+            .tree_state
+            .read(cx)
+            .entries()
+            .iter()
+            .find(|entry| entry.item().id == category_key)
+            .map(|entry| entry.is_expanded())
+            .unwrap_or(false);
+
+        let default_expanded = category_key.ends_with(":tables");
+        if expanded == default_expanded {
+            self.expanded_categories.remove(category_key);
+        } else {
+            self.expanded_categories.insert(category_key.to_string());
         }
     }
 

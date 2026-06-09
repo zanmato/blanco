@@ -308,6 +308,10 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                 // click handling (DDL tab) is wired separately in the panel.
                 menu
             }
+            TreeItemKind::Category => {
+                // Grouping folders have no contextual operations.
+                menu
+            }
             TreeItemKind::Schema
             | TreeItemKind::Table
             | TreeItemKind::View
