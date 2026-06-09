@@ -138,6 +138,7 @@ impl AgentToolHandler for ListTablesHandler {
                     required: vec![],
                 }).unwrap_or_default(),
             },
+            cache_control: None,
         }
     }
 

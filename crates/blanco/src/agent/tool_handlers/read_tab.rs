@@ -150,6 +150,7 @@ impl AgentToolHandler for ReadTabHandler {
                 })
                 .unwrap_or_default(),
             },
+            cache_control: None,
         }
     }
 

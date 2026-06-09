@@ -230,6 +230,7 @@ impl AgentToolHandler for WriteTabHandler {
                     required: vec!["content".to_string()],
                 }).unwrap_or_default(),
             },
+            cache_control: None,
         }
     }
 

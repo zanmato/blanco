@@ -132,6 +132,7 @@ impl AgentToolHandler for ExploreTablesHandler {
                     required: vec![],
                 }).unwrap_or_default(),
             },
+            cache_control: None,
         }
     }
 

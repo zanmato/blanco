@@ -1,0 +1,4 @@
+[submodule "crates/tree-sitter-sequel"]
+	path = crates/tree-sitter-sequel
+	url = https://github.com/derekstride/tree-sitter-sql.git
+	branch = main
