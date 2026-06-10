@@ -7,9 +7,14 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme, IndexPath, Sizable as _,
-    chart::{BarChart, LineChart, PieChart},
+    chart::{AreaChart, BarChart, LineChart, PieChart},
     checkbox::Checkbox,
     h_flex,
+    plot::{
+        AXIS_GAP, AxisText, Grid, IntoPlot, Plot, PlotAxis,
+        scale::{Scale, ScaleBand, ScaleLinear},
+        shape::{Bar, Stack},
+    },
     scroll::ScrollableElement as _,
     select::{Select, SelectEvent, SelectState},
     table::TableState,
@@ -20,7 +25,6 @@ use blanco_core::connection_trait::ColumnType;
 
 use super::ResultsTableDelegate;
 
-/// Maximum characters shown on the x-axis before truncating with "…".
 const MAX_LABEL_CHARS: usize = 15;
 
 fn truncate_label(s: &str) -> SharedString {
@@ -37,6 +41,15 @@ fn truncate_label_to(s: &str, max_chars: usize) -> SharedString {
             .map(|(i, _)| i)
             .unwrap_or(s.len());
         SharedString::from(format!("{}…", &s[..end]))
+    }
+}
+
+fn apply_aggregate(values: &[f64], agg: Aggregate) -> f64 {
+    match agg {
+        Aggregate::Sum => values.iter().sum(),
+        Aggregate::Avg => values.iter().sum::<f64>() / values.len() as f64,
+        Aggregate::Count => values.len() as f64,
+        Aggregate::None => values[0],
     }
 }
 
@@ -68,12 +81,41 @@ impl ChartKind {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Aggregate {
+    None,
+    Sum,
+    Avg,
+    Count,
+}
+
+impl Aggregate {
+    fn label(self) -> &'static str {
+        match self {
+            Aggregate::None => "None",
+            Aggregate::Sum => "Sum",
+            Aggregate::Avg => "Avg",
+            Aggregate::Count => "Count",
+        }
+    }
+
+    fn all() -> [Aggregate; 4] {
+        [
+            Aggregate::None,
+            Aggregate::Sum,
+            Aggregate::Avg,
+            Aggregate::Count,
+        ]
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ChartConfig {
     pub line_stepped: bool,
     pub line_show_points: bool,
 }
 
+/// A single data point used by single-series charts (LineChart, BarChart, PieChart).
 #[derive(Clone)]
 struct ChartPoint {
     display_label: SharedString,
@@ -82,20 +124,141 @@ struct ChartPoint {
     color: Hsla,
 }
 
+/// Pivoted row used by multi-series line charts (AreaChart). Each row has an
+/// x-axis label and one y-value per series.
+#[derive(Clone)]
+struct PivotedRow {
+    x_label: SharedString,
+    values: Vec<f64>,
+}
+
+struct SeriesInfo {
+    names: Vec<SharedString>,
+    colors: Vec<Hsla>,
+}
+
+struct GroupedData {
+    /// One entry per unique x value, in the order they first appeared.
+    rows: Vec<PivotedRow>,
+    series: SeriesInfo,
+}
+
+/// A stacked bar chart built from pivoted data. Uses the same low-level
+/// primitives as the gpui-component story (`Stack`, `Bar`, `ScaleBand`).
+#[derive(IntoPlot)]
+struct StackedBar {
+    x_labels: Vec<SharedString>,
+    series: Vec<gpui_component::plot::shape::StackSeries<PivotedRow>>,
+    colors: Vec<Hsla>,
+}
+
+impl StackedBar {
+    fn new(grouped: GroupedData) -> Self {
+        let keys: Vec<String> = grouped.series.names.iter().map(|n| n.to_string()).collect();
+        let num_series = keys.len();
+        let rows = grouped.rows;
+        let x_labels: Vec<SharedString> = rows.iter().map(|r| r.x_label.clone()).collect();
+
+        let series = Stack::new()
+            .data(rows)
+            .keys(keys)
+            .value(move |r: &PivotedRow, key| {
+                let si = (0..num_series).find(|&i| {
+                    grouped
+                        .series
+                        .names
+                        .get(i)
+                        .map_or(false, |n| n.as_ref() == key)
+                });
+                si.and_then(|i| {
+                    r.values
+                        .get(i)
+                        .copied()
+                        .filter(|&v| v != 0.0)
+                        .map(|v| v as f32)
+                })
+            })
+            .series();
+
+        Self {
+            x_labels,
+            series,
+            colors: grouped.series.colors,
+        }
+    }
+}
+
+impl Plot for StackedBar {
+    fn paint(&mut self, bounds: gpui::Bounds<gpui::Pixels>, window: &mut Window, cx: &mut App) {
+        let width = bounds.size.width.as_f32();
+        let height = bounds.size.height.as_f32() - AXIS_GAP;
+
+        let x = ScaleBand::new(self.x_labels.clone(), vec![0., width])
+            .padding_inner(0.4)
+            .padding_outer(0.2);
+        let band_width = x.band_width();
+
+        let max = self
+            .series
+            .iter()
+            .flat_map(|s| s.points.iter().map(|p| p.y1))
+            .fold(0., f32::max) as f64;
+
+        let y = ScaleLinear::new(vec![0., max], vec![height, 10.]);
+
+        let x_label = self.x_labels.iter().filter_map(|label| {
+            x.tick(label).map(|x_tick| {
+                AxisText::new(
+                    label.clone(),
+                    x_tick + band_width / 2.,
+                    cx.theme().muted_foreground,
+                )
+                .align(gpui::TextAlign::Center)
+            })
+        });
+        PlotAxis::new()
+            .x(height)
+            .x_label(x_label)
+            .stroke(cx.theme().border)
+            .paint(&bounds, window, cx);
+
+        Grid::new()
+            .y((0..=3).map(|i| height * i as f32 / 4.0).collect())
+            .stroke(cx.theme().border)
+            .dash_array(&[gpui::px(4.), gpui::px(2.)])
+            .paint(&bounds, window);
+
+        for (si, series) in self.series.iter().enumerate() {
+            let x = x.clone();
+            let y0 = y.clone();
+            let y1 = y.clone();
+            let fill = self.colors.get(si).copied().unwrap_or(cx.theme().chart_1);
+
+            Bar::new()
+                .data(&series.points)
+                .band_width(band_width)
+                .cross(move |d| x.tick(&d.data.x_label))
+                .base(move |d| y0.tick(&(d.y0 as f64)).unwrap_or(height))
+                .value(move |d| y1.tick(&(d.y1 as f64)))
+                .fill(move |_, _, _| fill)
+                .paint(&bounds, window, cx);
+        }
+    }
+}
+
 pub struct ChartView {
     focus_handle: FocusHandle,
     table_state: Entity<TableState<ResultsTableDelegate>>,
     kind: ChartKind,
     config: ChartConfig,
     kind_select: Entity<SelectState<Vec<SharedString>>>,
-    /// Left-hand axis selector: X-axis (line), Categories (bar), Keys (pie).
     axis_select: Entity<SelectState<Vec<SharedString>>>,
-    /// Right-hand axis selector: Y-axis (line), Values (bar), Values (pie). Always numeric.
     value_select: Entity<SelectState<Vec<SharedString>>>,
-    /// Maps a row index in `axis_select` items back to a column index in the delegate.
+    aggregate_select: Entity<SelectState<Vec<SharedString>>>,
+    series_select: Entity<SelectState<Vec<SharedString>>>,
     axis_column_indices: Vec<usize>,
-    /// Maps a row index in `value_select` items back to a column index in the delegate.
     value_column_indices: Vec<usize>,
+    series_column_indices: Vec<usize>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -105,7 +268,6 @@ impl ChartView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let kind = ChartKind::Line;
         let kind_items: Vec<SharedString> =
             ChartKind::all().iter().map(|k| k.label().into()).collect();
         let kind_select =
@@ -116,36 +278,47 @@ impl ChartView {
         let value_select =
             cx.new(|cx| SelectState::new(Vec::<SharedString>::new(), None, window, cx));
 
+        let agg_items: Vec<SharedString> =
+            Aggregate::all().iter().map(|a| a.label().into()).collect();
+        let aggregate_select =
+            cx.new(|cx| SelectState::new(agg_items, Some(IndexPath::new(0)), window, cx));
+
+        let series_select =
+            cx.new(|cx| SelectState::new(Vec::<SharedString>::new(), None, window, cx));
+
         let subs = vec![
             cx.subscribe_in(&kind_select, window, Self::on_kind_changed),
             cx.subscribe(&axis_select, |_, _, _ev: &SelectEvent<_>, cx| cx.notify()),
             cx.subscribe(&value_select, |_, _, _ev: &SelectEvent<_>, cx| cx.notify()),
+            cx.subscribe(&aggregate_select, |_, _, _ev: &SelectEvent<_>, cx| {
+                cx.notify()
+            }),
+            cx.subscribe(&series_select, |_, _, _ev: &SelectEvent<_>, cx| cx.notify()),
         ];
 
         let mut this = Self {
             focus_handle: cx.focus_handle(),
             table_state,
-            kind,
+            kind: ChartKind::Line,
             config: ChartConfig::default(),
             kind_select,
             axis_select,
             value_select,
+            aggregate_select,
+            series_select,
             axis_column_indices: Vec::new(),
             value_column_indices: Vec::new(),
+            series_column_indices: Vec::new(),
             _subscriptions: subs,
         };
         this.rebuild_column_selects(window, cx);
         this
     }
 
-    /// Rebuild axis selectors when the source result columns change (new query)
-    /// or when the chart kind changes.
     pub fn rebuild_column_selects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (axis_items, axis_indices, value_items, value_indices) =
+        let (axis_items, axis_indices, value_items, value_indices, all_items, all_indices) =
             self.table_state.read_with(cx, |state, _| {
                 let delegate = state.delegate();
-                // The delegate's `columns` includes a row-number column at index 0;
-                // skip it. `column_types` does not include the row-number prefix.
                 let pairs: Vec<(usize, SharedString)> = delegate
                     .columns
                     .iter()
@@ -166,20 +339,30 @@ impl ChartView {
                     .cloned()
                     .collect();
 
-                // Axis (X/Category/Key): all columns allowed.
                 let axis_items: Vec<SharedString> = pairs.iter().map(|(_, n)| n.clone()).collect();
                 let axis_indices: Vec<usize> = pairs.iter().map(|(i, _)| *i).collect();
-
-                // Value (Y/Value): numeric only.
                 let value_items: Vec<SharedString> =
                     numeric_pairs.iter().map(|(_, n)| n.clone()).collect();
                 let value_indices: Vec<usize> = numeric_pairs.iter().map(|(i, _)| *i).collect();
+                // Series: all columns (like axis), prepended with "None".
+                let mut all_items = vec![SharedString::from("None")];
+                all_items.extend(pairs.iter().map(|(_, n)| n.clone()));
+                let mut all_indices = vec![usize::MAX];
+                all_indices.extend(pairs.iter().map(|(i, _)| *i));
 
-                (axis_items, axis_indices, value_items, value_indices)
+                (
+                    axis_items,
+                    axis_indices,
+                    value_items,
+                    value_indices,
+                    all_items,
+                    all_indices,
+                )
             });
 
         self.axis_column_indices = axis_indices;
         self.value_column_indices = value_indices;
+        self.series_column_indices = all_indices;
 
         let axis_default = (!self.axis_column_indices.is_empty()).then(|| IndexPath::new(0));
         let value_default = (!self.value_column_indices.is_empty()).then(|| IndexPath::new(0));
@@ -192,6 +375,10 @@ impl ChartView {
             state.set_items(value_items, window, cx);
             state.set_selected_index(value_default, window, cx);
         });
+        self.series_select.update(cx, |state, cx| {
+            state.set_items(all_items, window, cx);
+            state.set_selected_index(Some(IndexPath::new(0)), window, cx);
+        });
         cx.notify();
     }
 
@@ -203,19 +390,15 @@ impl ChartView {
         cx: &mut Context<Self>,
     ) {
         let SelectEvent::Confirm(_) = event;
-        {
-            let kinds = ChartKind::all();
-            let idx = self
-                .kind_select
-                .read(cx)
-                .selected_index(cx)
-                .map(|ip| ip.row)
-                .unwrap_or(0);
-            self.kind = kinds.get(idx).copied().unwrap_or(ChartKind::Line);
-            // Axis filter doesn't depend on kind in v1 (numeric on value, anything on axis),
-            // but rebuild so a fresh result-set picks up new columns.
-            self.rebuild_column_selects(window, cx);
-        }
+        let kinds = ChartKind::all();
+        let idx = self
+            .kind_select
+            .read(cx)
+            .selected_index(cx)
+            .map(|ip| ip.row)
+            .unwrap_or(0);
+        self.kind = kinds.get(idx).copied().unwrap_or(ChartKind::Line);
+        self.rebuild_column_selects(window, cx);
     }
 
     fn selected_axis_column(&self, cx: &App) -> Option<usize> {
@@ -228,12 +411,34 @@ impl ChartView {
         self.value_column_indices.get(row).copied()
     }
 
-    fn extract_points(&self, cx: &App) -> Option<Vec<ChartPoint>> {
+    fn selected_aggregate(&self, cx: &App) -> Aggregate {
+        let row = self
+            .aggregate_select
+            .read(cx)
+            .selected_index(cx)
+            .map(|ip| ip.row)
+            .unwrap_or(0);
+        Aggregate::all()
+            .get(row)
+            .copied()
+            .unwrap_or(Aggregate::None)
+    }
+
+    fn selected_series_column(&self, cx: &App) -> Option<usize> {
+        let row = self.series_select.read(cx).selected_index(cx)?.row;
+        let col = self.series_column_indices.get(row).copied()?;
+        if col == usize::MAX { None } else { Some(col) }
+    }
+
+    fn extract_raw(&self, cx: &App) -> Option<(usize, usize, Vec<(String, f64, Option<String>)>)> {
         let axis_col = self.selected_axis_column(cx)?;
         let value_col = self.selected_value_column(cx)?;
+        let series_col = self.selected_series_column(cx);
         let axis_row_idx = axis_col + 1;
         let value_row_idx = value_col + 1;
-        let raw: Vec<(String, f64)> = self.table_state.read_with(cx, |state, _| {
+        let series_row_idx = series_col.map(|c| c + 1);
+
+        let rows = self.table_state.read_with(cx, |state, _| {
             let delegate = state.delegate();
             delegate
                 .rows
@@ -242,17 +447,28 @@ impl ChartView {
                     let axis = row.get(axis_row_idx)?.as_ref()?;
                     let value = row.get(value_row_idx)?.as_ref()?;
                     let value: f64 = value.parse().ok()?;
-                    Some((axis.clone(), value))
+                    let series = series_row_idx.and_then(|si| row.get(si).and_then(|v| v.clone()));
+                    Some((axis.clone(), value, series))
                 })
-                .collect()
+                .collect::<Vec<_>>()
         });
+        Some((axis_row_idx, value_row_idx, rows))
+    }
 
-        let mut seen: HashMap<String, usize> = HashMap::new();
+    fn extract_points(&self, cx: &App) -> Option<Vec<ChartPoint>> {
+        let (_, _, raw) = self.extract_raw(cx)?;
+        let aggregate = self.selected_aggregate(cx);
+
+        if aggregate != Aggregate::None {
+            return Some(self.aggregate_single_series(&raw, aggregate, cx));
+        }
+
         let palette = pie_palette(cx, raw.len());
+        let mut seen: HashMap<String, usize> = HashMap::new();
         let points: Vec<ChartPoint> = raw
             .into_iter()
             .enumerate()
-            .map(|(i, (label, value))| {
+            .map(|(i, (label, value, _))| {
                 let count = seen.entry(label.clone()).or_insert(0);
                 *count += 1;
                 let suffix = if *count > 1 {
@@ -282,6 +498,114 @@ impl ChartView {
             .collect();
 
         Some(points)
+    }
+
+    fn aggregate_single_series(
+        &self,
+        raw: &[(String, f64, Option<String>)],
+        agg: Aggregate,
+        cx: &App,
+    ) -> Vec<ChartPoint> {
+        let mut groups: Vec<(String, Vec<f64>)> = Vec::new();
+        let mut index: HashMap<String, usize> = HashMap::new();
+        for (label, value, _) in raw {
+            let idx = if let Some(&i) = index.get(label) {
+                i
+            } else {
+                let i = groups.len();
+                groups.push((label.clone(), Vec::new()));
+                index.insert(label.clone(), i);
+                i
+            };
+            groups[idx].1.push(*value);
+        }
+
+        let palette = pie_palette(cx, groups.len());
+        groups
+            .into_iter()
+            .enumerate()
+            .map(|(i, (label, values))| {
+                let value = apply_aggregate(&values, agg);
+                ChartPoint {
+                    display_label: truncate_label(&label),
+                    full_label: SharedString::from(label),
+                    value,
+                    color: palette[i % palette.len()],
+                }
+            })
+            .collect()
+    }
+
+    fn extract_grouped(&self, cx: &App) -> Option<GroupedData> {
+        let (_, _, raw) = self.extract_raw(cx)?;
+        let aggregate = self.selected_aggregate(cx);
+
+        let mut series_set: Vec<String> = Vec::new();
+        let mut series_index: HashMap<String, usize> = HashMap::new();
+        let mut x_order: Vec<String> = Vec::new();
+        let mut x_index: HashMap<String, usize> = HashMap::new();
+        // (x_idx, series_idx) → Vec<f64>
+        let mut cells: HashMap<(usize, usize), Vec<f64>> = HashMap::new();
+
+        for (x_label, value, series_label) in &raw {
+            let series_label = series_label.as_deref().unwrap_or("");
+            let si = if let Some(&i) = series_index.get(series_label) {
+                i
+            } else {
+                let i = series_set.len();
+                series_set.push(series_label.to_string());
+                series_index.insert(series_label.to_string(), i);
+                i
+            };
+            let xi = if let Some(&i) = x_index.get(x_label) {
+                i
+            } else {
+                let i = x_order.len();
+                x_order.push(x_label.clone());
+                x_index.insert(x_label.clone(), i);
+                i
+            };
+            cells.entry((xi, si)).or_default().push(*value);
+        }
+
+        let num_series = series_set.len();
+        let palette = pie_palette(cx, num_series);
+        let rows: Vec<PivotedRow> = x_order
+            .iter()
+            .map(|x_label| {
+                let xi = x_index[x_label];
+                let values: Vec<f64> = (0..num_series)
+                    .map(|si| {
+                        let vals = cells.get(&(xi, si));
+                        match vals {
+                            Some(vs) if !vs.is_empty() => {
+                                if aggregate == Aggregate::None {
+                                    vs[0]
+                                } else {
+                                    apply_aggregate(vs, aggregate)
+                                }
+                            }
+                            _ => 0.0,
+                        }
+                    })
+                    .collect();
+                PivotedRow {
+                    x_label: truncate_label(x_label),
+                    values,
+                }
+            })
+            .collect();
+
+        Some(GroupedData {
+            rows,
+            series: SeriesInfo {
+                names: series_set
+                    .into_iter()
+                    .map(|s| SharedString::from(s))
+                    .collect(),
+                colors: palette,
+            },
+        })
     }
 
     fn render_axis_field(
@@ -337,6 +661,8 @@ impl ChartView {
                     self.render_axis_field("Values", &self.value_select, "Select a numeric column")
                 }
             })
+            .child(self.render_axis_field("Aggregate", &self.aggregate_select, ""))
+            .child(self.render_axis_field("Series", &self.series_select, "None"))
             .when(matches!(kind, ChartKind::Line), |this| {
                 this.child(
                     Checkbox::new("chart-line-stepped")
@@ -361,8 +687,34 @@ impl ChartView {
             })
     }
 
+    fn render_series_legend(series: &SeriesInfo, border_color: Hsla) -> gpui::Div {
+        h_flex()
+            .p_2()
+            .px_4()
+            .gap_3()
+            .flex_wrap()
+            .border_t_1()
+            .border_color(border_color)
+            .children(
+                series
+                    .names
+                    .iter()
+                    .zip(series.colors.iter())
+                    .map(|(name, color)| {
+                        h_flex()
+                            .gap_1()
+                            .items_center()
+                            .text_sm()
+                            .child(div().w(px(10.)).h(px(10.)).rounded_sm().bg(*color))
+                            .child(name.clone())
+                    }),
+            )
+    }
+
     fn render_chart_canvas(&self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
+        let muted_fg = theme.muted_foreground;
+        let border_color = theme.border;
         let make_placeholder = |message: &'static str| -> AnyElement {
             div()
                 .flex_1()
@@ -371,10 +723,19 @@ impl ChartView {
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_color(theme.muted_foreground)
+                .text_color(muted_fg)
                 .child(message)
                 .into_any_element()
         };
+
+        let has_series = self.selected_series_column(cx).is_some();
+
+        if has_series {
+            return match self.render_multi_series(cx, border_color) {
+                Some(el) => el,
+                None => make_placeholder("Select an axis and a numeric value column."),
+            };
+        }
 
         let Some(points) = self.extract_points(cx) else {
             return make_placeholder("Select an axis and a numeric value column.");
@@ -456,13 +817,144 @@ impl ChartView {
             }
         }
     }
+
+    fn render_multi_series(
+        &self,
+        cx: &mut Context<Self>,
+        border_color: Hsla,
+    ) -> Option<AnyElement> {
+        let grouped = self.extract_grouped(cx)?;
+        if grouped.rows.is_empty() || grouped.series.names.is_empty() {
+            return None;
+        }
+        let theme = cx.theme();
+        let num_series = grouped.series.names.len();
+
+        match self.kind {
+            ChartKind::Line => {
+                const MIN_WIDTH_PER_POINT: f32 = 80.0;
+                let min_width = px(grouped.rows.len() as f32 * MIN_WIDTH_PER_POINT);
+
+                let mut chart = AreaChart::new(grouped.rows.clone())
+                    .x(|r: &PivotedRow| r.x_label.clone())
+                    .y(|r: &PivotedRow| r.values[0])
+                    .stroke(grouped.series.colors[0]);
+
+                for i in 1..num_series {
+                    let color = grouped.series.colors[i];
+                    chart = chart.y(move |r: &PivotedRow| r.values[i]).stroke(color);
+                }
+
+                let legend = Self::render_series_legend(&grouped.series, border_color);
+                Some(
+                    v_flex()
+                        .flex_1()
+                        .h_full()
+                        .child(
+                            div()
+                                .id("chart-canvas")
+                                .flex_1()
+                                .h_full()
+                                .p_4()
+                                .overflow_x_scrollbar()
+                                .child(div().h_full().w_full().min_w(min_width).child(chart)),
+                        )
+                        .child(legend)
+                        .into_any_element(),
+                )
+            }
+            ChartKind::Bar => {
+                let legend_info = SeriesInfo {
+                    names: grouped.series.names.clone(),
+                    colors: grouped.series.colors.clone(),
+                };
+                let chart = StackedBar::new(grouped);
+                let legend = Self::render_series_legend(&legend_info, border_color);
+                Some(
+                    v_flex()
+                        .flex_1()
+                        .h_full()
+                        .child(
+                            div()
+                                .id("chart-canvas")
+                                .flex_1()
+                                .h_full()
+                                .p_4()
+                                .child(div().h_full().w_full().child(chart)),
+                        )
+                        .child(legend)
+                        .into_any_element(),
+                )
+            }
+            ChartKind::Pie => {
+                let series_names = grouped.series.names.clone();
+                let series_colors = grouped.series.colors.clone();
+                let points: Vec<ChartPoint> = grouped
+                    .rows
+                    .into_iter()
+                    .flat_map(|r| {
+                        let x = r.x_label;
+                        let sn = &series_names;
+                        let sc = &series_colors;
+                        r.values.into_iter().enumerate().filter_map(move |(si, v)| {
+                            if v == 0.0 {
+                                None
+                            } else {
+                                Some(ChartPoint {
+                                    display_label: x.clone(),
+                                    full_label: SharedString::from(format!(
+                                        "{} – {}",
+                                        x,
+                                        sn.get(si).unwrap_or(&x),
+                                    )),
+                                    value: v,
+                                    color: sc[si % sc.len()],
+                                })
+                            }
+                        })
+                    })
+                    .collect();
+
+                let pie = PieChart::new(points.clone())
+                    .outer_radius(140.0)
+                    .value(|p: &ChartPoint| p.value as f32)
+                    .color(|p: &ChartPoint| p.color);
+                let legend = v_flex()
+                    .gap_1()
+                    .min_w(px(160.))
+                    .children(points.iter().map(|p| {
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .text_sm()
+                            .child(div().w(px(10.)).h(px(10.)).rounded_sm().bg(p.color))
+                            .child(div().flex_1().truncate().child(p.full_label.clone()))
+                            .child(
+                                div()
+                                    .text_color(theme.muted_foreground)
+                                    .child(format_legend_value(p.value)),
+                            )
+                    }));
+                Some(
+                    div()
+                        .id("chart-canvas")
+                        .flex_1()
+                        .h_full()
+                        .p_4()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .gap_6()
+                        .overflow_hidden()
+                        .child(div().w(px(320.)).h(px(320.)).child(pie))
+                        .child(legend)
+                        .into_any_element(),
+                )
+            }
+        }
+    }
 }
 
-/// Build a palette with at least `n` visually distinct colors. The first five
-/// entries come from the theme's `chart_1..chart_5` so the chart still feels
-/// like part of the app; the rest are derived by walking the hue wheel with
-/// the golden-ratio step and reusing the theme palette's average saturation
-/// and lightness so light/dark themes stay consistent.
 fn pie_palette(cx: &App, n: usize) -> Vec<Hsla> {
     let t = cx.theme();
     let base = [t.chart_1, t.chart_2, t.chart_3, t.chart_4, t.chart_5];
@@ -474,7 +966,6 @@ fn pie_palette(cx: &App, n: usize) -> Vec<Hsla> {
     let avg_l = base.iter().map(|c| c.l).sum::<f32>() / base.len() as f32;
     let alpha = base[0].a;
 
-    // Golden ratio conjugate; spreads hues evenly without obvious banding.
     const GOLDEN_STEP: f32 = 0.618_034;
     let mut hue = base[base.len() - 1].h;
 
