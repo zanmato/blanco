@@ -400,6 +400,20 @@ pub trait Connection: Send + Sync {
         ))
     }
 
+    /// Return the reconstructed `CREATE TABLE` statement (including indexes and
+    /// constraints where available). Drivers that cannot produce it return an
+    /// error; the UI hides the "Show Create Statement" button for those drivers
+    /// rather than surfacing the error.
+    async fn table_ddl(
+        &self,
+        _schema: Option<&str>,
+        _table_name: &str,
+    ) -> Result<String, anyhow::Error> {
+        Err(anyhow::anyhow!(
+            "table_ddl is not supported by this connection type"
+        ))
+    }
+
     /// Get all queryable entities (tables, views, materialized views) in a single query
     /// This is more efficient than calling get_tables, get_views, and get_materialized_views separately
     async fn get_queryable_entities(

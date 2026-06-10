@@ -1,16 +1,20 @@
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
-    Styled, Window, div, px,
+    Styled, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme, StyledExt,
+    ActiveTheme, Sizable as _, StyledExt,
+    button::Button,
+    h_flex,
     scroll::ScrollableElement,
     table::{Column, DataTable, TableDelegate, TableState},
     v_flex,
 };
 
 use crate::app_database::EnvironmentType;
+use crate::result_ext::ResultExt as _;
 use blanco_core::{ColumnInfo, IndexInfo};
+use blanco_ui::{SqlLog, SqlLogMessage};
 
 pub struct TableStructureTab {
     pub title: String,
@@ -26,6 +30,11 @@ pub struct TableStructureTab {
     focus_handle: FocusHandle,
     loading: bool,
     error: Option<String>,
+    ddl_log: Entity<SqlLog>,
+    ddl_visible: bool,
+    ddl_loaded: bool,
+    ddl_loading: bool,
+    ddl_error: Option<String>,
 }
 
 impl TableStructureTab {
@@ -44,6 +53,9 @@ impl TableStructureTab {
         cx: &mut Context<Self>,
     ) -> Self {
         let title = table_name.clone();
+
+        let highlight_theme = cx.theme().highlight_theme.clone();
+        let ddl_log = cx.new(|_| SqlLog::new(1, highlight_theme));
 
         let columns_delegate = ColumnsTableDelegate::new(columns);
         let columns_table_state = cx.new(|cx| {
@@ -75,7 +87,79 @@ impl TableStructureTab {
             focus_handle: cx.focus_handle(),
             loading: false,
             error: None,
+            ddl_log,
+            ddl_visible: false,
+            ddl_loaded: false,
+            ddl_loading: false,
+            ddl_error: None,
         }
+    }
+
+    /// Whether this driver can produce a `CREATE TABLE` statement. MSSQL has no
+    /// implementation, so the button is hidden rather than surfacing an error.
+    fn supports_table_ddl(&self) -> bool {
+        !matches!(self._db_type, database::DatabaseType::MsSql)
+    }
+
+    fn toggle_ddl(&mut self, cx: &mut Context<Self>) {
+        if self.ddl_visible {
+            self.ddl_visible = false;
+            cx.notify();
+            return;
+        }
+
+        self.ddl_visible = true;
+        if self.ddl_loaded {
+            cx.notify();
+            return;
+        }
+
+        self.ddl_loading = true;
+        self.ddl_error = None;
+        cx.notify();
+
+        let db_service = database::DatabaseService::global(cx).clone();
+        let connection_id = self._connection_id;
+        let database_name = self._database_name.clone();
+        let schema_name = self._schema_name.clone();
+        let table_name = self._table_name.clone();
+
+        cx.spawn(async move |this, cx| {
+            use database::DatabaseServiceTrait as _;
+            let result = match db_service
+                .get_or_create_connection_by_id(connection_id, Some(&database_name))
+                .await
+            {
+                Ok(connection) => {
+                    connection
+                        .table_ddl(schema_name.as_deref(), &table_name)
+                        .await
+                }
+                Err(e) => Err(e),
+            };
+
+            this.update(cx, |this, cx| match result {
+                Ok(ddl) => this.set_ddl(ddl, cx),
+                Err(e) => {
+                    this.ddl_loading = false;
+                    this.ddl_error = Some(e.to_string());
+                    cx.notify();
+                }
+            })
+            .log_err();
+        })
+        .detach();
+    }
+
+    fn set_ddl(&mut self, ddl: String, cx: &mut Context<Self>) {
+        self.ddl_loading = false;
+        self.ddl_loaded = true;
+        self.ddl_error = None;
+        self.ddl_log.update(cx, |log, cx| {
+            log.clear(cx);
+            log.append_text(&SqlLogMessage::SqlStatement(ddl), cx);
+        });
+        cx.notify();
     }
 
     pub fn set_columns(
@@ -147,6 +231,24 @@ impl Render for TableStructureTab {
                         v_flex()
                             .flex_1()
                             .gap_4()
+                            .when(self.supports_table_ddl(), |this| {
+                                let label = if self.ddl_visible {
+                                    "Hide Create Statement"
+                                } else {
+                                    "Show Create Statement"
+                                };
+                                this.child(
+                                    h_flex().child(
+                                        Button::new("toggle-table-ddl")
+                                            .outline()
+                                            .small()
+                                            .label(label)
+                                            .on_click(cx.listener(|this, _, _window, cx| {
+                                                this.toggle_ddl(cx);
+                                            })),
+                                    ),
+                                )
+                            })
                             .child(
                                 v_flex()
                                     .flex_grow(1.)
@@ -197,6 +299,48 @@ impl Render for TableStructureTab {
                                             ),
                                     ),
                             )
+                            .when(self.ddl_visible, |this| {
+                                let editor_bg = theme
+                                    .highlight_theme
+                                    .style
+                                    .editor_background
+                                    .unwrap_or(theme.background);
+                                this.child(
+                                    v_flex()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .text_lg()
+                                                .font_semibold()
+                                                .text_color(theme.foreground)
+                                                .child("Create Statement"),
+                                        )
+                                        .child(
+                                            div()
+                                                .h(px(280.))
+                                                .bg(editor_bg)
+                                                .border_1()
+                                                .border_color(theme.border)
+                                                .rounded(theme.radius)
+                                                .overflow_hidden()
+                                                .child(if let Some(error) = &self.ddl_error {
+                                                    div()
+                                                        .p_4()
+                                                        .text_color(theme.danger_foreground)
+                                                        .child(format!("Error: {error}"))
+                                                        .into_any_element()
+                                                } else if self.ddl_loading {
+                                                    div()
+                                                        .p_4()
+                                                        .text_color(theme.muted_foreground)
+                                                        .child("Loading…")
+                                                        .into_any_element()
+                                                } else {
+                                                    self.ddl_log.clone().into_any_element()
+                                                }),
+                                        ),
+                                )
+                            })
                             .into_any_element()
                     }),
             )

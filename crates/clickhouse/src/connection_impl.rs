@@ -286,6 +286,22 @@ impl Connection for ClickhouseConnection {
             .collect())
     }
 
+    async fn table_ddl(&self, schema: Option<&str>, table_name: &str) -> Result<String> {
+        let db = schema.unwrap_or(&self.database);
+        // SHOW CREATE TABLE returns a single `statement` column holding the full DDL.
+        let sql = format!(
+            "SHOW CREATE TABLE `{}`.`{}`",
+            db.replace('`', "``"),
+            table_name.replace('`', "``")
+        );
+        let tsv = self.raw_query_tsv(&sql, None).await?;
+        tsv.rows
+            .into_iter()
+            .next()
+            .and_then(|mut row| row.pop().flatten())
+            .ok_or_else(|| anyhow::anyhow!("Table '{}.{}' not found", db, table_name))
+    }
+
     async fn get_database_schema_paginated(
         &self,
         database_name: Option<&str>,

@@ -286,6 +286,30 @@ impl Connection for SqliteConnection {
         Ok(columns)
     }
 
+    async fn table_ddl(&self, _schema: Option<&str>, table_name: &str) -> Result<String> {
+        // The table's own CREATE statement and its index CREATE statements all
+        // live in sqlite_master. Ordering by `type = 'index'` keeps the table
+        // definition first, followed by its indexes.
+        let query = "SELECT sql FROM sqlite_master \
+             WHERE tbl_name = ?1 AND sql IS NOT NULL \
+             ORDER BY type = 'index'";
+        let result = self
+            .execute_query(query, None, Some(&[table_name.to_string()]))
+            .await?;
+
+        let statements: Vec<String> = result
+            .rows
+            .into_iter()
+            .filter_map(|row| row.into_iter().next().flatten())
+            .collect();
+
+        if statements.is_empty() {
+            return Err(anyhow::anyhow!("Table '{}' not found", table_name));
+        }
+
+        Ok(statements.join(";\n"))
+    }
+
     async fn execute_query_stream_rows(
         &self,
         query: &str,

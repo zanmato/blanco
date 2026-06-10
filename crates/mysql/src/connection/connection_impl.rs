@@ -422,6 +422,29 @@ impl Connection for MysqlConnection {
         Ok(ddl)
     }
 
+    async fn table_ddl(
+        &self,
+        _schema: Option<&str>,
+        table_name: &str,
+    ) -> Result<String, anyhow::Error> {
+        let database = self
+            .initial_database
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+        let pool = self.get_or_create_pool(database).await?;
+        // SHOW CREATE TABLE returns ('Table', 'Create Table'); the full DDL
+        // including indexes and constraints is in the second column (index 1).
+        let stmt = format!("SHOW CREATE TABLE `{}`.`{}`", database, table_name);
+        let row = sqlx::query(&stmt)
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| anyhow::anyhow!("SHOW CREATE TABLE failed: {}", e))?;
+        let ddl: String = row
+            .try_get::<String, _>(1)
+            .map_err(|e| anyhow::anyhow!("DDL column not found: {}", e))?;
+        Ok(ddl)
+    }
+
     async fn get_queryable_entities(
         &self,
         _schema: Option<&str>,

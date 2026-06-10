@@ -199,4 +199,46 @@ mod tests {
         }
         .await
     }
+
+    #[tokio::test]
+    async fn test_table_ddl_includes_indexes() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_file = NamedTempFile::new()?;
+        let path = temp_file.path().to_string_lossy().to_string();
+        let connection_string = format!("sqlite:{}", path);
+
+        let mut connection = crate::SqliteConnection::new(connection_string.clone())?;
+        connection.connect(&connection_string).await?;
+
+        connection
+            .execute_query(
+                "CREATE TABLE widget (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+                None,
+                None,
+            )
+            .await?;
+        connection
+            .execute_query(
+                "CREATE UNIQUE INDEX idx_widget_name ON widget(name)",
+                None,
+                None,
+            )
+            .await?;
+
+        let ddl = connection.table_ddl(None, "widget").await?;
+
+        assert!(
+            ddl.contains("CREATE TABLE widget"),
+            "DDL should contain the table definition, got: {ddl}"
+        );
+        assert!(
+            ddl.contains("idx_widget_name"),
+            "DDL should include the index definition, got: {ddl}"
+        );
+        // The table definition must come before its index.
+        let table_pos = ddl.find("CREATE TABLE").unwrap();
+        let index_pos = ddl.find("idx_widget_name").unwrap();
+        assert!(table_pos < index_pos, "table should precede index: {ddl}");
+
+        Ok(())
+    }
 }

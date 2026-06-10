@@ -197,10 +197,9 @@ fn paint_size_indicator(
     let shaped_muted = window
         .text_system()
         .shape_line(text.clone(), font_size, &[muted_run], None);
-    let shaped_contrast =
-        window
-            .text_system()
-            .shape_line(text, font_size, &[contrast_run], None);
+    let shaped_contrast = window
+        .text_system()
+        .shape_line(text, font_size, &[contrast_run], None);
 
     // Right-align text inside the bar with `horizontal_padding` of right inset.
     let text_origin = point(

@@ -219,6 +219,14 @@ impl Connection for TokioConnection {
             .await
     }
 
+    async fn table_ddl(&self, schema: Option<&str>, table_name: &str) -> Result<String> {
+        let inner = Arc::clone(&self.inner);
+        let schema = schema.map(str::to_string);
+        let table_name = table_name.to_string();
+        self.run(async move { inner.table_ddl(schema.as_deref(), &table_name).await })
+            .await
+    }
+
     async fn get_queryable_entities(&self, schema: Option<&str>) -> Result<Vec<QueryableEntity>> {
         let inner = Arc::clone(&self.inner);
         let schema = schema.map(str::to_string);

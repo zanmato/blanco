@@ -353,6 +353,120 @@ impl Connection for PostgresConnection {
             })
     }
 
+    async fn table_ddl(&self, schema: Option<&str>, table_name: &str) -> Result<String> {
+        let schema_name = schema.unwrap_or("public");
+        let params = [schema_name.to_string(), table_name.to_string()];
+
+        // 1. Columns with type, NOT NULL and DEFAULT.
+        let columns_query = "
+            SELECT a.attname,
+                   format_type(a.atttypid, a.atttypmod),
+                   a.attnotnull,
+                   pg_get_expr(d.adbin, d.adrelid)
+            FROM pg_attribute a
+            JOIN pg_class c ON c.oid = a.attrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+            WHERE n.nspname = $1 AND c.relname = $2
+              AND a.attnum > 0 AND NOT a.attisdropped
+            ORDER BY a.attnum
+        ";
+        let columns_result = self
+            .execute_query(
+                columns_query,
+                self.initial_database.as_deref(),
+                Some(&params),
+            )
+            .await?;
+        if columns_result.rows.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Table '{}.{}' not found",
+                schema_name,
+                table_name
+            ));
+        }
+
+        let mut column_defs: Vec<String> = Vec::new();
+        for row in &columns_result.rows {
+            let name = row.first().and_then(|v| v.clone()).unwrap_or_default();
+            let data_type = row.get(1).and_then(|v| v.clone()).unwrap_or_default();
+            let not_null = row.get(2).and_then(|v| v.as_deref()) == Some("true");
+            let default = row.get(3).and_then(|v| v.clone()).filter(|s| !s.is_empty());
+
+            let mut def = format!("    \"{}\" {}", name, data_type);
+            if not_null {
+                def.push_str(" NOT NULL");
+            }
+            if let Some(default) = default {
+                def.push_str(&format!(" DEFAULT {default}"));
+            }
+            column_defs.push(def);
+        }
+
+        // 2. Table constraints (PK, UNIQUE, FK, CHECK). contype DESC keeps
+        // primary keys ('p') ahead of foreign keys ('f') and checks ('c').
+        let constraints_query = "
+            SELECT con.conname, pg_get_constraintdef(con.oid)
+            FROM pg_constraint con
+            JOIN pg_class c ON c.oid = con.conrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = $1 AND c.relname = $2
+            ORDER BY con.contype DESC, con.conname
+        ";
+        let constraints_result = self
+            .execute_query(
+                constraints_query,
+                self.initial_database.as_deref(),
+                Some(&params),
+            )
+            .await?;
+
+        let mut constraint_names: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for row in &constraints_result.rows {
+            let name = row.first().and_then(|v| v.clone()).unwrap_or_default();
+            let def = row.get(1).and_then(|v| v.clone()).unwrap_or_default();
+            if name.is_empty() || def.is_empty() {
+                continue;
+            }
+            constraint_names.insert(name.clone());
+            column_defs.push(format!("    CONSTRAINT \"{name}\" {def}"));
+        }
+
+        let mut ddl = format!(
+            "CREATE TABLE \"{}\".\"{}\" (\n{}\n);",
+            schema_name,
+            table_name,
+            column_defs.join(",\n")
+        );
+
+        // 3. Standalone indexes (those not backing a PK/UNIQUE constraint, which
+        // pg_get_constraintdef already covers).
+        let indexes_query = "
+            SELECT indexname, indexdef
+            FROM pg_indexes
+            WHERE schemaname = $1 AND tablename = $2
+            ORDER BY indexname
+        ";
+        let indexes_result = self
+            .execute_query(
+                indexes_query,
+                self.initial_database.as_deref(),
+                Some(&params),
+            )
+            .await?;
+        for row in &indexes_result.rows {
+            let name = row.first().and_then(|v| v.clone()).unwrap_or_default();
+            let def = row.get(1).and_then(|v| v.clone()).unwrap_or_default();
+            if def.is_empty() || constraint_names.contains(&name) {
+                continue;
+            }
+            ddl.push_str(&format!("\n{def};"));
+        }
+
+        Ok(ddl)
+    }
+
     async fn get_queryable_entities(
         &self,
         schema: Option<&str>,

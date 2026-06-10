@@ -1,6 +1,6 @@
 use gpui::ClickEvent;
 use gpui::{
-    AnyElement, Anchor, App, Div, Edges, ElementId, InteractiveElement, IntoElement, ParentElement,
+    Anchor, AnyElement, App, Div, Edges, ElementId, InteractiveElement, IntoElement, ParentElement,
     RenderOnce, ScrollHandle, Stateful, StatefulInteractiveElement as _, StyleRefinement, Styled,
     Window, div, prelude::FluentBuilder as _, px,
 };
