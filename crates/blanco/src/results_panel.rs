@@ -8,7 +8,7 @@ use gpui::{
     prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme, Sizable as _,
+    ActiveTheme, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     input::{InputEvent, InputState},
     table::{DataTable, TableEvent, TableState},
@@ -21,6 +21,7 @@ use blanco_core::QueryResult;
 use crate::transformers::CopyHandler;
 
 mod cell_edit_state;
+mod chart_view;
 mod clipboard;
 mod commit;
 mod export_actions;
@@ -31,6 +32,7 @@ mod table_operations;
 
 // Re-exports
 pub use cell_edit_state::{ChangeType, TableChange};
+pub use chart_view::{ChartView, ResultViewMode};
 pub use results_table_delegate::ResultsTableDelegate;
 
 // Response structure for table operations
@@ -74,6 +76,8 @@ pub struct ResultTab {
     pub title: SharedString,
     pub pinned: bool,
     pub table_state: Entity<TableState<ResultsTableDelegate>>,
+    pub view_mode: ResultViewMode,
+    pub chart_view: Entity<ChartView>,
     pub _subscriptions: Vec<Subscription>,
 }
 
@@ -167,11 +171,24 @@ impl ResultsPanel {
             },
         );
 
+        let chart_view = cx.new(|cx| ChartView::new(table_state.clone(), window, cx));
+
         ResultTab {
             title,
             pinned: false,
             table_state,
+            view_mode: ResultViewMode::default(),
+            chart_view,
             _subscriptions: vec![subscription],
+        }
+    }
+
+    pub fn set_view_mode(&mut self, mode: ResultViewMode, cx: &mut Context<Self>) {
+        if let Some(tab) = self.result_tabs.get_mut(self.active_tab)
+            && tab.view_mode != mode
+        {
+            tab.view_mode = mode;
+            cx.notify();
         }
     }
 
@@ -232,6 +249,9 @@ impl ResultsPanel {
                 state.clear_selection(cx);
                 state.delegate_mut().set_query_result(result, window, cx);
                 state.refresh(cx);
+            });
+            tab.chart_view.update(cx, |view, cx| {
+                view.rebuild_column_selects(window, cx);
             });
             self.result_tabs.push(tab);
         }
@@ -677,6 +697,13 @@ impl Render for ResultsPanel {
         let tab_count = self.result_tabs.len();
         let show_strip = self.has_results;
         let show_close = tab_count > 1;
+        let active_view_mode = self
+            .result_tabs
+            .get(active)
+            .map(|t| t.view_mode)
+            .unwrap_or_default();
+        let active_chart_view = self.result_tabs.get(active).map(|t| t.chart_view.clone());
+
         let mut strip = gpui_component::h_flex()
             .id("result-tabs-strip")
             .w_full()
@@ -748,6 +775,35 @@ impl Render for ResultsPanel {
                     ),
             );
         }
+        // View-mode toggle (table / chart) for the active tab, anchored to the right.
+        let is_table = matches!(active_view_mode, ResultViewMode::Table);
+        strip = strip.child(
+            gpui_component::h_flex()
+                .gap_1()
+                .px_2()
+                .child(
+                    Button::new("view-mode-table")
+                        .ghost()
+                        .xsmall()
+                        .icon(IconName::Sheet)
+                        .selected(is_table)
+                        .tooltip("Table view")
+                        .on_click(cx.listener(|this, _ev, _window, cx| {
+                            this.set_view_mode(ResultViewMode::Table, cx);
+                        })),
+                )
+                .child(
+                    Button::new("view-mode-chart")
+                        .ghost()
+                        .xsmall()
+                        .icon(IconName::ChartBar)
+                        .selected(!is_table)
+                        .tooltip("Chart view")
+                        .on_click(cx.listener(|this, _ev, _window, cx| {
+                            this.set_view_mode(ResultViewMode::Chart, cx);
+                        })),
+                ),
+        );
 
         v_flex()
             .size_full()
@@ -770,16 +826,23 @@ impl Render for ResultsPanel {
             .on_action(cx.listener(Self::on_delete_row))
             .on_action(cx.listener(Self::on_set_cell_null))
             .when(show_strip, |this| this.child(strip))
-            // The table component (table should have built-in scrolling)
-            .child(
-                div()
+            .child(match (active_view_mode, active_chart_view) {
+                (ResultViewMode::Chart, Some(chart)) => div()
+                    .id("results-chart")
+                    .border_b_1()
+                    .border_color(border_color)
+                    .flex_1()
+                    .overflow_hidden()
+                    .min_h(px(200.0))
+                    .child(chart),
+                _ => div()
                     .id("results-table")
                     .border_b_1()
                     .border_color(border_color)
-                    .flex_1() // Allow table to fill available space
+                    .flex_1()
                     .overflow_hidden()
-                    .min_h(px(200.0)) // Minimum height for table
+                    .min_h(px(200.0))
                     .child(DataTable::new(&self.table_state).bordered(false)),
-            )
+            })
     }
 }
