@@ -202,6 +202,25 @@ impl From<database::DatabaseConnectedMessage> for DatabaseConnected {
     }
 }
 
+// Action dispatched when the database service detects that a connection has
+// dropped (e.g. the server closed an idle connection overnight, or an SSH
+// tunnel died). Lets the sidebar reflect the disconnected state.
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct DatabaseDisconnected {
+    pub connection_id: i64,
+    pub database_name: String,
+}
+
+impl From<database::DatabaseDisconnectedMessage> for DatabaseDisconnected {
+    fn from(msg: database::DatabaseDisconnectedMessage) -> Self {
+        Self {
+            connection_id: msg.connection_id,
+            database_name: msg.database_name,
+        }
+    }
+}
+
 /// Which view is active in the sidebar's segmented tab bar.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SidebarTab {
@@ -258,7 +277,9 @@ impl BlancoApp {
                             "DatabaseServiceMessage::Disconnected received for connection_id: {}, database_name: {}",
                             disconn_msg.connection_id, disconn_msg.database_name
                         );
-                        // Disconnection is handled by the sidebar's connection state
+                        _weak_handle.update(cx, |_, cx| {
+                            cx.dispatch_action(&DatabaseDisconnected::from(disconn_msg));
+                        }).log_err();
                     }
                 }
             }
@@ -425,6 +446,17 @@ impl BlancoApp {
         self.sidebar.update(cx, |sidebar, cx| {
             // Mark the connection as connected and refresh the sidebar view
             sidebar.validate_connection_as_connected(action.connection_id, cx);
+        });
+    }
+
+    fn on_database_disconnected(
+        &mut self,
+        action: &DatabaseDisconnected,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.mark_connection_disconnected(action.connection_id, cx);
         });
     }
 
@@ -972,6 +1004,7 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_rollback_changes))
             .on_action(cx.listener(Self::on_rename_tab))
             .on_action(cx.listener(Self::on_database_connected))
+            .on_action(cx.listener(Self::on_database_disconnected))
             .on_action(cx.listener(Self::on_open_snippet_editor))
             .on_action(cx.listener(Self::on_refresh_snippets))
             .on_action(cx.listener(Self::on_toggle_render_whitespace))

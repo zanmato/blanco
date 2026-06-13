@@ -237,9 +237,22 @@ impl DatabaseService {
         // in `TokioConnection` so subsequent method calls also hop runtimes.
         let connection_string_owned = connection_string.clone();
         let runtime_handle = self.runtime_handle.clone();
+        let connect_timeout = blanco_core::connect_timeout();
         let inner_conn = runtime_handle
             .clone()
-            .spawn(async move { factory.create_connection(&connection_string_owned).await })
+            .spawn(async move {
+                tokio::time::timeout(
+                    connect_timeout,
+                    factory.create_connection(&connection_string_owned),
+                )
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!(
+                        "Database connection timed out after {}s",
+                        connect_timeout.as_secs()
+                    )
+                })?
+            })
             .await
             .map_err(|e| anyhow::anyhow!("tokio task join failed: {}", e))??;
         let inner_arc: Arc<dyn Connection> = Arc::from(inner_conn);
@@ -372,6 +385,44 @@ impl DatabaseService {
         self.active_connections.read().await.clone()
     }
 
+    /// Inspect an error returned by a query/script. If it looks like the
+    /// underlying connection (or SSH tunnel) has dropped, evict the cached
+    /// connection so the next call reconnects, and notify the UI so the sidebar
+    /// can mark it disconnected instead of leaving a stale "connected" state.
+    async fn note_possible_disconnect(
+        &self,
+        config_id: DatabaseConfigId,
+        database: Option<&str>,
+        error: &anyhow::Error,
+    ) {
+        if !blanco_core::is_connection_lost(error) {
+            return;
+        }
+
+        tracing::info!(
+            "Connection {} appears to have dropped ({}); evicting and marking disconnected",
+            config_id,
+            error
+        );
+
+        // Drop the whole connection: a broken socket or dead SSH tunnel affects
+        // every database opened through it, not just the one that errored.
+        if let Err(e) = self.disconnect(config_id, None).await {
+            tracing::error!("Failed to evict dropped connection {}: {}", config_id, e);
+        }
+
+        let sender_opt = self.action_sender.lock().ok().and_then(|s| s.clone());
+        if let Some(sender) = sender_opt {
+            let message = DatabaseServiceMessage::Disconnected(DatabaseDisconnectedMessage {
+                connection_id: config_id,
+                database_name: database.unwrap_or("default").to_string(),
+            });
+            if let Err(e) = sender.send(message).await {
+                tracing::error!("Failed to send disconnect notification: {}", e);
+            }
+        }
+    }
+
     // Private helper methods
 
     /// Ensure SSH tunnel exists, creating if necessary
@@ -433,12 +484,22 @@ impl DatabaseService {
         // Create tunnel using the tokio runtime handle
         let runtime_handle = self.runtime_handle.clone();
         let runtime_handle_inner = runtime_handle.clone();
+        let connect_timeout = blanco_core::connect_timeout();
         let tunnel = runtime_handle
             .spawn(async move {
-                let mut tunnel =
-                    SshTunnel::create(ssh_config, runtime_handle_inner.clone()).await?;
-                tunnel.connect().await?;
-                Result::<SshTunnel, anyhow::Error>::Ok(tunnel)
+                tokio::time::timeout(connect_timeout, async move {
+                    let mut tunnel =
+                        SshTunnel::create(ssh_config, runtime_handle_inner.clone()).await?;
+                    tunnel.connect().await?;
+                    Result::<SshTunnel, anyhow::Error>::Ok(tunnel)
+                })
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!(
+                        "SSH tunnel connection timed out after {}s",
+                        connect_timeout.as_secs()
+                    )
+                })?
             })
             .await
             .map_err(|e| anyhow::anyhow!("Failed to spawn SSH tunnel creation: {}", e))??;
@@ -492,12 +553,22 @@ impl DatabaseService {
 
             let runtime_handle = self.runtime_handle.clone();
             let runtime_handle_inner = runtime_handle.clone();
+            let connect_timeout = blanco_core::connect_timeout();
             let tunnel = runtime_handle
                 .spawn(async move {
-                    let mut tunnel =
-                        SshTunnel::create(ssh_config, runtime_handle_inner.clone()).await?;
-                    tunnel.connect().await?;
-                    Result::<SshTunnel, anyhow::Error>::Ok(tunnel)
+                    tokio::time::timeout(connect_timeout, async move {
+                        let mut tunnel =
+                            SshTunnel::create(ssh_config, runtime_handle_inner.clone()).await?;
+                        tunnel.connect().await?;
+                        Result::<SshTunnel, anyhow::Error>::Ok(tunnel)
+                    })
+                    .await
+                    .map_err(|_| {
+                        anyhow::anyhow!(
+                            "SSH tunnel connection timed out after {}s",
+                            connect_timeout.as_secs()
+                        )
+                    })?
                 })
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to create SSH tunnel: {}", e))??;
@@ -519,9 +590,22 @@ impl DatabaseService {
 
         // The factory's `connect` call needs a tokio reactor; run it on the
         // shared runtime and discard the resulting connection.
+        let connect_timeout = blanco_core::connect_timeout();
         let result = self
             .runtime_handle
-            .spawn(async move { factory.create_connection(&connection_string).await })
+            .spawn(async move {
+                tokio::time::timeout(
+                    connect_timeout,
+                    factory.create_connection(&connection_string),
+                )
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!(
+                        "Database connection timed out after {}s",
+                        connect_timeout.as_secs()
+                    )
+                })?
+            })
             .await
             .map_err(|e| anyhow::anyhow!("tokio task join failed: {}", e))?;
 
@@ -549,6 +633,60 @@ impl DatabaseServiceTrait for DatabaseService {
         database: Option<&str>,
     ) -> Result<Arc<dyn Connection>> {
         self.get_or_create_connection(connection_id, database).await
+    }
+
+    async fn execute_query(
+        &self,
+        connection_id: i64,
+        database: Option<&str>,
+        sql: &str,
+    ) -> Result<blanco_core::QueryResult> {
+        let connection = self
+            .get_or_create_connection(connection_id, database)
+            .await?;
+        let result = connection.execute_query(sql, database, None).await;
+        if let Err(error) = &result {
+            self.note_possible_disconnect(connection_id, database, error)
+                .await;
+        }
+        result
+    }
+
+    async fn execute_script(
+        &self,
+        connection_id: i64,
+        database: Option<&str>,
+        sql: &str,
+    ) -> Result<Vec<blanco_core::QueryResult>> {
+        let connection = self
+            .get_or_create_connection(connection_id, database)
+            .await?;
+        let result = connection.execute_script(sql, database).await;
+        if let Err(error) = &result {
+            self.note_possible_disconnect(connection_id, database, error)
+                .await;
+        }
+        result
+    }
+
+    async fn execute_query_with_params(
+        &self,
+        connection_id: i64,
+        database: Option<&str>,
+        sql: &str,
+        parameters: &[String],
+    ) -> Result<blanco_core::QueryResult> {
+        let connection = self
+            .get_or_create_connection(connection_id, database)
+            .await?;
+        let result = connection
+            .execute_query(sql, database, Some(parameters))
+            .await;
+        if let Err(error) = &result {
+            self.note_possible_disconnect(connection_id, database, error)
+                .await;
+        }
+        result
     }
 
     async fn get_connection_status(
@@ -743,5 +881,18 @@ mod tests {
         let service = DatabaseService::new(tokio::runtime::Handle::current());
         let result = service.get_or_create_connection(999, None).await;
         assert!(result.is_err(), "unknown config id must error, not panic");
+    }
+
+    #[test]
+    fn test_connection_lost_marker_drives_eviction_decision() {
+        // A driver-tagged error (typed `ConnectionLost` in its chain, regardless
+        // of the descriptive message wrapped around it) is treated as a drop.
+        let tagged = anyhow::anyhow!("PostgreSQL query execution failed")
+            .context(blanco_core::ConnectionLost);
+        assert!(blanco_core::is_connection_lost(&tagged));
+
+        // An ordinary query error carries no marker and must not evict.
+        let ordinary = anyhow::anyhow!("syntax error at or near \"SELET\"");
+        assert!(!blanco_core::is_connection_lost(&ordinary));
     }
 }

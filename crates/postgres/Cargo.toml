@@ -6,7 +6,7 @@ description = "PostgreSQL database implementation for Blanco SQL editor"
 
 [dependencies]
 # Core dependencies
-blanco-core = { path = "../blanco-core" }
+blanco-core = { path = "../blanco-core", features = ["sqlx"] }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 smol = { workspace = true }

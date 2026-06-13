@@ -19,5 +19,13 @@ tracing = { workspace = true }
 # SQL parsing
 sqlparser = { workspace = true }
 
+# Optional: enables typed classification of `sqlx::Error` into the shared
+# `ConnectionLost` marker. Enabled by the sqlx-based driver crates only, so
+# non-sqlx consumers of blanco-core don't pull sqlx in.
+sqlx = { workspace = true, optional = true }
+
+[features]
+sqlx = ["dep:sqlx"]
+
 [lints]
 workspace = true

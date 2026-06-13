@@ -78,7 +78,7 @@ impl Connection for MysqlConnection {
         let mut rows_affected: u64 = 0;
 
         while let Some(result) = results.next().await {
-            match result? {
+            match result.map_err(blanco_core::tag_sqlx)? {
                 Either::Left(execution_result) => {
                     rows_affected += execution_result.rows_affected();
                 }
@@ -155,7 +155,7 @@ impl Connection for MysqlConnection {
         let mut current: Option<MysqlStmtAcc> = None;
 
         while let Some(result) = results.next().await {
-            match result? {
+            match result.map_err(blanco_core::tag_sqlx)? {
                 Either::Left(exec) => {
                     let mut acc = current.take().unwrap_or_default();
                     acc.rows_affected += exec.rows_affected();
@@ -193,7 +193,7 @@ impl Connection for MysqlConnection {
                 None => q.bind(Option::<String>::None),
             };
         }
-        let result = q.execute(&pool).await?;
+        let result = q.execute(&pool).await.map_err(blanco_core::tag_sqlx)?;
         Ok(result.rows_affected())
     }
 

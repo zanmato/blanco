@@ -357,6 +357,7 @@ impl SettingsView {
                                         .settings
                                         .database
                                         .default_connection_timeout_seconds = val as u32;
+                                    blanco_core::set_connect_timeout_secs(val as u64);
 
                                     let key =
                                         "database.default_connection_timeout_seconds".to_string();

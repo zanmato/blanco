@@ -653,6 +653,20 @@ impl ConnectionsPanel {
         cx.notify();
     }
 
+    /// Mark a connection as disconnected after the database service detected a
+    /// dropped connection. Unlike `disconnect_connection`, this only updates UI
+    /// state: the service has already evicted the underlying connection.
+    pub fn mark_connection_disconnected(&mut self, connection_id: i64, cx: &mut Context<Self>) {
+        if !self.loaded_connections.contains(&connection_id) {
+            return;
+        }
+        tracing::info!("Marking connection {} as disconnected", connection_id);
+        self.loaded_connections.remove(&connection_id);
+        self.expanded_connections.remove(&connection_id);
+        self.update_tree_items(cx);
+        cx.notify();
+    }
+
     fn render_connections_tree(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         Tree::new(&self.tree_state)
     }

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use blanco_core::{
     ColumnInfo, ColumnType, Connection, ForeignKeyInfo, IndexInfo, QueryResult, RoutineKind,
@@ -45,13 +45,12 @@ impl Connection for PostgresConnection {
         let database_name = database_name.ok_or(anyhow::anyhow!("missing database"))?;
 
         // Get or create connection pool for the specific database
-        let pool = self.get_or_create_pool(database_name).await.map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to get connection pool for database '{}': {}",
-                database_name,
-                e
-            )
-        })?;
+        let pool = self
+            .get_or_create_pool(database_name)
+            .await
+            .with_context(|| {
+                format!("Failed to get connection pool for database '{database_name}'")
+            })?;
 
         // Convert String parameters to QueryParam
         let params: Vec<QueryParam> = parameters
@@ -63,7 +62,11 @@ impl Connection for PostgresConnection {
         let result = self
             .execute_query_with_params(&pool, query, &params)
             .await
-            .map_err(|e| anyhow::anyhow!("PostgreSQL query execution failed: {}", e))?;
+            // Preserve the underlying `sqlx::Error` so a dropped connection is
+            // tagged for the service rather than flattened into a string.
+            .map_err(|e| {
+                blanco_core::tag_sqlx_error(e).context("PostgreSQL query execution failed")
+            })?;
 
         Ok(result)
     }
@@ -74,16 +77,15 @@ impl Connection for PostgresConnection {
         database_name: Option<&str>,
     ) -> Result<Vec<QueryResult>> {
         let database_name = database_name.ok_or(anyhow::anyhow!("missing database"))?;
-        let pool = self.get_or_create_pool(database_name).await.map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to get connection pool for database '{}': {}",
-                database_name,
-                e
-            )
-        })?;
-        self.execute_script_inner(&pool, query)
+        let pool = self
+            .get_or_create_pool(database_name)
             .await
-            .map_err(|e| anyhow::anyhow!("PostgreSQL script execution failed: {}", e))
+            .with_context(|| {
+                format!("Failed to get connection pool for database '{database_name}'")
+            })?;
+        self.execute_script_inner(&pool, query).await.map_err(|e| {
+            blanco_core::tag_sqlx_error(e).context("PostgreSQL script execution failed")
+        })
     }
 
     async fn execute_write(
@@ -93,13 +95,12 @@ impl Connection for PostgresConnection {
         parameters: &[Option<String>],
     ) -> Result<u64> {
         let database_name = database_name.ok_or(anyhow::anyhow!("missing database"))?;
-        let pool = self.get_or_create_pool(database_name).await.map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to get connection pool for database '{}': {}",
-                database_name,
-                e
-            )
-        })?;
+        let pool = self
+            .get_or_create_pool(database_name)
+            .await
+            .with_context(|| {
+                format!("Failed to get connection pool for database '{database_name}'")
+            })?;
 
         let mut q = sqlx::query(query);
         for param in parameters {
@@ -111,7 +112,7 @@ impl Connection for PostgresConnection {
         let result = q
             .execute(&pool)
             .await
-            .map_err(|e| anyhow::anyhow!("PostgreSQL write failed: {}", e))?;
+            .map_err(|e| blanco_core::tag_sqlx(e).context("PostgreSQL write failed"))?;
         Ok(result.rows_affected())
     }
 
@@ -891,5 +892,36 @@ impl Clone for PostgresConnection {
             ssh_config: self.ssh_config.clone(),
             local_tunnel_port: self.local_tunnel_port,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Error as IoError, ErrorKind};
+
+    #[test]
+    fn dropped_connection_errors_are_tagged() {
+        // Socket-level failures a dropped TCP connection / dead SSH tunnel yields.
+        for kind in [
+            ErrorKind::BrokenPipe,
+            ErrorKind::ConnectionReset,
+            ErrorKind::UnexpectedEof,
+        ] {
+            let sqlx_err = sqlx::Error::Io(IoError::new(kind, "boom"));
+            assert!(blanco_core::sqlx_connection_lost(&sqlx_err), "{kind:?}");
+
+            // The tag survives being wrapped in further context, which is how it
+            // reaches the service.
+            let wrapped = blanco_core::tag_sqlx(sqlx_err).context("PostgreSQL query failed");
+            assert!(blanco_core::is_connection_lost(&wrapped));
+        }
+    }
+
+    #[test]
+    fn ordinary_query_errors_are_not_tagged() {
+        let sqlx_err = sqlx::Error::RowNotFound;
+        assert!(!blanco_core::sqlx_connection_lost(&sqlx_err));
+        let wrapped = blanco_core::tag_sqlx(sqlx_err).context("PostgreSQL query failed");
+        assert!(!blanco_core::is_connection_lost(&wrapped));
     }
 }

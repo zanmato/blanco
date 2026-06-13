@@ -139,9 +139,15 @@ impl PostgresConnection {
         let database_connection_string = self.connection_string_for_database(database)?;
         let pool = PgPoolOptions::new()
             .max_connections(1)
+            // Bound how long acquiring (and therefore establishing) a connection
+            // may take so an unreachable host fails fast instead of hanging.
+            .acquire_timeout(blanco_core::connect_timeout())
             .connect(&database_connection_string)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to connect to database '{}': {}", database, e))?;
+            .map_err(|e| {
+                blanco_core::tag_sqlx(e)
+                    .context(format!("Failed to connect to database '{database}'"))
+            })?;
 
         pools.insert(database.to_string(), pool.clone());
 

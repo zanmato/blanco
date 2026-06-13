@@ -93,6 +93,12 @@ fn main() {
             .unwrap_or_default();
 
         let app_settings = AppSettings::new(cx, Settings::from_key_values(&settings));
+        blanco_core::set_connect_timeout_secs(
+            app_settings
+                .settings
+                .database
+                .default_connection_timeout_seconds as u64,
+        );
         cx.set_global(app_settings);
 
         // Apply theme

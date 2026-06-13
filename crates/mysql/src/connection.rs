@@ -223,8 +223,12 @@ impl MysqlConnection {
         let connection_string = self.generate_database_connection_string(database_name);
         let pool = MySqlPoolOptions::new()
             .max_connections(5)
+            // Bound how long acquiring (and therefore establishing) a connection
+            // may take so an unreachable host fails fast instead of hanging.
+            .acquire_timeout(blanco_core::connect_timeout())
             .connect(&connection_string)
-            .await?;
+            .await
+            .map_err(blanco_core::tag_sqlx)?;
 
         pools.insert(database_name.to_string(), pool.clone());
 
