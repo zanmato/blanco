@@ -47,10 +47,51 @@ fn truncate_label_to(s: &str, max_chars: usize) -> SharedString {
 fn apply_aggregate(values: &[f64], agg: Aggregate) -> f64 {
     match agg {
         Aggregate::Sum => values.iter().sum(),
-        Aggregate::Avg => values.iter().sum::<f64>() / values.len() as f64,
+        Aggregate::Avg => {
+            if values.is_empty() {
+                0.0
+            } else {
+                values.iter().sum::<f64>() / values.len() as f64
+            }
+        }
         Aggregate::Count => values.len() as f64,
-        Aggregate::None => values[0],
+        Aggregate::None => values.first().copied().unwrap_or(0.0),
     }
+}
+
+/// Assign a unique display label to each raw label, truncating long labels and
+/// appending a " (N)" suffix on any collision. Collisions are detected on the
+/// *truncated* form, so two distinct labels that share a 15-char prefix still
+/// get distinct display labels and won't collapse onto the same point in a
+/// `ScalePoint`/`ScaleBand` (which resolve a value to the first matching entry).
+/// Returns `(display_label, full_label)` per input in the same order.
+fn assign_display_labels(labels: &[String]) -> Vec<(SharedString, SharedString)> {
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    labels
+        .iter()
+        .map(|label| {
+            let truncated = truncate_label(label);
+            let count = seen.entry(truncated.to_string()).or_insert(0);
+            *count += 1;
+            if *count > 1 {
+                let suffix = format!(" ({})", count);
+                let budget = MAX_LABEL_CHARS.saturating_sub(suffix.chars().count());
+                let display =
+                    SharedString::from(format!("{}{}", truncate_label_to(label, budget), suffix));
+                let full = SharedString::from(format!("{}{}", label, suffix));
+                (display, full)
+            } else {
+                (truncated, SharedString::from(label.clone()))
+            }
+        })
+        .collect()
+}
+
+/// Pick a tick margin so a band/point axis shows at most ~40 labels, avoiding
+/// overlapping text when there are many data points.
+fn tick_margin_for(count: usize) -> usize {
+    const MAX_LABELS: usize = 40;
+    (count / MAX_LABELS).max(1)
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
@@ -206,16 +247,22 @@ impl Plot for StackedBar {
 
         let y = ScaleLinear::new(vec![0., max], vec![height, 10.]);
 
-        let x_label = self.x_labels.iter().filter_map(|label| {
-            x.tick(label).map(|x_tick| {
-                AxisText::new(
-                    label.clone(),
-                    x_tick + band_width / 2.,
-                    cx.theme().muted_foreground,
-                )
-                .align(gpui::TextAlign::Center)
-            })
-        });
+        let tick_margin = tick_margin_for(self.x_labels.len());
+        let x_label = self
+            .x_labels
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| i % tick_margin == 0)
+            .filter_map(|(_, label)| {
+                x.tick(label).map(|x_tick| {
+                    AxisText::new(
+                        label.clone(),
+                        x_tick + band_width / 2.,
+                        cx.theme().muted_foreground,
+                    )
+                    .align(gpui::TextAlign::Center)
+                })
+            });
         PlotAxis::new()
             .x(height)
             .x_label(x_label)
@@ -386,7 +433,7 @@ impl ChartView {
         &mut self,
         _: &Entity<SelectState<Vec<SharedString>>>,
         event: &SelectEvent<Vec<SharedString>>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let SelectEvent::Confirm(_) = event;
@@ -398,7 +445,10 @@ impl ChartView {
             .map(|ip| ip.row)
             .unwrap_or(0);
         self.kind = kinds.get(idx).copied().unwrap_or(ChartKind::Line);
-        self.rebuild_column_selects(window, cx);
+        // The available columns don't depend on chart kind, so we only re-render
+        // (which re-labels the axis fields) instead of rebuilding the selects,
+        // which would reset the user's column choices.
+        cx.notify();
     }
 
     fn selected_axis_column(&self, cx: &App) -> Option<usize> {
@@ -438,9 +488,9 @@ impl ChartView {
         let value_row_idx = value_col + 1;
         let series_row_idx = series_col.map(|c| c + 1);
 
-        let rows = self.table_state.read_with(cx, |state, _| {
+        let (mut rows, axis_numeric) = self.table_state.read_with(cx, |state, _| {
             let delegate = state.delegate();
-            delegate
+            let rows = delegate
                 .rows
                 .iter()
                 .filter_map(|row| {
@@ -450,8 +500,31 @@ impl ChartView {
                     let series = series_row_idx.and_then(|si| row.get(si).and_then(|v| v.clone()));
                     Some((axis.clone(), value, series))
                 })
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            let axis_numeric = delegate
+                .column_types
+                .get(axis_col)
+                .map(ColumnType::is_numeric)
+                .unwrap_or(false);
+            (rows, axis_numeric)
         });
+
+        // Line charts connect points in data order via a ScalePoint, so an
+        // unsorted x-axis produces a zig-zagging line. Sort by the x value
+        // (numerically when the column is numeric, lexically otherwise). Bar
+        // and pie charts keep first-appearance order.
+        if self.kind == ChartKind::Line {
+            if axis_numeric {
+                rows.sort_by(|a, b| {
+                    let pa = a.0.parse::<f64>().unwrap_or(f64::INFINITY);
+                    let pb = b.0.parse::<f64>().unwrap_or(f64::INFINITY);
+                    pa.partial_cmp(&pb).unwrap_or(std::cmp::Ordering::Equal)
+                });
+            } else {
+                rows.sort_by(|a, b| a.0.cmp(&b.0));
+            }
+        }
+
         Some((axis_row_idx, value_row_idx, rows))
     }
 
@@ -459,81 +532,51 @@ impl ChartView {
         let (_, _, raw) = self.extract_raw(cx)?;
         let aggregate = self.selected_aggregate(cx);
 
-        if aggregate != Aggregate::None {
-            return Some(self.aggregate_single_series(&raw, aggregate, cx));
-        }
-
-        let palette = pie_palette(cx, raw.len());
-        let mut seen: HashMap<String, usize> = HashMap::new();
-        let points: Vec<ChartPoint> = raw
-            .into_iter()
-            .enumerate()
-            .map(|(i, (label, value, _))| {
-                let count = seen.entry(label.clone()).or_insert(0);
-                *count += 1;
-                let suffix = if *count > 1 {
-                    Some(format!(" ({})", count))
+        // Build the (label, value) list. When aggregating, identical labels are
+        // collapsed into one group (preserving first-appearance order); without
+        // aggregation each row stays a distinct point.
+        let pairs: Vec<(String, f64)> = if aggregate != Aggregate::None {
+            let mut groups: Vec<(String, Vec<f64>)> = Vec::new();
+            let mut index: HashMap<String, usize> = HashMap::new();
+            for (label, value, _) in raw {
+                let idx = if let Some(&i) = index.get(&label) {
+                    i
                 } else {
-                    None
+                    let i = groups.len();
+                    groups.push((label.clone(), Vec::new()));
+                    index.insert(label, i);
+                    i
                 };
-                let full_label = match &suffix {
-                    Some(s) => SharedString::from(format!("{}{}", label, s)),
-                    None => SharedString::from(label.clone()),
-                };
-                let display_label = match &suffix {
-                    Some(s) => {
-                        let budget = MAX_LABEL_CHARS.saturating_sub(s.chars().count());
-                        let truncated = truncate_label_to(&label, budget);
-                        SharedString::from(format!("{}{}", truncated, s))
-                    }
-                    None => truncate_label(&label),
-                };
-                ChartPoint {
+                groups[idx].1.push(value);
+            }
+            groups
+                .into_iter()
+                .map(|(label, values)| (label, apply_aggregate(&values, aggregate)))
+                .collect()
+        } else {
+            raw.into_iter()
+                .map(|(label, value, _)| (label, value))
+                .collect()
+        };
+
+        let palette = pie_palette(cx, pairs.len());
+        let labels: Vec<String> = pairs.iter().map(|(label, _)| label.clone()).collect();
+        let display = assign_display_labels(&labels);
+        let points: Vec<ChartPoint> = pairs
+            .into_iter()
+            .zip(display)
+            .enumerate()
+            .map(
+                |(i, ((_, value), (display_label, full_label)))| ChartPoint {
                     display_label,
                     full_label,
                     value,
                     color: palette[i % palette.len()],
-                }
-            })
+                },
+            )
             .collect();
 
         Some(points)
-    }
-
-    fn aggregate_single_series(
-        &self,
-        raw: &[(String, f64, Option<String>)],
-        agg: Aggregate,
-        cx: &App,
-    ) -> Vec<ChartPoint> {
-        let mut groups: Vec<(String, Vec<f64>)> = Vec::new();
-        let mut index: HashMap<String, usize> = HashMap::new();
-        for (label, value, _) in raw {
-            let idx = if let Some(&i) = index.get(label) {
-                i
-            } else {
-                let i = groups.len();
-                groups.push((label.clone(), Vec::new()));
-                index.insert(label.clone(), i);
-                i
-            };
-            groups[idx].1.push(*value);
-        }
-
-        let palette = pie_palette(cx, groups.len());
-        groups
-            .into_iter()
-            .enumerate()
-            .map(|(i, (label, values))| {
-                let value = apply_aggregate(&values, agg);
-                ChartPoint {
-                    display_label: truncate_label(&label),
-                    full_label: SharedString::from(label),
-                    value,
-                    color: palette[i % palette.len()],
-                }
-            })
-            .collect()
     }
 
     fn extract_grouped(&self, cx: &App) -> Option<GroupedData> {
@@ -570,17 +613,21 @@ impl ChartView {
 
         let num_series = series_set.len();
         let palette = pie_palette(cx, num_series);
+        let x_display = assign_display_labels(&x_order);
         let rows: Vec<PivotedRow> = x_order
             .iter()
-            .map(|x_label| {
-                let xi = x_index[x_label];
+            .enumerate()
+            .map(|(xi, _)| {
                 let values: Vec<f64> = (0..num_series)
                     .map(|si| {
                         let vals = cells.get(&(xi, si));
                         match vals {
                             Some(vs) if !vs.is_empty() => {
                                 if aggregate == Aggregate::None {
-                                    vs[0]
+                                    // No aggregate selected, but a pivot cell may
+                                    // still hold several rows; sum them rather than
+                                    // silently dropping all but the first.
+                                    vs.iter().sum()
                                 } else {
                                     apply_aggregate(vs, aggregate)
                                 }
@@ -590,7 +637,7 @@ impl ChartView {
                     })
                     .collect();
                 PivotedRow {
-                    x_label: truncate_label(x_label),
+                    x_label: x_display[xi].0.clone(),
                     values,
                 }
             })
@@ -749,12 +796,14 @@ impl ChartView {
             ChartKind::Line | ChartKind::Bar => {
                 const MIN_WIDTH_PER_POINT: f32 = 80.0;
                 let min_width = px(points.len() as f32 * MIN_WIDTH_PER_POINT);
+                let tick_margin = tick_margin_for(points.len());
                 let chart_inner = div().h_full().w_full().min_w(min_width);
                 let chart_inner = match self.kind {
                     ChartKind::Line => {
                         let mut line = LineChart::new(points)
                             .x(|p: &ChartPoint| p.display_label.clone())
-                            .y(|p: &ChartPoint| p.value);
+                            .y(|p: &ChartPoint| p.value)
+                            .tick_margin(tick_margin);
                         if self.config.line_stepped {
                             line = line.step_after();
                         }
@@ -766,7 +815,9 @@ impl ChartView {
                     ChartKind::Bar => {
                         let bar = BarChart::new(points)
                             .band(|p: &ChartPoint| p.display_label.clone())
-                            .value(|p: &ChartPoint| p.value);
+                            .value(|p: &ChartPoint| p.value)
+                            .tick_margin(tick_margin)
+                            .fill(|p: &ChartPoint, _, _, _| p.color);
                         chart_inner.child(bar)
                     }
                     ChartKind::Pie => unreachable!(),
@@ -781,6 +832,13 @@ impl ChartView {
                     .into_any_element()
             }
             ChartKind::Pie => {
+                // Pie slices can only represent positive magnitudes; zero and
+                // negative values produce degenerate or nonsensical wedges.
+                let points: Vec<ChartPoint> =
+                    points.into_iter().filter(|p| p.value > 0.0).collect();
+                if points.is_empty() {
+                    return make_placeholder("Pie charts require positive values.");
+                }
                 let pie = PieChart::new(points.clone())
                     .outer_radius(140.0)
                     .value(|p: &ChartPoint| p.value as f32)
@@ -835,14 +893,24 @@ impl ChartView {
                 const MIN_WIDTH_PER_POINT: f32 = 80.0;
                 let min_width = px(grouped.rows.len() as f32 * MIN_WIDTH_PER_POINT);
 
+                let tick_margin = tick_margin_for(grouped.rows.len());
+                // AreaChart defaults every series to the same translucent fill,
+                // so without an explicit per-series fill the series are
+                // indistinguishable. Give each series its own color, lightly
+                // filled so overlapping areas stay readable.
                 let mut chart = AreaChart::new(grouped.rows.clone())
+                    .tick_margin(tick_margin)
                     .x(|r: &PivotedRow| r.x_label.clone())
                     .y(|r: &PivotedRow| r.values[0])
-                    .stroke(grouped.series.colors[0]);
+                    .stroke(grouped.series.colors[0])
+                    .fill(grouped.series.colors[0].opacity(0.15));
 
                 for i in 1..num_series {
                     let color = grouped.series.colors[i];
-                    chart = chart.y(move |r: &PivotedRow| r.values[i]).stroke(color);
+                    chart = chart
+                        .y(move |r: &PivotedRow| r.values[i])
+                        .stroke(color)
+                        .fill(color.opacity(0.15));
                 }
 
                 let legend = Self::render_series_legend(&grouped.series, border_color);
@@ -897,7 +965,7 @@ impl ChartView {
                         let sn = &series_names;
                         let sc = &series_colors;
                         r.values.into_iter().enumerate().filter_map(move |(si, v)| {
-                            if v == 0.0 {
+                            if v <= 0.0 {
                                 None
                             } else {
                                 Some(ChartPoint {
