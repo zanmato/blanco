@@ -8,6 +8,7 @@ use crate::result_ext::ResultExt;
 use crate::settings::EditorSettings;
 use crate::settings::FormatterSettings;
 use crate::sql::extract_statement_info;
+use crate::status_bar::ActivityReporter;
 
 use super::{EditorPanel, LINT_DEBOUNCE_MS, TabType};
 
@@ -68,6 +69,8 @@ impl EditorPanel {
         let formatter_settings = AppSettings::global(cx).settings.formatter.clone();
         let editor_settings = AppSettings::global(cx).settings.editor.clone();
 
+        let activity = ActivityReporter::global(cx).begin("linting");
+
         // Background task: do the heavy linting work
         let lint_task = cx.background_spawn(async move {
             sqruff_service.lint(
@@ -80,6 +83,7 @@ impl EditorPanel {
 
         // Foreground task: wait for background task to complete and update UI
         cx.spawn(async move |entity_handle, async_cx| {
+            let _activity = activity;
             let diagnostics = match lint_task.await {
                 Ok(diags) => diags,
                 Err(e) => {

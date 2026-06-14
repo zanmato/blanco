@@ -5,7 +5,7 @@ use gpui::{
     Task, Window, actions, div, prelude::FluentBuilder, px, svg,
 };
 use gpui_component::{
-    ActiveTheme, Root, TitleBar, WindowExt as _,
+    ActiveTheme, Icon, IconName, Root, Sizable as _, TitleBar, WindowExt as _,
     button::{Button, ButtonVariants as _},
     dialog::{DialogAction, DialogFooter},
     global_state::GlobalState,
@@ -13,6 +13,8 @@ use gpui_component::{
     menu::AppMenuBar,
     notification::NotificationType,
     resizable::{ResizableState, h_resizable, resizable_panel},
+    spinner::Spinner,
+    status_bar::StatusBar,
 };
 use serde::Deserialize;
 use smol::channel;
@@ -27,6 +29,7 @@ use crate::{
     editor::{EditorPanel, ObjectDdlParams, TabCreationParams, TableStructureParams},
     result_ext::ResultExt,
     snippets_panel::{RefreshSnippets, SnippetsPanel, SnippetsPanelEvent},
+    status_bar::{ActivityMessage, ActivityReporter, ActivityResult, StatusBarState, StatusKind},
 };
 
 actions!(
@@ -238,8 +241,10 @@ pub struct BlancoApp {
     sidebar_tab: SidebarTab,
     app_menu_bar: Entity<AppMenuBar>,
     main_resize_state: Entity<ResizableState>,
+    status_bar: Entity<StatusBarState>,
     _subscriptions: Vec<Subscription>,
     _action_task: Task<()>,
+    _activity_task: Task<()>,
 }
 
 impl BlancoApp {
@@ -284,6 +289,24 @@ impl BlancoApp {
                 }
             }
             info!("DatabaseServiceMessage listener task ended");
+        });
+
+        // App-wide activity channel feeding the bottom status bar. Any context
+        // (including background tokio tasks without a `cx`) reports work through
+        // the global ActivityReporter; this single task folds messages into the
+        // status entity.
+        let status_bar = cx.new(|_| StatusBarState::default());
+        let (activity_sender, activity_receiver) = channel::unbounded::<ActivityMessage>();
+        cx.set_global(ActivityReporter::new(activity_sender));
+        let activity_task = cx.spawn({
+            let status_bar = status_bar.downgrade();
+            async move |_weak_handle, cx| {
+                while let Ok(message) = activity_receiver.recv().await {
+                    status_bar
+                        .update(cx, |state, cx| state.apply(message, cx))
+                        .log_err();
+                }
+            }
         });
 
         let sidebar = cx.new(|cx| ConnectionsPanel::new(window, cx));
@@ -354,6 +377,9 @@ impl BlancoApp {
         );
         subscriptions.push(subscription);
 
+        // Re-render the status bar whenever the activity state changes.
+        subscriptions.push(cx.observe(&status_bar, |_, _, cx| cx.notify()));
+
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
 
@@ -367,9 +393,38 @@ impl BlancoApp {
             sidebar_tab: SidebarTab::Connections,
             app_menu_bar,
             main_resize_state,
+            status_bar,
             _subscriptions: subscriptions,
             _action_task: action_task,
+            _activity_task: activity_task,
         }
+    }
+
+    fn render_status_bar(&self, cx: &Context<Self>) -> StatusBar {
+        let line = self.status_bar.read(cx).display();
+        let leading = match line.kind {
+            StatusKind::Busy => Spinner::new().xsmall().into_any_element(),
+            StatusKind::Ok => Icon::new(IconName::CircleCheck)
+                .xsmall()
+                .text_color(cx.theme().success)
+                .into_any_element(),
+            StatusKind::Err => Icon::new(IconName::CircleX)
+                .xsmall()
+                .text_color(cx.theme().danger)
+                .into_any_element(),
+            StatusKind::Idle => Icon::new(IconName::Check)
+                .xsmall()
+                .text_color(cx.theme().muted_foreground)
+                .into_any_element(),
+        };
+
+        StatusBar::new().left(
+            h_flex()
+                .items_center()
+                .gap_1()
+                .child(leading)
+                .child(line.text),
+        )
     }
 
     #[cfg(test)]
@@ -447,6 +502,12 @@ impl BlancoApp {
             // Mark the connection as connected and refresh the sidebar view
             sidebar.validate_connection_as_connected(action.connection_id, cx);
         });
+        self.status_bar.update(cx, |state, cx| {
+            state.flash(
+                ActivityResult::Ok(format!("connected to {}", action.database_name).into()),
+                cx,
+            );
+        });
     }
 
     fn on_database_disconnected(
@@ -457,6 +518,12 @@ impl BlancoApp {
     ) {
         self.sidebar.update(cx, |sidebar, cx| {
             sidebar.mark_connection_disconnected(action.connection_id, cx);
+        });
+        self.status_bar.update(cx, |state, cx| {
+            state.flash(
+                ActivityResult::Err(format!("disconnected from {}", action.database_name).into()),
+                cx,
+            );
         });
     }
 
@@ -531,8 +598,11 @@ impl BlancoApp {
         let schema_name = action.schema_name.clone();
         let table_name = action.table_name.clone();
         let editor_panel = self.editor_panel.clone();
+        let activity = ActivityReporter::global(cx)
+            .begin(format!("{}: loading structure", action.connection_name));
 
         cx.spawn_in(window, async move |_, window| {
+            let _activity = activity;
             use database::DatabaseServiceTrait;
             let columns_result = db_service
                 .get_or_create_connection_by_id(connection_id, Some(&database_name))
@@ -591,8 +661,11 @@ impl BlancoApp {
         let schema_name = action.schema_name.clone();
         let object_name = action.object_name.clone();
         let kind = action.kind;
+        let activity =
+            ActivityReporter::global(cx).begin(format!("{}: loading DDL", action.connection_name));
 
         cx.spawn_in(window, async move |_, window| {
+            let _activity = activity;
             use database::DatabaseServiceTrait;
             let result = match db_service
                 .get_or_create_connection_by_id(connection_id, Some(&database_name))
@@ -1115,6 +1188,8 @@ impl Render for BlancoApp {
                         ),
                 ),
             )
+            // Status bar pinned to the bottom, spanning the full window width.
+            .child(self.render_status_bar(cx))
             .child(self.command_palette.clone())
             .children(sheet_layer)
             .children(dialog_layer)

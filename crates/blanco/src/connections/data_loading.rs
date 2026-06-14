@@ -2,6 +2,7 @@ use database::DatabaseService;
 use gpui::Context;
 
 use crate::result_ext::ResultExt;
+use crate::status_bar::ActivityReporter;
 
 use super::ConnectionsPanel;
 
@@ -90,7 +91,17 @@ impl ConnectionsPanel {
 
         let db_service = DatabaseService::global(cx).clone();
 
+        let connection_label = self
+            .connections
+            .iter()
+            .find(|connection| connection.id == Some(connection_id))
+            .map(|connection| connection.name.clone())
+            .unwrap_or_else(|| format!("connection {connection_id}"));
+        let activity =
+            ActivityReporter::global(cx).begin(format!("{connection_label}: listing schema"));
+
         cx.spawn(async move |this_handle, cx| {
+            let _activity = activity;
             match db_service
                 .get_or_create_connection(connection_id, None)
                 .await

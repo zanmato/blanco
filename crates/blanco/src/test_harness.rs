@@ -6,7 +6,10 @@ use crate::app_database::AppDatabase;
 use crate::app_settings::AppSettings;
 use crate::editor::{EditorPanel, TabCreationParams};
 use crate::settings::Settings;
+use crate::status_bar::{ActivityMessage, ActivityReporter, StatusBarState, StatusLine};
 
+use gpui::Task;
+use smol::channel;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 static NEXT_CONNECTION_ID: AtomicI64 = AtomicI64::new(1);
@@ -18,6 +21,8 @@ fn next_connection_id() -> i64 {
 pub struct TestHarness {
     pub editor_panel: gpui::Entity<EditorPanel>,
     pub window_handle: gpui::WindowHandle<Root>,
+    pub status_bar: gpui::Entity<StatusBarState>,
+    _activity_task: Task<()>,
 }
 
 impl TestHarness {
@@ -25,9 +30,27 @@ impl TestHarness {
         cx.executor().allow_parking();
 
         let mut editor_panel: Option<gpui::Entity<EditorPanel>> = None;
+        let mut status_bar: Option<gpui::Entity<StatusBarState>> = None;
+        let mut activity_task: Option<Task<()>> = None;
         let window_handle = cx.update(|cx| {
             gpui_component::init(cx);
             gpui_tokio::init(cx);
+
+            // Mirror app.rs: an activity channel feeding the status bar entity.
+            let status_bar_entity = cx.new(|_| StatusBarState::default());
+            let (activity_sender, activity_receiver) = channel::unbounded::<ActivityMessage>();
+            cx.set_global(ActivityReporter::new(activity_sender));
+            activity_task = Some(cx.spawn({
+                let status_bar = status_bar_entity.downgrade();
+                async move |cx| {
+                    while let Ok(message) = activity_receiver.recv().await {
+                        status_bar
+                            .update(cx, |state, cx| state.apply(message, cx))
+                            .ok();
+                    }
+                }
+            }));
+            status_bar = Some(status_bar_entity);
 
             let runtime_handle = gpui_tokio::Tokio::handle(cx);
 
@@ -83,8 +106,16 @@ impl TestHarness {
         Self {
             editor_panel: editor_panel.expect("editor_panel should be set"),
             window_handle,
+            status_bar: status_bar.expect("status_bar should be set"),
+            _activity_task: activity_task.expect("activity_task should be set"),
         }
     }
+}
+
+pub fn status_line(harness: &TestHarness, cx: &VisualTestContext) -> StatusLine {
+    harness
+        .status_bar
+        .read_with(cx, |state, _cx| state.display())
 }
 
 pub fn set_editor_text(harness: &TestHarness, text: &str, cx: &mut VisualTestContext) {

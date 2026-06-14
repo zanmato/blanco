@@ -21,6 +21,7 @@ mod results_panel;
 mod settings;
 mod snippets_panel;
 mod sql;
+mod status_bar;
 #[cfg(test)]
 mod test_harness;
 mod time_format;

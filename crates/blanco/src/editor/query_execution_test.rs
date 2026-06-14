@@ -1,9 +1,10 @@
 use gpui::{AppContext, TestAppContext, VisualTestContext};
 use std::collections::HashMap;
 
+use crate::status_bar::{ActivityReporter, ActivityResult, StatusKind};
 use crate::test_harness::{
     TestHarness, result_cell, result_columns, result_row_count, run_query, set_editor_text,
-    wait_for_query,
+    status_line, wait_for_query,
 };
 
 #[gpui::test]
@@ -66,6 +67,72 @@ async fn test_execute_write_query(cx: &mut TestAppContext) {
 
     let rows = result_row_count(&harness, &cx).expect("should have results");
     assert_eq!(rows, 1, "Should return 1 row");
+}
+
+/// After a query completes, the status bar should flash an `Ok` outcome that
+/// names the row count, then linger (the transient timer keeps it for a few
+/// seconds before returning to `Ready`).
+#[gpui::test]
+async fn test_status_bar_reports_query_outcome(cx: &mut TestAppContext) {
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    set_editor_text(&harness, "SELECT 1 AS n UNION ALL SELECT 2", &mut cx);
+    run_query(&harness, &mut cx);
+    wait_for_query(&harness, &mut cx).await;
+    cx.run_until_parked();
+
+    let line = status_line(&harness, &cx);
+    assert_eq!(line.kind, StatusKind::Ok, "got text {:?}", line.text);
+    assert!(
+        line.text.starts_with("Query OK · 2 rows ·"),
+        "unexpected status text: {:?}",
+        line.text
+    );
+}
+
+/// Drive the global reporter directly to exercise the display() folding logic:
+/// the latest activity is shown with a `(+N)` overflow count, finishing one
+/// flashes its outcome only once the bar is idle, and the line returns to
+/// `Ready` once every guard is gone (transient aside).
+#[gpui::test]
+async fn test_status_bar_tracks_concurrent_activities(cx: &mut TestAppContext) {
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    let reporter = cx.update(|_, cx| ActivityReporter::global(cx));
+
+    let first = reporter.begin("alpha: executing query");
+    cx.run_until_parked();
+    let line = status_line(&harness, &cx);
+    assert_eq!(line.kind, StatusKind::Busy);
+    assert_eq!(line.text.as_ref(), "alpha: executing query");
+
+    let second = reporter.begin("beta: listing schema");
+    cx.run_until_parked();
+    let line = status_line(&harness, &cx);
+    assert_eq!(line.kind, StatusKind::Busy);
+    assert_eq!(
+        line.text.as_ref(),
+        "beta: listing schema (+1)",
+        "newest activity wins and the older one shows as overflow"
+    );
+
+    // Finishing the foreground activity flashes its outcome, but the still-busy
+    // `first` keeps the bar in the Busy state.
+    second.finish(ActivityResult::Ok("done".into()));
+    cx.run_until_parked();
+    let line = status_line(&harness, &cx);
+    assert_eq!(line.kind, StatusKind::Busy);
+    assert_eq!(line.text.as_ref(), "alpha: executing query");
+
+    // Dropping the last guard clears active work; the lingering transient from
+    // `second` is what the bar shows next.
+    drop(first);
+    cx.run_until_parked();
+    let line = status_line(&harness, &cx);
+    assert_eq!(line.kind, StatusKind::Ok);
+    assert_eq!(line.text.as_ref(), "done");
 }
 
 /// Walks a SELECT result and confirms columns + cell values render correctly,

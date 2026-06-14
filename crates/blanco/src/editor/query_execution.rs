@@ -12,6 +12,7 @@ use crate::app_database::{AppDatabase, QueryTabData};
 use crate::result_ext::ResultExt;
 use crate::sql::extract_statement_info;
 use crate::sql::statement_parser::QueryParameter;
+use crate::status_bar::{ActivityReporter, ActivityResult};
 use crate::time_format;
 use database::{DatabaseService, DatabaseServiceTrait};
 
@@ -176,6 +177,16 @@ impl EditorPanel {
             })
             .detach();
 
+            // Report the in-flight query to the status bar. The guard moves into
+            // the foreground result task: success/error finish it with an
+            // outcome, cancellation drops it (clearing the line).
+            let activity_label = query_tab
+                .connection_name
+                .clone()
+                .unwrap_or_else(|| query_tab.database_name.clone());
+            let activity =
+                ActivityReporter::global(cx).begin(format!("{activity_label}: executing query"));
+
             // Set loading state to true
             self.loading = true;
             cx.notify();
@@ -229,6 +240,7 @@ impl EditorPanel {
             let completion_provider = query_tab.completion_provider.clone();
 
             self._run_query_task = cx.spawn_in(window, async move |editor_panel_entity, window| {
+                let activity = activity;
                 let Ok((execution_result, start_time)) = rx.await else {
                     // Background task was dropped (user clicked Abort).
                     window
@@ -307,6 +319,15 @@ impl EditorPanel {
 
                         let rows_affected = total_rows_affected;
 
+                        activity.finish(ActivityResult::Ok(
+                            format!(
+                                "Query OK · {} rows · {}",
+                                rows_affected,
+                                time_format::format_duration(duration_ms)
+                            )
+                            .into(),
+                        ));
+
                         window
                             .update(move |window, cx| {
                                 // Update results panel
@@ -345,6 +366,8 @@ impl EditorPanel {
                     }
                     Err(e) => {
                         tracing::error!("Query execution failed: {}", e);
+
+                        activity.finish(ActivityResult::Err("query execution failed".into()));
 
                         window
                             .update(|window, cx| {
