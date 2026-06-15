@@ -4,14 +4,15 @@ use std::time::Duration;
 use blanco_ui::IconName;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, Styled, Subscription, Window, div,
-    prelude::FluentBuilder as _, px,
+    ParentElement, Render, SharedString, StatefulInteractiveElement as _, Styled, Subscription,
+    Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme, Selectable as _, Sizable as _,
+    ActiveTheme, Icon, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     input::{InputEvent, InputState},
     table::{DataTable, TableEvent, TableState},
+    tooltip::Tooltip,
     v_flex,
 };
 
@@ -716,6 +717,7 @@ impl Render for ResultsPanel {
             let label = tab.title.clone();
             let pinned = tab.pinned;
             let is_last = idx == tab_count - 1;
+            let read_only = !tab.table_state.read(cx).delegate().is_editable();
             strip = strip.child(
                 gpui_component::h_flex()
                     .id(("result-tab", idx))
@@ -742,7 +744,32 @@ impl Render for ResultsPanel {
                             this.activate_tab(idx, cx);
                         }),
                     )
-                    .child(div().flex_1().min_w_0().truncate().child(label))
+                    .child(
+                        gpui_component::h_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .items_center()
+                            .gap_1()
+                            .when(read_only, |this| {
+                                this.child(
+                                    div()
+                                        .id(("read-only-lock", idx))
+                                        .flex_shrink_0()
+                                        .child(
+                                            Icon::new(IconName::Lock)
+                                                .size(px(12.))
+                                                .text_color(muted_fg),
+                                        )
+                                        .tooltip(|window, cx| {
+                                            Tooltip::new(
+                                                "Read-only: editing requires a complete primary key",
+                                            )
+                                            .build(window, cx)
+                                        }),
+                                )
+                            })
+                            .child(div().flex_1().min_w_0().truncate().child(label)),
+                    )
                     .child(
                         gpui_component::h_flex()
                             .gap_1()

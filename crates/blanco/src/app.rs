@@ -1125,7 +1125,6 @@ impl Render for BlancoApp {
                                             .h_full()
                                             .flex()
                                             .flex_col()
-                                            .pb_6()
                                             .overflow_hidden()
                                             .child(
                                                 div().flex_none().px_2().py_1p5().child(
