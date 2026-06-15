@@ -127,7 +127,7 @@ impl EditorPanel {
             let content = query_tab.editor.read(cx).text().to_string();
 
             let _results_panel = query_tab.results_panel.clone();
-            let _sql_log = query_tab.sql_log.clone();
+            let _sql_view = query_tab.sql_view.clone();
 
             let connection_type = None;
             let tab_data = QueryTabData {
@@ -203,8 +203,8 @@ impl EditorPanel {
             } else {
                 query.clone()
             };
-            query_tab.sql_log.update(cx, |sql_log, cx| {
-                sql_log.append_text(&blanco_ui::SqlLogMessage::SqlStatement(query_for_log), cx);
+            query_tab.sql_view.update(cx, |sql_view, cx| {
+                sql_view.append_text(&blanco_ui::SqlViewMessage::SqlStatement(query_for_log), cx);
             });
 
             // Clone values for background task
@@ -234,7 +234,7 @@ impl EditorPanel {
 
             // Spawn foreground task to handle the result and update UI
             let results_panel_clone = query_tab.results_panel.clone();
-            let sql_log_clone = query_tab.sql_log.clone();
+            let sql_view_clone = query_tab.sql_view.clone();
             let db_service = DatabaseService::global(cx).clone();
             let query_for_metadata = query;
             let completion_provider = query_tab.completion_provider.clone();
@@ -245,9 +245,9 @@ impl EditorPanel {
                     // Background task was dropped (user clicked Abort).
                     window
                         .update(|window, cx| {
-                            sql_log_clone.update(cx, |sql_log, cx| {
-                                sql_log.append_text(
-                                    &blanco_ui::SqlLogMessage::Comment(
+                            sql_view_clone.update(cx, |sql_view, cx| {
+                                sql_view.append_text(
+                                    &blanco_ui::SqlViewMessage::Comment(
                                         "query cancelled by user".to_string(),
                                     ),
                                     cx,
@@ -341,15 +341,15 @@ impl EditorPanel {
                                 });
 
                                 // Log execution result to SQL log
-                                sql_log_clone.update(cx, |sql_log, cx| {
+                                sql_view_clone.update(cx, |sql_view, cx| {
                                     let log_message = format!(
                                         "{}, {} rows in {}",
                                         time_format::format_current_timestamp(),
                                         rows_affected,
                                         time_format::format_duration(duration_ms)
                                     );
-                                    sql_log.append_text(
-                                        &blanco_ui::SqlLogMessage::Comment(log_message),
+                                    sql_view.append_text(
+                                        &blanco_ui::SqlViewMessage::Comment(log_message),
                                         cx,
                                     );
                                 });
@@ -373,10 +373,10 @@ impl EditorPanel {
                             .update(|window, cx| {
                                 // Log execution error to SQL log
                                 let _error_duration = start_time.elapsed().as_millis() as i64;
-                                sql_log_clone.update(cx, |sql_log, cx| {
+                                sql_view_clone.update(cx, |sql_view, cx| {
                                     let log_message = format!("query execution failed: {}", e);
-                                    sql_log.append_text(
-                                        &blanco_ui::SqlLogMessage::Comment(log_message),
+                                    sql_view.append_text(
+                                        &blanco_ui::SqlViewMessage::Comment(log_message),
                                         cx,
                                     );
                                 });

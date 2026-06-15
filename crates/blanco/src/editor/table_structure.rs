@@ -14,7 +14,7 @@ use gpui_component::{
 use crate::app_database::EnvironmentType;
 use crate::result_ext::ResultExt as _;
 use blanco_core::{ColumnInfo, IndexInfo};
-use blanco_ui::{SqlLog, SqlLogMessage};
+use blanco_ui::{SqlView, SqlViewMessage};
 
 pub struct TableStructureTab {
     pub title: String,
@@ -30,7 +30,7 @@ pub struct TableStructureTab {
     focus_handle: FocusHandle,
     loading: bool,
     error: Option<String>,
-    ddl_log: Entity<SqlLog>,
+    ddl_log: Entity<SqlView>,
     ddl_visible: bool,
     ddl_loaded: bool,
     ddl_loading: bool,
@@ -55,7 +55,7 @@ impl TableStructureTab {
         let title = table_name.clone();
 
         let highlight_theme = cx.theme().highlight_theme.clone();
-        let ddl_log = cx.new(|_| SqlLog::new(1, highlight_theme));
+        let ddl_log = cx.new(|_| SqlView::new(1, highlight_theme));
 
         let columns_delegate = ColumnsTableDelegate::new(columns);
         let columns_table_state = cx.new(|cx| {
@@ -157,7 +157,7 @@ impl TableStructureTab {
         self.ddl_error = None;
         self.ddl_log.update(cx, |log, cx| {
             log.clear(cx);
-            log.append_text(&SqlLogMessage::SqlStatement(ddl), cx);
+            log.append_text(&SqlViewMessage::SqlStatement(ddl), cx);
         });
         cx.notify();
     }

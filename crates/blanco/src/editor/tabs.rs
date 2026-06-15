@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use blanco_core::RoutineKind;
-use blanco_ui::SqlLog;
+use blanco_ui::SqlView;
 use gpui::Entity;
 use gpui_component::input::InputState;
 
@@ -37,10 +37,10 @@ pub struct QueryTab {
     pub editor: Entity<InputState>,
     pub db_id: Option<i64>,
     pub results_panel: Entity<ResultsPanel>,
-    pub sql_log: Entity<SqlLog>,
+    pub sql_view: Entity<SqlView>,
     pub chat_enabled: bool,
     pub chat_panel: Option<Entity<ChatPanel>>,
-    pub sql_log_visible: bool,
+    pub sql_view_visible: bool,
     pub sqruff_service: Option<Arc<SqruffService>>,
     pub completion_provider: Option<SqlCompletionProvider>,
     /// In-memory cache of the last values entered for query parameters in

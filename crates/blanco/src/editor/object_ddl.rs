@@ -1,5 +1,5 @@
 use blanco_core::RoutineKind;
-use blanco_ui::{SqlLog, SqlLogMessage};
+use blanco_ui::{SqlView, SqlViewMessage};
 use gpui::{
     App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
     Render, SharedString, Styled, Window, div, prelude::FluentBuilder as _,
@@ -18,7 +18,7 @@ pub struct ObjectDdlTab {
     pub _schema_name: Option<String>,
     pub _object_name: String,
     pub _environment_type: Option<EnvironmentType>,
-    sql_log: Entity<SqlLog>,
+    sql_view: Entity<SqlView>,
     focus_handle: FocusHandle,
     loading: bool,
     error: Option<String>,
@@ -40,7 +40,7 @@ impl ObjectDdlTab {
     ) -> Self {
         let title = format!("{}: {}", kind.display_name().to_lowercase(), object_name);
         let highlight_theme = cx.theme().highlight_theme.clone();
-        let sql_log = cx.new(|_| SqlLog::new(1, highlight_theme));
+        let sql_view = cx.new(|_| SqlView::new(1, highlight_theme));
         Self {
             title,
             kind,
@@ -51,7 +51,7 @@ impl ObjectDdlTab {
             _schema_name: schema_name,
             _object_name: object_name,
             _environment_type: environment_type,
-            sql_log,
+            sql_view,
             focus_handle: cx.focus_handle(),
             loading: true,
             error: None,
@@ -61,9 +61,9 @@ impl ObjectDdlTab {
     pub fn set_ddl(&mut self, ddl: String, cx: &mut Context<Self>) {
         self.loading = false;
         self.error = None;
-        self.sql_log.update(cx, |log, cx| {
+        self.sql_view.update(cx, |log, cx| {
             log.clear(cx);
-            log.append_text(&SqlLogMessage::SqlStatement(ddl), cx);
+            log.append_text(&SqlViewMessage::SqlStatement(ddl), cx);
         });
         cx.notify();
     }
@@ -112,6 +112,6 @@ impl Render for ObjectDdlTab {
                         .child(msg),
                 )
             })
-            .child(div().flex_1().min_h_0().child(self.sql_log.clone()))
+            .child(div().flex_1().min_h_0().child(self.sql_view.clone()))
     }
 }

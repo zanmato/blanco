@@ -1127,8 +1127,6 @@ impl Render for BlancoApp {
                                             .flex_col()
                                             .pb_6()
                                             .overflow_hidden()
-                                            .border_r_1()
-                                            .border_color(cx.theme().border)
                                             .child(
                                                 div().flex_none().px_2().py_1p5().child(
                                                     TabBar::new("sidebar-tabs")

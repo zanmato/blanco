@@ -1,5 +1,5 @@
 use blanco_core::RoutineKind;
-use blanco_ui::{IconName, SqlLog, SqlLogMessage, Tab, TabBar};
+use blanco_ui::{IconName, SqlView, SqlViewMessage, Tab, TabBar};
 use gpui::{
     AnyElement, App, AppContext, ClickEvent, Context, FocusHandle, Focusable, FontWeight,
     InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, WeakEntity,
@@ -343,9 +343,9 @@ impl EditorPanel {
                     .small()
                     .icon(IconName::SquareTerminal)
                     .tooltip("Toggle SQL Log")
-                    .when(query_tab.sql_log_visible, |btn| btn.primary())
+                    .when(query_tab.sql_view_visible, |btn| btn.primary())
                     .on_click(cx.listener(|this, _, window, cx| {
-                        this.toggle_sql_log_for_active_tab(window, cx);
+                        this.toggle_sql_view_for_active_tab(window, cx);
                     })),
             )
             .child(
@@ -380,24 +380,24 @@ impl EditorPanel {
         }
 
         let results_panel = query_tab.results_panel.clone();
-        let sql_log = query_tab.sql_log.clone();
+        let sql_view = query_tab.sql_view.clone();
 
         Popover::new("commit-changes-popover")
             .trigger(button)
             .content(move |_state, _window, cx| {
                 let results_panel = results_panel.clone();
-                let sql_log = sql_log.clone();
+                let sql_view = sql_view.clone();
                 let statements = results_panel.read(cx).preview_pending_sql(cx);
                 let preview_log = cx.new(|cx| {
-                    let mut log = SqlLog::new(usize::MAX, cx.theme().highlight_theme.clone());
+                    let mut log = SqlView::new(usize::MAX, cx.theme().highlight_theme.clone());
                     if statements.is_empty() {
                         log.append_text(
-                            &SqlLogMessage::Comment("no statements to apply".into()),
+                            &SqlViewMessage::Comment("no statements to apply".into()),
                             cx,
                         );
                     } else {
                         for statement in statements {
-                            log.append_text(&SqlLogMessage::SqlStatement(statement), cx);
+                            log.append_text(&SqlViewMessage::SqlStatement(statement), cx);
                         }
                     }
                     log
@@ -436,12 +436,12 @@ impl EditorPanel {
                                     .label("Confirm")
                                     .on_click({
                                         let results_panel = results_panel;
-                                        let sql_log = sql_log;
+                                        let sql_view = sql_view;
                                         cx.listener(
                                             move |state: &mut PopoverState, _, window, cx| {
                                                 results_panel.update(cx, |panel, cx| {
-                                                    panel.commit_changes_with_sql_log(
-                                                        window, &sql_log, cx,
+                                                    panel.commit_changes_with_sql_view(
+                                                        window, &sql_view, cx,
                                                     );
                                                 });
                                                 state.dismiss(window, cx);
@@ -571,7 +571,7 @@ impl EditorPanel {
                                             }),
                                     )
                                     .child(div().flex_1().min_h_0().overflow_hidden().map(|d| {
-                                        if query_tab.sql_log_visible {
+                                        if query_tab.sql_view_visible {
                                             d.child(
                                                 v_resizable("results-log-split")
                                                     .with_state(&self.results_log_resize_state)
@@ -582,7 +582,7 @@ impl EditorPanel {
                                                     .child(
                                                         resizable_panel()
                                                             .size(120.)
-                                                            .child(query_tab.sql_log.clone()),
+                                                            .child(query_tab.sql_view.clone()),
                                                     ),
                                             )
                                         } else {

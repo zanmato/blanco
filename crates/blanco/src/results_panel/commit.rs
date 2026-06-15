@@ -8,13 +8,13 @@ use crate::result_ext::ResultExt;
 use crate::time_format;
 
 impl ResultsPanel {
-    pub fn commit_changes_with_sql_log(
+    pub fn commit_changes_with_sql_view(
         &mut self,
         _window: &mut Window,
-        sql_log: &Entity<blanco_ui::SqlLog>,
+        sql_view: &Entity<blanco_ui::SqlView>,
         cx: &mut Context<Self>,
     ) {
-        self.commit_changes_internal(_window, Some(sql_log), cx)
+        self.commit_changes_internal(_window, Some(sql_view), cx)
     }
 
     #[allow(dead_code)]
@@ -25,7 +25,7 @@ impl ResultsPanel {
     fn commit_changes_internal(
         &mut self,
         _window: &mut Window,
-        sql_log: Option<&Entity<blanco_ui::SqlLog>>,
+        sql_view: Option<&Entity<blanco_ui::SqlView>>,
         cx: &mut Context<Self>,
     ) {
         // First, commit any currently editing cell
@@ -65,7 +65,7 @@ impl ResultsPanel {
         // Spawn background task to execute table operations
         let db_service = DatabaseService::global(cx).clone();
         let _table_entity = self.table_state.clone();
-        let _sql_log_entity: Option<Entity<blanco_ui::SqlLog>> = sql_log.cloned();
+        let _sql_view_entity: Option<Entity<blanco_ui::SqlView>> = sql_view.cloned();
 
         let table_operations_task = cx.background_spawn(async move {
             let start_time = std::time::Instant::now();
@@ -140,7 +140,7 @@ impl ResultsPanel {
         });
 
         // Spawn async task to handle the response
-        let sql_log_response_entity: Option<Entity<blanco_ui::SqlLog>> = sql_log.cloned();
+        let sql_view_response_entity: Option<Entity<blanco_ui::SqlView>> = sql_view.cloned();
         cx.spawn(async move |entity, cx| {
             let response = table_operations_task.await;
 
@@ -179,12 +179,12 @@ impl ResultsPanel {
                         });
 
                         // Update SQL log with queries and success message
-                        if let Some(sql_log) = sql_log_response_entity {
-                            sql_log.update(cx, |log, cx| {
+                        if let Some(sql_view) = sql_view_response_entity {
+                            sql_view.update(cx, |log, cx| {
                                 // Log each SQL query
                                 for sql_query in &response.sql_queries {
                                     log.append_text(
-                                        &blanco_ui::SqlLogMessage::SqlStatement(sql_query.clone()),
+                                        &blanco_ui::SqlViewMessage::SqlStatement(sql_query.clone()),
                                         cx,
                                     );
                                 }
@@ -199,7 +199,7 @@ impl ResultsPanel {
                                     )
                                 );
                                 log.append_text(
-                                    &blanco_ui::SqlLogMessage::Comment(log_message),
+                                    &blanco_ui::SqlViewMessage::Comment(log_message),
                                     cx,
                                 );
                             });
@@ -208,14 +208,14 @@ impl ResultsPanel {
                     .log_err();
             } else {
                 // Handle failed operations, show error but keep edits for retry
-                if let Some(sql_log) = sql_log_response_entity {
+                if let Some(sql_view) = sql_view_response_entity {
                     let error_message_clone = response.error_message.clone();
                     let sql_queries_clone = response.sql_queries;
-                    sql_log.update(cx, |log, cx| {
+                    sql_view.update(cx, |log, cx| {
                         // Log each SQL query that was attempted
                         for sql_query in &sql_queries_clone {
                             log.append_text(
-                                &blanco_ui::SqlLogMessage::SqlStatement(sql_query.clone()),
+                                &blanco_ui::SqlViewMessage::SqlStatement(sql_query.clone()),
                                 cx,
                             );
                         }
@@ -223,7 +223,7 @@ impl ResultsPanel {
                             "✗ Table operations failed: {}",
                             error_message_clone.unwrap_or_else(|| "Unknown error".to_string())
                         );
-                        log.append_text(&blanco_ui::SqlLogMessage::Comment(error_msg), cx);
+                        log.append_text(&blanco_ui::SqlViewMessage::Comment(error_msg), cx);
                     });
                 }
             }

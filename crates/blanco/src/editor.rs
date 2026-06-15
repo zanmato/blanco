@@ -38,7 +38,7 @@ use crate::result_ext::ResultExt;
 use crate::results_panel::ResultsPanel;
 use crate::settings::SettingsView;
 use crate::sql::{SqlCompletionProvider, SqlSelectionRangeProvider, SqruffService};
-use blanco_ui::SqlLog;
+use blanco_ui::SqlView;
 use database::{DatabaseService, DatabaseServiceTrait};
 
 pub struct EditorPanel {
@@ -596,13 +596,15 @@ impl EditorPanel {
             editor: editor.clone(),
             db_id: params.db_id,
             results_panel,
-            sql_log: cx.new(|cx| SqlLog::new(10, cx.theme().highlight_theme.clone())),
+            sql_view: cx.new(|cx| {
+                SqlView::new(10, cx.theme().highlight_theme.clone()).show_copy_button(false)
+            }),
             sqruff_service,
             completion_provider: Some(sql_completion_provider),
             // Chat functionality
             chat_enabled: false,
             chat_panel: None,
-            sql_log_visible: true,
+            sql_view_visible: true,
             last_parameter_values: HashMap::new(),
         };
 
@@ -647,7 +649,7 @@ impl EditorPanel {
 
             // Execute the commit in the results panel with SQL logging
             query_tab.results_panel.update(cx, |panel, cx| {
-                panel.commit_changes_with_sql_log(window, &query_tab.sql_log, cx);
+                panel.commit_changes_with_sql_view(window, &query_tab.sql_view, cx);
             });
 
             window.push_notification(format!("Committing {} changes", changes.len()), cx);
@@ -710,9 +712,9 @@ impl EditorPanel {
         }
     }
 
-    pub fn toggle_sql_log_for_active_tab(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub fn toggle_sql_view_for_active_tab(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(TabType::Query(query_tab)) = self.tabs.get_mut(self.active_tab_ix) {
-            query_tab.sql_log_visible = !query_tab.sql_log_visible;
+            query_tab.sql_view_visible = !query_tab.sql_view_visible;
             cx.notify();
         }
     }

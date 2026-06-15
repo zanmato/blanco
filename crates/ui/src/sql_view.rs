@@ -11,7 +11,7 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub enum SqlLogMessage {
+pub enum SqlViewMessage {
     SqlStatement(String),
     Comment(String),
 }
@@ -21,17 +21,18 @@ struct LogEntry {
     highlights: Box<[(Range<usize>, HighlightStyle)]>,
 }
 
-/// SQL Log entity for displaying SQL queries and logs with proper syntax highlighting
-pub struct SqlLog {
+/// SQL view entity for displaying SQL statements (queries, DDL, etc.) with proper syntax highlighting
+pub struct SqlView {
     entries: Vec<LogEntry>,
     max_entries: usize,
     theme: Arc<HighlightTheme>,
     scroll_handle: ScrollHandle,
     copied: bool,
+    show_copy_button: bool,
 }
 
-impl SqlLog {
-    /// Create a new SQL log with the specified maximum number of entries
+impl SqlView {
+    /// Create a new SQL view with the specified maximum number of entries
     pub fn new(max_entries: usize, theme: Arc<HighlightTheme>) -> Self {
         Self {
             entries: Vec::new(),
@@ -39,7 +40,14 @@ impl SqlLog {
             theme,
             scroll_handle: ScrollHandle::default(),
             copied: false,
+            show_copy_button: true,
         }
+    }
+
+    /// Control whether the copy-to-clipboard button is rendered.
+    pub fn show_copy_button(mut self, show: bool) -> Self {
+        self.show_copy_button = show;
+        self
     }
 
     /// Concatenate every entry's text, in order, for copying to the clipboard.
@@ -69,17 +77,17 @@ impl SqlLog {
     }
 
     /// Append text to the log, managing entry limits
-    pub fn append_text(&mut self, text: &SqlLogMessage, cx: &mut Context<Self>) {
+    pub fn append_text(&mut self, text: &SqlViewMessage, cx: &mut Context<Self>) {
         // Check if this is a comment or a SQL statement, if it doesn't end with a delimiter, add it
         let new_text = match text {
-            SqlLogMessage::SqlStatement(statement) => {
+            SqlViewMessage::SqlStatement(statement) => {
                 if !statement.trim_start().ends_with(";") {
                     format!("{};", statement)
                 } else {
                     statement.clone()
                 }
             }
-            SqlLogMessage::Comment(comment) => format!("-- {}", comment),
+            SqlViewMessage::Comment(comment) => format!("-- {}", comment),
         };
 
         // Create a new highlighter for this entry, parse, and compute styles once.
@@ -137,7 +145,7 @@ impl SqlLog {
     }
 }
 
-impl Render for SqlLog {
+impl Render for SqlView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .relative()
@@ -166,7 +174,7 @@ impl Render for SqlLog {
                     })),
             )
             .vertical_scrollbar(&self.scroll_handle)
-            .when(!self.entries.is_empty(), |this| {
+            .when(self.show_copy_button && !self.entries.is_empty(), |this| {
                 let copied = self.copied;
                 this.child(
                     div().absolute().top_2().right_2().child(
