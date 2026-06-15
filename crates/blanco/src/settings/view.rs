@@ -645,7 +645,11 @@ impl SettingsView {
                         )
                         .default_value(SharedString::from(default_settings.chat.base_url.clone())),
                     )
-                    .description("Base URL for the API."),
+                    .description(
+                        "Base URL for the OpenAI-compatible chat completions API. \
+                         Use https://api.openai.com/v1 for OpenAI, or point it at another \
+                         compatible endpoint such as https://api.z.ai/api/paas/v4.",
+                    ),
                 ]),
             ]),
         ]

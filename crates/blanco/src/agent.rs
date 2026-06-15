@@ -4,6 +4,7 @@ mod chat_provider_resolver;
 mod chat_message_view;
 mod chat_session;
 mod chat_types;
+mod openai_compatible;
 mod tool_handlers;
 
 // Re-export main types for the editor panel

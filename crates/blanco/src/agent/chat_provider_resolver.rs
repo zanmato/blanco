@@ -7,6 +7,7 @@
 use anyhow::Result;
 use std::sync::Arc;
 
+use crate::agent::openai_compatible::CompatibleProvider;
 use crate::settings::{ChatSettings, Settings};
 use llm::{LLMProvider, builder::LLMBackend, builder::LLMBuilder};
 
@@ -56,19 +57,6 @@ impl ChatProviderResolver {
 
     /// Create an LLM instance based on chat settings
     fn create_llm_from_settings(&self, chat_settings: &ChatSettings) -> Result<LLMInstance> {
-        let backend = match chat_settings.provider.to_lowercase().as_str() {
-            "openai" => LLMBackend::OpenAI,
-            "anthropic" => LLMBackend::Anthropic,
-            "google" => LLMBackend::Google,
-            "ollama" => LLMBackend::Ollama,
-            _ => {
-                return Err(anyhow::anyhow!(
-                    "Unsupported chat provider: {}",
-                    chat_settings.provider
-                ));
-            }
-        };
-
         if chat_settings.api_key.is_empty() {
             return Err(anyhow::anyhow!(
                 "API key is required for {}",
@@ -76,34 +64,70 @@ impl ChatProviderResolver {
             ));
         }
 
-        let mut builder = LLMBuilder::new()
-            .backend(backend.clone())
-            .api_key(&chat_settings.api_key)
-            .model(&chat_settings.model)
-            .max_tokens(chat_settings.max_tokens)
-            .temperature(chat_settings.temperature);
+        match chat_settings.provider.to_lowercase().as_str() {
+            // OpenAI and every OpenAI-compatible endpoint (z.AI, local proxies, ...) go
+            // through the `/chat/completions` wrapper. The `llm` crate's native OpenAI
+            // backend now targets the `/responses` endpoint, which these servers do not
+            // implement.
+            "openai" => {
+                let llm: Box<dyn LLMProvider> = Box::new(CompatibleProvider::new(
+                    &chat_settings.api_key,
+                    Self::resolve_base_url(&chat_settings.base_url),
+                    Some(chat_settings.model.clone()),
+                    Some(chat_settings.max_tokens),
+                    Some(chat_settings.temperature),
+                    None,
+                ));
 
-        // Set base URL if provided (for custom endpoints)
-        if !chat_settings.base_url.is_empty() && chat_settings.base_url != "https://api.openai.com"
-        {
-            builder = builder.base_url(&chat_settings.base_url);
+                Ok(LLMInstance {
+                    llm: Arc::new(llm),
+                    provider_name: "OpenAI Compatible".to_string(),
+                    model_name: chat_settings.model.clone(),
+                })
+            }
+            // Native backends that use their own (non-OpenAI) protocols.
+            other => {
+                let (backend, provider_name) = match other {
+                    "anthropic" => (LLMBackend::Anthropic, "Anthropic"),
+                    "google" => (LLMBackend::Google, "Google"),
+                    "ollama" => (LLMBackend::Ollama, "Ollama"),
+                    _ => {
+                        return Err(anyhow::anyhow!(
+                            "Unsupported chat provider: {}",
+                            chat_settings.provider
+                        ));
+                    }
+                };
+
+                let mut builder = LLMBuilder::new()
+                    .backend(backend)
+                    .api_key(&chat_settings.api_key)
+                    .model(&chat_settings.model)
+                    .max_tokens(chat_settings.max_tokens)
+                    .temperature(chat_settings.temperature);
+
+                if let Some(base_url) = Self::resolve_base_url(&chat_settings.base_url) {
+                    builder = builder.base_url(base_url);
+                }
+
+                Ok(LLMInstance {
+                    llm: Arc::new(builder.build()?),
+                    provider_name: provider_name.to_string(),
+                    model_name: chat_settings.model.clone(),
+                })
+            }
         }
+    }
 
-        let llm = Arc::new(builder.build()?);
-
-        let provider_name = match backend {
-            LLMBackend::OpenAI => "OpenAI",
-            LLMBackend::Anthropic => "Anthropic",
-            LLMBackend::Google => "Google",
-            LLMBackend::Ollama => "Ollama",
-            _ => "Unknown",
-        };
-
-        Ok(LLMInstance {
-            llm,
-            provider_name: provider_name.to_string(),
-            model_name: chat_settings.model.clone(),
-        })
+    /// Normalize the configured base URL into an explicit override, or `None` to let the
+    /// provider fall back to its default. The legacy default lacked the `/v1` suffix that
+    /// the chat-completions endpoint requires, so it is upgraded here for existing configs.
+    fn resolve_base_url(base_url: &str) -> Option<String> {
+        match base_url.trim() {
+            "" => None,
+            "https://api.openai.com" => Some("https://api.openai.com/v1".to_string()),
+            other => Some(other.to_string()),
+        }
     }
 
     /// Calculate a configuration hash for caching purposes
