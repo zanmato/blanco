@@ -13,6 +13,47 @@ pub enum DatabaseType {
     MsSql,
 }
 
+/// Which placeholder syntaxes a SQL dialect recognizes as bind parameters.
+///
+/// The SQL grammar happily parses tokens like `?` as bind parameters, but those
+/// same tokens are operators in some dialects (e.g. Postgres jsonb key-exists
+/// `?`, `?|`, `?&`). Filtering parameter detection by dialect avoids prompting
+/// the user for a value where no placeholder actually exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParamStyles {
+    /// `?` positional placeholder (JDBC / MySQL / SQLite).
+    pub question_mark: bool,
+    /// `$1`, `$2` positional placeholder (Postgres / SQLite).
+    pub dollar_number: bool,
+    /// `:name` named placeholder.
+    pub colon_named: bool,
+    /// `@name` named placeholder (T-SQL).
+    pub at_named: bool,
+}
+
+impl ParamStyles {
+    /// Every style enabled. Used by callers that only need statement extraction
+    /// and ignore the detected parameters.
+    pub const fn all() -> Self {
+        Self {
+            question_mark: true,
+            dollar_number: true,
+            colon_named: true,
+            at_named: true,
+        }
+    }
+
+    /// No style enabled.
+    pub const fn none() -> Self {
+        Self {
+            question_mark: false,
+            dollar_number: false,
+            colon_named: false,
+            at_named: false,
+        }
+    }
+}
+
 impl DatabaseType {
     /// Get the string representation of the database type
     pub fn as_str(&self) -> &'static str {
@@ -56,6 +97,41 @@ impl DatabaseType {
             DatabaseType::MySQL => "mysql",
             DatabaseType::ClickHouse => "ansi",
             DatabaseType::MsSql => "tsql",
+        }
+    }
+
+    /// The placeholder syntaxes this dialect recognizes as bind parameters.
+    ///
+    /// Note: `@name` in T-SQL is also used for local variable declarations
+    /// (`DECLARE @x INT`), which share the parameter syntax. MySQL `@name` is a
+    /// session variable, not a bind placeholder, so it is intentionally excluded.
+    pub fn parameter_styles(&self) -> ParamStyles {
+        match self {
+            DatabaseType::SQLite => ParamStyles {
+                question_mark: true,
+                dollar_number: true,
+                colon_named: true,
+                at_named: true,
+            },
+            DatabaseType::PostgreSQL => ParamStyles {
+                question_mark: false,
+                dollar_number: true,
+                colon_named: false,
+                at_named: false,
+            },
+            DatabaseType::MySQL => ParamStyles {
+                question_mark: true,
+                dollar_number: false,
+                colon_named: false,
+                at_named: false,
+            },
+            DatabaseType::MsSql => ParamStyles {
+                question_mark: false,
+                dollar_number: false,
+                colon_named: false,
+                at_named: true,
+            },
+            DatabaseType::ClickHouse => ParamStyles::none(),
         }
     }
 

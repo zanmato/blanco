@@ -10,8 +10,8 @@ use tracing::{debug, error};
 
 use crate::app_database::{AppDatabase, QueryTabData};
 use crate::result_ext::ResultExt;
-use crate::sql::extract_statement_info;
 use crate::sql::statement_parser::QueryParameter;
+use crate::sql::{extract_statement_info, extract_statement_info_with_styles};
 use crate::status_bar::{ActivityReporter, ActivityResult};
 use crate::time_format;
 use database::{DatabaseService, DatabaseServiceTrait};
@@ -38,15 +38,19 @@ impl EditorPanel {
             // Clone the values we need
             let connection_id = query_tab.connection_id;
             let database_name = query_tab.database_name.clone();
+            // Only treat the dialect's actual placeholder syntaxes as parameters,
+            // so e.g. Postgres jsonb operators (`?`, `?|`, `?&`) don't trigger the
+            // parameter form.
+            let param_styles = query_tab._db_type.parameter_styles();
 
             // Use extract_statement_info to get parameters
             // For selected text, parse from the selection; otherwise use cursor position
             let statement_info = if !selected_text.trim().is_empty() {
                 let selected_text = Rope::from_str(&selected_text);
-                extract_statement_info(&selected_text, 0)
+                extract_statement_info_with_styles(&selected_text, 0, param_styles)
             } else {
                 let full_text = Rope::from_str(&full_text);
-                extract_statement_info(&full_text, cursor_pos)
+                extract_statement_info_with_styles(&full_text, cursor_pos, param_styles)
             };
 
             // Determine the query to execute: use selected text if available, otherwise extract from statement_info

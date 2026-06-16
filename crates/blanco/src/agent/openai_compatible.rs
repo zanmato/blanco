@@ -108,7 +108,8 @@ impl ChatProvider for CompatibleProvider {
     async fn chat_stream_struct(
         &self,
         messages: &[ChatMessage],
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamResponse, LLMError>> + Send>>, LLMError> {
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamResponse, LLMError>> + Send>>, LLMError>
+    {
         self.inner.chat_stream_struct(messages).await
     }
 
