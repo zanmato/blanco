@@ -500,26 +500,43 @@ impl EditorPanel {
                                             .border_t_1()
                                             .border_color(cx.theme().border)
                                             .bg(cx.theme().title_bar)
-                                            .justify_end()
-                                            .child(
-                                                Button::new("format-query")
-                                                    .outline()
-                                                    .small()
-                                                    .icon(IconName::WandSparkles)
-                                                    .label("Format")
-                                                    .tooltip(format!(
-                                                        "Format ({})",
-                                                        self.format_query_keystroke
+                                            .justify_between()
+                                            .child({
+                                                let position =
+                                                    query_tab.editor.read(cx).cursor_position();
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child(format!(
+                                                        "Ln {}, Col {}",
+                                                        position.line + 1,
+                                                        position.character + 1
                                                     ))
-                                                    .on_click(cx.listener(
-                                                        |panel, _, window, cx| {
-                                                            panel.format_current_query(window, cx)
-                                                        },
-                                                    )),
-                                            )
-                                            .map(|this| {
-                                                if self.loading {
-                                                    this.child(
+                                            })
+                                            .child(
+                                                h_flex()
+                                                    .gap_2()
+                                                    .child(
+                                                        Button::new("format-query")
+                                                            .outline()
+                                                            .small()
+                                                            .icon(IconName::WandSparkles)
+                                                            .label("Format")
+                                                            .tooltip(format!(
+                                                                "Format ({})",
+                                                                self.format_query_keystroke
+                                                            ))
+                                                            .on_click(cx.listener(
+                                                                |panel, _, window, cx| {
+                                                                    panel.format_current_query(
+                                                                        window, cx,
+                                                                    )
+                                                                },
+                                                            )),
+                                                    )
+                                                    .map(|this| {
+                                                        if self.loading {
+                                                            this.child(
                                                         Button::new("abort-query")
                                                             .danger()
                                                             .small()
@@ -532,8 +549,8 @@ impl EditorPanel {
                                                                 },
                                                             )),
                                                     )
-                                                } else {
-                                                    this.child(
+                                                        } else {
+                                                            this.child(
                                                         Button::new("explain-query")
                                                             .outline()
                                                             .small()
@@ -567,8 +584,9 @@ impl EditorPanel {
                                                                 },
                                                             )),
                                                     )
-                                                }
-                                            }),
+                                                        }
+                                                    }),
+                                            ),
                                     )
                                     .child(div().flex_1().min_h_0().overflow_hidden().map(|d| {
                                         if query_tab.sql_view_visible {

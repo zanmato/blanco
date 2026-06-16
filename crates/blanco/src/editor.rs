@@ -544,6 +544,8 @@ impl EditorPanel {
                 if this.linting_enabled {
                     this.lint_current_query_debounced(*range, cx);
                 }
+                // Re-render so the Ln/Col indicator in the action bar tracks the cursor.
+                cx.notify();
             } else if let InputEvent::PressEnter { secondary, .. } = event
                 && *secondary
             {
