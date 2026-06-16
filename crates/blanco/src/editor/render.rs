@@ -313,7 +313,7 @@ impl EditorPanel {
                 Button::new("delete-row")
                     .outline()
                     .small()
-                    .icon(IconName::Delete)
+                    .icon(IconName::Trash)
                     .label("Delete")
                     .on_click(cx.listener(|this, _, _window, cx| {
                         this.with_active_results_panel(cx, |panel, cx| {
