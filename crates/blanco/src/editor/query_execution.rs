@@ -365,7 +365,7 @@ impl EditorPanel {
                             .log_err();
                     }
                     Err(e) => {
-                        tracing::error!("Query execution failed: {}", e);
+                        tracing::error!("Query execution failed: {e:#}");
 
                         activity.finish(ActivityResult::Err("query execution failed".into()));
 
@@ -374,7 +374,7 @@ impl EditorPanel {
                                 // Log execution error to SQL log
                                 let _error_duration = start_time.elapsed().as_millis() as i64;
                                 sql_view_clone.update(cx, |sql_view, cx| {
-                                    let log_message = format!("query execution failed: {}", e);
+                                    let log_message = format!("query execution failed: {e:#}");
                                     sql_view.append_text(
                                         &blanco_ui::SqlViewMessage::Comment(log_message),
                                         cx,
@@ -390,7 +390,10 @@ impl EditorPanel {
                                     .ok();
 
                                 window.push_notification(
-                                    (NotificationType::Error, SharedString::from(e.to_string())),
+                                    (
+                                        NotificationType::Error,
+                                        SharedString::from(format!("{e:#}")),
+                                    ),
                                     cx,
                                 );
                             })

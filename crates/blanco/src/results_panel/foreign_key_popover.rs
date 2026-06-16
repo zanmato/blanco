@@ -58,7 +58,7 @@ impl ForeignKeyPopover {
                                 this.is_loading = false;
                             }
                             Err(e) => {
-                                this.error = Some(e.to_string());
+                                this.error = Some(format!("{e:#}"));
                                 this.is_loading = false;
                             }
                         }

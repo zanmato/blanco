@@ -102,7 +102,7 @@ impl ResultsPanel {
                                     e
                                 );
                                 success = false;
-                                error_message = Some(e.to_string());
+                                error_message = Some(format!("{e:#}"));
                                 break;
                             }
                         }

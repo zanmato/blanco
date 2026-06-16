@@ -684,7 +684,7 @@ impl BlancoApp {
                     if let Some(tab) = weak_tab.upgrade() {
                         tab.update(cx, |tab, cx| match result {
                             Ok(ddl) => tab.set_ddl(ddl, cx),
-                            Err(e) => tab.set_error(e.to_string(), cx),
+                            Err(e) => tab.set_error(format!("{e:#}"), cx),
                         });
                     }
                     let _ = window;

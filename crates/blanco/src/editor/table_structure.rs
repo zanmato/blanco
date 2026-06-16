@@ -142,7 +142,7 @@ impl TableStructureTab {
                 Ok(ddl) => this.set_ddl(ddl, cx),
                 Err(e) => {
                     this.ddl_loading = false;
-                    this.ddl_error = Some(e.to_string());
+                    this.ddl_error = Some(format!("{e:#}"));
                     cx.notify();
                 }
             })
