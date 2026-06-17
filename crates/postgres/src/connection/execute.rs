@@ -45,10 +45,6 @@ impl PostgresConnection {
         let mut rows: Vec<Vec<Option<String>>> = Vec::new();
         let mut rows_affected: u64 = 0;
 
-        // Track OIDs that need resolution: (row_idx, col_idx, oid_value)
-        // Only store the minimal data needed instead of full raw rows
-        let mut oids_to_resolve: Vec<(usize, usize, i32)> = Vec::new();
-
         while let Some(result) = results.next().await {
             match result? {
                 Either::Left(execution_result) => {
@@ -76,7 +72,6 @@ impl PostgresConnection {
                     }
 
                     // Convert row to strings immediately to avoid memory doubling
-                    let row_idx = rows.len();
                     let row_data: Vec<Option<String>> = (0..columns.len())
                         .map(|i| {
                             self.convert_row_value_to_string(
@@ -88,50 +83,7 @@ impl PostgresConnection {
                         })
                         .collect();
 
-                    // Collect OIDs from Unknown (regclass) columns for later resolution
-                    // We do this before pushing the row so we have the current row_idx
-                    for (col_idx, col_type) in column_types.iter().enumerate() {
-                        if *col_type == ColumnType::Unknown
-                            && let Ok(raw_value) = row.try_get_raw(col_idx)
-                            && !raw_value.is_null()
-                        {
-                            match raw_value.as_bytes() {
-                                Ok(bytes) => {
-                                    // PostgreSQL OIDs are 4-byte integers in network byte order (big-endian)
-                                    if bytes.len() >= 4 {
-                                        let oid = i32::from_be_bytes([
-                                            bytes[0], bytes[1], bytes[2], bytes[3],
-                                        ]);
-                                        oids_to_resolve.push((row_idx, col_idx, oid));
-                                    }
-                                }
-                                Err(_) => {
-                                    // If we can't get bytes, we can't resolve this OID
-                                }
-                            }
-                        }
-                    }
-
                     rows.push(row_data);
-                }
-            }
-        }
-
-        // Resolve OIDs to table names if any were collected
-        if !oids_to_resolve.is_empty() {
-            let unique_oids: Vec<i32> = oids_to_resolve
-                .iter()
-                .map(|(_, _, oid)| *oid)
-                .collect::<std::collections::HashSet<_>>()
-                .into_iter()
-                .collect();
-
-            let oid_to_name = self.resolve_oids_to_names(pool, &unique_oids).await?;
-
-            // Update data rows with resolved names
-            for (row_idx, col_idx, oid) in oids_to_resolve {
-                if let Some(name) = oid_to_name.get(&oid) {
-                    rows[row_idx][col_idx] = Some(name.clone());
                 }
             }
         }

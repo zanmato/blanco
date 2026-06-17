@@ -92,8 +92,11 @@ impl AgentToolHandler for ExecuteSqlHandler {
 
         match context
             .db_service
-            .execute_query(connection_id, context.database_name.as_deref(), &sql)
+            .execute_script(connection_id, context.database_name.as_deref(), &sql)
             .await
+            // The tool runs a single statement; surface the final result-set,
+            // matching the script path the editor uses (and its OID resolution).
+            .map(|results| results.into_iter().last().unwrap_or_default())
         {
             Ok(result) => {
                 let truncated = result.rows.len() > EXECUTE_SQL_MAX_ROWS;
