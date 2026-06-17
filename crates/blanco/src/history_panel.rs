@@ -3,8 +3,8 @@ use std::rc::Rc;
 use blanco_ui::IconName;
 use gpui::{
     AppContext, ClipboardItem, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
-    ParentElement, Pixels, Render, Size, Styled, Subscription, Window, div,
-    prelude::FluentBuilder, px, size,
+    ParentElement, Pixels, Render, Size, Styled, Subscription, Window, div, prelude::FluentBuilder,
+    px, size,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, InteractiveElementExt as _, Sizable as _,
@@ -132,9 +132,6 @@ impl HistoryPanel {
             .join(" ");
 
         let mut meta = vec![time_format::format_relative(entry.executed_at)];
-        if let Some(duration) = entry.duration_ms {
-            meta.push(time_format::format_duration(duration));
-        }
         if entry.success
             && let Some(rows) = entry.row_count
         {

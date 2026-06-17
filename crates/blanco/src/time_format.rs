@@ -1,6 +1,14 @@
 use chrono::{DateTime, Utc};
 
-pub fn format_duration(duration_ms: i64) -> String {
+/// Format a duration given in microseconds. Sub-millisecond queries
+/// would otherwise round to "0ms", so we keep the finest unit and
+/// step up to ms / s / m as the value grows.
+pub fn format_duration(duration_us: i64) -> String {
+    if duration_us < 1_000 {
+        return format!("{}µs", duration_us);
+    }
+
+    let duration_ms = duration_us / 1_000;
     if duration_ms < 1000 {
         format!("{}ms", duration_ms)
     } else if duration_ms < 60000 {

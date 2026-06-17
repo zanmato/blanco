@@ -195,7 +195,7 @@ impl ResultsPanel {
                                     response.operations_executed,
                                     response.rows_affected.unwrap_or(0),
                                     time_format::format_duration(
-                                        response.duration.as_millis() as i64
+                                        response.duration.as_micros() as i64
                                     )
                                 );
                                 log.append_text(

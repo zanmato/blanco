@@ -294,6 +294,7 @@ impl EditorPanel {
                 match execution_result {
                     Ok(mut results) => {
                         let duration_ms = query_duration.as_millis() as i64;
+                        let duration_us = query_duration.as_micros() as i64;
 
                         // Annotate every result with execution metadata. The
                         // duration is recorded against the first result only;
@@ -350,7 +351,7 @@ impl EditorPanel {
                             format!(
                                 "Query OK · {} rows · {}",
                                 rows_affected,
-                                time_format::format_duration(duration_ms)
+                                time_format::format_duration(duration_us)
                             )
                             .into(),
                         ));
@@ -373,7 +374,7 @@ impl EditorPanel {
                                         "{}, {} rows in {}",
                                         time_format::format_current_timestamp(),
                                         rows_affected,
-                                        time_format::format_duration(duration_ms)
+                                        time_format::format_duration(duration_us)
                                     );
                                     sql_view.append_text(
                                         &blanco_ui::SqlViewMessage::Comment(log_message),
