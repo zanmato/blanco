@@ -64,6 +64,15 @@ pub struct EditorPanel {
     _lint_debounce_task: Task<()>,
 }
 
+/// Events emitted by the editor panel for other parts of the app to react to.
+#[derive(Clone, Debug)]
+pub enum EditorPanelEvent {
+    /// A query finished executing and was written to the history log.
+    QueryRecorded,
+}
+
+impl gpui::EventEmitter<EditorPanelEvent> for EditorPanel {}
+
 /// Debounce duration for linting (500ms)
 const LINT_DEBOUNCE_MS: u64 = 500;
 
@@ -718,6 +727,27 @@ impl EditorPanel {
         if let Some(TabType::Query(query_tab)) = self.tabs.get_mut(self.active_tab_ix) {
             query_tab.sql_view_visible = !query_tab.sql_view_visible;
             cx.notify();
+        }
+    }
+
+    /// Insert text at the cursor of the active query tab's editor and focus it.
+    /// Returns `true` when an active query tab received the text.
+    pub fn insert_into_active_query(
+        &mut self,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if let Some(TabType::Query(query_tab)) = self.tabs.get(self.active_tab_ix) {
+            let editor = query_tab.editor.clone();
+            editor.update(cx, |state, cx| {
+                state.focus(window, cx);
+                state.insert(text, window, cx);
+            });
+            cx.notify();
+            true
+        } else {
+            false
         }
     }
 }

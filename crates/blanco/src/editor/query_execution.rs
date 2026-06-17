@@ -8,7 +8,8 @@ use gpui_component::{
 use ropey::Rope;
 use tracing::{debug, error};
 
-use crate::app_database::{AppDatabase, QueryTabData};
+use crate::app_database::{AppDatabase, QueryHistoryData, QueryTabData};
+use crate::app_settings::AppSettings;
 use crate::result_ext::ResultExt;
 use crate::sql::statement_parser::QueryParameter;
 use crate::sql::{extract_statement_info, extract_statement_info_with_styles};
@@ -232,7 +233,12 @@ impl EditorPanel {
                         &query_clone,
                     )
                     .await;
-                let _ = tx.send((execution_result, start_time));
+                // Measure the duration here, on the background thread, right when
+                // the query completes. Reading the elapsed time on the foreground
+                // task instead would also count the oneshot hand-off plus however
+                // long the GPUI foreground executor takes to poll us back, which
+                // is several milliseconds and unrelated to query execution.
+                let _ = tx.send((execution_result, start_time.elapsed()));
             });
             self.abort_query_task = Some(query_task);
 
@@ -243,9 +249,20 @@ impl EditorPanel {
             let query_for_metadata = query;
             let completion_provider = query_tab.completion_provider.clone();
 
+            // Static metadata captured for the query-history log. The dynamic
+            // bits (duration, row counts, success/error) are filled in once the
+            // result arrives.
+            let history_db = AppDatabase::global(cx).clone();
+            let history_query = query_for_metadata.clone();
+            let history_connection_id = connection_id;
+            let history_connection_name = query_tab.connection_name.clone();
+            let history_database_name = database_name.clone();
+            let history_max_items =
+                AppSettings::global(cx).settings.database.max_history_items as i64;
+
             self._run_query_task = cx.spawn_in(window, async move |editor_panel_entity, window| {
                 let activity = activity;
-                let Ok((execution_result, start_time)) = rx.await else {
+                let Ok((execution_result, query_duration)) = rx.await else {
                     // Background task was dropped (user clicked Abort).
                     window
                         .update(|window, cx| {
@@ -270,9 +287,13 @@ impl EditorPanel {
                     return;
                 };
 
+                // The branches below move `editor_panel_entity` into their UI
+                // update closures; keep a handle for the post-match emit.
+                let emit_handle = editor_panel_entity.clone();
+
                 match execution_result {
                     Ok(mut results) => {
-                        let duration_ms = start_time.elapsed().as_millis() as i64;
+                        let duration_ms = query_duration.as_millis() as i64;
 
                         // Annotate every result with execution metadata. The
                         // duration is recorded against the first result only;
@@ -322,6 +343,8 @@ impl EditorPanel {
                         }
 
                         let rows_affected = total_rows_affected;
+                        let returned_row_count: i64 =
+                            results.iter().map(|result| result.row_count() as i64).sum();
 
                         activity.finish(ActivityResult::Ok(
                             format!(
@@ -367,18 +390,38 @@ impl EditorPanel {
                                     .ok();
                             })
                             .log_err();
+
+                        history_db
+                            .record_query_history(&QueryHistoryData {
+                                id: None,
+                                query_text: history_query.clone(),
+                                executed_at: chrono::Utc::now().timestamp(),
+                                duration_ms: Some(duration_ms),
+                                rows_affected: Some(rows_affected as i64),
+                                row_count: Some(returned_row_count),
+                                success: true,
+                                error_message: None,
+                                connection_id: Some(history_connection_id),
+                                connection_name: history_connection_name.clone(),
+                                database_name: Some(history_database_name.clone()),
+                            })
+                            .await
+                            .map_err(anyhow::Error::from)
+                            .log_err();
                     }
                     Err(e) => {
                         tracing::error!("Query execution failed: {e:#}");
+                        let duration_ms = query_duration.as_millis() as i64;
+                        let error_message = format!("{e:#}");
 
                         activity.finish(ActivityResult::Err("query execution failed".into()));
 
                         window
                             .update(|window, cx| {
                                 // Log execution error to SQL log
-                                let _error_duration = start_time.elapsed().as_millis() as i64;
                                 sql_view_clone.update(cx, |sql_view, cx| {
-                                    let log_message = format!("query execution failed: {e:#}");
+                                    let log_message =
+                                        format!("query execution failed: {error_message}");
                                     sql_view.append_text(
                                         &blanco_ui::SqlViewMessage::Comment(log_message),
                                         cx,
@@ -396,14 +439,50 @@ impl EditorPanel {
                                 window.push_notification(
                                     (
                                         NotificationType::Error,
-                                        SharedString::from(format!("{e:#}")),
+                                        SharedString::from(error_message.clone()),
                                     ),
                                     cx,
                                 );
                             })
                             .log_err();
+
+                        history_db
+                            .record_query_history(&QueryHistoryData {
+                                id: None,
+                                query_text: history_query.clone(),
+                                executed_at: chrono::Utc::now().timestamp(),
+                                duration_ms: Some(duration_ms),
+                                rows_affected: None,
+                                row_count: None,
+                                success: false,
+                                error_message: Some(error_message),
+                                connection_id: Some(history_connection_id),
+                                connection_name: history_connection_name.clone(),
+                                database_name: Some(history_database_name.clone()),
+                            })
+                            .await
+                            .map_err(anyhow::Error::from)
+                            .log_err();
                     }
                 }
+
+                history_db
+                    .prune_query_history(history_max_items)
+                    .await
+                    .map_err(anyhow::Error::from)
+                    .log_err();
+
+                // Let observers (e.g. the history panel) refresh now that a new
+                // entry has been written.
+                window
+                    .update(|_window, cx| {
+                        emit_handle
+                            .update(cx, |_editor_panel, cx| {
+                                cx.emit(super::EditorPanelEvent::QueryRecorded);
+                            })
+                            .ok();
+                    })
+                    .log_err();
             });
         }
     }

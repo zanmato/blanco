@@ -2,6 +2,7 @@ use crate::app_database::AppDatabase;
 use crate::app_settings::AppSettings;
 use crate::settings::Settings;
 use crate::settings::formatter_page::formatter_page;
+use crate::settings::keybindings_page::keybindings_page;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, Render, SharedString,
     Styled, Subscription, Task, Window, px, rems,
@@ -332,6 +333,7 @@ impl SettingsView {
                 ]),
             ]),
             formatter_page(view_handle.clone(), &default_settings),
+            keybindings_page(view_handle.clone()),
             // Database Settings Page
             SettingPage::new("Database").resettable(true).groups(vec![
                 SettingGroup::new().title("Connection").items(vec![
@@ -443,6 +445,41 @@ impl SettingsView {
                     )
                     .description(
                         "Show notifications when connecting to or disconnecting from databases.",
+                    ),
+                    SettingItem::new(
+                        "Max History Items",
+                        SettingField::number_input(
+                            NumberFieldOptions {
+                                min: 0.0,
+                                max: 100_000.0,
+                                step: 100.0,
+                            },
+                            move |cx: &App| {
+                                AppSettings::global(cx).settings.database.max_history_items as f64
+                            },
+                            {
+                                let view_handle = view_handle.clone();
+                                move |val: f64, cx: &mut App| {
+                                    AppSettings::global_mut(cx)
+                                        .settings
+                                        .database
+                                        .max_history_items = val as u32;
+
+                                    let key = "database.max_history_items".to_string();
+                                    let value = (val as u32).to_string();
+                                    if let Some(view) = view_handle.upgrade() {
+                                        view.update(cx, |view, cx| {
+                                            view.save_setting_debounced(key, value, false, cx);
+                                        });
+                                    }
+                                }
+                            },
+                        )
+                        .default_value(default_settings.database.max_history_items as f64),
+                    )
+                    .description(
+                        "Maximum number of query-history entries to keep. Older entries are \
+                         pruned after each query. Set to 0 to keep an unlimited history.",
                     ),
                 ]),
             ]),

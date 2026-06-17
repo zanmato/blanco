@@ -26,7 +26,10 @@ use crate::{
     command_palette::CommandPalette,
     connection_modal::NewConnectionModal,
     connections::{ConnectionsPanel, ConnectionsPanelEvent},
-    editor::{EditorPanel, ObjectDdlParams, TabCreationParams, TableStructureParams},
+    editor::{
+        EditorPanel, EditorPanelEvent, ObjectDdlParams, TabCreationParams, TableStructureParams,
+    },
+    history_panel::{HistoryPanel, HistoryPanelEvent},
     result_ext::ResultExt,
     snippets_panel::{RefreshSnippets, SnippetsPanel, SnippetsPanelEvent},
     status_bar::{ActivityMessage, ActivityReporter, ActivityResult, StatusBarState, StatusKind},
@@ -229,12 +232,14 @@ impl From<database::DatabaseDisconnectedMessage> for DatabaseDisconnected {
 enum SidebarTab {
     Connections,
     Snippets,
+    History,
 }
 
 pub struct BlancoApp {
     focus_handle: FocusHandle,
     sidebar: Entity<ConnectionsPanel>,
     snippets_panel: Entity<SnippetsPanel>,
+    history_panel: Entity<HistoryPanel>,
     editor_panel: Entity<EditorPanel>,
     command_palette: Entity<CommandPalette>,
     sidebar_collapsed: bool,
@@ -311,6 +316,7 @@ impl BlancoApp {
 
         let sidebar = cx.new(|cx| ConnectionsPanel::new(window, cx));
         let snippets_panel = cx.new(|cx| SnippetsPanel::new(window, cx));
+        let history_panel = cx.new(|cx| HistoryPanel::new(window, cx));
         let main_resize_state = cx.new(|_| ResizableState::default());
 
         // Load saved tabs from database
@@ -377,6 +383,36 @@ impl BlancoApp {
         );
         subscriptions.push(subscription);
 
+        // Subscribe to history panel events: dropping a saved query into the
+        // active editor tab.
+        let subscription = cx.subscribe_in(
+            &history_panel,
+            window,
+            move |app, _history_panel, event, window, cx| match event {
+                HistoryPanelEvent::InsertQuery(query) => {
+                    let query = query.clone();
+                    app.editor_panel.update(cx, |editor_panel, cx| {
+                        editor_panel.insert_into_active_query(&query, window, cx);
+                    });
+                }
+            },
+        );
+        subscriptions.push(subscription);
+
+        // Keep the history panel in sync as queries are executed.
+        let subscription = cx.subscribe_in(
+            &editor_panel,
+            window,
+            move |app, _editor_panel, event, _window, cx| match event {
+                EditorPanelEvent::QueryRecorded => {
+                    app.history_panel.update(cx, |panel, cx| {
+                        panel.reload(cx);
+                    });
+                }
+            },
+        );
+        subscriptions.push(subscription);
+
         // Re-render the status bar whenever the activity state changes.
         subscriptions.push(cx.observe(&status_bar, |_, _, cx| cx.notify()));
 
@@ -387,6 +423,7 @@ impl BlancoApp {
             focus_handle,
             sidebar,
             snippets_panel,
+            history_panel,
             editor_panel,
             command_palette,
             sidebar_collapsed: false,
@@ -1117,8 +1154,8 @@ impl Render for BlancoApp {
                         .when(!self.sidebar_collapsed, |this| {
                             this.child(
                                 resizable_panel()
-                                    .size(px(256.))
-                                    .size_range(px(200.)..px(500.))
+                                    .size(px(288.))
+                                    .size_range(px(240.)..px(500.))
                                     .child(
                                         div()
                                             .w_full()
@@ -1134,16 +1171,28 @@ impl Render for BlancoApp {
                                                         .selected_index(match self.sidebar_tab {
                                                             SidebarTab::Connections => 0,
                                                             SidebarTab::Snippets => 1,
+                                                            SidebarTab::History => 2,
                                                         })
                                                         .on_click({
                                                             let view = cx.entity().downgrade();
                                                             move |ix: &usize, _, _, cx| {
                                                                 let tab = match ix {
                                                                     1 => SidebarTab::Snippets,
+                                                                    2 => SidebarTab::History,
                                                                     _ => SidebarTab::Connections,
                                                                 };
                                                                 view.update(cx, |this, cx| {
                                                                     this.sidebar_tab = tab;
+                                                                    // Pick up queries run since
+                                                                    // this panel was last shown.
+                                                                    if tab == SidebarTab::History {
+                                                                        this.history_panel.update(
+                                                                            cx,
+                                                                            |panel, cx| {
+                                                                                panel.reload(cx);
+                                                                            },
+                                                                        );
+                                                                    }
                                                                     cx.notify();
                                                                 })
                                                                 .log_err();
@@ -1156,6 +1205,9 @@ impl Render for BlancoApp {
                                                         )
                                                         .child(
                                                             Tab::new().label("Snippets").flex_1(),
+                                                        )
+                                                        .child(
+                                                            Tab::new().label("History").flex_1(),
                                                         ),
                                                 ),
                                             )
@@ -1166,6 +1218,9 @@ impl Render for BlancoApp {
                                                     }
                                                     SidebarTab::Snippets => {
                                                         this.child(self.snippets_panel.clone())
+                                                    }
+                                                    SidebarTab::History => {
+                                                        this.child(self.history_panel.clone())
                                                     }
                                                 },
                                             )),
@@ -1195,16 +1250,13 @@ impl Render for BlancoApp {
 }
 
 fn init_menus(cx: &mut App) {
-    // Register keyboard shortcut for settings
+    // User-customizable shortcuts, resolved from settings (defaults overlaid
+    // with any user overrides).
+    let settings = AppSettings::global(cx).settings.clone();
+    cx.bind_keys(crate::keybindings::customizable_key_bindings(&settings));
+
+    // Quit is platform-fixed and not user-configurable.
     cx.bind_keys([
-        gpui::KeyBinding::new("super-,", OpenSettings, None),
-        // Register keyboard shortcuts for commit operations
-        gpui::KeyBinding::new("super-shift-c", CommitChanges, None),
-        gpui::KeyBinding::new("super-shift-r", RollbackChanges, None),
-        // Register keyboard shortcut for formatting SQL
-        gpui::KeyBinding::new("shift-alt-f", FormatQuery, None),
-        // Register keyboard shortcut for the command palette
-        gpui::KeyBinding::new("secondary-k", ToggleCommandPalette, None),
         #[cfg(target_os = "macos")]
         gpui::KeyBinding::new("cmd-q", Quit, None),
         #[cfg(not(target_os = "macos"))]

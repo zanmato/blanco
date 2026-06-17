@@ -1,4 +1,5 @@
 mod connections;
+mod query_history;
 mod query_tabs;
 mod schema;
 mod settings;
@@ -6,7 +7,7 @@ mod snippets;
 mod types;
 
 pub use schema::{app_db_path, init_schema};
-pub use types::{ConnectionData, EnvironmentType, QueryTabData, SnippetData};
+pub use types::{ConnectionData, EnvironmentType, QueryHistoryData, QueryTabData, SnippetData};
 
 use gpui::{App, Global};
 use sqlx::ConnectOptions;

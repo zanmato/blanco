@@ -99,6 +99,47 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    // Add connection_id column so history can be labeled/filtered per connection
+    sqlx::query(
+        r#"
+        ALTER TABLE query_history ADD COLUMN connection_id INTEGER
+        "#,
+    )
+    .execute(pool)
+    .await
+    .ok(); // Ignore error if column already exists
+
+    // Add connection_name column to preserve a readable label even after a
+    // connection is deleted
+    sqlx::query(
+        r#"
+        ALTER TABLE query_history ADD COLUMN connection_name TEXT
+        "#,
+    )
+    .execute(pool)
+    .await
+    .ok(); // Ignore error if column already exists
+
+    // Add database_name column for database context
+    sqlx::query(
+        r#"
+        ALTER TABLE query_history ADD COLUMN database_name TEXT
+        "#,
+    )
+    .execute(pool)
+    .await
+    .ok(); // Ignore error if column already exists
+
+    // Index for the history panel's reverse-chronological listing
+    sqlx::query(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_query_history_executed_at
+        ON query_history (executed_at DESC)
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
     // Connections table
     sqlx::query(
         r#"

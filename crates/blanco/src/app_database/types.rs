@@ -62,6 +62,23 @@ pub struct QueryTabData {
     pub environment_type: Option<EnvironmentType>,
 }
 
+/// A single recorded query execution, stored in the `query_history` table.
+#[derive(Debug, Clone)]
+pub struct QueryHistoryData {
+    pub id: Option<i64>,
+    pub query_text: String,
+    /// Unix timestamp (seconds) of when the query finished executing.
+    pub executed_at: i64,
+    pub duration_ms: Option<i64>,
+    pub rows_affected: Option<i64>,
+    pub row_count: Option<i64>,
+    pub success: bool,
+    pub error_message: Option<String>,
+    pub connection_id: Option<i64>,
+    pub connection_name: Option<String>,
+    pub database_name: Option<String>,
+}
+
 /// Data for a code snippet
 #[derive(Debug, Clone)]
 pub struct SnippetData {

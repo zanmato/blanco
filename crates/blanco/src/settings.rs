@@ -1,4 +1,5 @@
 mod formatter_page;
+mod keybindings_page;
 mod view;
 
 pub use view::SettingsView;
@@ -7,7 +8,7 @@ use crate::app_settings::AppSettings;
 use gpui::{App, SharedString};
 use gpui_component::Theme;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Apply user font settings on top of the current theme.
 /// Called after theme changes and on startup to ensure font preferences persist.
@@ -29,6 +30,11 @@ pub struct Settings {
     pub database: DatabaseSettings,
     pub appearance: AppearanceSettings,
     pub chat: ChatSettings,
+    /// User overrides for keyboard shortcuts, keyed by action identifier (see
+    /// `crate::keybindings`). Only entries that differ from the built-in
+    /// defaults are stored here; an empty string means the action is unbound.
+    #[serde(default)]
+    pub keybindings: HashMap<String, String>,
 }
 
 impl Settings {
@@ -78,6 +84,9 @@ impl Settings {
                 "database.show_connection_notifications" => {
                     settings.database.show_connection_notifications =
                         value.parse().unwrap_or_default();
+                }
+                "database.max_history_items" => {
+                    settings.database.max_history_items = value.parse().unwrap_or(1000);
                 }
                 "appearance.theme" => {
                     settings.appearance.theme = value.clone();
@@ -168,6 +177,12 @@ impl Settings {
                         .filter(|s| !s.is_empty())
                         .collect();
                 }
+                key if key.starts_with("keybinding.") => {
+                    let action = key.trim_start_matches("keybinding.").to_string();
+                    if !action.is_empty() {
+                        settings.keybindings.insert(action, value.clone());
+                    }
+                }
                 _ => {}
             }
         }
@@ -197,6 +212,9 @@ pub struct DatabaseSettings {
     pub max_rows: u32,
     pub auto_limit_results: bool,
     pub show_connection_notifications: bool,
+    /// Maximum number of query-history entries to retain. Older entries beyond
+    /// this count are pruned after each execution.
+    pub max_history_items: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -246,6 +264,7 @@ impl Default for DatabaseSettings {
             max_rows: 1000,
             auto_limit_results: true,
             show_connection_notifications: true,
+            max_history_items: 1000,
         }
     }
 }

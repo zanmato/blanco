@@ -370,3 +370,145 @@ async fn test_parameter_form_substitutes_positional_params(cx: &mut TestAppConte
     let substituted = form.read_with(&cx, |f, cx| f.get_substituted_query(cx));
     assert_eq!(substituted, "SELECT 'alice', 100");
 }
+
+/// Poll the persisted query history until it reaches the expected length. The
+/// recording insert runs just after the results land, so a short retry loop
+/// avoids racing the background write.
+async fn wait_for_history(
+    cx: &mut VisualTestContext,
+    expected_len: usize,
+) -> Vec<crate::app_database::QueryHistoryData> {
+    use crate::app_database::AppDatabase;
+
+    for _ in 0..50 {
+        let history = cx.update(|_window, cx| {
+            let db = AppDatabase::global(cx).clone();
+            gpui_tokio::Tokio::handle(cx)
+                .block_on(async move { db.load_query_history(100, None).await })
+        });
+        if let Ok(history) = history
+            && history.len() >= expected_len
+        {
+            return history;
+        }
+        cx.executor()
+            .timer(std::time::Duration::from_millis(20))
+            .await;
+    }
+    panic!("query history did not reach {expected_len} entries within timeout");
+}
+
+/// A successful execution is recorded in the history log with its outcome.
+#[gpui::test]
+async fn test_successful_query_records_history(cx: &mut TestAppContext) {
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    set_editor_text(&harness, "SELECT 42 AS answer", &mut cx);
+    run_query(&harness, &mut cx);
+    wait_for_query(&harness, &mut cx).await;
+
+    let history = wait_for_history(&mut cx, 1).await;
+    assert_eq!(history.len(), 1);
+    assert!(history[0].success, "expected a successful entry");
+    assert!(
+        history[0].query_text.contains("SELECT 42"),
+        "unexpected query text: {:?}",
+        history[0].query_text
+    );
+    assert_eq!(history[0].row_count, Some(1));
+}
+
+/// A failed execution is recorded with `success = false` and the error message.
+#[gpui::test]
+async fn test_failed_query_records_history(cx: &mut TestAppContext) {
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    set_editor_text(&harness, "SELECT * FROM no_such_table_xyz", &mut cx);
+    run_query(&harness, &mut cx);
+    wait_for_query(&harness, &mut cx).await;
+
+    let history = wait_for_history(&mut cx, 1).await;
+    assert_eq!(history.len(), 1);
+    assert!(!history[0].success, "expected a failed entry");
+    assert!(
+        history[0].error_message.is_some(),
+        "failed entry should carry an error message"
+    );
+}
+
+/// Pruning keeps only the newest N entries and treats 0 as unlimited.
+#[gpui::test]
+async fn test_prune_query_history_keeps_newest(cx: &mut TestAppContext) {
+    use crate::app_database::{AppDatabase, QueryHistoryData};
+
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    let record = |query: &str, ts: i64| QueryHistoryData {
+        id: None,
+        query_text: query.to_string(),
+        executed_at: ts,
+        duration_ms: Some(1),
+        rows_affected: Some(0),
+        row_count: Some(0),
+        success: true,
+        error_message: None,
+        connection_id: None,
+        connection_name: None,
+        database_name: None,
+    };
+
+    let remaining = cx.update(|_window, cx| {
+        let db = AppDatabase::global(cx).clone();
+        gpui_tokio::Tokio::handle(cx).block_on(async move {
+            for n in 0..5 {
+                db.record_query_history(&record(&format!("SELECT {n}"), 1000 + n))
+                    .await
+                    .unwrap();
+            }
+            // 0 means unlimited: nothing is removed.
+            db.prune_query_history(0).await.unwrap();
+            assert_eq!(db.load_query_history(100, None).await.unwrap().len(), 5);
+
+            db.prune_query_history(2).await.unwrap();
+            db.load_query_history(100, None).await.unwrap()
+        })
+    });
+
+    assert_eq!(remaining.len(), 2, "prune should keep exactly 2 entries");
+    assert_eq!(remaining[0].query_text, "SELECT 4", "newest first");
+    assert_eq!(remaining[1].query_text, "SELECT 3");
+}
+
+/// History search filters by query text and is case-insensitive.
+#[gpui::test]
+async fn test_history_search_filters_entries(cx: &mut TestAppContext) {
+    use crate::app_database::AppDatabase;
+
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    set_editor_text(&harness, "SELECT 1 AS apple", &mut cx);
+    run_query(&harness, &mut cx);
+    wait_for_query(&harness, &mut cx).await;
+
+    set_editor_text(&harness, "SELECT 2 AS banana", &mut cx);
+    run_query(&harness, &mut cx);
+    wait_for_query(&harness, &mut cx).await;
+
+    wait_for_history(&mut cx, 2).await;
+
+    let matches = cx.update(|_window, cx| {
+        let db = AppDatabase::global(cx).clone();
+        gpui_tokio::Tokio::handle(cx).block_on(async move {
+            db.load_query_history(100, Some("BANANA".to_string()))
+                .await
+                .unwrap()
+        })
+    });
+
+    assert_eq!(matches.len(), 1, "only the banana query should match");
+    assert!(matches[0].query_text.contains("banana"));
+}
