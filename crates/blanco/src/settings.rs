@@ -286,7 +286,7 @@ impl Default for ChatSettings {
             model: "gpt-4".to_string(),
             api_key: "".to_string(),
             base_url: "https://api.openai.com/v1".to_string(),
-            max_tokens: 2048,
+            max_tokens: 8192,
             temperature: 0.7,
             auto_execute_queries: false,
             show_thinking_process: false,

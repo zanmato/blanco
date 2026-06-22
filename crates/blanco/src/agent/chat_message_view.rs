@@ -33,7 +33,10 @@ pub struct ApprovalEvent {
 
 pub struct ChatMessageState {
     pub id: ElementId,
+    /// The originating `ChatMessage.id`, used to route streaming deltas to this view.
+    pub message_id: String,
     pub message: SharedString,
+    pub reasoning: Option<SharedString>,
     pub role: MessageRole,
     pub metadata: Option<MessageMetadata>,
     pub approval_state: Option<ApprovalState>,
@@ -45,7 +48,9 @@ pub struct ChatMessageState {
 impl ChatMessageState {
     pub fn new(
         id: usize,
+        message_id: String,
         message: String,
+        reasoning: Option<String>,
         role: MessageRole,
         metadata: Option<MessageMetadata>,
         _cx: &mut Context<Self>,
@@ -56,7 +61,9 @@ impl ChatMessageState {
             .map(|a| a.state.clone());
         Self {
             id: ("chat-message-", id).into(),
+            message_id,
             message: message.into(),
+            reasoning: reasoning.map(Into::into),
             role,
             metadata,
             approval_state,
@@ -68,6 +75,20 @@ impl ChatMessageState {
 
     pub fn set_tool_result(&mut self, result: String) {
         self.tool_result = Some(result.into());
+    }
+
+    /// Replace the message body and reasoning as a streaming turn progresses.
+    pub fn apply_stream_delta(&mut self, content: String, reasoning: String) {
+        self.message = content.into();
+        self.reasoning = (!reasoning.is_empty()).then(|| reasoning.into());
+    }
+
+    /// Attach final token usage once a streaming turn finishes.
+    pub fn set_usage(&mut self, prompt_tokens: u32, completion_tokens: u32) {
+        let metadata = self.metadata.get_or_insert_with(Default::default);
+        metadata.prompt_tokens = Some(prompt_tokens);
+        metadata.completion_tokens = Some(completion_tokens);
+        metadata.tokens_used = Some(prompt_tokens + completion_tokens);
     }
 }
 
@@ -108,22 +129,47 @@ impl Render for ChatMessageState {
                             format_tokens(completion)
                         ))
                     });
-                    div()
-                        .child(
-                            TextView::markdown(self.id.clone(), self.message.clone())
-                                .text_sm()
-                                .scrollable(false)
-                                .selectable(true)
-                                .style(text_view_style())
-                                .code_block_actions(move |code_block, _window, _cx| {
-                                    let code = code_block.code();
-                                    let id = id.clone();
+                    let reasoning = self.reasoning.clone();
+                    v_flex()
+                        .when_some(reasoning, |el, reasoning| {
+                            el.child(
+                                v_flex()
+                                    .mb_1()
+                                    .gap_0p5()
+                                    .border_l_2()
+                                    .border_color(cx.theme().border)
+                                    .pl_2()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(div().text_xs().font_medium().child("Thinking"))
+                                    .child(
+                                        TextView::markdown(
+                                            (self.id.clone(), "reasoning"),
+                                            reasoning,
+                                        )
+                                        .text_sm()
+                                        .scrollable(false)
+                                        .selectable(true)
+                                        .style(text_view_style()),
+                                    ),
+                            )
+                        })
+                        .when(!self.message.is_empty(), |el| {
+                            el.child(
+                                TextView::markdown(self.id.clone(), self.message.clone())
+                                    .text_sm()
+                                    .scrollable(false)
+                                    .selectable(true)
+                                    .style(text_view_style())
+                                    .code_block_actions(move |code_block, _window, _cx| {
+                                        let code = code_block.code();
+                                        let id = id.clone();
 
-                                    h_flex()
-                                        .gap_1()
-                                        .child(Clipboard::new((id, "copy")).value(code))
-                                }),
-                        )
+                                        h_flex()
+                                            .gap_1()
+                                            .child(Clipboard::new((id, "copy")).value(code))
+                                    }),
+                            )
+                        })
                         .when_some(token_info, |el, info| {
                             el.child(
                                 div()

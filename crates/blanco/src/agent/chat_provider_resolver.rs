@@ -8,13 +8,14 @@ use anyhow::Result;
 use std::sync::Arc;
 
 use crate::agent::openai_compatible::CompatibleProvider;
+use crate::agent::streaming::{NonStreamingAdapter, StreamingChatProvider};
 use crate::settings::{ChatSettings, Settings};
-use llm::{LLMProvider, builder::LLMBackend, builder::LLMBuilder};
+use llm::{builder::LLMBackend, builder::LLMBuilder};
 
 /// LLM instance with metadata
 #[derive(Clone)]
 pub struct LLMInstance {
-    pub llm: Arc<Box<dyn LLMProvider>>,
+    pub llm: Arc<dyn StreamingChatProvider>,
     pub provider_name: String,
     pub model_name: String,
 }
@@ -70,17 +71,20 @@ impl ChatProviderResolver {
             // backend now targets the `/responses` endpoint, which these servers do not
             // implement.
             "openai" => {
-                let llm: Box<dyn LLMProvider> = Box::new(CompatibleProvider::new(
+                // Streams `/chat/completions` directly so reasoning models' `reasoning_content`
+                // and incremental output reach the UI. Retries on the initial request are
+                // handled inside the provider.
+                let provider = CompatibleProvider::new(
                     &chat_settings.api_key,
                     Self::resolve_base_url(&chat_settings.base_url),
                     Some(chat_settings.model.clone()),
                     Some(chat_settings.max_tokens),
                     Some(chat_settings.temperature),
                     None,
-                ));
+                );
 
                 Ok(LLMInstance {
-                    llm: Arc::new(llm),
+                    llm: Arc::new(provider),
                     provider_name: "OpenAI Compatible".to_string(),
                     model_name: chat_settings.model.clone(),
                 })
@@ -104,14 +108,26 @@ impl ChatProviderResolver {
                     .api_key(&chat_settings.api_key)
                     .model(&chat_settings.model)
                     .max_tokens(chat_settings.max_tokens)
-                    .temperature(chat_settings.temperature);
+                    .temperature(chat_settings.temperature)
+                    // Retry transient failures (network blips, 429/5xx) with exponential
+                    // backoff so a single hiccup does not fail the whole chat turn. Kept in
+                    // sync with the compatible provider's own retry policy.
+                    .resilient(true)
+                    .resilient_attempts(3)
+                    .resilient_backoff(200, 2000)
+                    .resilient_jitter(true);
 
                 if let Some(base_url) = Self::resolve_base_url(&chat_settings.base_url) {
                     builder = builder.base_url(base_url);
                 }
 
+                // Native backends only expose a blocking `chat_with_tools`; adapt it to the
+                // streaming interface so the session loop is uniform across providers.
+                let provider: Arc<dyn StreamingChatProvider> =
+                    Arc::new(NonStreamingAdapter::new(Arc::new(builder.build()?)));
+
                 Ok(LLMInstance {
-                    llm: Arc::new(builder.build()?),
+                    llm: provider,
                     provider_name: provider_name.to_string(),
                     model_name: chat_settings.model.clone(),
                 })

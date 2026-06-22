@@ -17,6 +17,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 sqlx = { workspace = true }
 futures = { workspace = true }
+reqwest = { workspace = true }
 
 # Local dependencies
 gpui_tokio = { path = "../gpui_tokio" }

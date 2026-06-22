@@ -665,7 +665,7 @@ impl SettingsView {
                                 )
                             },
                             {
-                                let view_handle = view_handle;
+                                let view_handle = view_handle.clone();
                                 move |val: SharedString, cx: &mut App| {
                                     let base_url = val.to_string();
                                     AppSettings::global_mut(cx).settings.chat.base_url =
@@ -686,6 +686,38 @@ impl SettingsView {
                         "Base URL for the OpenAI-compatible chat completions API. \
                          Use https://api.openai.com/v1 for OpenAI, or point it at another \
                          compatible endpoint such as https://api.z.ai/api/paas/v4.",
+                    ),
+                    SettingItem::new(
+                        "Max Tokens",
+                        SettingField::number_input(
+                            NumberFieldOptions {
+                                min: 256.0,
+                                max: 200_000.0,
+                                step: 256.0,
+                            },
+                            move |cx: &App| AppSettings::global(cx).settings.chat.max_tokens as f64,
+                            {
+                                let view_handle = view_handle;
+                                move |val: f64, cx: &mut App| {
+                                    AppSettings::global_mut(cx).settings.chat.max_tokens =
+                                        val as u32;
+
+                                    let key = "chat.max_tokens".to_string();
+                                    let value = (val as u32).to_string();
+                                    if let Some(view) = view_handle.upgrade() {
+                                        view.update(cx, |view, cx| {
+                                            view.save_setting_debounced(key, value, false, cx);
+                                        });
+                                    }
+                                }
+                            },
+                        )
+                        .default_value(default_settings.chat.max_tokens as f64),
+                    )
+                    .description(
+                        "Maximum tokens the model may generate per turn. Reasoning models \
+                         spend tokens on their thinking before answering, so a low limit can \
+                         truncate the response before any visible answer is produced.",
                     ),
                 ]),
             ]),

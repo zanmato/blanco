@@ -19,10 +19,10 @@ use std::time::Duration;
 use super::chat_message_view::{ApprovalEvent, ChatMessageState};
 use super::chat_session::{ChatSession, ChatSessionContext};
 use super::chat_types::{ApprovalState, ChatEvent, LoadingState, MessageRole};
+use super::streaming::StreamingChatProvider;
 use super::tool_handlers::ToolMode;
 use blanco_ui::IconName;
 use gpui::ScrollHandle;
-use llm::LLMProvider;
 
 actions!(agent_chat, [SendMessage, ClearChat]);
 
@@ -40,7 +40,7 @@ pub struct ChatPanel {
 
 impl ChatPanel {
     pub fn new(
-        llm: Arc<Box<dyn LLMProvider>>,
+        llm: Arc<dyn StreamingChatProvider>,
         provider_name: String,
         model_name: String,
         session_context: ChatSessionContext,
@@ -67,7 +67,9 @@ impl ChatPanel {
                 let message_state = cx.new(|cx| {
                     ChatMessageState::new(
                         panel.messages.len(),
+                        message.id.clone(),
                         message.content.to_string(),
+                        message.reasoning.as_ref().map(|r| r.to_string()),
                         message.role.clone(),
                         Some(message.metadata.clone()),
                         cx,
@@ -155,6 +157,41 @@ impl ChatPanel {
                     }
                 }
                 cx.notify();
+            }
+            ChatEvent::StreamDelta {
+                message_id,
+                content,
+                reasoning,
+            } => {
+                if let Some(entity) = panel
+                    .messages
+                    .iter()
+                    .find(|entity| entity.read(cx).message_id == *message_id)
+                {
+                    entity.update(cx, |state, cx| {
+                        state.apply_stream_delta(content.clone(), reasoning.clone());
+                        cx.notify();
+                    });
+                    panel.scroll_to_bottom(cx);
+                }
+            }
+            ChatEvent::StreamCompleted {
+                message_id,
+                prompt_tokens,
+                completion_tokens,
+            } => {
+                if *prompt_tokens > 0 || *completion_tokens > 0 {
+                    if let Some(entity) = panel
+                        .messages
+                        .iter()
+                        .find(|entity| entity.read(cx).message_id == *message_id)
+                    {
+                        entity.update(cx, |state, cx| {
+                            state.set_usage(*prompt_tokens, *completion_tokens);
+                            cx.notify();
+                        });
+                    }
+                }
             }
         });
 

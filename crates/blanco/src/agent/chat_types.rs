@@ -16,6 +16,9 @@ pub struct ChatMessage {
     pub id: String,
     pub role: MessageRole,
     pub content: SharedString,
+    /// The model's reasoning/thinking for assistant messages, when the provider streams a
+    /// separate `reasoning_content` field. Rendered as a dimmed block above the answer.
+    pub reasoning: Option<SharedString>,
     pub timestamp: DateTime<Utc>,
     pub metadata: MessageMetadata,
     pub tool_calls: Option<Vec<ToolCallData>>,
@@ -125,6 +128,19 @@ pub enum ChatEvent {
         tool_call_id: String,
         result_summary: String,
     },
+    /// Incremental update to a streaming assistant message. `content` and `reasoning` are the
+    /// full text accumulated so far (snapshots), keyed by the message id.
+    StreamDelta {
+        message_id: String,
+        content: String,
+        reasoning: String,
+    },
+    /// A streaming assistant message finished; carries final token usage for the turn.
+    StreamCompleted {
+        message_id: String,
+        prompt_tokens: u32,
+        completion_tokens: u32,
+    },
 }
 
 // Chat commands
@@ -165,6 +181,7 @@ impl ChatMessage {
             id: uuid::Uuid::new_v4().to_string(),
             role,
             content: content.into(),
+            reasoning: None,
             timestamp: Utc::now(),
             metadata: MessageMetadata {
                 model,
@@ -188,6 +205,7 @@ impl ChatMessage {
             id: uuid::Uuid::new_v4().to_string(),
             role: MessageRole::Tool,
             content: content.into(),
+            reasoning: None,
             timestamp: Utc::now(),
             metadata: MessageMetadata {
                 model,
@@ -214,6 +232,7 @@ impl ChatMessage {
             id: uuid::Uuid::new_v4().to_string(),
             role: MessageRole::ToolRequest,
             content: content.into(),
+            reasoning: None,
             timestamp: Utc::now(),
             metadata: MessageMetadata {
                 model,
@@ -229,17 +248,5 @@ impl ChatMessage {
             tool_calls: None,
             tool_call_id: None,
         }
-    }
-
-    pub fn with_tool_calls(mut self, tool_calls: Vec<ToolCallData>) -> Self {
-        self.tool_calls = Some(tool_calls);
-        self
-    }
-
-    pub fn with_usage(mut self, prompt_tokens: u32, completion_tokens: u32) -> Self {
-        self.metadata.prompt_tokens = Some(prompt_tokens);
-        self.metadata.completion_tokens = Some(completion_tokens);
-        self.metadata.tokens_used = Some(prompt_tokens + completion_tokens);
-        self
     }
 }

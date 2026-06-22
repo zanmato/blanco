@@ -1620,6 +1620,7 @@ dependencies = [
  "llm",
  "lsp-types",
  "once_cell",
+ "reqwest",
  "ropey",
  "rust-embed",
  "serde",
