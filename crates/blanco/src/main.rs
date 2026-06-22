@@ -119,10 +119,34 @@ fn main() {
 
         cx.set_text_rendering_mode(gpui::TextRenderingMode::Subpixel);
 
-        let window_bounds = gpui::Bounds::centered(None, size(px(1400.), px(900.)), cx);
+        // Restore the window geometry saved on the last run
+        let window_bounds = {
+            let window = &AppSettings::global(cx).settings.window;
+            match (window.width, window.height) {
+                (Some(width), Some(height)) => {
+                    let bounds = gpui::Bounds {
+                        origin: gpui::point(
+                            px(window.x.unwrap_or_default()),
+                            px(window.y.unwrap_or_default()),
+                        ),
+                        size: size(px(width), px(height)),
+                    };
+                    if window.maximized {
+                        WindowBounds::Maximized(bounds)
+                    } else {
+                        WindowBounds::Windowed(bounds)
+                    }
+                }
+                _ => WindowBounds::Windowed(gpui::Bounds::centered(
+                    None,
+                    size(px(1400.), px(900.)),
+                    cx,
+                )),
+            }
+        };
 
         let window_options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(window_bounds)),
+            window_bounds: Some(window_bounds),
             titlebar: Some(gpui::TitlebarOptions {
                 title: Some("Blanco".into()),
                 appears_transparent: true,

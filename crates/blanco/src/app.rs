@@ -250,6 +250,7 @@ pub struct BlancoApp {
     _subscriptions: Vec<Subscription>,
     _action_task: Task<()>,
     _activity_task: Task<()>,
+    _save_window_bounds_task: Task<()>,
 }
 
 impl BlancoApp {
@@ -416,6 +417,12 @@ impl BlancoApp {
         // Re-render the status bar whenever the activity state changes.
         subscriptions.push(cx.observe(&status_bar, |_, _, cx| cx.notify()));
 
+        // Persist window geometry as it changes so it can be restored on the
+        // next launch (see `main.rs`). The save itself is debounced.
+        subscriptions.push(cx.observe_window_bounds(window, |this, window, cx| {
+            this.persist_window_bounds(window, cx);
+        }));
+
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
 
@@ -434,7 +441,52 @@ impl BlancoApp {
             _subscriptions: subscriptions,
             _action_task: action_task,
             _activity_task: activity_task,
+            _save_window_bounds_task: Task::ready(()),
         }
+    }
+
+    /// Persist the current window geometry to the app settings database so it
+    /// can be restored on the next launch. Called on every resize/move, so the
+    /// database write is debounced to avoid hammering it during a drag.
+    fn persist_window_bounds(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (maximized, bounds) = match window.window_bounds() {
+            gpui::WindowBounds::Maximized(bounds) => (true, bounds),
+            gpui::WindowBounds::Fullscreen(bounds) => (true, bounds),
+            gpui::WindowBounds::Windowed(bounds) => (false, bounds),
+        };
+
+        let x = f32::from(bounds.origin.x);
+        let y = f32::from(bounds.origin.y);
+        let width = f32::from(bounds.size.width);
+        let height = f32::from(bounds.size.height);
+
+        cx.update_global::<AppSettings, _>(|app_settings, _| {
+            let window = &mut app_settings.settings.window;
+            window.x = Some(x);
+            window.y = Some(y);
+            window.width = Some(width);
+            window.height = Some(height);
+            window.maximized = maximized;
+        });
+
+        let db = AppDatabase::global(cx).clone();
+        self._save_window_bounds_task = cx.spawn(async move |_, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(500))
+                .await;
+            let values = [
+                ("window.x", x.to_string()),
+                ("window.y", y.to_string()),
+                ("window.width", width.to_string()),
+                ("window.height", height.to_string()),
+                ("window.maximized", maximized.to_string()),
+            ];
+            for (key, value) in values {
+                if let Err(e) = db.save_setting(key, &value, false).await {
+                    error!("Failed to save {}: {}", key, e);
+                }
+            }
+        });
     }
 
     fn render_status_bar(&self, cx: &Context<Self>) -> StatusBar {
@@ -1155,7 +1207,7 @@ impl Render for BlancoApp {
                             this.child(
                                 resizable_panel()
                                     .size(px(288.))
-                                    .size_range(px(240.)..px(500.))
+                                    .size_range(px(288.)..px(500.))
                                     .child(
                                         div()
                                             .w_full()

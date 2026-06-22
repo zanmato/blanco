@@ -30,6 +30,10 @@ pub struct Settings {
     pub database: DatabaseSettings,
     pub appearance: AppearanceSettings,
     pub chat: ChatSettings,
+    /// Last known window geometry, restored on the next startup. Empty until the
+    /// window has been moved or resized at least once.
+    #[serde(default)]
+    pub window: WindowSettings,
     /// User overrides for keyboard shortcuts, keyed by action identifier (see
     /// `crate::keybindings`). Only entries that differ from the built-in
     /// defaults are stored here; an empty string means the action is unbound.
@@ -177,6 +181,21 @@ impl Settings {
                         .filter(|s| !s.is_empty())
                         .collect();
                 }
+                "window.x" => {
+                    settings.window.x = value.parse().ok();
+                }
+                "window.y" => {
+                    settings.window.y = value.parse().ok();
+                }
+                "window.width" => {
+                    settings.window.width = value.parse().ok();
+                }
+                "window.height" => {
+                    settings.window.height = value.parse().ok();
+                }
+                "window.maximized" => {
+                    settings.window.maximized = value.parse().unwrap_or_default();
+                }
                 key if key.starts_with("keybinding.") => {
                     let action = key.trim_start_matches("keybinding.").to_string();
                     if !action.is_empty() {
@@ -222,6 +241,19 @@ pub struct AppearanceSettings {
     pub theme: String,
     pub font_family: String,
     pub mono_font_family: String,
+}
+
+/// Persisted window geometry, in logical pixels. `width`/`height` are `None`
+/// until the window has been sized at least once, in which case the startup
+/// code falls back to a centered default. Position is best-effort: some
+/// platforms (e.g. Wayland) ignore client-requested window positions.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WindowSettings {
+    pub x: Option<f32>,
+    pub y: Option<f32>,
+    pub width: Option<f32>,
+    pub height: Option<f32>,
+    pub maximized: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
