@@ -181,10 +181,7 @@ impl ResultsTableDelegate {
 
         // Recreate InputState with multi-line mode
         let new_input = cx.new(|cx| {
-            let editor = InputState::new(window, cx)
-                .multi_line(true)
-                .soft_wrap(true)
-                .context_menu(false);
+            let editor = InputState::new(window, cx).multi_line(true).soft_wrap(true);
 
             if is_json {
                 // Prettify JSON if valid
