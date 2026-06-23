@@ -588,25 +588,39 @@ impl EditorPanel {
                                                     }),
                                             ),
                                     )
-                                    .child(div().flex_1().min_h_0().overflow_hidden().map(|d| {
-                                        if query_tab.sql_view_visible {
-                                            d.child(
-                                                v_resizable("results-log-split")
-                                                    .with_state(&self.results_log_resize_state)
-                                                    .child(
-                                                        resizable_panel()
-                                                            .child(query_tab.results_panel.clone()),
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            // Without an explicit width this wrapper collapses to
+                                            // its content's max-content width during intrinsic
+                                            // sizing: a single narrow result column (or a long,
+                                            // unwrappable SQL line in the log below) leaves the
+                                            // results table pinned to that width instead of filling
+                                            // the resizable panel. `w_full` forces it to the panel.
+                                            .w_full()
+                                            .min_h_0()
+                                            .overflow_hidden()
+                                            .map(|d| {
+                                                if query_tab.sql_view_visible {
+                                                    d.child(
+                                                        v_resizable("results-log-split")
+                                                            .with_state(
+                                                                &self.results_log_resize_state,
+                                                            )
+                                                            .child(resizable_panel().child(
+                                                                query_tab.results_panel.clone(),
+                                                            ))
+                                                            .child(
+                                                                resizable_panel().size(120.).child(
+                                                                    query_tab.sql_view.clone(),
+                                                                ),
+                                                            ),
                                                     )
-                                                    .child(
-                                                        resizable_panel()
-                                                            .size(120.)
-                                                            .child(query_tab.sql_view.clone()),
-                                                    ),
-                                            )
-                                        } else {
-                                            d.child(query_tab.results_panel.clone())
-                                        }
-                                    }))
+                                                } else {
+                                                    d.child(query_tab.results_panel.clone())
+                                                }
+                                            }),
+                                    )
                                     .child(self.render_row_operations_bar(query_tab, cx)),
                             ),
                         ),
