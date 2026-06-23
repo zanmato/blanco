@@ -10,6 +10,7 @@ use gpui_component::{
     tooltip::Tooltip,
 };
 
+use crate::app::OpenSchemaGraph;
 use crate::app::OpenTableStructure;
 use crate::connections::{
     ConnectionsPanel, CreateNewQueryTabParams, TreeItemIcon, TreeItemKind, TreeItemMetadata,
@@ -278,6 +279,9 @@ impl TreeDelegate for ConnectionsTreeDelegate {
             TreeItemKind::Database => {
                 let connection_id = metadata.connection_id;
                 let database_name = metadata.database_name.clone().unwrap_or_default();
+                let connection_name = metadata.connection_name.clone();
+                let db_type = metadata.db_type;
+                let environment_type = metadata.environment_type;
 
                 let mut menu = if let Some(action) = metadata.create_new_query_tab_action() {
                     menu.item(
@@ -292,14 +296,32 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                     menu
                 };
 
-                menu = menu.item(
-                    PopupMenuItem::new("Disconnect").on_click(window.listener_for(
-                        &self.parent,
-                        move |this, _event, _window, cx| {
-                            this.disconnect_database(connection_id, database_name.clone(), cx);
-                        },
-                    )),
-                );
+                let connection_name_for_graph = connection_name;
+                let database_name_for_graph = database_name.clone();
+                menu =
+                    menu.item(PopupMenuItem::new("View Schema Graph").on_click(
+                        window.listener_for(&self.parent, move |_this, _event, window, cx| {
+                            window.dispatch_action(
+                                Box::new(OpenSchemaGraph {
+                                    connection_id,
+                                    connection_name: connection_name_for_graph.clone(),
+                                    db_type,
+                                    database_name: database_name_for_graph.clone(),
+                                    schema_name: None,
+                                    environment_type,
+                                }),
+                                cx,
+                            );
+                        }),
+                    ))
+                    .item(
+                        PopupMenuItem::new("Disconnect").on_click(window.listener_for(
+                            &self.parent,
+                            move |this, _event, _window, cx| {
+                                this.disconnect_database(connection_id, database_name.clone(), cx);
+                            },
+                        )),
+                    );
 
                 menu
             }
@@ -406,6 +428,33 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                                         },
                                     ),
                                 ));
+                    }
+
+                    if matches!(metadata.kind, TreeItemKind::Schema) {
+                        let connection_name_for_graph = metadata.connection_name.clone();
+                        let database_name_for_graph =
+                            metadata.database_name.clone().unwrap_or_default();
+                        let schema_name_for_graph = metadata.schema_name.clone();
+                        let environment_type_for_graph = metadata.environment_type;
+
+                        menu = menu.separator().item(
+                            PopupMenuItem::new("View Schema Graph").on_click(window.listener_for(
+                                &self.parent,
+                                move |_this, _event, window, cx| {
+                                    window.dispatch_action(
+                                        Box::new(OpenSchemaGraph {
+                                            connection_id,
+                                            connection_name: connection_name_for_graph.clone(),
+                                            db_type,
+                                            database_name: database_name_for_graph.clone(),
+                                            schema_name: schema_name_for_graph.clone(),
+                                            environment_type: environment_type_for_graph,
+                                        }),
+                                        cx,
+                                    );
+                                },
+                            )),
+                        );
                     }
 
                     menu

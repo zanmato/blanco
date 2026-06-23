@@ -5,6 +5,7 @@ mod query_execution;
 mod query_execution_test;
 mod rename_form;
 mod render;
+pub(crate) mod schema_graph;
 mod snippet_editor;
 mod sql_operations;
 mod table_structure;
@@ -336,6 +337,57 @@ impl EditorPanel {
             tab.update(cx, |tab, cx| {
                 tab.set_columns(columns, window, cx);
                 tab.set_indexes(indexes, window, cx);
+            });
+        }
+    }
+
+    pub fn create_schema_graph_tab(
+        &mut self,
+        params: schema_graph::SchemaGraphParams,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let tab = cx.new(|cx| {
+            schema_graph::SchemaGraphTab::new(
+                params.connection_id,
+                params.db_type,
+                Some(params.connection_name),
+                params.database_name,
+                params.schema_name,
+                params.environment_type,
+                window,
+                cx,
+            )
+        });
+
+        self.tabs.push(TabType::SchemaGraph(tab));
+        self.active_tab_ix = self.tabs.len() - 1;
+        self.scroll_tabbar_to_the_end(window, cx);
+        cx.notify();
+    }
+
+    pub fn update_last_schema_graph_tab(
+        &mut self,
+        tables: Vec<blanco_core::connection_trait::TableSchemaInfo>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(TabType::SchemaGraph(tab)) = self.tabs.last_mut() {
+            tab.update(cx, |tab, cx| {
+                tab.update_with_schema(tables, window, cx);
+            });
+        }
+    }
+
+    pub fn set_schema_graph_error(
+        &mut self,
+        error: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(TabType::SchemaGraph(tab)) = self.tabs.last_mut() {
+            tab.update(cx, |tab, cx| {
+                tab.set_error(error, window, cx);
             });
         }
     }

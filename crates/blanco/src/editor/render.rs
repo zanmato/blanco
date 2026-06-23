@@ -270,6 +270,27 @@ impl EditorPanel {
                         ),
                 )
             }
+            TabType::SchemaGraph(schema_graph_tab) => {
+                let label = schema_graph_tab.read(cx).title.clone();
+                let tab_index = ix;
+
+                Tab::new().label(label).group("Other").suffix(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .pr_1()
+                        .child(Icon::new(IconName::Network).text_color(cx.theme().cyan))
+                        .child(
+                            Button::new(("close-schema-graph-tab", ix))
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::Close)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.close_tab(tab_index, cx);
+                                })),
+                        ),
+                )
+            }
         }
     }
 
@@ -742,6 +763,13 @@ impl Render for EditorPanel {
                                 .h_full()
                                 .overflow_hidden()
                                 .child(object_ddl_tab.clone()),
+                        ),
+                        TabType::SchemaGraph(schema_graph_tab) => this.child(
+                            div()
+                                .flex_1()
+                                .h_full()
+                                .overflow_hidden()
+                                .child(schema_graph_tab.clone()),
                         ),
                     }),
             )

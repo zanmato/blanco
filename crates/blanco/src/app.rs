@@ -182,6 +182,17 @@ pub struct OpenTableStructure {
 
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
+pub struct OpenSchemaGraph {
+    pub connection_id: i64,
+    pub connection_name: String,
+    pub db_type: database::DatabaseType,
+    pub database_name: String,
+    pub schema_name: Option<String>,
+    pub environment_type: Option<EnvironmentType>,
+}
+
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
 pub struct EditConnection {
     pub connection_id: i64,
 }
@@ -785,6 +796,93 @@ impl BlancoApp {
         cx.notify();
     }
 
+    fn on_open_schema_graph(
+        &mut self,
+        action: &OpenSchemaGraph,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::editor::schema_graph::SchemaGraphParams;
+
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.create_schema_graph_tab(
+                SchemaGraphParams {
+                    connection_id: action.connection_id,
+                    connection_name: action.connection_name.clone(),
+                    db_type: action.db_type,
+                    database_name: action.database_name.clone(),
+                    schema_name: action.schema_name.clone(),
+                    environment_type: action.environment_type,
+                },
+                window,
+                cx,
+            );
+        });
+
+        let db_service = database::DatabaseService::global(cx).clone();
+        let connection_id = action.connection_id;
+        let database_name = action.database_name.clone();
+        let schema_name = action.schema_name.clone();
+        let editor_panel = self.editor_panel.clone();
+
+        cx.spawn_in(window, async move |_, window| {
+            use database::DatabaseServiceTrait;
+            let connection_result = db_service
+                .get_or_create_connection_by_id(connection_id, Some(&database_name))
+                .await;
+
+            match connection_result {
+                Ok(connection) => {
+                    let tables_result = connection
+                        .get_tables(schema_name.as_deref())
+                        .await
+                        .unwrap_or_default();
+
+                    let mut all_table_info = Vec::new();
+                    for table_name in &tables_result {
+                        let columns = connection
+                            .get_columns_for_table(table_name, schema_name.as_deref())
+                            .await
+                            .unwrap_or_default();
+
+                        all_table_info.push(blanco_core::connection_trait::TableSchemaInfo {
+                            name: table_name.clone(),
+                            schema: schema_name.clone().unwrap_or_default(),
+                            object_type: "table".to_string(),
+                            columns,
+                            column_count: 0,
+                            referenced_by: Vec::new(),
+                        });
+                    }
+
+                    window
+                        .update(|window, cx| {
+                            editor_panel.update(cx, |panel, cx| {
+                                panel.update_last_schema_graph_tab(all_table_info, window, cx);
+                            });
+                        })
+                        .log_err();
+                }
+                Err(e) => {
+                    window
+                        .update(|_window, cx| {
+                            editor_panel.update(cx, |panel, cx| {
+                                panel.set_schema_graph_error(
+                                    format!("Failed to connect: {e}"),
+                                    _window,
+                                    cx,
+                                );
+                            });
+                        })
+                        .log_err();
+                }
+            }
+        })
+        .detach();
+
+        cx.notify();
+    }
+
     fn on_new_connection_modal(
         &mut self,
         _: &OpenNewConnectionModal,
@@ -1160,6 +1258,7 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_create_new_query_tab))
             .on_action(cx.listener(Self::on_open_table_structure))
             .on_action(cx.listener(Self::on_open_object_ddl))
+            .on_action(cx.listener(Self::on_open_schema_graph))
             .on_action(cx.listener(Self::on_new_connection_modal))
             .on_action(cx.listener(Self::on_new_snippet))
             .on_action(cx.listener(Self::on_commit_changes))

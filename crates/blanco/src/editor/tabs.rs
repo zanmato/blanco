@@ -24,6 +24,7 @@ pub enum TabType {
     Snippet(Entity<SnippetEditor>),
     TableStructure(Entity<TableStructureTab>),
     ObjectDdl(Entity<ObjectDdlTab>),
+    SchemaGraph(Entity<super::schema_graph::SchemaGraphTab>),
 }
 
 pub struct QueryTab {
