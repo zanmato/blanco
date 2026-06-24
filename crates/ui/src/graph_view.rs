@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::cmp::Reverse;
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 
 use gpui::{
     App, Bounds, Context, FocusHandle, Focusable, Hsla, InteractiveElement, IntoElement,
@@ -29,6 +32,20 @@ const LAYOUT_SUBCOL_GAP_X: f32 = 60.0;
 const LAYOUT_MAX_COLUMN_HEIGHT: f32 = 1600.0;
 /// Number of alternating barycenter sweeps used to reduce edge crossings.
 const LAYOUT_BARYCENTER_SWEEPS: usize = 4;
+
+/// Resolution (graph units per cell) of the grid used for edge path-finding.
+/// Smaller is more precise but quadratically more expensive.
+const ROUTE_CELL: f32 = 16.0;
+/// Clearance kept around every table when rasterising obstacles, so routed
+/// lines never hug a node's border.
+const ROUTE_NODE_PADDING: f32 = 12.0;
+/// Extra cost added by A* whenever the path changes direction, biasing it
+/// toward long straight runs with few bends (the "step" look) instead of
+/// staircases through open space.
+const ROUTE_TURN_PENALTY: i32 = 3;
+/// Corner radius applied to routed edges, in graph units (scaled by zoom at
+/// paint time).
+const ROUTE_CORNER_RADIUS: f32 = 10.0;
 
 #[derive(Clone, Debug)]
 pub struct GraphNodeField {
@@ -102,19 +119,42 @@ struct NodeRenderData {
     fields: Vec<(SharedString, SharedString, Vec<(SharedString, Hsla)>)>,
 }
 
-struct EdgeRenderData {
-    from: Point<Pixels>,
-    to: Point<Pixels>,
-    from_side: AnchorSide,
-    to_side: AnchorSide,
+/// A fully routed edge in graph coordinates, cached between renders. Panning
+/// and zooming only transform these points; they are recomputed solely when a
+/// node moves or the visible edge set changes.
+#[derive(Clone)]
+struct RoutedEdge {
+    /// Index into `GraphModel::edges`, so an individual route can be refreshed
+    /// (e.g. while its node is dragged) without recomputing the whole set.
+    edge_ix: usize,
+    points: Vec<Point<f32>>,
     is_highlighted: bool,
 }
 
+struct EdgeRenderData {
+    /// Screen-space (pre-origin) poly-line, ready to stroke.
+    points: Vec<Point<Pixels>>,
+    is_highlighted: bool,
+}
+
+#[derive(Clone, Copy, PartialEq)]
 enum AnchorSide {
     Right,
     Left,
     Bottom,
     Top,
+}
+
+impl AnchorSide {
+    /// Unit vector pointing out of the node along this side.
+    fn out_dir(self) -> (i32, i32) {
+        match self {
+            Self::Right => (1, 0),
+            Self::Left => (-1, 0),
+            Self::Bottom => (0, 1),
+            Self::Top => (0, -1),
+        }
+    }
 }
 
 pub struct GraphView {
@@ -136,6 +176,10 @@ pub struct GraphView {
     /// currently selected node. This keeps large schemas legible instead of
     /// rendering every relationship at once. Toggled via the on-screen control.
     show_all_edges: bool,
+    /// Cached node-avoiding edge routes (graph space) and the hash of the inputs
+    /// they were computed from. Recomputed lazily when the hash changes.
+    routed_edges: Vec<RoutedEdge>,
+    route_cache_key: Option<u64>,
     pub loading: bool,
     pub error: Option<String>,
 }
@@ -158,6 +202,8 @@ impl GraphView {
             mouse_down_pos: None,
             element_bounds: None,
             show_all_edges: false,
+            routed_edges: Vec::new(),
+            route_cache_key: None,
             loading: false,
             error: None,
         }
@@ -256,15 +302,48 @@ impl GraphView {
             + NODE_FIELD_ROW_HEIGHT / 2.0
     }
 
-    fn collect_edge_data(&self) -> Vec<EdgeRenderData> {
-        let visible_ids: HashSet<String> = self
-            .model
-            .nodes
-            .iter()
-            .filter(|n| self.is_node_visible(n))
-            .map(|n| n.id.clone())
-            .collect();
+    /// Hash of everything the routed paths depend on. Node positions/sizes, the
+    /// selection, and the show-all toggle all change routing; pan and zoom do
+    /// not (they are applied as a transform afterwards).
+    fn route_cache_key(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.show_all_edges.hash(&mut hasher);
 
+        let mut selected: Vec<usize> = self.selected_nodes.iter().copied().collect();
+        selected.sort_unstable();
+        selected.hash(&mut hasher);
+
+        for node in &self.model.nodes {
+            node.id.hash(&mut hasher);
+            node.position.x.to_bits().hash(&mut hasher);
+            node.position.y.to_bits().hash(&mut hasher);
+            node.size.width.to_bits().hash(&mut hasher);
+            node.size.height.to_bits().hash(&mut hasher);
+        }
+        self.model.edges.len().hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Recompute and cache the node-avoiding routes if any routing input has
+    /// changed since the last call. Cheap no-op when nothing relevant moved.
+    fn ensure_routes(&mut self) {
+        let key = self.route_cache_key();
+        if self.route_cache_key == Some(key) {
+            return;
+        }
+        self.route_cache_key = Some(key);
+        self.routed_edges = self.compute_routes();
+    }
+
+    fn selected_node_ids(&self) -> HashSet<&str> {
+        self.selected_nodes
+            .iter()
+            .filter_map(|&ix| self.model.nodes.get(ix).map(|n| n.id.as_str()))
+            .collect()
+    }
+
+    /// Route every currently-active edge around the tables using grid A*.
+    fn compute_routes(&self) -> Vec<RoutedEdge> {
         let node_map: HashMap<&str, &GraphNode> = self
             .model
             .nodes
@@ -272,14 +351,9 @@ impl GraphView {
             .map(|n| (n.id.as_str(), n))
             .collect();
 
-        let selected_ids: HashSet<&str> = self
-            .selected_nodes
-            .iter()
-            .filter_map(|&ix| self.model.nodes.get(ix).map(|n| n.id.as_str()))
-            .collect();
+        let selected_ids = self.selected_node_ids();
 
-        // In on-demand mode (the default) only edges touching a selected node
-        // are drawn. With nothing selected there is nothing to draw, so bail.
+        // On-demand mode with no selection draws nothing.
         if !self.show_all_edges && selected_ids.is_empty() {
             return Vec::new();
         }
@@ -288,86 +362,197 @@ impl GraphView {
             selected_ids.contains(e.from_node.as_str()) || selected_ids.contains(e.to_node.as_str())
         };
 
+        let Some(grid) = RouteGrid::build(&self.model.nodes) else {
+            return Vec::new();
+        };
+        let mut search = AStarSearch::new(grid.cell_count());
+
         self.model
             .edges
             .iter()
-            .filter(|e| {
-                if self.show_all_edges {
-                    visible_ids.contains(&e.from_node) || visible_ids.contains(&e.to_node)
-                } else {
-                    touches_selection(e)
-                }
-            })
-            .filter_map(|e| {
-                let from_node = node_map.get(e.from_node.as_str())?;
-                let to_node = node_map.get(e.to_node.as_str())?;
-
+            .enumerate()
+            .filter(|(_, e)| self.show_all_edges || touches_selection(e))
+            .filter_map(|(edge_ix, e)| {
+                let from_node = *node_map.get(e.from_node.as_str())?;
+                let to_node = *node_map.get(e.to_node.as_str())?;
                 let is_highlighted = touches_selection(e);
 
-                let from_center_y = from_node.position.y + from_node.size.height / 2.0;
-                let to_center_y = to_node.position.y + to_node.size.height / 2.0;
-                let from_right = from_node.position.x + from_node.size.width;
-                let to_right = to_node.position.x + to_node.size.width;
+                let (from_anchor, from_side, to_anchor, to_side) =
+                    Self::edge_anchors(e, from_node, to_node);
 
-                let dx = to_node.position.x - from_right;
-                let dy = to_center_y - from_center_y;
+                let points = grid
+                    .route(from_anchor, from_side, to_anchor, to_side, &mut search)
+                    .unwrap_or_else(|| vec![from_anchor, to_anchor]);
 
-                let (from_anchor, from_side) = if dx > from_node.size.width * 0.3 {
-                    let p = Point::new(
-                        from_right,
-                        from_node.position.y + Self::field_y_offset(e.from_field_index),
-                    );
-                    (p, AnchorSide::Right)
-                } else if dx < -(to_node.size.width * 0.3) {
-                    let p = Point::new(
-                        from_node.position.x,
-                        from_node.position.y + Self::field_y_offset(e.from_field_index),
-                    );
-                    (p, AnchorSide::Left)
-                } else {
-                    let p = Point::new(
-                        from_node.position.x + from_node.size.width / 2.0,
-                        from_node.position.y + from_node.size.height,
-                    );
-                    (p, AnchorSide::Bottom)
-                };
-
-                let (to_anchor, to_side) = if dx > from_node.size.width * 0.3 {
-                    let p = Point::new(
-                        to_node.position.x,
-                        to_node.position.y + Self::field_y_offset(e.to_field_index),
-                    );
-                    (p, AnchorSide::Left)
-                } else if dx < -(to_node.size.width * 0.3) {
-                    let p = Point::new(
-                        to_right,
-                        to_node.position.y + Self::field_y_offset(e.to_field_index),
-                    );
-                    (p, AnchorSide::Right)
-                } else if dy > 0.0 {
-                    let p = Point::new(
-                        to_node.position.x + to_node.size.width / 2.0,
-                        to_node.position.y,
-                    );
-                    (p, AnchorSide::Top)
-                } else {
-                    let p = Point::new(
-                        to_node.position.x + to_node.size.width / 2.0,
-                        to_node.position.y + to_node.size.height,
-                    );
-                    (p, AnchorSide::Bottom)
-                };
-
-                let from_screen = self.graph_to_screen(from_anchor);
-                let to_screen = self.graph_to_screen(to_anchor);
-
-                Some(EdgeRenderData {
-                    from: point(px(from_screen.x), px(from_screen.y)),
-                    to: point(px(to_screen.x), px(to_screen.y)),
-                    from_side,
-                    to_side,
+                Some(RoutedEdge {
+                    edge_ix,
+                    points,
                     is_highlighted,
                 })
+            })
+            .collect()
+    }
+
+    /// Re-route only the edges touching `node_ix`, leaving every other cached
+    /// route untouched. Used during a drag so each move re-runs A* for a handful
+    /// of edges instead of the whole graph. Other edges keep their (now slightly
+    /// stale) routes until the drag ends and a full recompute runs.
+    fn reroute_node_edges(&mut self, node_ix: usize) {
+        let Some(dragged_id) = self.model.nodes.get(node_ix).map(|n| n.id.clone()) else {
+            return;
+        };
+
+        // Nothing routed touches the moved node: skip the grid build entirely
+        // and just keep the cache marked current.
+        let touches = self.routed_edges.iter().any(|r| {
+            self.model.edges.get(r.edge_ix).is_some_and(|e| {
+                e.from_node == dragged_id || e.to_node == dragged_id
+            })
+        });
+        if !touches {
+            self.route_cache_key = Some(self.route_cache_key());
+            return;
+        }
+
+        let Some(grid) = RouteGrid::build(&self.model.nodes) else {
+            return;
+        };
+        let mut search = AStarSearch::new(grid.cell_count());
+
+        let node_map: HashMap<&str, &GraphNode> = self
+            .model
+            .nodes
+            .iter()
+            .map(|n| (n.id.as_str(), n))
+            .collect();
+
+        for routed in &mut self.routed_edges {
+            let Some(e) = self.model.edges.get(routed.edge_ix) else {
+                continue;
+            };
+            if e.from_node != dragged_id && e.to_node != dragged_id {
+                continue;
+            }
+            let (Some(&from_node), Some(&to_node)) = (
+                node_map.get(e.from_node.as_str()),
+                node_map.get(e.to_node.as_str()),
+            ) else {
+                continue;
+            };
+            let (from_anchor, from_side, to_anchor, to_side) =
+                Self::edge_anchors(e, from_node, to_node);
+            routed.points = grid
+                .route(from_anchor, from_side, to_anchor, to_side, &mut search)
+                .unwrap_or_else(|| vec![from_anchor, to_anchor]);
+        }
+
+        // Mark the cache as current so the upcoming render's `ensure_routes` is a
+        // no-op instead of triggering a full recompute for the moved node.
+        self.route_cache_key = Some(self.route_cache_key());
+    }
+
+    /// Pick which side of each node the edge leaves/enters and the exact anchor
+    /// point on that side, based on their relative position.
+    fn edge_anchors(
+        e: &GraphEdge,
+        from_node: &GraphNode,
+        to_node: &GraphNode,
+    ) -> (Point<f32>, AnchorSide, Point<f32>, AnchorSide) {
+        let from_center_y = from_node.position.y + from_node.size.height / 2.0;
+        let to_center_y = to_node.position.y + to_node.size.height / 2.0;
+        let from_right = from_node.position.x + from_node.size.width;
+        let to_right = to_node.position.x + to_node.size.width;
+
+        let dx = to_node.position.x - from_right;
+        let dy = to_center_y - from_center_y;
+
+        let (from_anchor, from_side) = if dx > from_node.size.width * 0.3 {
+            let p = Point::new(
+                from_right,
+                from_node.position.y + Self::field_y_offset(e.from_field_index),
+            );
+            (p, AnchorSide::Right)
+        } else if dx < -(to_node.size.width * 0.3) {
+            let p = Point::new(
+                from_node.position.x,
+                from_node.position.y + Self::field_y_offset(e.from_field_index),
+            );
+            (p, AnchorSide::Left)
+        } else {
+            let p = Point::new(
+                from_node.position.x + from_node.size.width / 2.0,
+                from_node.position.y + from_node.size.height,
+            );
+            (p, AnchorSide::Bottom)
+        };
+
+        let (to_anchor, to_side) = if dx > from_node.size.width * 0.3 {
+            let p = Point::new(
+                to_node.position.x,
+                to_node.position.y + Self::field_y_offset(e.to_field_index),
+            );
+            (p, AnchorSide::Left)
+        } else if dx < -(to_node.size.width * 0.3) {
+            let p = Point::new(
+                to_right,
+                to_node.position.y + Self::field_y_offset(e.to_field_index),
+            );
+            (p, AnchorSide::Right)
+        } else if dy > 0.0 {
+            let p = Point::new(
+                to_node.position.x + to_node.size.width / 2.0,
+                to_node.position.y,
+            );
+            (p, AnchorSide::Top)
+        } else {
+            let p = Point::new(
+                to_node.position.x + to_node.size.width / 2.0,
+                to_node.position.y + to_node.size.height,
+            );
+            (p, AnchorSide::Bottom)
+        };
+
+        (from_anchor, from_side, to_anchor, to_side)
+    }
+
+    /// Transform the cached graph-space routes into screen-space poly-lines,
+    /// dropping any that fall entirely outside the viewport.
+    fn collect_edge_data(&self) -> Vec<EdgeRenderData> {
+        let visible = self.visible_graph_bounds();
+
+        self.routed_edges
+            .iter()
+            .filter(|edge| edge.points.len() >= 2)
+            .filter(|edge| match visible {
+                None => true,
+                Some((top_left, bottom_right)) => {
+                    let (mut min_x, mut min_y) = (f32::MAX, f32::MAX);
+                    let (mut max_x, mut max_y) = (f32::MIN, f32::MIN);
+                    for p in &edge.points {
+                        min_x = min_x.min(p.x);
+                        min_y = min_y.min(p.y);
+                        max_x = max_x.max(p.x);
+                        max_y = max_y.max(p.y);
+                    }
+                    max_x >= top_left.x
+                        && min_x <= bottom_right.x
+                        && max_y >= top_left.y
+                        && min_y <= bottom_right.y
+                }
+            })
+            .map(|edge| {
+                let points = edge
+                    .points
+                    .iter()
+                    .map(|p| {
+                        let s = self.graph_to_screen(*p);
+                        point(px(s.x), px(s.y))
+                    })
+                    .collect();
+                EdgeRenderData {
+                    points,
+                    is_highlighted: edge.is_highlighted,
+                }
             })
             .collect()
     }
@@ -473,6 +658,10 @@ impl GraphView {
             let graph_pos = self.screen_to_graph(element_pos);
             self.model.nodes[node_ix].position =
                 Point::new(graph_pos.x - offset.x, graph_pos.y - offset.y);
+            // Only re-route the moved node's own edges this frame; a full
+            // recompute over every edge per drag frame is too slow on large
+            // schemas.
+            self.reroute_node_edges(node_ix);
             cx.notify();
             return;
         }
@@ -523,6 +712,13 @@ impl GraphView {
             }
         }
 
+        // A drag only re-routed the moved node's own edges each frame. Now that
+        // it has settled, invalidate the cache so the next render does one full
+        // recompute and the rest of the graph reacts to the new position.
+        if self.node_dragged {
+            self.route_cache_key = None;
+        }
+
         self.dragging_node = None;
         self.node_dragged = false;
         self.is_panning = false;
@@ -567,6 +763,7 @@ impl Focusable for GraphView {
 
 impl Render for GraphView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.ensure_routes();
         let edges_data = self.collect_edge_data();
         let nodes_data = self.collect_node_data(cx);
 
@@ -579,6 +776,9 @@ impl Render for GraphView {
         let edge_color = cx.theme().border;
         let highlight_color = cx.theme().cyan;
         let bg = cx.theme().background;
+        // Tint the canvas with the secondary surface so the background-filled
+        // table nodes read as distinct panels instead of blending in.
+        let canvas_bg = cx.theme().secondary;
         let muted = cx.theme().muted_foreground;
         let danger = cx.theme().danger_foreground;
         let foreground = cx.theme().foreground;
@@ -608,56 +808,16 @@ impl Render for GraphView {
             },
             move |bounds: Bounds<Pixels>, _, window, _cx| {
                 let origin = bounds.origin;
+                // Corner radius scales with zoom so bends stay proportional to
+                // the nodes at any magnification.
+                let radius = ROUTE_CORNER_RADIUS * zoom;
+
                 for edge in &edges_data {
-                    let from = point(edge.from.x + origin.x, edge.from.y + origin.y);
-                    let to = point(edge.to.x + origin.x, edge.to.y + origin.y);
-
-                    let dx = (to.x - from.x).as_f32();
-                    let dy = (to.y - from.y).as_f32();
-                    let dist = (dx * dx + dy * dy).sqrt();
-
-                    let (control_a, control_b) = match (&edge.from_side, &edge.to_side) {
-                        (AnchorSide::Right, AnchorSide::Left) => {
-                            let offset = px((dist * 0.4).clamp(50.0, 250.0));
-                            (point(from.x + offset, from.y), point(to.x - offset, to.y))
-                        }
-                        (AnchorSide::Left, AnchorSide::Right) => {
-                            let offset = px((dist * 0.4).clamp(50.0, 250.0));
-                            (point(from.x - offset, from.y), point(to.x + offset, to.y))
-                        }
-                        (AnchorSide::Bottom, AnchorSide::Top) => {
-                            let offset = px((dist * 0.4).clamp(50.0, 200.0));
-                            (point(from.x, from.y + offset), point(to.x, to.y - offset))
-                        }
-                        (AnchorSide::Bottom, AnchorSide::Bottom) => {
-                            let offset = px((dy.abs() * 0.5).clamp(40.0, 200.0));
-                            (point(from.x, from.y + offset), point(to.x, to.y + offset))
-                        }
-                        (AnchorSide::Right, AnchorSide::Top) => {
-                            let h = px((dx.abs() * 0.4).clamp(40.0, 150.0));
-                            let v = px((dy.abs() * 0.4).clamp(40.0, 150.0));
-                            (point(from.x + h, from.y), point(to.x, to.y - v))
-                        }
-                        (AnchorSide::Right, AnchorSide::Bottom) => {
-                            let h = px((dx.abs() * 0.4).clamp(40.0, 150.0));
-                            let v = px((dy.abs() * 0.4).clamp(40.0, 150.0));
-                            (point(from.x + h, from.y), point(to.x, to.y + v))
-                        }
-                        (AnchorSide::Left, AnchorSide::Top) => {
-                            let h = px((dx.abs() * 0.4).clamp(40.0, 150.0));
-                            let v = px((dy.abs() * 0.4).clamp(40.0, 150.0));
-                            (point(from.x - h, from.y), point(to.x, to.y - v))
-                        }
-                        (AnchorSide::Left, AnchorSide::Bottom) => {
-                            let h = px((dx.abs() * 0.4).clamp(40.0, 150.0));
-                            let v = px((dy.abs() * 0.4).clamp(40.0, 150.0));
-                            (point(from.x - h, from.y), point(to.x, to.y + v))
-                        }
-                        _ => {
-                            let offset = px((dist * 0.35).clamp(40.0, 250.0));
-                            (point(from.x + offset, from.y), point(to.x - offset, to.y))
-                        }
-                    };
+                    let waypoints: Vec<Point<Pixels>> = edge
+                        .points
+                        .iter()
+                        .map(|p| point(p.x + origin.x, p.y + origin.y))
+                        .collect();
 
                     let stroke_width = if edge.is_highlighted {
                         px(2.5)
@@ -669,11 +829,8 @@ impl Render for GraphView {
                     } else {
                         edge_color
                     };
-                    let mut builder = PathBuilder::stroke(stroke_width);
-                    builder.move_to(from);
-                    builder.cubic_bezier_to(to, control_a, control_b);
 
-                    if let Ok(path) = builder.build() {
+                    if let Some(path) = build_rounded_path(&waypoints, radius, stroke_width) {
                         window.paint_path(path, color);
                     }
                 }
@@ -687,7 +844,7 @@ impl Render for GraphView {
             .track_focus(&self.focus_handle)
             .size_full()
             .overflow_hidden()
-            .bg(bg)
+            .bg(canvas_bg)
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_down(MouseButton::Right, cx.listener(Self::on_mouse_down))
             .on_mouse_down(MouseButton::Middle, cx.listener(Self::on_mouse_down))
@@ -885,6 +1042,361 @@ impl Render for GraphView {
                 )
             })
     }
+}
+
+/// A rasterised occupancy grid over the graph's bounding box. Cells covered by
+/// a table (plus padding) are blocked; A* threads edges through the rest. The
+/// grid is built once per route recomputation and shared by every edge.
+struct RouteGrid {
+    cols: i32,
+    rows: i32,
+    origin_x: f32,
+    origin_y: f32,
+    cell: f32,
+    blocked: Vec<bool>,
+}
+
+impl RouteGrid {
+    fn build(nodes: &[GraphNode]) -> Option<Self> {
+        if nodes.is_empty() {
+            return None;
+        }
+
+        let pad = ROUTE_NODE_PADDING;
+        let mut x_min = f32::MAX;
+        let mut y_min = f32::MAX;
+        let mut x_max = f32::MIN;
+        let mut y_max = f32::MIN;
+        for n in nodes {
+            x_min = x_min.min(n.position.x);
+            y_min = y_min.min(n.position.y);
+            x_max = x_max.max(n.position.x + n.size.width);
+            y_max = y_max.max(n.position.y + n.size.height);
+        }
+
+        // Outer margin so a route can travel around the outside of the graph
+        // when no interior channel is available.
+        let margin = pad + ROUTE_CELL * 3.0;
+        let origin_x = x_min - margin;
+        let origin_y = y_min - margin;
+        let cell = ROUTE_CELL;
+        let cols = (((x_max + margin - origin_x) / cell).ceil() as i32).max(1) + 1;
+        let rows = (((y_max + margin - origin_y) / cell).ceil() as i32).max(1) + 1;
+
+        let mut grid = RouteGrid {
+            cols,
+            rows,
+            origin_x,
+            origin_y,
+            cell,
+            blocked: vec![false; (cols * rows) as usize],
+        };
+
+        for n in nodes {
+            let (c0, r0) = grid.to_cell(n.position.x - pad, n.position.y - pad);
+            let (c1, r1) = grid.to_cell(
+                n.position.x + n.size.width + pad,
+                n.position.y + n.size.height + pad,
+            );
+            for r in r0..=r1 {
+                for c in c0..=c1 {
+                    if let Some(i) = grid.index(c, r) {
+                        grid.blocked[i] = true;
+                    }
+                }
+            }
+        }
+
+        Some(grid)
+    }
+
+    fn cell_count(&self) -> usize {
+        (self.cols * self.rows) as usize
+    }
+
+    fn to_cell(&self, x: f32, y: f32) -> (i32, i32) {
+        (
+            ((x - self.origin_x) / self.cell).round() as i32,
+            ((y - self.origin_y) / self.cell).round() as i32,
+        )
+    }
+
+    fn to_point(&self, c: i32, r: i32) -> Point<f32> {
+        Point::new(
+            self.origin_x + c as f32 * self.cell,
+            self.origin_y + r as f32 * self.cell,
+        )
+    }
+
+    fn index(&self, c: i32, r: i32) -> Option<usize> {
+        if c < 0 || r < 0 || c >= self.cols || r >= self.rows {
+            None
+        } else {
+            Some((r * self.cols + c) as usize)
+        }
+    }
+
+    fn walkable(&self, c: i32, r: i32) -> bool {
+        self.index(c, r).is_some_and(|i| !self.blocked[i])
+    }
+
+    /// Step out from `anchor` along `side` until a walkable cell is reached, so
+    /// pathfinding starts in free space just outside the node border.
+    fn endpoint_cell(&self, anchor: Point<f32>, side: AnchorSide) -> Option<(i32, i32)> {
+        let (mut c, mut r) = self.to_cell(anchor.x, anchor.y);
+        let (dc, dr) = side.out_dir();
+        for _ in 0..64 {
+            if self.walkable(c, r) {
+                return Some((c, r));
+            }
+            c += dc;
+            r += dr;
+            if self.index(c, r).is_none() {
+                return None;
+            }
+        }
+        None
+    }
+
+    /// Route a single edge: A* between the two endpoints, then convert the grid
+    /// path back to graph-space points with the real anchors at the ends. Returns
+    /// `None` if no path exists (the caller falls back to a straight line).
+    fn route(
+        &self,
+        from_anchor: Point<f32>,
+        from_side: AnchorSide,
+        to_anchor: Point<f32>,
+        to_side: AnchorSide,
+        search: &mut AStarSearch,
+    ) -> Option<Vec<Point<f32>>> {
+        let start = self.endpoint_cell(from_anchor, from_side)?;
+        let end = self.endpoint_cell(to_anchor, to_side)?;
+        let cells = search.find(self, start, end)?;
+        let cells = compress_collinear(&cells);
+
+        let mut points = Vec::with_capacity(cells.len() + 2);
+        points.push(from_anchor);
+        for &(c, r) in &cells {
+            points.push(self.to_point(c, r));
+        }
+        points.push(to_anchor);
+
+        // The grid-snapped path can sit up to half a cell off the real anchor,
+        // giving a slight slant where the line meets a table. Pull the leading
+        // and trailing straight runs onto the anchor so edges enter/leave
+        // perpendicular to the node border.
+        align_endpoint(&mut points, from_anchor, from_side, true);
+        align_endpoint(&mut points, to_anchor, to_side, false);
+
+        dedup_points(&mut points);
+        Some(points)
+    }
+}
+
+/// Reusable buffers for repeated A* searches over a grid of fixed size. A
+/// per-search generation counter avoids clearing the score arrays each time.
+struct AStarSearch {
+    g_score: Vec<i32>,
+    came_from: Vec<i32>,
+    came_dir: Vec<u8>,
+    generation: Vec<u32>,
+    current_gen: u32,
+    heap: BinaryHeap<Reverse<(i32, usize)>>,
+}
+
+/// 4-connected moves: +x, -x, +y, -y. Index doubles as the direction id used
+/// for the turn penalty.
+const STEPS: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+
+impl AStarSearch {
+    fn new(cells: usize) -> Self {
+        Self {
+            g_score: vec![0; cells],
+            came_from: vec![-1; cells],
+            came_dir: vec![u8::MAX; cells],
+            generation: vec![0; cells],
+            current_gen: 0,
+            heap: BinaryHeap::new(),
+        }
+    }
+
+    fn find(
+        &mut self,
+        grid: &RouteGrid,
+        start: (i32, i32),
+        end: (i32, i32),
+    ) -> Option<Vec<(i32, i32)>> {
+        let start_i = grid.index(start.0, start.1)?;
+        let end_i = grid.index(end.0, end.1)?;
+
+        self.current_gen += 1;
+        let generation_id = self.current_gen;
+        self.heap.clear();
+
+        let heuristic = |c: i32, r: i32| (c - end.0).abs() + (r - end.1).abs();
+
+        self.g_score[start_i] = 0;
+        self.came_from[start_i] = -1;
+        self.came_dir[start_i] = u8::MAX;
+        self.generation[start_i] = generation_id;
+        self.heap.push(Reverse((heuristic(start.0, start.1), start_i)));
+
+        while let Some(Reverse((f, ci))) = self.heap.pop() {
+            let c = (ci as i32) % grid.cols;
+            let r = (ci as i32) / grid.cols;
+
+            // Lazy deletion: skip stale heap entries.
+            if f > self.g_score[ci] + heuristic(c, r) {
+                continue;
+            }
+            if ci == end_i {
+                return Some(self.reconstruct(grid, end_i));
+            }
+
+            for (dir, (dc, dr)) in STEPS.iter().enumerate() {
+                let (nc, nr) = (c + dc, r + dr);
+                if !grid.walkable(nc, nr) {
+                    continue;
+                }
+                let ni = (nr * grid.cols + nc) as usize;
+
+                let turn = if self.came_dir[ci] != u8::MAX && self.came_dir[ci] != dir as u8 {
+                    ROUTE_TURN_PENALTY
+                } else {
+                    0
+                };
+                let tentative = self.g_score[ci] + 1 + turn;
+
+                if self.generation[ni] != generation_id || tentative < self.g_score[ni] {
+                    self.g_score[ni] = tentative;
+                    self.came_from[ni] = ci as i32;
+                    self.came_dir[ni] = dir as u8;
+                    self.generation[ni] = generation_id;
+                    self.heap
+                        .push(Reverse((tentative + heuristic(nc, nr), ni)));
+                }
+            }
+        }
+
+        None
+    }
+
+    fn reconstruct(&self, grid: &RouteGrid, end_i: usize) -> Vec<(i32, i32)> {
+        let mut path = Vec::new();
+        let mut i = end_i as i32;
+        while i >= 0 {
+            let ui = i as usize;
+            path.push((ui as i32 % grid.cols, ui as i32 / grid.cols));
+            i = self.came_from[ui];
+        }
+        path.reverse();
+        path
+    }
+}
+
+/// Collapse runs of cells travelling in the same direction down to their
+/// turning points, so the path has a vertex only where it actually bends.
+fn compress_collinear(cells: &[(i32, i32)]) -> Vec<(i32, i32)> {
+    if cells.len() <= 2 {
+        return cells.to_vec();
+    }
+    let mut out = vec![cells[0]];
+    for window in cells.windows(3) {
+        let (a, b, c) = (window[0], window[1], window[2]);
+        let d1 = (b.0 - a.0, b.1 - a.1);
+        let d2 = (c.0 - b.0, c.1 - b.1);
+        if d1 != d2 {
+            out.push(b);
+        }
+    }
+    out.push(*cells.last().unwrap());
+    out
+}
+
+/// Snap the straight run at one end of a routed path onto its anchor's
+/// perpendicular axis, so the edge meets the table border square-on. The first
+/// turn stays orthogonal because every point in the run shifts by the same
+/// amount on the same axis (mirrors react-flow-smart-edge's `alignEndpoints`).
+fn align_endpoint(points: &mut [Point<f32>], anchor: Point<f32>, side: AnchorSide, leading: bool) {
+    // Need at least the anchor plus two interior points to have a run to align.
+    if points.len() < 4 {
+        return;
+    }
+    let horizontal = matches!(side, AnchorSide::Left | AnchorSide::Right);
+
+    // Interior points run from index 1 to len-2 (0 and len-1 are the anchors).
+    let run_start = if leading { 1 } else { points.len() - 2 };
+    let key = if horizontal {
+        points[run_start].y
+    } else {
+        points[run_start].x
+    };
+
+    let mut i = run_start as isize;
+    let limit = if leading { points.len() as isize - 1 } else { 0 };
+    let step = if leading { 1 } else { -1 };
+    while i != limit {
+        let p = &mut points[i as usize];
+        let v = if horizontal { p.y } else { p.x };
+        if (v - key).abs() > 0.5 {
+            break;
+        }
+        if horizontal {
+            p.y = anchor.y;
+        } else {
+            p.x = anchor.x;
+        }
+        i += step;
+    }
+}
+
+/// Drop coincident points so corner rounding never sees a zero-length segment
+/// (which would produce NaN directions).
+fn dedup_points(pts: &mut Vec<Point<f32>>) {
+    pts.dedup_by(|a, b| (a.x - b.x).abs() < 0.5 && (a.y - b.y).abs() < 0.5);
+}
+
+/// Stroke a poly-line with rounded corners. Each interior vertex is replaced by
+/// a quadratic curve whose radius is clamped to half of the shorter adjoining
+/// segment so tight elbows stay sane.
+fn build_rounded_path(
+    pts: &[Point<Pixels>],
+    radius: f32,
+    width: Pixels,
+) -> Option<gpui::Path<Pixels>> {
+    if pts.len() < 2 {
+        return None;
+    }
+
+    let distance = |a: Point<Pixels>, b: Point<Pixels>| {
+        let dx = (a.x - b.x).as_f32();
+        let dy = (a.y - b.y).as_f32();
+        (dx * dx + dy * dy).sqrt()
+    };
+    let lerp = |from: Point<Pixels>, to: Point<Pixels>, t: f32| {
+        point(from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t)
+    };
+
+    let mut builder = PathBuilder::stroke(width);
+    builder.move_to(pts[0]);
+
+    for i in 1..pts.len() - 1 {
+        let (a, v, b) = (pts[i - 1], pts[i], pts[i + 1]);
+        let len_av = distance(v, a);
+        let len_vb = distance(v, b);
+        let r = radius.min(len_av / 2.0).min(len_vb / 2.0);
+
+        if r < 0.5 {
+            builder.line_to(v);
+            continue;
+        }
+
+        builder.line_to(lerp(v, a, r / len_av));
+        builder.curve_to(lerp(v, b, r / len_vb), v);
+    }
+
+    builder.line_to(pts[pts.len() - 1]);
+    builder.build().ok()
 }
 
 pub fn compute_node_height(fields: usize) -> f32 {
@@ -1202,6 +1714,65 @@ mod tests {
 
     fn position_of(nodes: &[GraphNode], id: &str) -> Point<f32> {
         nodes.iter().find(|n| n.id == id).unwrap().position
+    }
+
+    #[test]
+    fn route_avoids_a_blocking_node() {
+        // An obstacle sits directly between source and target. A* must thread
+        // the route around it: no interior vertex may land inside the obstacle's
+        // padded rectangle.
+        let mut nodes = vec![node("src"), node("dst"), node("block")];
+        nodes[0].position = Point::new(0.0, 100.0);
+        nodes[0].size = Size {
+            width: 80.0,
+            height: 40.0,
+        };
+        nodes[1].position = Point::new(400.0, 100.0);
+        nodes[1].size = Size {
+            width: 80.0,
+            height: 40.0,
+        };
+        nodes[2].position = Point::new(180.0, 60.0);
+        nodes[2].size = Size {
+            width: 80.0,
+            height: 120.0,
+        };
+
+        let grid = RouteGrid::build(&nodes).expect("grid");
+        let mut search = AStarSearch::new(grid.cell_count());
+
+        let from = Point::new(80.0, 120.0); // right edge of src
+        let to = Point::new(400.0, 120.0); // left edge of dst
+        let path = grid
+            .route(from, AnchorSide::Right, to, AnchorSide::Left, &mut search)
+            .expect("a path should exist around the obstacle");
+
+        // The padded obstacle rectangle.
+        let pad = ROUTE_NODE_PADDING;
+        let (bx0, by0) = (180.0 - pad, 60.0 - pad);
+        let (bx1, by1) = (180.0 + 80.0 + pad, 60.0 + 120.0 + pad);
+        for p in &path {
+            let inside = p.x > bx0 && p.x < bx1 && p.y > by0 && p.y < by1;
+            assert!(!inside, "routed point {p:?} fell inside the obstacle");
+        }
+    }
+
+    #[test]
+    fn intervening_column_does_not_change_layer_order() {
+        // Sanity: a chain a->b->c lays out c left of b left of a, so the edge
+        // a->c spans an intervening column (b) and would be flagged for
+        // perimeter routing at render time.
+        let mut nodes = vec![node("a"), node("b"), node("c")];
+        let edges = vec![edge("a", "b"), edge("b", "c")];
+        compute_node_sizes(&mut nodes);
+        layout_dag(&mut nodes, &edges);
+
+        let (ax, bx, cx) = (
+            position_of(&nodes, "a").x,
+            position_of(&nodes, "b").x,
+            position_of(&nodes, "c").x,
+        );
+        assert!(cx < bx && bx < ax, "b's column sits between a and c");
     }
 
     #[test]
