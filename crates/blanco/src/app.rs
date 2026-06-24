@@ -437,6 +437,15 @@ impl BlancoApp {
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
 
+        // First-run experience: if there are no saved connections, greet the
+        // user with the new connection dialog instead of an empty window. The
+        // dialog is opened after construction completes via `defer_in`.
+        if sidebar.read(cx).connections.is_empty() {
+            cx.defer_in(window, |this, window, cx| {
+                this.on_new_connection_modal(&OpenNewConnectionModal, window, cx);
+            });
+        }
+
         Self {
             focus_handle,
             sidebar,
