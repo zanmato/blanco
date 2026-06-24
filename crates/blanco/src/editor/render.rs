@@ -433,7 +433,13 @@ impl EditorPanel {
                             .font_weight(FontWeight::BOLD)
                             .child("Preview SQL"),
                     )
-                    .child(div().h(px(280.)).overflow_hidden().child(preview_log))
+                    .child(
+                        v_flex()
+                            .h(px(280.))
+                            .min_h_0()
+                            .overflow_hidden()
+                            .child(preview_log),
+                    )
                     .child(
                         h_flex()
                             .gap_2()
