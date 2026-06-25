@@ -40,6 +40,7 @@ impl ResultsTableDelegate {
         col_ix: usize,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
+        let is_json = self.column_types.get(col_ix).copied() == Some(ColumnType::Json);
         div()
             .bg(cx.theme().background)
             .border_2()
@@ -58,7 +59,13 @@ impl ResultsTableDelegate {
                         .shadow_lg()
                         .on_action(cx.listener(
                             move |table, _event: &gpui_component::input::Escape, window, cx| {
-                                Self::handle_minimize(table, (col_ix, row_ix), window, cx);
+                                Self::handle_minimize(
+                                    table,
+                                    (col_ix, row_ix),
+                                    is_json,
+                                    window,
+                                    cx,
+                                );
                             },
                         ))
                         .child(
@@ -76,6 +83,7 @@ impl ResultsTableDelegate {
                                                 Self::handle_minimize(
                                                     table,
                                                     (col_ix, row_ix),
+                                                    is_json,
                                                     window,
                                                     cx,
                                                 );

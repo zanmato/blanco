@@ -122,17 +122,27 @@ impl ResultsTableDelegate {
     pub(crate) fn handle_minimize(
         state: &mut TableState<ResultsTableDelegate>,
         cell: (usize, usize),
+        is_json: bool,
         window: &mut Window,
         cx: &mut Context<'_, TableState<ResultsTableDelegate>>,
     ) {
         // Get current text before recreating input
-        let current_text = state
+        let mut current_text = state
             .delegate_mut()
             .edit_state
             .editing_input
             .as_ref()
             .map(|input| input.read(cx).text().to_string())
             .unwrap_or_default();
+
+        // Re-compact prettified JSON back to its single-line form. The
+        // single-line input strips newlines but leaves indentation behind,
+        // which otherwise mangles the value, so reserialize it compactly.
+        if is_json && let Ok(value) = serde_json::from_str::<Value>(&current_text) {
+            if let Ok(compact) = serde_json::to_string(&value) {
+                current_text = compact;
+            }
+        }
 
         // Recreate InputState with single-line mode and subscribe to events
         let new_input = cx.new(|cx| InputState::new(window, cx).default_value(current_text));
