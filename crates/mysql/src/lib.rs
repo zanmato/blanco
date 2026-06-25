@@ -365,4 +365,36 @@ mod tests {
         }
         .await
     }
+
+    #[tokio::test]
+    async fn test_mysql_ping_validates_credentials() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::MysqlConnection;
+        use std::time::{Duration, Instant};
+
+        let test_name = "test_mysql_ping_validates_credentials";
+
+        // Valid credentials should ping successfully (or skip if unreachable).
+        let conn = MysqlConnection::from_connection_string(&default_connection_string())?;
+        if let Err(e) = conn.ping().await {
+            return handle_unreachable(test_name, &e);
+        }
+
+        // A bad password must fail, and fail fast: the single-shot connect
+        // surfaces the auth error immediately instead of the pool retrying until
+        // the ~30s acquire timeout.
+        let bad = MysqlConnection::from_connection_string(
+            "mysql://root:wrong-password@127.0.0.1:3306/blanco",
+        )?;
+        let started = Instant::now();
+        let result = bad.ping().await;
+        let elapsed = started.elapsed();
+
+        assert!(result.is_err(), "ping with a bad password must error");
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "ping should fail fast, took {elapsed:?}"
+        );
+
+        Ok(())
+    }
 }

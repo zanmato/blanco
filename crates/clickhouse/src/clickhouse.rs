@@ -689,4 +689,40 @@ mod tests {
             Ok(())
         })
     }
+
+    #[test]
+    fn test_clickhouse_ping_validates_credentials() -> Result<(), Box<dyn std::error::Error>> {
+        use std::time::{Duration, Instant};
+
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(async {
+            let test_name = "test_clickhouse_ping_validates_credentials";
+            let connection_string = env::var("CLICKHOUSE_CONNECTION_STRING").unwrap_or_else(|_| {
+                "http://blanco:blanco@localhost:8124/?database=blanco".to_string()
+            });
+
+            // Valid credentials should ping successfully (or skip if unreachable).
+            let conn = ClickhouseConnection::from_connection_string(&connection_string)?;
+            if let Err(e) = conn.ping().await {
+                return require_db_or_skip(test_name, &e);
+            }
+
+            // A bad password must fail, and reasonably fast (an HTTP auth error
+            // returns immediately).
+            let bad = ClickhouseConnection::from_connection_string(
+                "http://blanco:wrong-password@localhost:8124/?database=blanco",
+            )?;
+            let started = Instant::now();
+            let result = bad.ping().await;
+            let elapsed = started.elapsed();
+
+            assert!(result.is_err(), "ping with a bad password must error");
+            assert!(
+                elapsed < Duration::from_secs(10),
+                "ping should fail fast, took {elapsed:?}"
+            );
+
+            Ok(())
+        })
+    }
 }

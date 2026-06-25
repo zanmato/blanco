@@ -589,12 +589,14 @@ impl DatabaseService {
             .clone();
 
         // The factory's `connect` call needs a tokio reactor; run it on the
-        // shared runtime and discard the resulting connection.
+        // shared runtime. For lazy backends `create_connection` only parses the
+        // connection string, so we follow it with `ping` (a real round-trip) to
+        // actually validate credentials and reachability.
         let connect_timeout = blanco_core::connect_timeout();
         let result = self
             .runtime_handle
             .spawn(async move {
-                tokio::time::timeout(
+                let connection = tokio::time::timeout(
                     connect_timeout,
                     factory.create_connection(&connection_string),
                 )
@@ -604,7 +606,8 @@ impl DatabaseService {
                         "Database connection timed out after {}s",
                         connect_timeout.as_secs()
                     )
-                })?
+                })??;
+                connection.ping().await
             })
             .await
             .map_err(|e| anyhow::anyhow!("tokio task join failed: {}", e))?;

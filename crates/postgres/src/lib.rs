@@ -449,4 +449,36 @@ mod tests {
         }
         .await
     }
+
+    #[tokio::test]
+    async fn test_postgres_ping_validates_credentials() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::PostgresConnection;
+        use std::time::{Duration, Instant};
+
+        let test_name = "test_postgres_ping_validates_credentials";
+
+        // Valid credentials should ping successfully (or skip if unreachable).
+        let conn = PostgresConnection::from_connection_string(&default_connection_string())?;
+        if let Err(e) = conn.ping().await {
+            return handle_unreachable(test_name, &e);
+        }
+
+        // A bad password must fail, and fail fast: the single-shot connect
+        // surfaces the auth error immediately instead of the pool retrying until
+        // the ~30s acquire timeout.
+        let bad = PostgresConnection::from_connection_string(
+            "postgres://blanco:wrong-password@localhost:5488/blanco?sslmode=disable",
+        )?;
+        let started = Instant::now();
+        let result = bad.ping().await;
+        let elapsed = started.elapsed();
+
+        assert!(result.is_err(), "ping with a bad password must error");
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "ping should fail fast, took {elapsed:?}"
+        );
+
+        Ok(())
+    }
 }

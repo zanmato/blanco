@@ -54,6 +54,10 @@ services:
   # SQL Server for testing
   mssqltestdb:
     image: mcr.microsoft.com/mssql/server:2022-latest
+    # The 2022 image runs as the non-root `mssql` user (uid 10001), which can't
+    # create its `/.system` directory or write to the root-owned `/var/opt/mssql`
+    # tmpfs, so it fails to start. Run as root to sidestep the permission issue.
+    user: root
     environment:
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: "Blanco_Passw0rd!"

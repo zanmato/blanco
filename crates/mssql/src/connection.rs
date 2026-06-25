@@ -358,6 +358,34 @@ impl Connection for MssqlConnection {
         Ok(())
     }
 
+    async fn ping(&self) -> Result<()> {
+        use bb8::ManageConnection as _;
+
+        // `ManageConnection::connect` makes a single connection attempt and
+        // surfaces the real error immediately, unlike `Pool::get` which retries
+        // until `connection_timeout` (~30s) and returns a generic timeout,
+        // hiding a bad password or login failure.
+        let config = self.build_tiberius_config(None);
+        let manager = bb8_tiberius::ConnectionManager::new(config);
+        let timeout = blanco_core::connect_timeout();
+
+        let mut conn = tokio::time::timeout(timeout, manager.connect())
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "SQL Server connection timed out after {}s",
+                    timeout.as_secs()
+                )
+            })?
+            .map_err(|e| anyhow::anyhow!("Failed to connect to SQL Server: {e}"))?;
+
+        conn.simple_query("SELECT 1")
+            .await
+            .map_err(|e| anyhow::anyhow!("SQL Server connection check failed: {e}"))?;
+
+        Ok(())
+    }
+
     async fn execute_query(
         &self,
         query: &str,

@@ -144,6 +144,11 @@ impl Connection for TokioConnection {
             .map_err(|e| anyhow!("tokio task join failed: {e}"))?
     }
 
+    async fn ping(&self) -> Result<()> {
+        let inner = Arc::clone(&self.inner);
+        self.run(async move { inner.ping().await }).await
+    }
+
     async fn get_databases(&self) -> Result<Vec<String>> {
         let inner = Arc::clone(&self.inner);
         self.run(async move { inner.get_databases().await }).await

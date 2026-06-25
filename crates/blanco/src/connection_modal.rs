@@ -11,15 +11,16 @@ use mssql::MssqlForm;
 use mysql::MysqlForm;
 use postgres::PostgresForm;
 use sqlite::SqliteForm;
-use types::{ConnectorType, TestResult};
+use types::ConnectorType;
 
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
     Styled, Window, div, prelude::FluentBuilder,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, IndexPath, h_flex,
+    ActiveTheme, Icon, IconName, IndexPath, WindowExt as _, h_flex,
     input::{Input, InputState},
+    notification::NotificationType,
     select::{Select, SelectState},
     v_flex,
 };
@@ -36,7 +37,6 @@ pub struct NewConnectionModal {
     mysql_form: MysqlForm,
     clickhouse_form: ClickhouseForm,
     mssql_form: MssqlForm,
-    test_result: Option<TestResult>,
     is_testing: bool,
     editing_connection_id: Option<i64>,
     db_type_locked: bool,
@@ -121,7 +121,6 @@ impl NewConnectionModal {
             mysql_form,
             clickhouse_form,
             mssql_form,
-            test_result: None,
             is_testing: false,
             editing_connection_id,
             db_type_locked,
@@ -191,7 +190,7 @@ impl NewConnectionModal {
         }
     }
 
-    pub fn test_connection(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub fn test_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_testing {
             return;
         }
@@ -199,11 +198,7 @@ impl NewConnectionModal {
         let connector_type = self.get_selected_connector_type(cx);
 
         if let Some(error) = self.validate(&connector_type, cx) {
-            self.test_result = Some(TestResult {
-                success: false,
-                message: error,
-            });
-            cx.notify();
+            window.push_notification((NotificationType::Error, error), cx);
             return;
         }
 
@@ -219,11 +214,10 @@ impl NewConnectionModal {
             match self.build_connection_data(&connector_type, name, environment_type, cx) {
                 Some(data) => data,
                 None => {
-                    self.test_result = Some(TestResult {
-                        success: false,
-                        message: "Please fill in all required fields".to_string(),
-                    });
-                    cx.notify();
+                    window.push_notification(
+                        (NotificationType::Error, "Please fill in all required fields"),
+                        cx,
+                    );
                     return;
                 }
             };
@@ -233,37 +227,42 @@ impl NewConnectionModal {
         let config = match data_with_id.to_connection_config() {
             Some(c) => c,
             None => {
-                self.test_result = Some(TestResult {
-                    success: false,
-                    message: "Failed to build connection configuration".to_string(),
-                });
-                cx.notify();
+                window.push_notification(
+                    (
+                        NotificationType::Error,
+                        "Failed to build connection configuration",
+                    ),
+                    cx,
+                );
                 return;
             }
         };
 
         self.is_testing = true;
-        self.test_result = None;
         cx.notify();
 
         let db_service = database::DatabaseService::global(cx).clone();
 
-        cx.spawn(async move |this, cx| {
+        // `spawn_in` hands the async block an `AsyncWindowContext` so the result
+        // can be surfaced as a window notification rather than inline in the
+        // modal's scrollable body.
+        cx.spawn_in(window, async move |this, window| {
             let result = db_service.test_connection(&config).await;
 
-            this.update(cx, |modal, cx| {
+            this.update_in(window, |modal, window, cx| {
                 modal.is_testing = false;
-                modal.test_result = Some(match result {
-                    Ok(()) => TestResult {
-                        success: true,
-                        message: "Connection successful".to_string(),
-                    },
-                    Err(err) => TestResult {
-                        success: false,
-                        message: format!("Connection failed: {}", err),
-                    },
-                });
                 cx.notify();
+
+                match result {
+                    Ok(()) => window.push_notification(
+                        (NotificationType::Success, "Connection successful"),
+                        cx,
+                    ),
+                    Err(err) => window.push_notification(
+                        (NotificationType::Error, format!("Connection failed: {err:#}")),
+                        cx,
+                    ),
+                }
             })
             .ok();
         })
@@ -347,26 +346,6 @@ impl Render for NewConnectionModal {
                             .text_color(cx.theme().blue)
                             .child(Icon::new(IconName::LoaderCircle).size_4())
                             .child(div().text_sm().child("Testing connection...")),
-                    )
-                })
-                .when_some(self.test_result.clone(), |this, result| {
-                    this.child(
-                        h_flex()
-                            .items_center()
-                            .gap_2()
-                            .p_3()
-                            .rounded(cx.theme().radius)
-                            .when(result.success, |this| {
-                                this.bg(cx.theme().green.opacity(0.1))
-                                    .text_color(cx.theme().green)
-                                    .child(Icon::new(IconName::CircleCheck).size_4())
-                            })
-                            .when(!result.success, |this| {
-                                this.bg(cx.theme().red.opacity(0.1))
-                                    .text_color(cx.theme().red)
-                                    .child(Icon::new(IconName::CircleX).size_4())
-                            })
-                            .child(div().text_sm().child(result.message)),
                     )
                 }),
         )

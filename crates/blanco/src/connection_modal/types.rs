@@ -45,12 +45,6 @@ impl From<ConnectorType> for DriverType {
     }
 }
 
-#[derive(Clone, Debug)]
-pub(super) struct TestResult {
-    pub success: bool,
-    pub message: String,
-}
-
 /// Returns true if the host string (possibly containing a scheme and/or path)
 /// specifies an explicit port like `host:1234` or `https://host:1234`.
 pub(super) fn host_contains_explicit_port(host: &str) -> bool {

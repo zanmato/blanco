@@ -36,6 +36,46 @@ impl Connection for PostgresConnection {
         Ok(())
     }
 
+    async fn ping(&self) -> Result<()> {
+        // Single-shot connection rather than the pool: a bad password makes the
+        // pool retry until `acquire_timeout` (~30s) and then return a generic
+        // "pool timed out" error, hiding the real cause. A direct connect fails
+        // fast and preserves the authentication error.
+        use sqlx::Connection as _;
+
+        let database = self.initial_database.as_deref().unwrap_or("postgres");
+        let connection_string = self.connection_string_for_database(database)?;
+        let timeout = blanco_core::connect_timeout();
+
+        // Bound the connect so an unreachable host fails fast. `smol::Timer` is
+        // driven by the global async-io reactor, so it works even though this
+        // runs on the tokio runtime.
+        let connect = async {
+            sqlx::postgres::PgConnection::connect(&connection_string)
+                .await
+                .map_err(|e| blanco_core::tag_sqlx(e).context("Failed to connect to PostgreSQL"))
+        };
+        let deadline = async {
+            smol::Timer::after(timeout).await;
+            Err(anyhow::anyhow!(
+                "PostgreSQL connection timed out after {}s",
+                timeout.as_secs()
+            ))
+        };
+
+        let mut conn = smol::future::or(connect, deadline).await?;
+
+        let result = sqlx::query("SELECT 1")
+            .execute(&mut conn)
+            .await
+            .map_err(|e| blanco_core::tag_sqlx(e).context("PostgreSQL connection check failed"));
+
+        // Close best-effort; the validation result is what matters.
+        let _ = conn.close().await;
+
+        result.map(|_| ())
+    }
+
     async fn execute_query(
         &self,
         query: &str,

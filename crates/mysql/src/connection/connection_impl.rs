@@ -40,6 +40,47 @@ impl Connection for MysqlConnection {
         Ok(())
     }
 
+    async fn ping(&self) -> Result<()> {
+        // Single-shot connection rather than the pool: a bad password makes the
+        // pool retry until `acquire_timeout` (~30s) and then return a generic
+        // "pool timed out" error, hiding the real cause. A direct connect fails
+        // fast and preserves the authentication error.
+        use sqlx::Connection as _;
+
+        // MySQL allows connecting without a default database.
+        let database = self.initial_database.as_deref().unwrap_or("");
+        let connection_string = self.generate_database_connection_string(database);
+        let timeout = blanco_core::connect_timeout();
+
+        // Bound the connect so an unreachable host fails fast. `smol::Timer` is
+        // driven by the global async-io reactor, so it works even though this
+        // runs on the tokio runtime.
+        let connect = async {
+            sqlx::mysql::MySqlConnection::connect(&connection_string)
+                .await
+                .map_err(|e| blanco_core::tag_sqlx(e).context("Failed to connect to MySQL"))
+        };
+        let deadline = async {
+            smol::Timer::after(timeout).await;
+            Err(anyhow::anyhow!(
+                "MySQL connection timed out after {}s",
+                timeout.as_secs()
+            ))
+        };
+
+        let mut conn = smol::future::or(connect, deadline).await?;
+
+        let result = sqlx::query("SELECT 1")
+            .execute(&mut conn)
+            .await
+            .map_err(|e| blanco_core::tag_sqlx(e).context("MySQL connection check failed"));
+
+        // Close best-effort; the validation result is what matters.
+        let _ = conn.close().await;
+
+        result.map(|_| ())
+    }
+
     async fn execute_query(
         &self,
         query: &str,

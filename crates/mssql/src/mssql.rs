@@ -328,4 +328,35 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_mssql_ping_validates_credentials() -> Result<(), Box<dyn std::error::Error>> {
+        use std::time::{Duration, Instant};
+
+        let test_name = "test_mssql_ping_validates_credentials";
+
+        // Valid credentials should ping successfully (or skip if unreachable).
+        let conn = MssqlConnection::from_connection_string(&default_connection_string())?;
+        if let Err(e) = conn.ping().await {
+            return require_db_or_skip(test_name, &e);
+        }
+
+        // A bad password must fail, and fail fast: the single-shot
+        // `ManageConnection::connect` surfaces the login error immediately
+        // instead of `Pool::get` retrying until the ~30s connection timeout.
+        let bad = MssqlConnection::from_connection_string(
+            "mssql://sa:Wrong_Passw0rd!@localhost:1433/master?trust_cert=true",
+        )?;
+        let started = Instant::now();
+        let result = bad.ping().await;
+        let elapsed = started.elapsed();
+
+        assert!(result.is_err(), "ping with a bad password must error");
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "ping should fail fast, took {elapsed:?}"
+        );
+
+        Ok(())
+    }
 }

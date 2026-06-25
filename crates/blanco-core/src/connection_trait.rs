@@ -271,6 +271,16 @@ pub trait Connection: Send + Sync {
     /// Connect to the database using the provided connection string
     async fn connect(&mut self, connection_string: &str) -> Result<(), anyhow::Error>;
 
+    /// Validate that the connection is actually usable by performing a minimal
+    /// round-trip to the server. Lazy backends (PostgreSQL/MySQL create their
+    /// pool on first use, so `connect` alone never authenticates) surface bad
+    /// credentials here. The default lists schemas, which every backend
+    /// implements with a real query; drivers may override with a cheaper or
+    /// faster-failing check.
+    async fn ping(&self) -> Result<(), anyhow::Error> {
+        self.get_schemas().await.map(|_| ())
+    }
+
     // === Query Execution ===
 
     /// Execute a SQL query and return the results
