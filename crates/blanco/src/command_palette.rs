@@ -1,6 +1,6 @@
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Render,
+    InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Render, SharedString,
     StatefulInteractiveElement as _, Styled as _, Subscription, WeakEntity, WeakFocusHandle,
     Window, actions, anchored, deferred, div, point, prelude::FluentBuilder, px,
 };
@@ -8,17 +8,21 @@ use gpui_component::{
     ActiveTheme, IndexPath, Selectable,
     input::{Input, InputEvent, InputState},
     list::{List, ListDelegate, ListEvent, ListState},
-    v_flex, window_paddings,
+    h_flex, v_flex, window_paddings,
 };
+
+use database::{DatabaseService, DatabaseType};
 
 use crate::{
     app::{
         CommitChanges, ConnectToConnection, CopyAsCSV, CopyAsJSON, CopyAsMarkdown, CopyAsSQL,
-        CopyAsTSV, ExplainQuery, ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL,
-        ExportAsTSV, FormatQuery, NewSnippet, OpenNewConnectionModal, OpenSettings,
+        CopyAsTSV, CreateNewQueryTab, ExplainQuery, ExportAsCSV, ExportAsJSON, ExportAsMarkdown,
+        ExportAsSQL, ExportAsTSV, FormatQuery, NewSnippet, OpenNewConnectionModal, OpenSettings,
         RollbackChanges, RunQuery, ToggleRenderWhitespace, ToggleSidebar, ToggleWordWrap,
     },
+    app_database::EnvironmentType,
     connections::ConnectionsPanel,
+    result_ext::ResultExt as _,
 };
 
 const COMMAND_PALETTE_CONTEXT: &str = "CommandPalette";
@@ -29,7 +33,9 @@ actions!(
         CancelCommandPalette,
         SelectNextCommand,
         SelectPrevCommand,
-        ConfirmCommand
+        ConfirmCommand,
+        NavigateForward,
+        NavigateBack
     ]
 );
 
@@ -37,7 +43,49 @@ actions!(
 pub struct CommandItem {
     pub label: String,
     pub group: String,
-    pub action_type: CommandType,
+    pub kind: ItemKind,
+}
+
+impl CommandItem {
+    /// Whether selecting this item drills into another level rather than
+    /// running a leaf action and closing the palette.
+    fn is_navigable(&self) -> bool {
+        matches!(self.kind, ItemKind::Connection(_) | ItemKind::Database(_))
+    }
+}
+
+/// What activating a `CommandItem` does.
+#[derive(Clone, Debug)]
+pub enum ItemKind {
+    /// Leaf: run the action and close the palette (existing behavior).
+    Command(CommandType),
+    /// Navigable: connect, then drill into databases (schema-aware backends) or
+    /// straight to the leaf action (schemaless backends).
+    Connection(ConnectionRef),
+    /// Navigable: push a level holding this database's leaf actions.
+    Database(DatabaseRef),
+}
+
+/// A connection the palette can connect to and descend into.
+#[derive(Clone, Debug)]
+pub struct ConnectionRef {
+    pub connection_id: i64,
+    pub connection_name: String,
+    pub db_type: DatabaseType,
+    pub environment_type: EnvironmentType,
+    /// `ConnectionData.database_name.clone().unwrap_or_default()`; the database
+    /// to scope schemaless backends to.
+    pub default_database: String,
+}
+
+/// A database within a connection that the palette can scope an action to.
+#[derive(Clone, Debug)]
+pub struct DatabaseRef {
+    pub connection_id: i64,
+    pub connection_name: String,
+    pub db_type: DatabaseType,
+    pub environment_type: EnvironmentType,
+    pub database_name: String,
 }
 
 #[derive(Clone, Debug)]
@@ -63,7 +111,15 @@ pub enum CommandType {
     ExportAsMarkdown,
     ToggleRenderWhitespace,
     ToggleWordWrap,
-    ConnectToConnection { connection_id: i64 },
+    NewQueryForDatabase(DatabaseRef),
+}
+
+/// One pushed level of the navigation stack. `crumb` labels the breadcrumb
+/// chip; `items` are the level's commands; `placeholder` hints the search box.
+struct NavLevel {
+    crumb: SharedString,
+    items: Vec<CommandItem>,
+    placeholder: SharedString,
 }
 
 struct ScoredItem {
@@ -101,17 +157,12 @@ impl CommandPalette {
         let delegate = CommandPaletteDelegate::new(sidebar, cx);
         let list_state = cx.new(|cx| ListState::new(delegate, window, cx).searchable(false));
 
-        let list_entity = list_state.clone();
         let list_subscription = cx.subscribe_in(
             &list_state,
             window,
             move |palette, _, event, window, cx| match event {
                 ListEvent::Confirm(_) => {
-                    let command = list_entity.read(cx).delegate().selected_command();
-                    palette.hide(window, cx);
-                    if let Some(cmd) = command {
-                        execute_command(&cmd.action_type, window, cx);
-                    }
+                    palette.activate_selected(window, cx);
                 }
                 ListEvent::Cancel => {
                     palette.hide(window, cx);
@@ -162,6 +213,13 @@ impl CommandPalette {
             KeyBinding::new("down", SelectNextCommand, Some(COMMAND_PALETTE_CONTEXT)),
             KeyBinding::new("up", SelectPrevCommand, Some(COMMAND_PALETTE_CONTEXT)),
             KeyBinding::new("enter", ConfirmCommand, Some(COMMAND_PALETTE_CONTEXT)),
+            // The focused search input handles these for cursor movement and
+            // editing; the patched gpui-component input propagates them only at
+            // the relevant boundary (cursor at end for right, at start for
+            // left, empty for backspace), so they reach us only to navigate.
+            KeyBinding::new("right", NavigateForward, Some(COMMAND_PALETTE_CONTEXT)),
+            KeyBinding::new("left", NavigateBack, Some(COMMAND_PALETTE_CONTEXT)),
+            KeyBinding::new("backspace", NavigateBack, Some(COMMAND_PALETTE_CONTEXT)),
         ]);
     }
 
@@ -186,12 +244,225 @@ impl CommandPalette {
         });
     }
 
-    fn confirm_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let command = self.list_state.read(cx).delegate().selected_command();
-        self.hide(window, cx);
-        if let Some(cmd) = command {
-            execute_command(&cmd.action_type, window, cx);
+    /// Activate the currently selected item: run a leaf and close, or drill
+    /// into a navigable connection/database.
+    fn activate_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Ignore activation while an async connect is in flight.
+        if self.list_state.read(cx).delegate().loading {
+            return;
         }
+        let Some(command) = self.list_state.read(cx).delegate().selected_command() else {
+            return;
+        };
+        self.activate_item(command, window, cx);
+    }
+
+    /// Activate a specific item, independent of list selection.
+    fn activate_item(&mut self, command: CommandItem, window: &mut Window, cx: &mut Context<Self>) {
+        match command.kind {
+            ItemKind::Command(cmd) => {
+                self.hide(window, cx);
+                execute_command(&cmd, window, cx);
+            }
+            ItemKind::Connection(connection) => {
+                self.begin_connect_and_descend(connection, window, cx);
+            }
+            ItemKind::Database(database) => {
+                let crumb: SharedString = database.database_name.clone().into();
+                let leaf = new_query_leaf(&database);
+                self.push_level(crumb, vec![leaf], "Search actions...", window, cx);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub fn activate_item_for_test(
+        &mut self,
+        command: CommandItem,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.activate_item(command, window, cx);
+    }
+
+    #[cfg(test)]
+    pub fn breadcrumbs_for_test(&self, cx: &App) -> Vec<String> {
+        self.list_state
+            .read(cx)
+            .delegate()
+            .breadcrumbs()
+            .into_iter()
+            .map(|c| c.to_string())
+            .collect()
+    }
+
+    /// `Right` at the end of the filter: descend only into navigable items. A
+    /// leaf is left for the input to no-op on.
+    fn navigate_forward(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let navigable = self
+            .list_state
+            .read(cx)
+            .delegate()
+            .selected_command()
+            .map(|c| c.is_navigable())
+            .unwrap_or(false);
+        if navigable {
+            self.activate_selected(window, cx);
+        }
+    }
+
+    /// `Left` at the start / `Backspace` on an empty filter: go back one level.
+    fn navigate_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.list_state.read(cx).delegate().loading {
+            return;
+        }
+        if self.list_state.read(cx).delegate().stack.is_empty() {
+            return;
+        }
+        self.list_state.update(cx, |state, cx| {
+            state.delegate_mut().pop_level();
+            cx.notify();
+        });
+        self.after_level_change(window, cx);
+    }
+
+    /// Jump back to breadcrumb depth `depth` (0 == root).
+    fn navigate_to_depth(&mut self, depth: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.list_state.read(cx).delegate().loading {
+            return;
+        }
+        self.list_state.update(cx, |state, cx| {
+            state.delegate_mut().pop_to(depth);
+            cx.notify();
+        });
+        self.after_level_change(window, cx);
+    }
+
+    /// Push a new level and reset the filter/selection to its top.
+    fn push_level(
+        &mut self,
+        crumb: SharedString,
+        items: Vec<CommandItem>,
+        placeholder: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let placeholder: SharedString = placeholder.to_string().into();
+        self.list_state.update(cx, |state, cx| {
+            state.delegate_mut().push_level(crumb, items, placeholder);
+            cx.notify();
+        });
+        self.after_level_change(window, cx);
+    }
+
+    /// Shared bookkeeping after the navigation stack changes: clear the input,
+    /// update its placeholder, reset selection to the first row and refocus.
+    fn after_level_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let placeholder = self.list_state.read(cx).delegate().placeholder();
+        self.query_input.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+            input.set_placeholder(placeholder, window, cx);
+        });
+        self.list_state.update(cx, |state, cx| {
+            state.delegate_mut().set_query("", cx);
+            let ix = if state.delegate().items_count(0, cx) > 0 {
+                Some(IndexPath::new(0))
+            } else {
+                None
+            };
+            state.set_selected_index(ix, window, cx);
+            if ix.is_some() {
+                state.scroll_to_item(IndexPath::new(0), gpui::ScrollStrategy::Top, window, cx);
+            }
+        });
+        self.query_input.focus_handle(cx).focus(window, cx);
+        cx.notify();
+    }
+
+    /// Connect to `connection` (reusing the sidebar's cached connection), show a
+    /// loading state, then drill into its databases or straight to the leaf
+    /// action for schemaless backends.
+    fn begin_connect_and_descend(
+        &mut self,
+        connection: ConnectionRef,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.list_state.update(cx, |state, cx| {
+            state.delegate_mut().set_loading(true);
+            cx.notify();
+        });
+        cx.notify();
+
+        // Reflect the connection in the sidebar tree. `get_or_create_connection`
+        // is cached, so this does not connect twice.
+        window.dispatch_action(
+            Box::new(ConnectToConnection {
+                connection_id: connection.connection_id,
+            }),
+            cx,
+        );
+
+        let db_service = DatabaseService::global(cx).clone();
+        cx.spawn_in(window, async move |this, cx| {
+            // `Some(databases)` for schema-aware backends, `None` for schemaless
+            // ones (which skip the database level).
+            let result: anyhow::Result<Option<Vec<String>>> = async {
+                let conn = db_service
+                    .get_or_create_connection(connection.connection_id, None)
+                    .await?;
+                conn.ping().await?;
+                if conn.supports_schemas() {
+                    Ok(Some(conn.get_databases().await?))
+                } else {
+                    Ok(None)
+                }
+            }
+            .await;
+
+            this.update_in(cx, |this, window, cx| match result {
+                Ok(databases) => {
+                    let crumb: SharedString = connection.connection_name.clone().into();
+                    this.list_state.update(cx, |state, cx| {
+                        state.delegate_mut().set_loading(false);
+                        cx.notify();
+                    });
+                    match databases {
+                        Some(databases) => {
+                            let items = databases
+                                .into_iter()
+                                .map(|name| database_item(&connection, name))
+                                .collect();
+                            this.push_level(crumb, items, "Search databases...", window, cx);
+                        }
+                        None => {
+                            // Schemaless backend: skip the database level entirely.
+                            let database = DatabaseRef {
+                                connection_id: connection.connection_id,
+                                connection_name: connection.connection_name.clone(),
+                                db_type: connection.db_type,
+                                environment_type: connection.environment_type,
+                                database_name: connection.default_database.clone(),
+                            };
+                            let leaf = new_query_leaf(&database);
+                            this.push_level(crumb, vec![leaf], "Search actions...", window, cx);
+                        }
+                    }
+                }
+                Err(e) => {
+                    this.list_state.update(cx, |state, cx| {
+                        let delegate = state.delegate_mut();
+                        delegate.set_loading(false);
+                        delegate.set_error(Some(format!("{e:#}")));
+                        cx.notify();
+                    });
+                    this.query_input.focus_handle(cx).focus(window, cx);
+                    cx.notify();
+                }
+            })
+            .log_err();
+        })
+        .detach();
     }
 
     pub fn show(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -199,6 +470,7 @@ impl CommandPalette {
         self.visible = true;
         self.query_input.update(cx, |input, cx| {
             input.set_value("", window, cx);
+            input.set_placeholder("Type a command or search...", window, cx);
         });
         self.list_state.update(cx, |state, cx| {
             state.delegate_mut().refresh_commands(cx);
@@ -289,7 +561,13 @@ impl Render for CommandPalette {
                 this.move_selection(-1, window, cx);
             }))
             .on_action(cx.listener(|this, _: &ConfirmCommand, window, cx| {
-                this.confirm_selection(window, cx);
+                this.activate_selected(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &NavigateForward, window, cx| {
+                this.navigate_forward(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &NavigateBack, window, cx| {
+                this.navigate_back(window, cx);
             }));
 
         if !self.visible {
@@ -314,6 +592,78 @@ impl Render for CommandPalette {
                 this.hide(window, cx);
             }));
 
+        let (breadcrumbs, loading, error) = {
+            let delegate = self.list_state.read(cx).delegate();
+            (
+                delegate.breadcrumbs(),
+                delegate.loading,
+                delegate.error.clone(),
+            )
+        };
+
+        let muted = cx.theme().muted_foreground;
+        let accent = cx.theme().accent_foreground;
+
+        // The breadcrumb row only shows once we have descended at least one
+        // level (i.e. there is more than just the root crumb).
+        let breadcrumb_row = (breadcrumbs.len() > 1).then(|| {
+            let last = breadcrumbs.len() - 1;
+            let mut row = h_flex()
+                .px_2()
+                .py_1()
+                .gap_1()
+                .text_sm()
+                .border_b_1()
+                .border_color(cx.theme().border);
+            for (i, crumb) in breadcrumbs.into_iter().enumerate() {
+                if i > 0 {
+                    row = row.child(div().text_color(muted).child("/"));
+                }
+                let is_last = i == last;
+                let chip = div()
+                    .id(("crumb", i))
+                    .when(!is_last, |el| {
+                        el.cursor_pointer().on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.navigate_to_depth(i, window, cx);
+                            },
+                        ))
+                    })
+                    .text_color(if is_last { accent } else { muted })
+                    .child(crumb);
+                row = row.child(chip);
+            }
+            row
+        });
+
+        let list_area = div().px_1().py_1().h(px(360.));
+        let list_area = if loading {
+            list_area.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size_full()
+                    .text_sm()
+                    .text_color(muted)
+                    .child("Connecting…"),
+            )
+        } else if let Some(error) = error {
+            list_area.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size_full()
+                    .px_2()
+                    .text_sm()
+                    .text_color(cx.theme().danger)
+                    .child(error),
+            )
+        } else {
+            list_area.child(List::new(&self.list_state))
+        };
+
         let palette_content = div()
             .id("palette-content")
             .absolute()
@@ -331,6 +681,7 @@ impl Render for CommandPalette {
             .on_click(|_, _, _| {})
             .child(
                 v_flex()
+                    .when_some(breadcrumb_row, |this, row| this.child(row))
                     .child(
                         div()
                             .py_2()
@@ -338,13 +689,7 @@ impl Render for CommandPalette {
                             .border_color(cx.theme().border)
                             .child(Input::new(&input_entity).appearance(false)),
                     )
-                    .child(
-                        div()
-                            .px_1()
-                            .py_1()
-                            .h(px(360.))
-                            .child(List::new(&self.list_state)),
-                    ),
+                    .child(list_area),
             );
 
         base.child(
@@ -406,43 +751,127 @@ fn execute_command(cmd: &CommandType, window: &mut Window, cx: &mut App) {
             window.dispatch_action(Box::new(ToggleRenderWhitespace), cx)
         }
         CommandType::ToggleWordWrap => window.dispatch_action(Box::new(ToggleWordWrap), cx),
-        CommandType::ConnectToConnection { connection_id } => window.dispatch_action(
-            Box::new(ConnectToConnection {
-                connection_id: *connection_id,
+        CommandType::NewQueryForDatabase(database) => window.dispatch_action(
+            Box::new(CreateNewQueryTab {
+                connection_id: database.connection_id,
+                connection_name: database.connection_name.clone(),
+                db_type: database.db_type,
+                database_name: database.database_name.clone(),
+                schema_name: None,
+                table_name: None,
+                environment_type: Some(database.environment_type),
             }),
             cx,
         ),
     }
 }
 
+/// Label shown for the first (root) breadcrumb chip.
+const ROOT_CRUMB: &str = "Commands";
+
 pub struct CommandPaletteDelegate {
     sidebar: WeakEntity<ConnectionsPanel>,
-    all_commands: Vec<CommandItem>,
+    /// The root level: base commands plus per-connection navigable items.
+    root_commands: Vec<CommandItem>,
+    /// Pushed navigation levels; empty == at the root.
+    stack: Vec<NavLevel>,
     filtered: Vec<ScoredItem>,
     selected_index: Option<IndexPath>,
     query: String,
+    loading: bool,
+    error: Option<String>,
 }
 
 impl CommandPaletteDelegate {
     fn new(sidebar: WeakEntity<ConnectionsPanel>, cx: &App) -> Self {
         let mut delegate = Self {
             sidebar,
-            all_commands: Vec::new(),
+            root_commands: Vec::new(),
+            stack: Vec::new(),
             filtered: Vec::new(),
             selected_index: None,
             query: String::new(),
+            loading: false,
+            error: None,
         };
         delegate.refresh_commands(cx);
         delegate
     }
 
+    /// The items for the current level (root or the top of the stack).
+    fn current_items(&self) -> &[CommandItem] {
+        self.stack
+            .last()
+            .map(|level| level.items.as_slice())
+            .unwrap_or(&self.root_commands)
+    }
+
     fn refresh_commands(&mut self, cx: &App) {
-        self.all_commands = build_commands(&self.sidebar, cx);
+        self.root_commands = build_commands(&self.sidebar, cx);
+        self.stack.clear();
+        self.loading = false;
+        self.error = None;
+        self.query.clear();
         self.apply_filter();
+    }
+
+    fn push_level(&mut self, crumb: SharedString, items: Vec<CommandItem>, placeholder: SharedString) {
+        self.stack.push(NavLevel {
+            crumb,
+            items,
+            placeholder,
+        });
+        self.error = None;
+        self.query.clear();
+        self.apply_filter();
+    }
+
+    fn pop_level(&mut self) {
+        self.stack.pop();
+        self.error = None;
+        self.query.clear();
+        self.apply_filter();
+    }
+
+    /// Truncate the stack to `depth` levels (0 == root).
+    fn pop_to(&mut self, depth: usize) {
+        self.stack.truncate(depth);
+        self.error = None;
+        self.query.clear();
+        self.apply_filter();
+    }
+
+    fn set_loading(&mut self, loading: bool) {
+        self.loading = loading;
+        if loading {
+            self.error = None;
+        }
+    }
+
+    fn set_error(&mut self, error: Option<String>) {
+        self.error = error;
+    }
+
+    /// Breadcrumb labels including the root, from root to the current level.
+    fn breadcrumbs(&self) -> Vec<SharedString> {
+        let mut crumbs = Vec::with_capacity(self.stack.len() + 1);
+        crumbs.push(SharedString::new_static(ROOT_CRUMB));
+        crumbs.extend(self.stack.iter().map(|level| level.crumb.clone()));
+        crumbs
+    }
+
+    /// The search placeholder for the current level.
+    fn placeholder(&self) -> SharedString {
+        self.stack
+            .last()
+            .map(|level| level.placeholder.clone())
+            .unwrap_or_else(|| SharedString::new_static("Type a command or search..."))
     }
 
     fn set_query(&mut self, query: &str, cx: &mut Context<ListState<Self>>) {
         self.query = query.to_string();
+        // Typing dismisses a stale connection error so the list reappears.
+        self.error = None;
         self.apply_filter();
         self.selected_index = if self.filtered.is_empty() {
             None
@@ -455,7 +884,7 @@ impl CommandPaletteDelegate {
     fn apply_filter(&mut self) {
         if self.query.is_empty() {
             self.filtered = self
-                .all_commands
+                .current_items()
                 .iter()
                 .enumerate()
                 .map(|(i, cmd)| ScoredItem {
@@ -468,7 +897,7 @@ impl CommandPaletteDelegate {
 
         let query_lower = self.query.to_lowercase();
         let mut results: Vec<ScoredItem> = self
-            .all_commands
+            .current_items()
             .iter()
             .filter_map(|cmd| {
                 let label_lower = cmd.label.to_lowercase();
@@ -532,113 +961,62 @@ fn fuzzy_score(text: &str, query: &str) -> Option<i64> {
     }
 }
 
+/// Build a leaf command item.
+fn leaf(label: &str, group: &str, command: CommandType) -> CommandItem {
+    CommandItem {
+        label: label.into(),
+        group: group.into(),
+        kind: ItemKind::Command(command),
+    }
+}
+
+/// The leaf action shown at the bottom of a navigation drill-down.
+fn new_query_leaf(database: &DatabaseRef) -> CommandItem {
+    CommandItem {
+        label: "New query".into(),
+        group: "Action".into(),
+        kind: ItemKind::Command(CommandType::NewQueryForDatabase(database.clone())),
+    }
+}
+
+/// A navigable database item under a connection.
+fn database_item(connection: &ConnectionRef, name: String) -> CommandItem {
+    CommandItem {
+        label: name.clone(),
+        group: "Database".into(),
+        kind: ItemKind::Database(DatabaseRef {
+            connection_id: connection.connection_id,
+            connection_name: connection.connection_name.clone(),
+            db_type: connection.db_type,
+            environment_type: connection.environment_type,
+            database_name: name,
+        }),
+    }
+}
+
 fn build_commands(sidebar: &WeakEntity<ConnectionsPanel>, cx: &App) -> Vec<CommandItem> {
     let mut commands = vec![
-        CommandItem {
-            label: "Run Query".into(),
-            group: "Query".into(),
-            action_type: CommandType::RunQuery,
-        },
-        CommandItem {
-            label: "Explain Query".into(),
-            group: "Query".into(),
-            action_type: CommandType::ExplainQuery,
-        },
-        CommandItem {
-            label: "Format Query".into(),
-            group: "Query".into(),
-            action_type: CommandType::FormatQuery,
-        },
-        CommandItem {
-            label: "New Snippet".into(),
-            group: "Tab".into(),
-            action_type: CommandType::NewSnippet,
-        },
-        CommandItem {
-            label: "New Connection".into(),
-            group: "Connection".into(),
-            action_type: CommandType::OpenNewConnectionModal,
-        },
-        CommandItem {
-            label: "Open Settings".into(),
-            group: "View".into(),
-            action_type: CommandType::OpenSettings,
-        },
-        CommandItem {
-            label: "Toggle Sidebar".into(),
-            group: "View".into(),
-            action_type: CommandType::ToggleSidebar,
-        },
-        CommandItem {
-            label: "Commit Changes".into(),
-            group: "Edit".into(),
-            action_type: CommandType::CommitChanges,
-        },
-        CommandItem {
-            label: "Rollback Changes".into(),
-            group: "Edit".into(),
-            action_type: CommandType::RollbackChanges,
-        },
-        CommandItem {
-            label: "Copy as CSV".into(),
-            group: "Results".into(),
-            action_type: CommandType::CopyAsCSV,
-        },
-        CommandItem {
-            label: "Copy as TSV".into(),
-            group: "Results".into(),
-            action_type: CommandType::CopyAsTSV,
-        },
-        CommandItem {
-            label: "Copy as JSON".into(),
-            group: "Results".into(),
-            action_type: CommandType::CopyAsJSON,
-        },
-        CommandItem {
-            label: "Copy as SQL".into(),
-            group: "Results".into(),
-            action_type: CommandType::CopyAsSQL,
-        },
-        CommandItem {
-            label: "Copy as Markdown".into(),
-            group: "Results".into(),
-            action_type: CommandType::CopyAsMarkdown,
-        },
-        CommandItem {
-            label: "Export as CSV".into(),
-            group: "Results".into(),
-            action_type: CommandType::ExportAsCSV,
-        },
-        CommandItem {
-            label: "Export as TSV".into(),
-            group: "Results".into(),
-            action_type: CommandType::ExportAsTSV,
-        },
-        CommandItem {
-            label: "Export as JSON".into(),
-            group: "Results".into(),
-            action_type: CommandType::ExportAsJSON,
-        },
-        CommandItem {
-            label: "Export as SQL".into(),
-            group: "Results".into(),
-            action_type: CommandType::ExportAsSQL,
-        },
-        CommandItem {
-            label: "Export as Markdown".into(),
-            group: "Results".into(),
-            action_type: CommandType::ExportAsMarkdown,
-        },
-        CommandItem {
-            label: "Render Whitespace".into(),
-            group: "View".into(),
-            action_type: CommandType::ToggleRenderWhitespace,
-        },
-        CommandItem {
-            label: "Word Wrap".into(),
-            group: "View".into(),
-            action_type: CommandType::ToggleWordWrap,
-        },
+        leaf("Run Query", "Query", CommandType::RunQuery),
+        leaf("Explain Query", "Query", CommandType::ExplainQuery),
+        leaf("Format Query", "Query", CommandType::FormatQuery),
+        leaf("New Snippet", "Tab", CommandType::NewSnippet),
+        leaf("New Connection", "Connection", CommandType::OpenNewConnectionModal),
+        leaf("Open Settings", "View", CommandType::OpenSettings),
+        leaf("Toggle Sidebar", "View", CommandType::ToggleSidebar),
+        leaf("Commit Changes", "Edit", CommandType::CommitChanges),
+        leaf("Rollback Changes", "Edit", CommandType::RollbackChanges),
+        leaf("Copy as CSV", "Results", CommandType::CopyAsCSV),
+        leaf("Copy as TSV", "Results", CommandType::CopyAsTSV),
+        leaf("Copy as JSON", "Results", CommandType::CopyAsJSON),
+        leaf("Copy as SQL", "Results", CommandType::CopyAsSQL),
+        leaf("Copy as Markdown", "Results", CommandType::CopyAsMarkdown),
+        leaf("Export as CSV", "Results", CommandType::ExportAsCSV),
+        leaf("Export as TSV", "Results", CommandType::ExportAsTSV),
+        leaf("Export as JSON", "Results", CommandType::ExportAsJSON),
+        leaf("Export as SQL", "Results", CommandType::ExportAsSQL),
+        leaf("Export as Markdown", "Results", CommandType::ExportAsMarkdown),
+        leaf("Render Whitespace", "View", CommandType::ToggleRenderWhitespace),
+        leaf("Word Wrap", "View", CommandType::ToggleWordWrap),
     ];
 
     add_connection_commands(&mut commands, sidebar, cx);
@@ -659,9 +1037,15 @@ fn add_connection_commands(
             continue;
         };
         commands.push(CommandItem {
-            label: format!("Connect to {}", connection.name),
+            label: connection.name.clone(),
             group: "Connection".into(),
-            action_type: CommandType::ConnectToConnection { connection_id },
+            kind: ItemKind::Connection(ConnectionRef {
+                connection_id,
+                connection_name: connection.name.clone(),
+                db_type: connection.db_type,
+                environment_type: connection.environment_type,
+                default_database: connection.database_name.clone().unwrap_or_default(),
+            }),
         });
     }
 }
@@ -722,6 +1106,7 @@ impl IntoElement for CommandPaletteItemElement {
         } else {
             self.muted_color
         };
+        let navigable = self.command.is_navigable();
         div()
             .id(id)
             .w_full()
@@ -739,7 +1124,11 @@ impl IntoElement for CommandPaletteItemElement {
                     .child(div().text_color(group_color).child(self.command.group))
                     .child(div().text_color(group_color).child("/"))
                     .child(div().flex_1().child(self.command.label))
-                    .when_some(self.keybinding, |this, kbd| this.child(kbd)),
+                    .when_some(self.keybinding, |this, kbd| this.child(kbd))
+                    // A chevron marks items that drill into another level.
+                    .when(navigable, |this| {
+                        this.child(div().text_color(group_color).child("›"))
+                    }),
             )
     }
 }
@@ -763,7 +1152,10 @@ impl ListDelegate for CommandPaletteDelegate {
         let muted_color = theme.muted_foreground;
         let selected_bg = theme.accent;
         let selected_fg = theme.accent_foreground;
-        let keybinding = keybinding_for_command(&command.action_type, window);
+        let keybinding = match &command.kind {
+            ItemKind::Command(ct) => keybinding_for_command(ct, window),
+            _ => None,
+        };
         Some(CommandPaletteItemElement::new(
             ix,
             command,
@@ -956,7 +1348,7 @@ mod visual_tests {
         cx.run_until_parked();
 
         palette.update_in(&mut cx, |p, window, cx| {
-            p.confirm_selection(window, cx);
+            p.activate_selected(window, cx);
         });
         cx.run_until_parked();
 
@@ -964,6 +1356,53 @@ mod visual_tests {
         assert_ne!(
             collapsed_before, collapsed_after,
             "executing Toggle Sidebar command should flip sidebar_collapsed"
+        );
+    }
+
+    #[gpui::test]
+    async fn test_database_item_pushes_new_query_leaf(cx: &mut TestAppContext) {
+        use super::{CommandItem, DatabaseRef, ItemKind};
+        use database::DatabaseType;
+
+        let (app, window_handle) = setup_app(cx);
+        let mut cx = VisualTestContext::from_window(window_handle.into(), cx);
+
+        let palette = app.read_with(&cx, |app, _| app.command_palette().clone());
+
+        cx.update(|window, cx| {
+            window.dispatch_action(Box::new(ToggleCommandPalette), cx);
+        });
+        cx.run_until_parked();
+
+        // Activating a database item drills into a level holding a single
+        // "New query" leaf, with the database name in the breadcrumb trail.
+        palette.update_in(&mut cx, |p, window, cx| {
+            let item = CommandItem {
+                label: "mydb".into(),
+                group: "Database".into(),
+                kind: ItemKind::Database(DatabaseRef {
+                    connection_id: 1,
+                    connection_name: "Postgres Test".into(),
+                    db_type: DatabaseType::PostgreSQL,
+                    environment_type: Default::default(),
+                    database_name: "mydb".into(),
+                }),
+            };
+            p.activate_item_for_test(item, window, cx);
+        });
+        cx.run_until_parked();
+
+        let labels = palette.read_with(&cx, |p, cx| p.filtered_labels(cx));
+        assert_eq!(
+            labels,
+            vec!["New query".to_string()],
+            "database level should hold exactly the New query leaf, got {labels:?}"
+        );
+
+        let crumbs = palette.read_with(&cx, |p, cx| p.breadcrumbs_for_test(cx));
+        assert!(
+            crumbs.iter().any(|c| c == "mydb"),
+            "breadcrumb trail should include the database name, got {crumbs:?}"
         );
     }
 }
