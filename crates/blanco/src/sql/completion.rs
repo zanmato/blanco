@@ -45,6 +45,14 @@ struct TableRef {
     table: String,
 }
 
+/// A column offered for completion, with its data type when known (real table
+/// columns have a type; CTE/derived-table projection columns do not).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ColumnCandidate {
+    name: String,
+    data_type: Option<String>,
+}
+
 /// Where a set of completable columns comes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ColumnSource {
@@ -413,23 +421,43 @@ fn filter_and_sort(items: &[String], current_word: &str) -> Vec<String> {
 }
 
 fn build_column_items(
-    columns: &[String],
+    columns: &[ColumnCandidate],
     current_word: &str,
     range: Range,
     table: &str,
 ) -> Vec<CompletionItem> {
-    filter_and_sort(columns, current_word)
+    let needle = current_word.to_lowercase();
+    let mut filtered: Vec<&ColumnCandidate> = if current_word.is_empty() {
+        columns.iter().collect()
+    } else {
+        columns
+            .iter()
+            .filter(|column| column.name.to_lowercase().starts_with(&needle))
+            .collect()
+    };
+    filtered.sort_by_key(|column| column.name.len());
+
+    filtered
         .into_iter()
-        .map(|column_name| CompletionItem {
-            label: column_name.clone(),
-            kind: Some(CompletionItemKind::FIELD),
-            text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
-                range,
-                column_name.clone(),
-            ))),
-            detail: Some(format!("Column from {table}")),
-            insert_text: Some(column_name),
-            ..Default::default()
+        .map(|column| {
+            let column_name = column.name.clone();
+            // Prefer the data type as the detail hint; fall back to the source
+            // table when the type is unknown (CTE / derived-table columns).
+            let detail = column
+                .data_type
+                .clone()
+                .unwrap_or_else(|| format!("Column from {table}"));
+            CompletionItem {
+                label: column_name.clone(),
+                kind: Some(CompletionItemKind::FIELD),
+                text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
+                    range,
+                    column_name.clone(),
+                ))),
+                detail: Some(detail),
+                insert_text: Some(column_name),
+                ..Default::default()
+            }
         })
         .collect()
 }
@@ -854,7 +882,7 @@ impl CompletionProvider for SqlCompletionProvider {
                         // first occurrence so columns from earlier relations win
                         // on name collisions. Keep the full column metadata of
                         // real tables so foreign-key join conditions can be built.
-                        let mut all_columns: Vec<String> = Vec::new();
+                        let mut all_columns: Vec<ColumnCandidate> = Vec::new();
                         let mut seen = std::collections::HashSet::new();
                         let mut fetched_tables: Vec<(TableRef, Arc<Vec<ColumnInfo>>)> = Vec::new();
                         for source in &sources {
@@ -866,7 +894,10 @@ impl CompletionProvider for SqlCompletionProvider {
                                     {
                                         for column in columns.iter() {
                                             if seen.insert(column.name.clone()) {
-                                                all_columns.push(column.name.clone());
+                                                all_columns.push(ColumnCandidate {
+                                                    name: column.name.clone(),
+                                                    data_type: Some(column.data_type.clone()),
+                                                });
                                             }
                                         }
                                         fetched_tables.push((table_ref.clone(), columns));
@@ -875,7 +906,10 @@ impl CompletionProvider for SqlCompletionProvider {
                                 ColumnSource::Static(columns) => {
                                     for column in columns {
                                         if seen.insert(column.clone()) {
-                                            all_columns.push(column.clone());
+                                            all_columns.push(ColumnCandidate {
+                                                name: column.clone(),
+                                                data_type: None,
+                                            });
                                         }
                                     }
                                 }
@@ -1342,14 +1376,38 @@ mod tests {
         assert_eq!(items[0].label, "analytics");
     }
 
+    fn typed_candidate(name: &str, data_type: &str) -> ColumnCandidate {
+        ColumnCandidate {
+            name: name.to_string(),
+            data_type: Some(data_type.to_string()),
+        }
+    }
+
     #[test]
     fn test_build_column_items_filter_and_detail() {
-        let cols = schemas(&["id", "company", "region"]);
+        let cols = vec![
+            typed_candidate("id", "integer"),
+            typed_candidate("company", "text"),
+            typed_candidate("region", "text"),
+        ];
         let items = build_column_items(&cols, "co", dummy_range(), "customers");
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].label, "company");
-        assert_eq!(items[0].detail.as_deref(), Some("Column from customers"));
+        // The data type is shown as the detail hint.
+        assert_eq!(items[0].detail.as_deref(), Some("text"));
         assert_eq!(items[0].kind, Some(CompletionItemKind::FIELD));
+    }
+
+    #[test]
+    fn test_build_column_items_type_hint_falls_back_to_table() {
+        // Columns without a known type (CTE / derived) fall back to the table.
+        let cols = vec![ColumnCandidate {
+            name: "total".to_string(),
+            data_type: None,
+        }];
+        let items = build_column_items(&cols, "", dummy_range(), "summary");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].detail.as_deref(), Some("Column from summary"));
     }
 
     #[test]
