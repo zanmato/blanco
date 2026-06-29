@@ -43,15 +43,25 @@ struct TableRef {
     table: String,
 }
 
+/// Where a set of completable columns comes from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ColumnSource {
+    /// Columns fetched (and cached) from a real database table.
+    Table(TableRef),
+    /// Columns known statically from a CTE or derived-table (subquery)
+    /// projection, so no database lookup is needed.
+    Static(Vec<String>),
+}
+
 /// What the completion request resolves to once the SQL context has been
 /// analysed. Computed by [`plan_completion`], which is pure so the routing
 /// rules can be tested without a database.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CompletionPlan {
-    /// Show the union of columns from one or more tables. A single entry is the
-    /// dot-notation / single-table case; multiple entries cover columns from all
-    /// relations in scope (e.g. every table in a JOIN).
-    Columns { tables: Vec<TableRef> },
+    /// Show the union of columns from one or more sources. A single entry is the
+    /// dot-notation / single-relation case; multiple entries cover columns from
+    /// all relations in scope (e.g. every table in a JOIN).
+    Columns { sources: Vec<ColumnSource> },
     /// Show the tables of `schema` (drilling into `schema.` in a FROM/JOIN).
     SchemaTables { schema: String },
     /// Show the current schema's tables plus the other schema names.
@@ -258,6 +268,29 @@ fn split_schema_qualified(name: &str, default_schema: &str) -> (String, String) 
     }
 }
 
+/// Look up the static columns of a CTE / derived table referenced by `name`,
+/// either directly (`FROM cte`) or via an alias that maps to such a relation.
+fn lookup_derived_columns(context: &TsCompletionContext, name: &str) -> Option<Vec<String>> {
+    if let Some((_, columns)) = context.cte_columns.iter().find(|(key, _)| key == name) {
+        return Some(columns.clone());
+    }
+    // `name` may be a table alias that resolves to a CTE name.
+    let resolved = resolve_table_alias(&context.table_aliases, name)?;
+    context
+        .cte_columns
+        .iter()
+        .find(|(key, _)| *key == resolved)
+        .map(|(_, columns)| columns.clone())
+}
+
+/// Push a source unless an equal one is already present (de-dupes repeated
+/// relations without disturbing order).
+fn push_unique(sources: &mut Vec<ColumnSource>, source: ColumnSource) {
+    if !sources.contains(&source) {
+        sources.push(source);
+    }
+}
+
 /// Decide what to complete from the parsed SQL context. Pure: all database
 /// state (`known_schemas`, `supports_schemas`) is passed in, so the routing
 /// rules are unit-testable without IO.
@@ -272,11 +305,18 @@ fn plan_completion(
             return CompletionPlan::Nothing;
         };
 
+        // A CTE or derived-table referenced by this name -> its static columns.
+        if let Some(columns) = lookup_derived_columns(context, name) {
+            return CompletionPlan::Columns {
+                sources: vec![ColumnSource::Static(columns)],
+            };
+        }
+
         // An alias always refers to a table -> show its columns.
         if let Some(table) = resolve_table_alias(&context.table_aliases, name) {
             let (schema, table) = split_schema_qualified(&table, current_schema);
             return CompletionPlan::Columns {
-                tables: vec![TableRef { schema, table }],
+                sources: vec![ColumnSource::Table(TableRef { schema, table })],
             };
         }
 
@@ -293,10 +333,10 @@ fn plan_completion(
         // Otherwise treat it as a table in the current schema -> its columns.
         if is_valid_identifier(name) && !is_sql_keyword(name) {
             return CompletionPlan::Columns {
-                tables: vec![TableRef {
+                sources: vec![ColumnSource::Table(TableRef {
                     schema: current_schema.to_string(),
                     table: name.to_string(),
-                }],
+                })],
             };
         }
 
@@ -304,20 +344,39 @@ fn plan_completion(
     }
 
     if is_column_clause(context.clause) {
-        // Offer columns from every relation in scope (all FROM/JOIN tables), not
-        // just the first, so a JOIN suggests columns from each joined table.
-        let mut tables: Vec<TableRef> = Vec::new();
+        // Offer columns from every relation in scope (all FROM/JOIN relations),
+        // not just the first. Real tables are fetched from the database; CTEs and
+        // derived tables contribute their statically-known projection columns.
+        let mut sources: Vec<ColumnSource> = Vec::new();
+        let mut covered_derived: Vec<&str> = Vec::new();
+
         for alias in &context.table_aliases {
+            // A relation aliased to a CTE/derived name uses its static columns
+            // (e.g. `FROM cte c` or `FROM (subquery) c`).
+            if let Some(columns) = lookup_derived_columns(context, &alias.alias) {
+                covered_derived.push(&alias.alias);
+                push_unique(&mut sources, ColumnSource::Static(columns));
+                continue;
+            }
             let (schema, table) = split_schema_qualified(&alias.table_name, current_schema);
-            let table_ref = TableRef { schema, table };
-            if !tables.contains(&table_ref) {
-                tables.push(table_ref);
+            push_unique(
+                &mut sources,
+                ColumnSource::Table(TableRef { schema, table }),
+            );
+        }
+
+        // Derived relations referenced without a separate alias (e.g. `FROM cte`
+        // or `FROM (subquery) sub`) are not in `table_aliases`, so add them here.
+        for (name, columns) in &context.cte_columns {
+            if !covered_derived.contains(&name.as_str()) {
+                push_unique(&mut sources, ColumnSource::Static(columns.clone()));
             }
         }
-        if tables.is_empty() {
+
+        if sources.is_empty() {
             return CompletionPlan::Nothing;
         }
-        return CompletionPlan::Columns { tables };
+        return CompletionPlan::Columns { sources };
     }
 
     if is_table_clause(context.clause) {
@@ -509,11 +568,14 @@ impl CompletionProvider for SqlCompletionProvider {
 
                 // Debounce table/column fetches that are not yet cached.
                 let needs_fetch = match &plan {
-                    CompletionPlan::Columns { tables } => tables.iter().any(|t| {
-                        provider
-                            .try_get_cached_columns(&t.schema, &t.table)
-                            .is_none()
-                    }),
+                    CompletionPlan::Columns { sources } => {
+                        sources.iter().any(|source| match source {
+                            ColumnSource::Table(t) => provider
+                                .try_get_cached_columns(&t.schema, &t.table)
+                                .is_none(),
+                            ColumnSource::Static(_) => false,
+                        })
+                    }
                     CompletionPlan::SchemaTables { schema } => {
                         provider.try_get_cached_tables(schema).is_none()
                     }
@@ -527,27 +589,35 @@ impl CompletionProvider for SqlCompletionProvider {
                 }
 
                 let items = match plan {
-                    CompletionPlan::Columns { tables } => {
-                        // Union columns across all in-scope tables, keeping the
+                    CompletionPlan::Columns { sources } => {
+                        // Union columns across all in-scope sources, keeping the
                         // first occurrence so columns from earlier relations win
                         // on name collisions.
                         let mut all_columns: Vec<String> = Vec::new();
                         let mut seen = std::collections::HashSet::new();
-                        for table_ref in &tables {
-                            if let Ok(columns) = provider
-                                .get_cached_columns(&table_ref.schema, &table_ref.table)
-                                .await
-                            {
-                                for column in columns.iter() {
-                                    if seen.insert(column.clone()) {
-                                        all_columns.push(column.clone());
-                                    }
+                        let mut add = |columns: &[String]| {
+                            for column in columns {
+                                if seen.insert(column.clone()) {
+                                    all_columns.push(column.clone());
                                 }
                             }
+                        };
+                        for source in &sources {
+                            match source {
+                                ColumnSource::Table(table_ref) => {
+                                    if let Ok(columns) = provider
+                                        .get_cached_columns(&table_ref.schema, &table_ref.table)
+                                        .await
+                                    {
+                                        add(&columns);
+                                    }
+                                }
+                                ColumnSource::Static(columns) => add(columns),
+                            }
                         }
-                        let detail = match tables.as_slice() {
-                            [single] => single.table.clone(),
-                            _ => "joined tables".to_string(),
+                        let detail = match sources.as_slice() {
+                            [ColumnSource::Table(single)] => single.table.clone(),
+                            _ => "query columns".to_string(),
                         };
                         build_column_items(&all_columns, &context.current_word, range, &detail)
                     }
@@ -612,10 +682,19 @@ mod tests {
     /// A single-table `Columns` plan, the common case in these tests.
     fn columns_plan(schema: &str, table: &str) -> CompletionPlan {
         CompletionPlan::Columns {
-            tables: vec![TableRef {
+            sources: vec![ColumnSource::Table(TableRef {
                 schema: schema.to_string(),
                 table: table.to_string(),
-            }],
+            })],
+        }
+    }
+
+    /// A `Columns` plan made of statically-known columns (CTE / derived table).
+    fn static_columns_plan(columns: &[&str]) -> CompletionPlan {
+        CompletionPlan::Columns {
+            sources: vec![ColumnSource::Static(
+                columns.iter().map(|c| c.to_string()).collect(),
+            )],
         }
     }
 
@@ -781,6 +860,7 @@ mod tests {
             table_aliases: aliases,
             is_dot_notation: true,
             dot_table_name: Some("sales".to_string()),
+            cte_columns: Vec::new(),
         };
         let plan = plan_completion(&context, "public", &schemas(&["public", "sales"]), true);
         assert_eq!(plan, columns_plan("public", "shipments"));
@@ -826,20 +906,80 @@ mod tests {
             table_aliases: aliases,
             is_dot_notation: false,
             dot_table_name: None,
+            cte_columns: Vec::new(),
         };
         let plan = plan_completion(&context, "public", &schemas(&["public", "sales"]), true);
         assert_eq!(
             plan,
             CompletionPlan::Columns {
-                tables: vec![
-                    TableRef {
+                sources: vec![
+                    ColumnSource::Table(TableRef {
                         schema: "public".to_string(),
                         table: "users".to_string(),
-                    },
-                    TableRef {
+                    }),
+                    ColumnSource::Table(TableRef {
                         schema: "sales".to_string(),
                         table: "orders".to_string(),
-                    },
+                    }),
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn test_plan_cte_columns_in_where() {
+        // Columns of a CTE referenced unqualified should be offered statically.
+        let sql = "WITH cte AS (SELECT a, b FROM users) SELECT * FROM cte WHERE ";
+        let plan = plan_completion(&ctx_end(sql), "public", &schemas(&["public"]), true);
+        assert_eq!(plan, static_columns_plan(&["a", "b"]));
+    }
+
+    #[test]
+    fn test_plan_cte_columns_via_alias_dot() {
+        // `c.` where `c` aliases the CTE should resolve to the CTE's columns.
+        let sql = "WITH cte AS (SELECT a, b FROM users) SELECT * FROM cte c WHERE c.";
+        let plan = plan_completion(&ctx(sql, sql.len()), "public", &schemas(&["public"]), true);
+        assert_eq!(plan, static_columns_plan(&["a", "b"]));
+    }
+
+    #[test]
+    fn test_plan_derived_table_columns() {
+        // A derived table (subquery in FROM) exposes its projection columns.
+        let sql = "SELECT * FROM (SELECT a, b FROM users) sub WHERE ";
+        let plan = plan_completion(&ctx_end(sql), "public", &schemas(&["public"]), true);
+        assert_eq!(plan, static_columns_plan(&["a", "b"]));
+    }
+
+    #[test]
+    fn test_plan_derived_table_columns_via_dot() {
+        let sql = "SELECT * FROM (SELECT a, b FROM users) sub WHERE sub.";
+        let plan = plan_completion(&ctx(sql, sql.len()), "public", &schemas(&["public"]), true);
+        assert_eq!(plan, static_columns_plan(&["a", "b"]));
+    }
+
+    #[test]
+    fn test_plan_cte_aliased_column_uses_alias_name() {
+        // `SELECT x AS y` projects `y`, not `x`.
+        let sql = "WITH cte AS (SELECT x AS y, z FROM users) SELECT * FROM cte WHERE ";
+        let plan = plan_completion(&ctx_end(sql), "public", &schemas(&["public"]), true);
+        assert_eq!(plan, static_columns_plan(&["y", "z"]));
+    }
+
+    #[test]
+    fn test_plan_cte_joined_with_real_table_unions_both() {
+        // A CTE joined with a real table contributes static columns alongside
+        // the real table's fetched columns.
+        let sql = "WITH cte AS (SELECT a FROM users) SELECT * FROM cte c JOIN orders o ON c.a = o.a WHERE ";
+        let plan = plan_completion(&ctx_end(sql), "public", &schemas(&["public"]), true);
+        assert_eq!(
+            plan,
+            CompletionPlan::Columns {
+                sources: vec![
+                    ColumnSource::Static(vec!["a".to_string()]),
+                    ColumnSource::Table(TableRef {
+                        schema: "public".to_string(),
+                        table: "orders".to_string(),
+                    }),
                 ]
             }
         );
@@ -853,6 +993,7 @@ mod tests {
             table_aliases: Vec::new(),
             is_dot_notation: false,
             dot_table_name: None,
+            cte_columns: Vec::new(),
         };
         assert_eq!(
             plan_completion(&context, "public", &[], false),

@@ -391,6 +391,11 @@ pub struct CompletionContext {
     pub table_aliases: Vec<TableAlias>,
     pub is_dot_notation: bool,
     pub dot_table_name: Option<String>,
+    /// Columns of CTEs and derived tables (subqueries) referenced in the
+    /// statement's FROM clauses, keyed by the name used to reference them (the
+    /// CTE name, or the relation alias). Ordered by appearance. Only populated
+    /// when the projection is statically determinable (no `*`).
+    pub cte_columns: Vec<(String, Vec<String>)>,
 }
 
 /// Extract completion context at cursor position using tree-sitter.
@@ -451,12 +456,15 @@ pub fn extract_completion_context(
                 }
             });
 
+        let cte_columns = extract_derived_columns(search_root, &text_str);
+
         Some(CompletionContext {
             current_word,
             clause,
             table_aliases,
             is_dot_notation,
             dot_table_name,
+            cte_columns,
         })
     })
 }
@@ -516,6 +524,164 @@ fn extract_table_aliases_from_ast(node: Node, source: &str) -> Vec<TableAlias> {
     let mut aliases = Vec::new();
     collect_table_aliases(node, source, &mut aliases);
     aliases
+}
+
+/// Text of a node.
+fn node_text<'a>(node: Node, source: &'a str) -> &'a str {
+    let range = node.byte_range();
+    source.get(range).unwrap_or("")
+}
+
+/// First direct child of the given kind.
+fn first_child_of_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
+    (0..node.child_count() as u32)
+        .filter_map(|i| node.child(i))
+        .find(|child| child.kind() == kind)
+}
+
+/// Whether `node` has any descendant matching `kind`.
+fn has_descendant_of_kind(node: Node, kind: &str) -> bool {
+    if node.kind() == kind {
+        return true;
+    }
+    (0..node.child_count() as u32)
+        .filter_map(|i| node.child(i))
+        .any(|child| has_descendant_of_kind(child, kind))
+}
+
+/// The text of the last `identifier` descendant in document order. For a column
+/// projection this is the column name (`a`), the qualified name's tail (`t.a` ->
+/// `a`), or the alias (`x AS y` -> `y`).
+fn last_identifier_text(node: Node, source: &str) -> Option<String> {
+    let mut found: Option<String> = None;
+    collect_last_identifier(node, source, &mut found);
+    found
+}
+
+fn collect_last_identifier(node: Node, source: &str, found: &mut Option<String>) {
+    if node.kind() == "identifier" {
+        *found = Some(node_text(node, source).to_string());
+    }
+    for i in 0..node.child_count() as u32 {
+        if let Some(child) = node.child(i) {
+            collect_last_identifier(child, source, found);
+        }
+    }
+}
+
+/// Find the `select` clause node belonging directly to `node`'s query, without
+/// descending into nested subqueries or CTEs.
+fn find_select_clause<'a>(node: Node<'a>) -> Option<Node<'a>> {
+    for i in 0..node.child_count() as u32 {
+        let Some(child) = node.child(i) else { continue };
+        match child.kind() {
+            "select" => return Some(child),
+            "subquery" | "cte" => continue,
+            _ => {
+                if let Some(found) = find_select_clause(child) {
+                    return Some(found);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The projected column names of the query rooted at `node` (a `cte` or
+/// `subquery` node). Returns `None` if the projection is not statically
+/// enumerable (e.g. it uses `*`), so callers can fall back to a database lookup.
+fn projected_columns(node: Node, source: &str) -> Option<Vec<String>> {
+    let select = find_select_clause(node)?;
+    let select_expression = first_child_of_kind(select, "select_expression")?;
+
+    let mut columns = Vec::new();
+    for i in 0..select_expression.child_count() as u32 {
+        let Some(term) = select_expression.child(i) else {
+            continue;
+        };
+        if term.kind() != "term" {
+            continue;
+        }
+        // `SELECT *` / `t.*` can't be enumerated without the source schema.
+        if has_descendant_of_kind(term, "all_fields") {
+            return None;
+        }
+        columns.push(last_identifier_text(term, source)?);
+    }
+
+    if columns.is_empty() {
+        None
+    } else {
+        Some(columns)
+    }
+}
+
+/// Extract the statically-known columns of CTEs and derived tables referenced in
+/// `search_root`'s FROM clauses. See [`CompletionContext::cte_columns`].
+fn extract_derived_columns(search_root: Node, source: &str) -> Vec<(String, Vec<String>)> {
+    let mut cte_defs: Vec<(String, Vec<String>)> = Vec::new();
+    collect_cte_defs(search_root, source, &mut cte_defs);
+
+    let mut result: Vec<(String, Vec<String>)> = Vec::new();
+    collect_derived_relations(search_root, source, &cte_defs, &mut result);
+    result
+}
+
+/// Map CTE definition names to their projected columns.
+fn collect_cte_defs(node: Node, source: &str, out: &mut Vec<(String, Vec<String>)>) {
+    if node.kind() == "cte"
+        && let Some(name_node) = first_child_of_kind(node, "identifier")
+        && let Some(columns) = projected_columns(node, source)
+    {
+        out.push((node_text(name_node, source).to_string(), columns));
+    }
+    for i in 0..node.child_count() as u32 {
+        if let Some(child) = node.child(i) {
+            collect_cte_defs(child, source, out);
+        }
+    }
+}
+
+/// Walk `relation` nodes; for each derived table (subquery) or CTE reference,
+/// record its reference name and columns.
+fn collect_derived_relations(
+    node: Node,
+    source: &str,
+    cte_defs: &[(String, Vec<String>)],
+    out: &mut Vec<(String, Vec<String>)>,
+) {
+    if node.kind() == "relation" {
+        if let Some(subquery) = first_child_of_kind(node, "subquery") {
+            // `FROM (SELECT ...) alias` -> columns keyed by the alias.
+            if let (Some(alias), Some(columns)) = (
+                first_child_of_kind(node, "identifier"),
+                projected_columns(subquery, source),
+            ) {
+                push_named(out, node_text(alias, source).to_string(), columns);
+            }
+        } else if let Some(object_reference) = first_child_of_kind(node, "object_reference") {
+            // `FROM cte [alias]` -> columns of the matching CTE, keyed by the
+            // alias if present, else the CTE name.
+            let table_name = node_text(object_reference, source);
+            if let Some((_, columns)) = cte_defs.iter().find(|(name, _)| name == table_name) {
+                let key = first_child_of_kind(node, "identifier")
+                    .map(|id| node_text(id, source).to_string())
+                    .unwrap_or_else(|| table_name.to_string());
+                push_named(out, key, columns.clone());
+            }
+        }
+    }
+    for i in 0..node.child_count() as u32 {
+        if let Some(child) = node.child(i) {
+            collect_derived_relations(child, source, cte_defs, out);
+        }
+    }
+}
+
+fn push_named(out: &mut Vec<(String, Vec<String>)>, name: String, columns: Vec<String>) {
+    if !out.iter().any(|(existing, _)| *existing == name) {
+        out.push((name, columns));
+    }
 }
 
 fn collect_table_aliases(node: Node, source: &str, aliases: &mut Vec<TableAlias>) {
