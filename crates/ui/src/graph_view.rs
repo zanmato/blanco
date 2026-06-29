@@ -119,6 +119,117 @@ struct NodeRenderData {
     fields: Vec<(SharedString, SharedString, Vec<(SharedString, Hsla)>)>,
 }
 
+/// Per-frame layout values shared by every node, captured once in `render` so
+/// `render_graph_node` stays a plain function (nodes carry no event handlers).
+struct NodeRenderParams {
+    theme: gpui_component::Theme,
+    border_radius: Pixels,
+    header_height: f32,
+    field_row_height: f32,
+    font_size: f32,
+    badge_font_size: f32,
+    zoom: f32,
+}
+
+/// Render a single table node from precomputed layout data. Returns an owned
+/// `AnyElement` so the result does not borrow `params` (it is reused per node).
+fn render_graph_node(node_data: NodeRenderData, params: &NodeRenderParams) -> gpui::AnyElement {
+    let theme = &params.theme;
+    let zoom = params.zoom;
+    let font_size = params.font_size;
+    let border_color = if node_data.is_selected {
+        theme.cyan
+    } else if node_data.is_connected {
+        theme.cyan.opacity(0.6)
+    } else {
+        theme.border
+    };
+    div()
+        .absolute()
+        .left(px(node_data.screen_x))
+        .top(px(node_data.screen_y))
+        .w(px(node_data.width))
+        .h(px(node_data.height))
+        .rounded(params.border_radius)
+        .border_1()
+        .when(node_data.is_selected || node_data.is_connected, |el| {
+            el.border_2()
+        })
+        .border_color(border_color)
+        .bg(theme.background)
+        .when(node_data.is_dragging, |el| el.shadow_lg())
+        .overflow_hidden()
+        .cursor_grab()
+        .child(
+            div()
+                .w_full()
+                .h(px(params.header_height))
+                .flex()
+                .items_center()
+                .px(px(NODE_PADDING * zoom))
+                .bg(theme.title_bar)
+                .rounded_t(params.border_radius)
+                .child(
+                    div()
+                        .text_size(px(font_size))
+                        .text_color(theme.foreground)
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .child(node_data.title),
+                ),
+        )
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .children(
+                    node_data
+                        .fields
+                        .into_iter()
+                        .map(|(label, type_label, badges)| {
+                            div()
+                                .w_full()
+                                .h(px(params.field_row_height))
+                                .flex()
+                                .items_center()
+                                .px(px(NODE_PADDING * zoom))
+                                .gap(px(4.0 * zoom))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .text_size(px(font_size))
+                                        .text_color(theme.foreground)
+                                        .child(label),
+                                )
+                                .child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .text_size(px(font_size * 0.85))
+                                        .text_color(theme.muted_foreground)
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .child(type_label),
+                                )
+                                .children(badges.into_iter().map(|(badge_label, badge_color)| {
+                                    div()
+                                        .px(px(3.0 * zoom))
+                                        .rounded(px(3.0 * zoom))
+                                        .bg(badge_color.opacity(0.2))
+                                        .text_size(px(params.badge_font_size))
+                                        .text_color(badge_color)
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .child(badge_label)
+                                }))
+                        }),
+                ),
+        )
+        .into_any_element()
+}
+
 /// A fully routed edge in graph coordinates, cached between renders. Panning
 /// and zooming only transform these points; they are recomputed solely when a
 /// node moves or the visible edge set changes.
@@ -405,9 +516,10 @@ impl GraphView {
         // Nothing routed touches the moved node: skip the grid build entirely
         // and just keep the cache marked current.
         let touches = self.routed_edges.iter().any(|r| {
-            self.model.edges.get(r.edge_ix).is_some_and(|e| {
-                e.from_node == dragged_id || e.to_node == dragged_id
-            })
+            self.model
+                .edges
+                .get(r.edge_ix)
+                .is_some_and(|e| e.from_node == dragged_id || e.to_node == dragged_id)
         });
         if !touches {
             self.route_cache_key = Some(self.route_cache_key());
@@ -782,14 +894,17 @@ impl Render for GraphView {
         let muted = cx.theme().muted_foreground;
         let danger = cx.theme().danger_foreground;
         let foreground = cx.theme().foreground;
-        let theme = cx.theme().clone();
 
         let zoom = self.viewport.zoom_level;
-        let header_height = NODE_HEADER_HEIGHT * zoom;
-        let field_row_height = NODE_FIELD_ROW_HEIGHT * zoom;
-        let font_size = (13.0 * zoom).max(6.0);
-        let badge_font_size = (10.0 * zoom).max(5.0);
-        let border_radius = px(NODE_BORDER_RADIUS * zoom);
+        let node_params = NodeRenderParams {
+            theme: cx.theme().clone(),
+            border_radius: px(NODE_BORDER_RADIUS * zoom),
+            header_height: NODE_HEADER_HEIGHT * zoom,
+            field_row_height: NODE_FIELD_ROW_HEIGHT * zoom,
+            font_size: (13.0 * zoom).max(6.0),
+            badge_font_size: (10.0 * zoom).max(5.0),
+            zoom,
+        };
 
         let view = cx.entity().downgrade();
         let edges_canvas = canvas(
@@ -854,97 +969,11 @@ impl Render for GraphView {
             .on_mouse_up(MouseButton::Middle, cx.listener(Self::on_mouse_up))
             .on_scroll_wheel(cx.listener(Self::on_scroll))
             .child(edges_canvas)
-            .children(nodes_data.into_iter().map(move |node_data| {
-                let border_color = if node_data.is_selected {
-                    theme.cyan
-                } else if node_data.is_connected {
-                    theme.cyan.opacity(0.6)
-                } else {
-                    theme.border
-                };
-                div()
-                    .absolute()
-                    .left(px(node_data.screen_x))
-                    .top(px(node_data.screen_y))
-                    .w(px(node_data.width))
-                    .h(px(node_data.height))
-                    .rounded(border_radius)
-                    .border_1()
-                    .when(node_data.is_selected || node_data.is_connected, |el| {
-                        el.border_2()
-                    })
-                    .border_color(border_color)
-                    .bg(theme.background)
-                    .when(node_data.is_dragging, |el| el.shadow_lg())
-                    .overflow_hidden()
-                    .cursor_grab()
-                    .child(
-                        div()
-                            .w_full()
-                            .h(px(header_height))
-                            .flex()
-                            .items_center()
-                            .px(px(NODE_PADDING * zoom))
-                            .bg(theme.title_bar)
-                            .rounded_t(border_radius)
-                            .child(
-                                div()
-                                    .text_size(px(font_size))
-                                    .text_color(theme.foreground)
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .child(node_data.title),
-                            ),
-                    )
-                    .child(
-                        div().w_full().flex().flex_col().children(
-                            node_data
-                                .fields
-                                .into_iter()
-                                .map(|(label, type_label, badges)| {
-                                    div()
-                                        .w_full()
-                                        .h(px(field_row_height))
-                                        .flex()
-                                        .items_center()
-                                        .px(px(NODE_PADDING * zoom))
-                                        .gap(px(4.0 * zoom))
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .overflow_hidden()
-                                                .text_ellipsis()
-                                                .text_size(px(font_size))
-                                                .text_color(theme.foreground)
-                                                .child(label),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex_shrink_0()
-                                                .text_size(px(font_size * 0.85))
-                                                .text_color(theme.muted_foreground)
-                                                .overflow_hidden()
-                                                .text_ellipsis()
-                                                .child(type_label),
-                                        )
-                                        .children(badges.into_iter().map(
-                                            |(badge_label, badge_color)| {
-                                                div()
-                                                    .px(px(3.0 * zoom))
-                                                    .rounded(px(3.0 * zoom))
-                                                    .bg(badge_color.opacity(0.2))
-                                                    .text_size(px(badge_font_size))
-                                                    .text_color(badge_color)
-                                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                                    .child(badge_label)
-                                            },
-                                        ))
-                                }),
-                        ),
-                    )
-                    .into_any_element()
-            }))
+            .children(
+                nodes_data
+                    .into_iter()
+                    .map(move |node_data| render_graph_node(node_data, &node_params)),
+            )
             .when(has_content, |el| {
                 let hint: Option<SharedString> = if show_all_edges {
                     None
@@ -1239,7 +1268,8 @@ impl AStarSearch {
         self.came_from[start_i] = -1;
         self.came_dir[start_i] = u8::MAX;
         self.generation[start_i] = generation_id;
-        self.heap.push(Reverse((heuristic(start.0, start.1), start_i)));
+        self.heap
+            .push(Reverse((heuristic(start.0, start.1), start_i)));
 
         while let Some(Reverse((f, ci))) = self.heap.pop() {
             let c = (ci as i32) % grid.cols;
@@ -1272,8 +1302,7 @@ impl AStarSearch {
                     self.came_from[ni] = ci as i32;
                     self.came_dir[ni] = dir as u8;
                     self.generation[ni] = generation_id;
-                    self.heap
-                        .push(Reverse((tentative + heuristic(nc, nr), ni)));
+                    self.heap.push(Reverse((tentative + heuristic(nc, nr), ni)));
                 }
             }
         }
@@ -1333,7 +1362,11 @@ fn align_endpoint(points: &mut [Point<f32>], anchor: Point<f32>, side: AnchorSid
     };
 
     let mut i = run_start as isize;
-    let limit = if leading { points.len() as isize - 1 } else { 0 };
+    let limit = if leading {
+        points.len() as isize - 1
+    } else {
+        0
+    };
     let step = if leading { 1 } else { -1 };
     while i != limit {
         let p = &mut points[i as usize];

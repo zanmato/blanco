@@ -474,6 +474,119 @@ impl<D: DraggableTreeDelegate> DraggableTreeState<D> {
         cx.notify();
     }
 
+    /// Handle drag movement over the empty background, toggling the root-level
+    /// (`Background`) drop target on or off. We can't read per-entry hit bounds
+    /// from here, so we rely on `drag_target_entry`, which the per-entry drag
+    /// handlers set while the pointer is over them.
+    fn on_background_drag_move(&mut self, cx: &mut Context<Self>) {
+        let is_over_entry = matches!(self.drag_target_entry, Some(DragTarget::Entry { .. }));
+
+        if !is_over_entry {
+            if !matches!(self.drag_target_entry, Some(DragTarget::Background)) {
+                self.drag_target_entry = Some(DragTarget::Background);
+                cx.notify();
+            }
+        } else if matches!(self.drag_target_entry, Some(DragTarget::Background)) {
+            self.drag_target_entry = None;
+            cx.notify();
+        }
+    }
+
+    /// Handle a drop onto the empty background (root-level drop).
+    fn on_background_drop(
+        &mut self,
+        dropped_item: &DraggedTreeItem,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.drag_target_entry = None;
+        self.hover_scroll_task.take();
+
+        if self.delegate.can_drop_on_root(dropped_item) {
+            self.delegate.on_drop(dropped_item, None, window, cx);
+        }
+
+        cx.notify();
+    }
+
+    /// Handle drag movement over a specific entry, computing the insert position
+    /// (before/after/inside) and updating `drag_target_entry` accordingly.
+    fn on_entry_drag_move(
+        &mut self,
+        item_id: &SharedString,
+        entry: &TreeEntry,
+        is_folder: bool,
+        event: &DragMoveEvent<DraggedTreeItem>,
+        cx: &mut Context<Self>,
+    ) {
+        let dragged_item = event.drag(cx);
+        let cx_app = &**cx;
+
+        // Check if this is the current target (prevent duplicate handling).
+        let is_current_target = match &self.drag_target_entry {
+            Some(DragTarget::Entry { entry_id, .. }) => entry_id.as_ref() == item_id.as_ref(),
+            _ => false,
+        };
+
+        // Clear highlight if mouse left this element's bounds.
+        if !event.bounds.contains(&event.event.position) {
+            if is_current_target {
+                self.drag_target_entry = None;
+                self.hover_scroll_task.take();
+                self.hover_expand_task.take();
+                cx.notify();
+            }
+            return;
+        }
+
+        let can_drop = self.delegate.can_drop_on(dragged_item, entry, cx_app);
+
+        if can_drop && !is_current_target {
+            // Calculate position based on cursor location.
+            let relative_y = event.event.position.y - event.bounds.origin.y;
+            let height = event.bounds.size.height;
+            let position = if is_folder {
+                InsertPosition::Inside
+            } else if relative_y < height / 2.0 {
+                InsertPosition::Before
+            } else {
+                InsertPosition::After
+            };
+
+            self.drag_target_entry = Some(DragTarget::Entry {
+                entry_id: item_id.clone(),
+                highlight_entry_id: item_id.clone(),
+                position,
+            });
+
+            cx.notify();
+        }
+    }
+
+    /// Handle a drop onto a specific entry.
+    fn on_entry_drop(
+        &mut self,
+        item_id: &SharedString,
+        entry: &TreeEntry,
+        dropped_item: &DraggedTreeItem,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Clear all drag state.
+        self.drag_target_entry = None;
+        self.hover_scroll_task.take();
+        self.hover_expand_task.take();
+
+        let can_drop = self.delegate.can_drop_on(dropped_item, entry, cx);
+
+        if can_drop {
+            self.delegate
+                .on_drop(dropped_item, Some(item_id.as_ref()), window, cx);
+        }
+
+        cx.notify();
+    }
+
     /// Check if the given entry is currently highlighted for drag feedback.
     fn is_drag_highlighted(&self, entry_id: &str) -> bool {
         match &self.drag_target_entry {
@@ -584,33 +697,11 @@ impl<D: DraggableTreeDelegate> Render for DraggableTreeState<D> {
                     // Background drop zone for root-level drops, receives drag events when hovering empty space
                     .on_drag_move::<DraggedTreeItem>(cx.listener(
                         |this, _event: &DragMoveEvent<DraggedTreeItem>, _, cx| {
-                            // We can't read per-entry hit bounds from here, so we
-                            // rely on `drag_target_entry`, which the per-entry
-                            // drag handlers set while the pointer is over them.
-                            let is_over_entry =
-                                matches!(this.drag_target_entry, Some(DragTarget::Entry { .. }));
-
-                            if !is_over_entry {
-                                if !matches!(this.drag_target_entry, Some(DragTarget::Background)) {
-                                    this.drag_target_entry = Some(DragTarget::Background);
-                                    cx.notify();
-                                }
-                            } else if matches!(this.drag_target_entry, Some(DragTarget::Background))
-                            {
-                                this.drag_target_entry = None;
-                                cx.notify();
-                            }
+                            this.on_background_drag_move(cx);
                         },
                     ))
                     .on_drop::<DraggedTreeItem>(cx.listener(|this, dropped_item, window, cx| {
-                        this.drag_target_entry = None;
-                        this.hover_scroll_task.take();
-
-                        if this.delegate.can_drop_on_root(dropped_item) {
-                            this.delegate.on_drop(dropped_item, None, window, cx);
-                        }
-
-                        cx.notify();
+                        this.on_background_drop(dropped_item, window, cx);
                     }))
                     .children(self.entries.iter().enumerate().map(|(ix, entry)| {
                         let item = entry.item();
@@ -670,90 +761,26 @@ impl<D: DraggableTreeDelegate> Render for DraggableTreeState<D> {
                                 let item_for_delegate = entry.clone();
                                 let is_folder = entry.is_folder();
                                 move |this, event: &DragMoveEvent<DraggedTreeItem>, _window, cx| {
-                                    let dragged_item = event.drag(cx);
-                                    let cx_app = &**cx; // Convert to &App
-
-                                    // Check if this is the current target (prevent duplicate handling)
-                                    let is_current_target = match &this.drag_target_entry {
-                                        Some(DragTarget::Entry { entry_id, .. }) => {
-                                            entry_id.as_ref() == item_id.as_ref()
-                                        }
-                                        _ => false,
-                                    };
-
-                                    // Clear highlight if mouse left this element's bounds
-                                    if !event.bounds.contains(&event.event.position) {
-                                        if is_current_target {
-                                            this.drag_target_entry = None;
-                                            this.hover_scroll_task.take();
-                                            this.hover_expand_task.take();
-                                            cx.notify();
-                                        }
-                                        return;
-                                    }
-
-                                    // Check if we can drop on this entry
-                                    let can_drop = this.delegate.can_drop_on(
-                                        dragged_item,
+                                    this.on_entry_drag_move(
+                                        &item_id,
                                         &item_for_delegate,
-                                        cx_app,
+                                        is_folder,
+                                        event,
+                                        cx,
                                     );
-
-                                    if can_drop && !is_current_target {
-                                        // Calculate position based on cursor location
-                                        let relative_y =
-                                            event.event.position.y - event.bounds.origin.y;
-                                        let height = event.bounds.size.height;
-                                        let position = if is_folder {
-                                            // For folders, always insert inside
-                                            InsertPosition::Inside
-                                        } else if relative_y < height / 2.0 {
-                                            // Top half of non-folder entry, insert before
-                                            InsertPosition::Before
-                                        } else {
-                                            // Bottom half of non-folder entry,insert after
-                                            InsertPosition::After
-                                        };
-
-                                        this.drag_target_entry = Some(DragTarget::Entry {
-                                            entry_id: item_id.clone(),
-                                            highlight_entry_id: item_id.clone(),
-                                            position,
-                                        });
-
-                                        cx.notify();
-                                    }
                                 }
                             }))
                             .on_drop::<DraggedTreeItem>(cx.listener({
                                 let item_id = item.id.clone();
                                 let item_for_delegate = entry.clone();
                                 move |this, dropped_item: &DraggedTreeItem, window, cx| {
-                                    let cx_app = &**cx; // Convert to &App
-
-                                    // Clear all drag state
-                                    this.drag_target_entry = None;
-                                    this.hover_scroll_task.take();
-                                    this.hover_expand_task.take();
-
-                                    // Check if we can drop on this target
-                                    let can_drop = this.delegate.can_drop_on(
-                                        dropped_item,
+                                    this.on_entry_drop(
+                                        &item_id,
                                         &item_for_delegate,
-                                        cx_app,
+                                        dropped_item,
+                                        window,
+                                        cx,
                                     );
-
-                                    if can_drop {
-                                        // Notify delegate to handle the drop
-                                        this.delegate.on_drop(
-                                            dropped_item,
-                                            Some(item_id.as_ref()),
-                                            window,
-                                            cx,
-                                        );
-                                    }
-
-                                    cx.notify();
                                 }
                             }))
                     })),

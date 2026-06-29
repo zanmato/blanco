@@ -675,16 +675,10 @@ impl ResultsPanel {
             selected_rows: selected_rows_data,
         }
     }
-}
 
-impl Focusable for ResultsPanel {
-    fn focus_handle(&self, _: &App) -> FocusHandle {
-        self.focus_handle.clone()
-    }
-}
-
-impl Render for ResultsPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Build the result tab strip: one entry per result tab plus the
+    /// table/chart view-mode toggle anchored on the right.
+    fn render_tab_strip(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.active_tab;
         let theme = cx.theme();
         let border_color = theme.border;
@@ -695,15 +689,10 @@ impl Render for ResultsPanel {
         // (inactive) on top. The active tab composites identically to the
         // real column header because the underlying surface matches.
         let strip_bg = theme.table;
+        let table_head = theme.table_head;
+        let title_bar = theme.title_bar;
         let tab_count = self.result_tabs.len();
-        let show_strip = self.has_results;
         let show_close = tab_count > 1;
-        let active_view_mode = self
-            .result_tabs
-            .get(active)
-            .map(|t| t.view_mode)
-            .unwrap_or_default();
-        let active_chart_view = self.result_tabs.get(active).map(|t| t.chart_view.clone());
 
         let mut strip = gpui_component::h_flex()
             .id("result-tabs-strip")
@@ -732,10 +721,10 @@ impl Render for ResultsPanel {
                         this.border_r_1().border_color(border_color)
                     })
                     .when(is_active, |this| {
-                        this.bg(theme.table_head).text_color(active_fg)
+                        this.bg(table_head).text_color(active_fg)
                     })
                     .when(!is_active, |this| {
-                        this.bg(theme.title_bar).text_color(muted_fg)
+                        this.bg(title_bar).text_color(muted_fg)
                     })
                     .cursor_pointer()
                     .on_mouse_down(
@@ -802,9 +791,15 @@ impl Render for ResultsPanel {
                     ),
             );
         }
-        // View-mode toggle (table / chart) for the active tab, anchored to the right.
+
+        // View-mode toggle (table / chart) for the active tab, anchored right.
+        let active_view_mode = self
+            .result_tabs
+            .get(active)
+            .map(|t| t.view_mode)
+            .unwrap_or_default();
         let is_table = matches!(active_view_mode, ResultViewMode::Table);
-        strip = strip.child(
+        strip.child(
             gpui_component::h_flex()
                 .gap_1()
                 .px_2()
@@ -830,7 +825,27 @@ impl Render for ResultsPanel {
                             this.set_view_mode(ResultViewMode::Chart, cx);
                         })),
                 ),
-        );
+        )
+    }
+}
+
+impl Focusable for ResultsPanel {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for ResultsPanel {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let active = self.active_tab;
+        let border_color = cx.theme().border;
+        let show_strip = self.has_results;
+        let active_view_mode = self
+            .result_tabs
+            .get(active)
+            .map(|t| t.view_mode)
+            .unwrap_or_default();
+        let active_chart_view = self.result_tabs.get(active).map(|t| t.chart_view.clone());
 
         v_flex()
             .size_full()
@@ -852,7 +867,7 @@ impl Render for ResultsPanel {
             .on_action(cx.listener(Self::on_duplicate_row))
             .on_action(cx.listener(Self::on_delete_row))
             .on_action(cx.listener(Self::on_set_cell_null))
-            .when(show_strip, |this| this.child(strip))
+            .when(show_strip, |this| this.child(self.render_tab_strip(cx)))
             .child(match (active_view_mode, active_chart_view) {
                 (ResultViewMode::Chart, Some(chart)) => div()
                     .id("results-chart")
