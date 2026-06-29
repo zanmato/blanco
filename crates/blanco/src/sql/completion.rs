@@ -2,14 +2,16 @@ mod cache;
 mod context;
 mod fetch;
 
-use blanco_core::QueryableEntity;
+use blanco_core::{ColumnInfo, QueryableEntity};
 pub use cache::{CacheEntry, MetadataCache};
 pub use context::{generate_table_abbreviation, resolve_table_alias};
 pub use fetch::{fetch_columns, fetch_queryable_entities, fetch_schemas};
 
 use cache::columns_key;
 
-use crate::sql::statement_parser::{self, CompletionContext as TsCompletionContext, SqlClause};
+use crate::sql::statement_parser::{
+    self, CompletionContext as TsCompletionContext, SqlClause, TableAlias,
+};
 
 use anyhow::Result;
 use database::DatabaseServiceTrait;
@@ -146,7 +148,11 @@ impl SqlCompletionProvider {
     }
 
     /// Return cached columns for `schema.table` only if a fresh entry exists. No IO.
-    pub fn try_get_cached_columns(&self, schema: &str, table: &str) -> Option<Arc<Vec<String>>> {
+    pub fn try_get_cached_columns(
+        &self,
+        schema: &str,
+        table: &str,
+    ) -> Option<Arc<Vec<ColumnInfo>>> {
         let key = columns_key(schema, table);
         let cache = self.cache.lock().ok()?;
         let cached = cache.columns.get(&key)?;
@@ -189,7 +195,11 @@ impl SqlCompletionProvider {
     }
 
     /// Get cached columns for `schema.table` or fetch them if not cached/expired
-    pub async fn get_cached_columns(&self, schema: &str, table: &str) -> Result<Arc<Vec<String>>> {
+    pub async fn get_cached_columns(
+        &self,
+        schema: &str,
+        table: &str,
+    ) -> Result<Arc<Vec<ColumnInfo>>> {
         if let Some(cached) = self.try_get_cached_columns(schema, table) {
             return Ok(cached);
         }
@@ -653,6 +663,84 @@ fn build_function_items(current_word: &str, range: Range) -> Vec<CompletionItem>
         .collect()
 }
 
+/// A real table participating in a join, with its alias and column metadata,
+/// used to derive foreign-key join conditions.
+struct JoinTable<'a> {
+    alias: &'a str,
+    table_name: &'a str,
+    columns: &'a [ColumnInfo],
+}
+
+/// Build `alias.col = other_alias.ref_col` strings for every foreign key on an
+/// in-scope table that references another in-scope table.
+fn build_join_conditions(tables: &[JoinTable]) -> Vec<String> {
+    let mut conditions = Vec::new();
+    for table in tables {
+        for column in table.columns {
+            let Some(foreign_key) = &column.foreign_key else {
+                continue;
+            };
+            for other in tables {
+                if other.table_name == foreign_key.foreign_table_name {
+                    conditions.push(format!(
+                        "{}.{} = {}.{}",
+                        table.alias, column.name, other.alias, foreign_key.foreign_column_name
+                    ));
+                }
+            }
+        }
+    }
+    conditions
+}
+
+/// Build foreign-key join-condition completion items for the in-scope relations,
+/// filtered by `current_word`. Each item inserts a full `a.col = b.col` clause.
+fn build_join_condition_items(
+    table_aliases: &[TableAlias],
+    fetched_tables: &[(TableRef, Arc<Vec<ColumnInfo>>)],
+    current_schema: &str,
+    current_word: &str,
+    range: Range,
+) -> Vec<CompletionItem> {
+    // Pair each alias with its fetched column metadata.
+    let owned: Vec<(String, String, Arc<Vec<ColumnInfo>>)> = table_aliases
+        .iter()
+        .filter_map(|alias| {
+            let (schema, table) = split_schema_qualified(&alias.table_name, current_schema);
+            let columns = fetched_tables
+                .iter()
+                .find(|(table_ref, _)| table_ref.schema == schema && table_ref.table == table)
+                .map(|(_, columns)| Arc::clone(columns))?;
+            Some((alias.alias.clone(), table, columns))
+        })
+        .collect();
+    let tables: Vec<JoinTable> = owned
+        .iter()
+        .map(|(alias, table, columns)| JoinTable {
+            alias,
+            table_name: table,
+            columns,
+        })
+        .collect();
+
+    let needle = current_word.to_lowercase();
+    build_join_conditions(&tables)
+        .into_iter()
+        .filter(|condition| condition.to_lowercase().starts_with(&needle))
+        .map(|condition| CompletionItem {
+            label: condition.clone(),
+            kind: Some(CompletionItemKind::SNIPPET),
+            text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
+                range,
+                condition.clone(),
+            ))),
+            detail: Some("Join condition".to_string()),
+            insert_text: Some(condition),
+            ..Default::default()
+        })
+        .collect()
+}
+
 fn build_keyword_items(current_word: &str, range: Range) -> Vec<CompletionItem> {
     let filtered: Vec<&str> = if current_word.is_empty() {
         SQL_KEYWORDS.to_vec()
@@ -764,16 +852,11 @@ impl CompletionProvider for SqlCompletionProvider {
                     CompletionPlan::Columns { sources } => {
                         // Union columns across all in-scope sources, keeping the
                         // first occurrence so columns from earlier relations win
-                        // on name collisions.
+                        // on name collisions. Keep the full column metadata of
+                        // real tables so foreign-key join conditions can be built.
                         let mut all_columns: Vec<String> = Vec::new();
                         let mut seen = std::collections::HashSet::new();
-                        let mut add = |columns: &[String]| {
-                            for column in columns {
-                                if seen.insert(column.clone()) {
-                                    all_columns.push(column.clone());
-                                }
-                            }
-                        };
+                        let mut fetched_tables: Vec<(TableRef, Arc<Vec<ColumnInfo>>)> = Vec::new();
                         for source in &sources {
                             match source {
                                 ColumnSource::Table(table_ref) => {
@@ -781,18 +864,46 @@ impl CompletionProvider for SqlCompletionProvider {
                                         .get_cached_columns(&table_ref.schema, &table_ref.table)
                                         .await
                                     {
-                                        add(&columns);
+                                        for column in columns.iter() {
+                                            if seen.insert(column.name.clone()) {
+                                                all_columns.push(column.name.clone());
+                                            }
+                                        }
+                                        fetched_tables.push((table_ref.clone(), columns));
                                     }
                                 }
-                                ColumnSource::Static(columns) => add(columns),
+                                ColumnSource::Static(columns) => {
+                                    for column in columns {
+                                        if seen.insert(column.clone()) {
+                                            all_columns.push(column.clone());
+                                        }
+                                    }
+                                }
                             }
                         }
                         let detail = match sources.as_slice() {
                             [ColumnSource::Table(single)] => single.table.clone(),
                             _ => "query columns".to_string(),
                         };
-                        let mut items =
-                            build_column_items(&all_columns, &context.current_word, range, &detail);
+
+                        let mut items = Vec::new();
+                        // In an ON clause, offer ready-made foreign-key join
+                        // conditions first so they rank above raw columns.
+                        if context.clause == Some(SqlClause::On) {
+                            items.extend(build_join_condition_items(
+                                &context.table_aliases,
+                                &fetched_tables,
+                                &provider.current_schema,
+                                &context.current_word,
+                                range,
+                            ));
+                        }
+                        items.extend(build_column_items(
+                            &all_columns,
+                            &context.current_word,
+                            range,
+                            &detail,
+                        ));
                         // Expression clauses also accept function calls, so offer
                         // built-in functions after the columns.
                         items.extend(build_function_items(&context.current_word, range));
@@ -1283,5 +1394,102 @@ mod tests {
                 .iter()
                 .all(|i| i.label.to_lowercase().starts_with("now"))
         );
+    }
+
+    fn plain_column(name: &str) -> ColumnInfo {
+        ColumnInfo {
+            name: name.to_string(),
+            data_type: "integer".to_string(),
+            is_nullable: false,
+            is_primary_key: false,
+            default_value: None,
+            character_maximum_length: None,
+            foreign_key: None,
+        }
+    }
+
+    fn fk_column(name: &str, foreign_table: &str, foreign_column: &str) -> ColumnInfo {
+        ColumnInfo {
+            foreign_key: Some(blanco_core::ForeignKeyInfo {
+                foreign_table_name: foreign_table.to_string(),
+                foreign_column_name: foreign_column.to_string(),
+                constraint_name: None,
+            }),
+            ..plain_column(name)
+        }
+    }
+
+    #[test]
+    fn test_build_join_conditions_from_fk() {
+        let orders = vec![plain_column("id"), fk_column("user_id", "users", "id")];
+        let users = vec![plain_column("id")];
+        let tables = vec![
+            JoinTable {
+                alias: "o",
+                table_name: "orders",
+                columns: &orders,
+            },
+            JoinTable {
+                alias: "u",
+                table_name: "users",
+                columns: &users,
+            },
+        ];
+        assert_eq!(
+            build_join_conditions(&tables),
+            vec!["o.user_id = u.id".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_build_join_conditions_ignores_out_of_scope_target() {
+        // FK references a table that is not part of the join -> no suggestion.
+        let orders = vec![fk_column("user_id", "users", "id")];
+        let tables = vec![JoinTable {
+            alias: "o",
+            table_name: "orders",
+            columns: &orders,
+        }];
+        assert!(build_join_conditions(&tables).is_empty());
+    }
+
+    #[test]
+    fn test_build_join_condition_items_filtered_by_word() {
+        let orders = vec![fk_column("user_id", "users", "id")];
+        let users = vec![plain_column("id")];
+        let aliases = vec![
+            TableAlias {
+                table_name: "orders".to_string(),
+                alias: "o".to_string(),
+            },
+            TableAlias {
+                table_name: "users".to_string(),
+                alias: "u".to_string(),
+            },
+        ];
+        let fetched = vec![
+            (
+                TableRef {
+                    schema: "public".to_string(),
+                    table: "orders".to_string(),
+                },
+                Arc::new(orders),
+            ),
+            (
+                TableRef {
+                    schema: "public".to_string(),
+                    table: "users".to_string(),
+                },
+                Arc::new(users),
+            ),
+        ];
+        let items = build_join_condition_items(&aliases, &fetched, "public", "o.", dummy_range());
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].label, "o.user_id = u.id");
+        assert_eq!(items[0].kind, Some(CompletionItemKind::SNIPPET));
+
+        // A non-matching prefix filters it out.
+        let none = build_join_condition_items(&aliases, &fetched, "public", "zzz", dummy_range());
+        assert!(none.is_empty());
     }
 }

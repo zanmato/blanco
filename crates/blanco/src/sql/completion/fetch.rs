@@ -1,5 +1,5 @@
 use anyhow::Result;
-use blanco_core::QueryableEntity;
+use blanco_core::{ColumnInfo, QueryableEntity};
 use database::DatabaseServiceTrait;
 
 /// True for postgres system schemas that should never be offered as completion
@@ -75,14 +75,15 @@ pub async fn fetch_queryable_entities(
     }
 }
 
-/// Fetch column names for a specific table (in an optional schema) using the DbService
+/// Fetch full column metadata (including foreign keys) for a specific table (in
+/// an optional schema) using the DbService.
 pub async fn fetch_columns(
     db_service: &dyn DatabaseServiceTrait,
     connection_id: i64,
     table_name: &str,
     database_name: &str,
     schema: Option<&str>,
-) -> Result<Vec<String>> {
+) -> Result<Vec<ColumnInfo>> {
     tracing::debug!(
         "Fetching columns for table '{}', database '{}', schema {:?}",
         table_name,
@@ -94,14 +95,8 @@ pub async fn fetch_columns(
         .await
     {
         let columns = connection.get_columns_for_table(table_name, schema).await?;
-        let column_names: Vec<String> = columns.into_iter().map(|col| col.name).collect();
-        tracing::debug!(
-            "Found {} columns for table '{}': {:?}",
-            column_names.len(),
-            table_name,
-            column_names
-        );
-        Ok(column_names)
+        tracing::debug!("Found {} columns for table '{}'", columns.len(), table_name);
+        Ok(columns)
     } else {
         tracing::warn!(
             "Failed to get connection for fetching columns from table '{}', database '{}'",

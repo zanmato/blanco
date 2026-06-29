@@ -1,4 +1,4 @@
-use blanco_core::QueryableEntity;
+use blanco_core::{ColumnInfo, QueryableEntity};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -48,7 +48,8 @@ pub struct MetadataCache {
     /// alongside `schemas` since they are fetched together.
     pub supports_schemas: Option<bool>,
     pub tables_by_schema: HashMap<String, CacheEntry<Vec<QueryableEntity>>>,
-    pub columns: HashMap<String, CacheEntry<Vec<String>>>,
+    /// Full column metadata (including foreign keys) keyed by `schema.table`.
+    pub columns: HashMap<String, CacheEntry<Vec<ColumnInfo>>>,
 }
 
 impl MetadataCache {
