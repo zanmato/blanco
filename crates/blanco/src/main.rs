@@ -11,6 +11,8 @@ mod app_database;
 mod app_settings;
 mod assets;
 mod command_palette;
+#[cfg(test)]
+mod connection_integration_test;
 mod connection_modal;
 mod connections;
 mod editor;

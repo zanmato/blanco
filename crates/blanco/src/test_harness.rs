@@ -112,6 +112,104 @@ impl TestHarness {
     }
 }
 
+/// A harness that opens the *full* `BlancoApp` (sidebar + main resizable
+/// layout), not just the `EditorPanel`. Use this to reproduce layout issues
+/// that depend on the app-level chrome.
+pub struct FullAppHarness {
+    pub app: gpui::Entity<crate::app::BlancoApp>,
+    pub window_handle: gpui::WindowHandle<Root>,
+    _activity_task: Task<()>,
+}
+
+impl FullAppHarness {
+    pub fn new(cx: &mut TestAppContext) -> Self {
+        cx.executor().allow_parking();
+
+        let mut app: Option<gpui::Entity<crate::app::BlancoApp>> = None;
+        let mut activity_task: Option<Task<()>> = None;
+
+        let window_handle = cx.update(|cx| {
+            gpui_component::init(cx);
+            gpui_tokio::init(cx);
+
+            let status_bar_entity = cx.new(|_| StatusBarState::default());
+            let (activity_sender, activity_receiver) = channel::unbounded::<ActivityMessage>();
+            cx.set_global(ActivityReporter::new(activity_sender));
+            activity_task = Some(cx.spawn({
+                let status_bar = status_bar_entity.downgrade();
+                async move |cx| {
+                    while let Ok(message) = activity_receiver.recv().await {
+                        status_bar
+                            .update(cx, |state, cx| state.apply(message, cx))
+                            .ok();
+                    }
+                }
+            }));
+
+            let runtime_handle = gpui_tokio::Tokio::handle(cx);
+
+            let app_database = runtime_handle
+                .block_on(AppDatabase::new_in_memory(runtime_handle.clone()))
+                .expect("failed to create in-memory database");
+            cx.set_global(app_database);
+
+            let db_service = DatabaseService::new(runtime_handle.clone());
+            cx.set_global(db_service);
+
+            let settings = AppSettings::new(cx, Settings::default());
+            cx.set_global(settings);
+
+            let connection_id = next_connection_id();
+            let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+            let db_path = temp_dir.path().join("test.db");
+            let db_path_str = db_path.to_string_lossy().to_string();
+            std::mem::forget(temp_dir);
+
+            let sqlite_config =
+                ConnectionConfig::new_sqlite(connection_id, "test".into(), db_path_str);
+            let db_service = DatabaseService::global(cx).clone();
+            runtime_handle.block_on(async {
+                db_service.add_connection_config(sqlite_config).await;
+            });
+
+            cx.open_window(Default::default(), |window, cx| {
+                let blanco_app = cx.new(|cx| crate::app::BlancoApp::new(window, cx));
+
+                let params = TabCreationParams {
+                    title: "Test Query".into(),
+                    content: None,
+                    db_id: None,
+                    connection_id,
+                    db_type: database::DatabaseType::SQLite,
+                    connection_name: Some("test".into()),
+                    database_name: "main".into(),
+                    schema_name: None,
+                    environment_type: None,
+                };
+                blanco_app.update(cx, |app, cx| {
+                    app.editor_panel().clone().update(cx, |panel, cx| {
+                        panel.create_and_add_tab_with_connection(window, params, cx);
+                    });
+                });
+
+                app = Some(blanco_app.clone());
+                cx.new(|cx| Root::new(blanco_app, window, cx))
+            })
+            .expect("failed to open window")
+        });
+
+        Self {
+            app: app.expect("app should be set"),
+            window_handle,
+            _activity_task: activity_task.expect("activity_task should be set"),
+        }
+    }
+
+    pub fn editor_panel(&self, cx: &VisualTestContext) -> gpui::Entity<EditorPanel> {
+        self.app.read_with(cx, |app, _| app.editor_panel().clone())
+    }
+}
+
 pub fn status_line(harness: &TestHarness, cx: &VisualTestContext) -> StatusLine {
     harness
         .status_bar

@@ -1293,6 +1293,15 @@ mod visual_tests {
             "palette should start hidden"
         );
 
+        // The dispatched action only routes to BlancoApp's handler when its
+        // tracked focus handle (or a descendant) is focused, so mirror the real
+        // app by focusing it first.
+        cx.update(|window, cx| {
+            let handle = app.read(cx).focus_handle(cx);
+            window.focus(&handle, cx);
+        });
+        cx.run_until_parked();
+
         cx.update(|window, cx| {
             window.dispatch_action(Box::new(ToggleCommandPalette), cx);
         });

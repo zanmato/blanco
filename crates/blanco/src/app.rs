@@ -465,6 +465,11 @@ impl BlancoApp {
         }
     }
 
+    #[cfg(test)]
+    pub fn editor_panel(&self) -> &Entity<EditorPanel> {
+        &self.editor_panel
+    }
+
     /// Persist the current window geometry to the app settings database so it
     /// can be restored on the next launch. Called on every resize/move, so the
     /// database write is debounced to avoid hammering it during a drag.

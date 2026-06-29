@@ -40,6 +40,8 @@ pub struct NewConnectionModal {
     is_testing: bool,
     editing_connection_id: Option<i64>,
     db_type_locked: bool,
+    #[cfg(test)]
+    last_test_result: Option<Result<(), String>>,
 }
 
 impl NewConnectionModal {
@@ -124,6 +126,8 @@ impl NewConnectionModal {
             is_testing: false,
             editing_connection_id,
             db_type_locked,
+            #[cfg(test)]
+            last_test_result: None,
         }
     }
 
@@ -215,7 +219,10 @@ impl NewConnectionModal {
                 Some(data) => data,
                 None => {
                     window.push_notification(
-                        (NotificationType::Error, "Please fill in all required fields"),
+                        (
+                            NotificationType::Error,
+                            "Please fill in all required fields",
+                        ),
                         cx,
                     );
                     return;
@@ -253,13 +260,26 @@ impl NewConnectionModal {
                 modal.is_testing = false;
                 cx.notify();
 
+                #[cfg(test)]
+                {
+                    modal.last_test_result = Some(
+                        result
+                            .as_ref()
+                            .map(|_| ())
+                            .map_err(|err| format!("{err:#}")),
+                    );
+                }
+
                 match result {
                     Ok(()) => window.push_notification(
                         (NotificationType::Success, "Connection successful"),
                         cx,
                     ),
                     Err(err) => window.push_notification(
-                        (NotificationType::Error, format!("Connection failed: {err:#}")),
+                        (
+                            NotificationType::Error,
+                            format!("Connection failed: {err:#}"),
+                        ),
                         cx,
                     ),
                 }
@@ -286,6 +306,100 @@ impl NewConnectionModal {
         }
 
         Some(connection)
+    }
+}
+
+#[cfg(test)]
+impl NewConnectionModal {
+    /// Most recent `test_connection` outcome, consumed so a subsequent attempt
+    /// starts from a clean slate. `None` until a test has completed.
+    pub fn take_test_result(&mut self) -> Option<Result<(), String>> {
+        self.last_test_result.take()
+    }
+
+    pub fn is_testing(&self) -> bool {
+        self.is_testing
+    }
+
+    /// Set the connection name (required by `get_connection_data`).
+    pub fn set_name(&self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.name_input
+            .update(cx, |state, cx| state.set_value(name, window, cx));
+    }
+
+    /// Select the database type by its display label (e.g. "PostgreSQL").
+    pub fn select_db_type(&self, label: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let index = match label {
+            "PostgreSQL" => 1,
+            "MySQL" => 2,
+            "ClickHouse" => 3,
+            "SQL Server" => 4,
+            _ => 0,
+        };
+        self.db_type_select.update(cx, |state, cx| {
+            state.set_selected_index(Some(IndexPath::new(index)), window, cx);
+        });
+    }
+
+    /// Populate the host/port/database/username/password inputs of the form
+    /// matching the currently selected connector type.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_network_credentials(
+        &self,
+        host: &str,
+        port: &str,
+        database: &str,
+        username: &str,
+        password: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let inputs = match self.get_selected_connector_type(cx) {
+            ConnectorType::PostgreSQL => (
+                &self.postgres_form.host_input,
+                &self.postgres_form.port_input,
+                &self.postgres_form.database_input,
+                &self.postgres_form.username_input,
+                &self.postgres_form.password_input,
+            ),
+            ConnectorType::MySQL => (
+                &self.mysql_form.host_input,
+                &self.mysql_form.port_input,
+                &self.mysql_form.database_input,
+                &self.mysql_form.username_input,
+                &self.mysql_form.password_input,
+            ),
+            ConnectorType::ClickHouse => (
+                &self.clickhouse_form.host_input,
+                &self.clickhouse_form.port_input,
+                &self.clickhouse_form.database_input,
+                &self.clickhouse_form.username_input,
+                &self.clickhouse_form.password_input,
+            ),
+            ConnectorType::MsSql => (
+                &self.mssql_form.host_input,
+                &self.mssql_form.port_input,
+                &self.mssql_form.database_input,
+                &self.mssql_form.username_input,
+                &self.mssql_form.password_input,
+            ),
+            ConnectorType::SQLite => {
+                panic!("set_network_credentials called for SQLite; use set_sqlite_path")
+            }
+        };
+        let (host_input, port_input, database_input, username_input, password_input) = inputs;
+        host_input.update(cx, |state, cx| state.set_value(host, window, cx));
+        port_input.update(cx, |state, cx| state.set_value(port, window, cx));
+        database_input.update(cx, |state, cx| state.set_value(database, window, cx));
+        username_input.update(cx, |state, cx| state.set_value(username, window, cx));
+        password_input.update(cx, |state, cx| state.set_value(password, window, cx));
+    }
+
+    /// Set the SQLite database file path.
+    pub fn set_sqlite_path(&self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.sqlite_form
+            .file_path_input
+            .update(cx, |state, cx| state.set_value(path, window, cx));
     }
 }
 
