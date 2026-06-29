@@ -373,9 +373,9 @@ fn plan_completion(
             }
         }
 
-        if sources.is_empty() {
-            return CompletionPlan::Nothing;
-        }
+        // Even with no resolvable tables (e.g. `SELECT ` before a FROM), this is
+        // still an expression context, so return `Columns` so functions can be
+        // offered. The source list may be empty.
         return CompletionPlan::Columns { sources };
     }
 
@@ -477,6 +477,178 @@ fn build_schema_items(schemas: &[String], current_word: &str, range: Range) -> V
             detail: Some("Schema".to_string()),
             insert_text: Some(schema),
             ..Default::default()
+        })
+        .collect()
+}
+
+/// A built-in SQL function offered in expression contexts, with a human-readable
+/// signature shown as the completion detail.
+struct SqlFunction {
+    name: &'static str,
+    signature: &'static str,
+}
+
+/// Common cross-dialect SQL functions. Not exhaustive or dialect-specific, but
+/// covers the functions users reach for most often so completion can offer them
+/// with a signature hint alongside columns.
+const SQL_FUNCTIONS: &[SqlFunction] = &[
+    // Aggregates
+    SqlFunction {
+        name: "COUNT",
+        signature: "COUNT(expr)",
+    },
+    SqlFunction {
+        name: "SUM",
+        signature: "SUM(expr)",
+    },
+    SqlFunction {
+        name: "AVG",
+        signature: "AVG(expr)",
+    },
+    SqlFunction {
+        name: "MIN",
+        signature: "MIN(expr)",
+    },
+    SqlFunction {
+        name: "MAX",
+        signature: "MAX(expr)",
+    },
+    SqlFunction {
+        name: "ARRAY_AGG",
+        signature: "ARRAY_AGG(expr)",
+    },
+    SqlFunction {
+        name: "STRING_AGG",
+        signature: "STRING_AGG(expr, delimiter)",
+    },
+    // Conditional / null handling
+    SqlFunction {
+        name: "COALESCE",
+        signature: "COALESCE(value [, ...])",
+    },
+    SqlFunction {
+        name: "NULLIF",
+        signature: "NULLIF(value1, value2)",
+    },
+    SqlFunction {
+        name: "GREATEST",
+        signature: "GREATEST(value [, ...])",
+    },
+    SqlFunction {
+        name: "LEAST",
+        signature: "LEAST(value [, ...])",
+    },
+    SqlFunction {
+        name: "CAST",
+        signature: "CAST(expr AS type)",
+    },
+    // String
+    SqlFunction {
+        name: "UPPER",
+        signature: "UPPER(string)",
+    },
+    SqlFunction {
+        name: "LOWER",
+        signature: "LOWER(string)",
+    },
+    SqlFunction {
+        name: "LENGTH",
+        signature: "LENGTH(string)",
+    },
+    SqlFunction {
+        name: "TRIM",
+        signature: "TRIM(string)",
+    },
+    SqlFunction {
+        name: "SUBSTRING",
+        signature: "SUBSTRING(string FROM start FOR count)",
+    },
+    SqlFunction {
+        name: "REPLACE",
+        signature: "REPLACE(string, from, to)",
+    },
+    SqlFunction {
+        name: "CONCAT",
+        signature: "CONCAT(value [, ...])",
+    },
+    // Math
+    SqlFunction {
+        name: "ROUND",
+        signature: "ROUND(numeric [, decimals])",
+    },
+    SqlFunction {
+        name: "ABS",
+        signature: "ABS(numeric)",
+    },
+    SqlFunction {
+        name: "CEIL",
+        signature: "CEIL(numeric)",
+    },
+    SqlFunction {
+        name: "FLOOR",
+        signature: "FLOOR(numeric)",
+    },
+    // Date / time
+    SqlFunction {
+        name: "NOW",
+        signature: "NOW()",
+    },
+    SqlFunction {
+        name: "CURRENT_DATE",
+        signature: "CURRENT_DATE",
+    },
+    SqlFunction {
+        name: "CURRENT_TIMESTAMP",
+        signature: "CURRENT_TIMESTAMP",
+    },
+    SqlFunction {
+        name: "DATE_TRUNC",
+        signature: "DATE_TRUNC(field, source)",
+    },
+    SqlFunction {
+        name: "EXTRACT",
+        signature: "EXTRACT(field FROM source)",
+    },
+    // Window
+    SqlFunction {
+        name: "ROW_NUMBER",
+        signature: "ROW_NUMBER() OVER (...)",
+    },
+    SqlFunction {
+        name: "RANK",
+        signature: "RANK() OVER (...)",
+    },
+    SqlFunction {
+        name: "DENSE_RANK",
+        signature: "DENSE_RANK() OVER (...)",
+    },
+];
+
+/// Build completion items for built-in SQL functions whose name starts with
+/// `current_word`. Inserts `NAME()` so the parentheses are balanced.
+fn build_function_items(current_word: &str, range: Range) -> Vec<CompletionItem> {
+    let needle = current_word.to_lowercase();
+    let mut filtered: Vec<&SqlFunction> = SQL_FUNCTIONS
+        .iter()
+        .filter(|function| function.name.to_lowercase().starts_with(&needle))
+        .collect();
+    filtered.sort_by_key(|function| function.name.len());
+
+    filtered
+        .into_iter()
+        .map(|function| {
+            let insert_text = format!("{}()", function.name);
+            CompletionItem {
+                label: function.name.to_string(),
+                kind: Some(CompletionItemKind::FUNCTION),
+                text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
+                    range,
+                    insert_text.clone(),
+                ))),
+                detail: Some(function.signature.to_string()),
+                insert_text: Some(insert_text),
+                ..Default::default()
+            }
         })
         .collect()
 }
@@ -619,7 +791,12 @@ impl CompletionProvider for SqlCompletionProvider {
                             [ColumnSource::Table(single)] => single.table.clone(),
                             _ => "query columns".to_string(),
                         };
-                        build_column_items(&all_columns, &context.current_word, range, &detail)
+                        let mut items =
+                            build_column_items(&all_columns, &context.current_word, range, &detail);
+                        // Expression clauses also accept function calls, so offer
+                        // built-in functions after the columns.
+                        items.extend(build_function_items(&context.current_word, range));
+                        items
                     }
                     CompletionPlan::SchemaTables { schema } => {
                         match provider.get_cached_tables(&schema).await {
@@ -986,6 +1163,20 @@ mod tests {
     }
 
     #[test]
+    fn test_plan_column_clause_without_tables_still_columns() {
+        // `SELECT ` with no FROM yet is still a column/expression context, so the
+        // plan is `Columns` (with no sources) and functions can be offered.
+        let sql = "SELECT ";
+        let plan = plan_completion(&ctx_end(sql), "public", &schemas(&["public"]), true);
+        assert_eq!(
+            plan,
+            CompletionPlan::Columns {
+                sources: Vec::new()
+            }
+        );
+    }
+
+    #[test]
     fn test_plan_keywords_when_no_clause() {
         let context = TsCompletionContext {
             current_word: "SEL".to_string(),
@@ -1048,5 +1239,49 @@ mod tests {
         assert_eq!(items[0].label, "company");
         assert_eq!(items[0].detail.as_deref(), Some("Column from customers"));
         assert_eq!(items[0].kind, Some(CompletionItemKind::FIELD));
+    }
+
+    #[test]
+    fn test_build_function_items_filter_and_signature() {
+        let items = build_function_items("co", dummy_range());
+        // COALESCE, CONCAT, COUNT all start with "co".
+        assert!(items.iter().any(|i| i.label == "COALESCE"));
+        assert!(items.iter().any(|i| i.label == "COUNT"));
+        assert!(
+            items
+                .iter()
+                .all(|i| i.kind == Some(CompletionItemKind::FUNCTION))
+        );
+        let coalesce = items
+            .iter()
+            .find(|i| i.label == "COALESCE")
+            .expect("COALESCE present");
+        assert!(
+            coalesce
+                .detail
+                .as_deref()
+                .unwrap_or_default()
+                .contains("COALESCE(")
+        );
+        assert_eq!(coalesce.insert_text.as_deref(), Some("COALESCE()"));
+    }
+
+    #[test]
+    fn test_build_function_items_empty_word_lists_all() {
+        let items = build_function_items("", dummy_range());
+        assert!(items.iter().any(|i| i.label == "NOW"));
+        assert!(items.iter().any(|i| i.label == "COUNT"));
+        assert!(items.iter().any(|i| i.label == "ROW_NUMBER"));
+    }
+
+    #[test]
+    fn test_build_function_items_filter_excludes_non_matching() {
+        let items = build_function_items("now", dummy_range());
+        assert!(items.iter().any(|i| i.label == "NOW"));
+        assert!(
+            items
+                .iter()
+                .all(|i| i.label.to_lowercase().starts_with("now"))
+        );
     }
 }
