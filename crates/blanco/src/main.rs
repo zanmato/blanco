@@ -41,7 +41,12 @@ use std::path::PathBuf;
 use crate::{app_database::AppDatabase, app_settings::AppSettings, settings::Settings};
 
 fn main() {
-    tracing_subscriber::fmt::init();
+    // Honour `RUST_LOG` when set, otherwise default to a useful baseline so
+    // plain runs still surface our own info-level lines without drowning in
+    // dependency chatter.
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("blanco=info,warn"));
+    tracing_subscriber::fmt().with_env_filter(env_filter).init();
     let app = application()
         .with_quit_mode(gpui::QuitMode::LastWindowClosed)
         .with_assets(Assets);

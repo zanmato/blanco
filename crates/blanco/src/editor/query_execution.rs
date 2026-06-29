@@ -238,7 +238,22 @@ impl EditorPanel {
                 // task instead would also count the oneshot hand-off plus however
                 // long the GPUI foreground executor takes to poll us back, which
                 // is several milliseconds and unrelated to query execution.
-                let _ = tx.send((execution_result, start_time.elapsed()));
+                let elapsed = start_time.elapsed();
+                match &execution_result {
+                    Ok(results) => tracing::debug!(
+                        connection_id,
+                        statements = results.len(),
+                        duration_ms = elapsed.as_millis(),
+                        "query execution finished"
+                    ),
+                    Err(error) => tracing::debug!(
+                        connection_id,
+                        duration_ms = elapsed.as_millis(),
+                        %error,
+                        "query execution failed"
+                    ),
+                }
+                let _ = tx.send((execution_result, elapsed));
             });
             self.abort_query_task = Some(query_task);
 

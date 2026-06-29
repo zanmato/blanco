@@ -333,7 +333,9 @@ impl ConnectionsPanel {
                         }
                     };
 
-                    // Load tables and views for all schemas (without lazy loading for now)
+                    // Register each schema with an empty table list. Tables and
+                    // views are loaded lazily when the user expands a schema, so
+                    // we avoid introspecting every schema up front.
                     let mut schema_tables: Vec<(String, Vec<DatabaseTable>)> = Vec::new();
                     for schema_name in &schemas {
                         let all_items: Vec<DatabaseTable> = Vec::new();

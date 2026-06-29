@@ -4,12 +4,17 @@ use crate::transformers::sql_transformer::{
 use crate::transformers::{DataTransformer, SelectedTableData, TransformError};
 use blanco_core::ColumnType;
 use database::DatabaseType;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub struct ValuesTransformer {
     table_name: Option<String>,
     db_type: DatabaseType,
     first_row: AtomicBool,
+    // Captured during `initialize_stream` so `finalize_stream` can emit the
+    // trailing `AS t(col, ...)` column list. The streaming API hands columns to
+    // `initialize_stream` but not to `finalize_stream`, so we stash them here.
+    stream_columns: Mutex<Vec<String>>,
 }
 
 impl ValuesTransformer {
@@ -18,6 +23,7 @@ impl ValuesTransformer {
             table_name: None,
             db_type: DatabaseType::PostgreSQL,
             first_row: AtomicBool::new(true),
+            stream_columns: Mutex::new(Vec::new()),
         }
     }
 
@@ -27,6 +33,7 @@ impl ValuesTransformer {
             table_name: Some(table_name),
             db_type,
             first_row: AtomicBool::new(true),
+            stream_columns: Mutex::new(Vec::new()),
         }
     }
 }
@@ -162,6 +169,10 @@ impl DataTransformer for ValuesTransformer {
         let table_name = effective_table_name(self.table_name.as_ref());
         let column_list = build_column_list(columns, db_type);
 
+        if let Ok(mut stored) = self.stream_columns.lock() {
+            *stored = columns.to_vec();
+        }
+
         let mut output = String::with_capacity(200);
 
         if matches!(db_type, DatabaseType::SQLite) {
@@ -219,20 +230,15 @@ impl DataTransformer for ValuesTransformer {
             output.push_str(&sql_identifier(table_name, db_type));
             output.push_str(";\n");
         } else {
-            let columns = self
-                .table_name
-                .as_ref()
-                .map(|_| String::new())
+            let column_list = self
+                .stream_columns
+                .lock()
+                .map(|columns| build_column_list(&columns, db_type))
                 .unwrap_or_default();
             output.push_str(") AS ");
             output.push_str(&sql_identifier(table_name, db_type));
             output.push('(');
-            // For streaming, we don't have columns stored separately,
-            // so finalize_stream can't produce the column list.
-            // The streaming path would need the caller to handle this,
-            // or we'd need to store columns during initialize_stream.
-            // For now, this is a placeholder that works when columns are empty.
-            output.push_str(&columns);
+            output.push_str(&column_list);
             output.push_str(");\n");
         }
 
@@ -385,6 +391,35 @@ mod tests {
         assert_eq!(
             result,
             "SELECT *\nFROM (\nVALUES\n  (42)\n) AS \"t\"(\"x\");\n"
+        );
+    }
+
+    #[test]
+    fn test_stream_finalize_emits_column_list() {
+        // The streaming path hands columns to `initialize_stream` only, so the
+        // transformer must carry them through to `finalize_stream` to produce a
+        // valid `AS t(col, ...)` clause for non-SQLite dialects.
+        let transformer = ValuesTransformer::new();
+        let columns = vec!["id".to_string(), "name".to_string()];
+        let column_types = vec![ColumnType::Integer, ColumnType::Text];
+
+        let mut output = transformer
+            .initialize_stream(&columns, &column_types)
+            .unwrap();
+        output.push_str(
+            &transformer
+                .transform_stream_row(
+                    &[Some("1".to_string()), Some("Widget".to_string())],
+                    &columns,
+                    &column_types,
+                )
+                .unwrap(),
+        );
+        output.push_str(&transformer.finalize_stream().unwrap());
+
+        assert!(
+            output.ends_with(") AS \"t\"(\"id\", \"name\");\n"),
+            "streamed VALUES output should close with the column list, got: {output}"
         );
     }
 }

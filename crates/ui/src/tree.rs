@@ -404,7 +404,12 @@ impl<D: TreeDelegate> Render for TreeState<D> {
                 move |this, window: &mut Window, cx: &mut Context<PopupMenu>| {
                     if let Some(ix) = view.read(cx).right_clicked_index {
                         view.update(cx, |state, cx| {
-                            let entry = state.entries.get(ix).unwrap();
+                            // `right_clicked_index` may be stale if `entries`
+                            // changed between the right-click and this menu
+                            // build, so guard the lookup rather than indexing.
+                            let Some(entry) = state.entries.get(ix) else {
+                                return this;
+                            };
                             state.delegate().context_menu(ix, entry, this, window, cx)
                         })
                     } else {

@@ -584,12 +584,11 @@ impl<D: DraggableTreeDelegate> Render for DraggableTreeState<D> {
                     // Background drop zone for root-level drops, receives drag events when hovering empty space
                     .on_drag_move::<DraggedTreeItem>(cx.listener(
                         |this, _event: &DragMoveEvent<DraggedTreeItem>, _, cx| {
-                            // Check if we're hovering in empty space (not over any entry)
-                            let is_over_entry = this.entries.iter().any(|_entry| {
-                                // This is a simplified check. In practice, we'd need to check actual bounds
-                                // For now, we use the drag_target_entry state to determine if we're over an entry
-                                matches!(this.drag_target_entry, Some(DragTarget::Entry { .. }))
-                            });
+                            // We can't read per-entry hit bounds from here, so we
+                            // rely on `drag_target_entry`, which the per-entry
+                            // drag handlers set while the pointer is over them.
+                            let is_over_entry =
+                                matches!(this.drag_target_entry, Some(DragTarget::Entry { .. }));
 
                             if !is_over_entry {
                                 if !matches!(this.drag_target_entry, Some(DragTarget::Background)) {

@@ -298,6 +298,7 @@ impl DatabaseService {
         config_id: DatabaseConfigId,
         database: Option<&str>,
     ) -> Result<()> {
+        tracing::debug!(?config_id, ?database, "disconnecting connection");
         let disconnected_connections: Vec<(DatabaseConfigId, String)>;
 
         // Remove from active_connections
