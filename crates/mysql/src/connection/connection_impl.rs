@@ -583,14 +583,7 @@ impl Connection for MysqlConnection {
             let fk_column: Option<String> = row.try_get(7).ok();
             let fk_constraint: Option<String> = row.try_get(8).ok();
 
-            let foreign_key = match (fk_table, fk_column) {
-                (Some(table), Some(column)) => Some(ForeignKeyInfo {
-                    foreign_table_name: table,
-                    foreign_column_name: column,
-                    constraint_name: fk_constraint,
-                }),
-                _ => None,
-            };
+            let foreign_key = ForeignKeyInfo::from_parts(fk_table, fk_column, fk_constraint);
 
             let is_nullable = is_nullable_str == "YES";
 

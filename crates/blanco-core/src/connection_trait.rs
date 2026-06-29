@@ -146,6 +146,27 @@ pub struct ForeignKeyInfo {
     pub constraint_name: Option<String>,
 }
 
+impl ForeignKeyInfo {
+    /// Build a foreign key from a catalog row's referenced table/column.
+    /// Returns `None` unless both are present, since a column without a complete
+    /// reference is not a foreign key. Drivers share this so their
+    /// introspection queries only differ in how they read the catalog columns.
+    pub fn from_parts(
+        foreign_table_name: Option<impl Into<String>>,
+        foreign_column_name: Option<impl Into<String>>,
+        constraint_name: Option<String>,
+    ) -> Option<Self> {
+        match (foreign_table_name, foreign_column_name) {
+            (Some(table), Some(column)) => Some(Self {
+                foreign_table_name: table.into(),
+                foreign_column_name: column.into(),
+                constraint_name,
+            }),
+            _ => None,
+        }
+    }
+}
+
 /// Information about an inbound foreign key (a row in another table that references this one)
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct InboundForeignKey {
@@ -506,4 +527,30 @@ pub trait ConnectionFactory: Send + Sync {
         &self,
         connection_string: &str,
     ) -> Result<Box<dyn Connection>, anyhow::Error>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ForeignKeyInfo;
+
+    #[test]
+    fn foreign_key_from_parts_requires_table_and_column() {
+        assert_eq!(
+            ForeignKeyInfo::from_parts(Some("users"), Some("id"), Some("fk_orders".to_string())),
+            Some(ForeignKeyInfo {
+                foreign_table_name: "users".to_string(),
+                foreign_column_name: "id".to_string(),
+                constraint_name: Some("fk_orders".to_string()),
+            })
+        );
+
+        assert_eq!(
+            ForeignKeyInfo::from_parts(Some("users"), None::<&str>, None),
+            None
+        );
+        assert_eq!(
+            ForeignKeyInfo::from_parts(None::<&str>, Some("id"), None),
+            None
+        );
+    }
 }

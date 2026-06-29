@@ -654,16 +654,7 @@ impl Connection for MssqlConnection {
             .into_iter()
             .map(|row| {
                 let get = |i: usize| -> Option<String> { row.get(i).cloned().flatten() };
-                let fk_table = get(6);
-                let fk_col = get(7);
-                let fk_name = get(8);
-                let foreign_key = fk_table.and_then(|table| {
-                    fk_col.map(|col| ForeignKeyInfo {
-                        foreign_table_name: table,
-                        foreign_column_name: col,
-                        constraint_name: fk_name,
-                    })
-                });
+                let foreign_key = ForeignKeyInfo::from_parts(get(6), get(7), get(8));
                 ColumnInfo {
                     name: get(0).unwrap_or_default(),
                     data_type: get(1).unwrap_or_default(),

@@ -100,14 +100,8 @@ impl MysqlConnection {
                                 .and_then(|v| v.as_str())
                                 .filter(|s| !s.is_empty())
                                 .map(|s| s.to_string());
-                            let foreign_key = match (fk_table, fk_column) {
-                                (Some(table), Some(column)) => Some(ForeignKeyInfo {
-                                    foreign_table_name: table.to_string(),
-                                    foreign_column_name: column.to_string(),
-                                    constraint_name: fk_constraint,
-                                }),
-                                _ => None,
-                            };
+                            let foreign_key =
+                                ForeignKeyInfo::from_parts(fk_table, fk_column, fk_constraint);
 
                             columns.push(ColumnInfo {
                                 name: name.to_string(),
