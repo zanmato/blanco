@@ -36,13 +36,22 @@ const SQL_KEYWORDS: &[&str] = &[
     "UNION", "ALL", "AS", "CASE", "WHEN", "THEN", "ELSE", "END",
 ];
 
+/// A resolved table reference (schema-qualified) whose columns should be offered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TableRef {
+    schema: String,
+    table: String,
+}
+
 /// What the completion request resolves to once the SQL context has been
 /// analysed. Computed by [`plan_completion`], which is pure so the routing
 /// rules can be tested without a database.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CompletionPlan {
-    /// Show columns of `schema.table`.
-    Columns { schema: String, table: String },
+    /// Show the union of columns from one or more tables. A single entry is the
+    /// dot-notation / single-table case; multiple entries cover columns from all
+    /// relations in scope (e.g. every table in a JOIN).
+    Columns { tables: Vec<TableRef> },
     /// Show the tables of `schema` (drilling into `schema.` in a FROM/JOIN).
     SchemaTables { schema: String },
     /// Show the current schema's tables plus the other schema names.
@@ -266,7 +275,9 @@ fn plan_completion(
         // An alias always refers to a table -> show its columns.
         if let Some(table) = resolve_table_alias(&context.table_aliases, name) {
             let (schema, table) = split_schema_qualified(&table, current_schema);
-            return CompletionPlan::Columns { schema, table };
+            return CompletionPlan::Columns {
+                tables: vec![TableRef { schema, table }],
+            };
         }
 
         // `schema.` in a table position drills into that schema's tables.
@@ -282,8 +293,10 @@ fn plan_completion(
         // Otherwise treat it as a table in the current schema -> its columns.
         if is_valid_identifier(name) && !is_sql_keyword(name) {
             return CompletionPlan::Columns {
-                schema: current_schema.to_string(),
-                table: name.to_string(),
+                tables: vec![TableRef {
+                    schema: current_schema.to_string(),
+                    table: name.to_string(),
+                }],
             };
         }
 
@@ -291,12 +304,20 @@ fn plan_completion(
     }
 
     if is_column_clause(context.clause) {
-        // Resolve the table from the FROM clause (first relation with an alias).
-        if let Some(first) = context.table_aliases.first() {
-            let (schema, table) = split_schema_qualified(&first.table_name, current_schema);
-            return CompletionPlan::Columns { schema, table };
+        // Offer columns from every relation in scope (all FROM/JOIN tables), not
+        // just the first, so a JOIN suggests columns from each joined table.
+        let mut tables: Vec<TableRef> = Vec::new();
+        for alias in &context.table_aliases {
+            let (schema, table) = split_schema_qualified(&alias.table_name, current_schema);
+            let table_ref = TableRef { schema, table };
+            if !tables.contains(&table_ref) {
+                tables.push(table_ref);
+            }
         }
-        return CompletionPlan::Nothing;
+        if tables.is_empty() {
+            return CompletionPlan::Nothing;
+        }
+        return CompletionPlan::Columns { tables };
     }
 
     if is_table_clause(context.clause) {
@@ -488,9 +509,11 @@ impl CompletionProvider for SqlCompletionProvider {
 
                 // Debounce table/column fetches that are not yet cached.
                 let needs_fetch = match &plan {
-                    CompletionPlan::Columns { schema, table } => {
-                        provider.try_get_cached_columns(schema, table).is_none()
-                    }
+                    CompletionPlan::Columns { tables } => tables.iter().any(|t| {
+                        provider
+                            .try_get_cached_columns(&t.schema, &t.table)
+                            .is_none()
+                    }),
                     CompletionPlan::SchemaTables { schema } => {
                         provider.try_get_cached_tables(schema).is_none()
                     }
@@ -504,13 +527,29 @@ impl CompletionProvider for SqlCompletionProvider {
                 }
 
                 let items = match plan {
-                    CompletionPlan::Columns { schema, table } => {
-                        match provider.get_cached_columns(&schema, &table).await {
-                            Ok(columns) => {
-                                build_column_items(&columns, &context.current_word, range, &table)
+                    CompletionPlan::Columns { tables } => {
+                        // Union columns across all in-scope tables, keeping the
+                        // first occurrence so columns from earlier relations win
+                        // on name collisions.
+                        let mut all_columns: Vec<String> = Vec::new();
+                        let mut seen = std::collections::HashSet::new();
+                        for table_ref in &tables {
+                            if let Ok(columns) = provider
+                                .get_cached_columns(&table_ref.schema, &table_ref.table)
+                                .await
+                            {
+                                for column in columns.iter() {
+                                    if seen.insert(column.clone()) {
+                                        all_columns.push(column.clone());
+                                    }
+                                }
                             }
-                            Err(_) => Vec::new(),
                         }
+                        let detail = match tables.as_slice() {
+                            [single] => single.table.clone(),
+                            _ => "joined tables".to_string(),
+                        };
+                        build_column_items(&all_columns, &context.current_word, range, &detail)
                     }
                     CompletionPlan::SchemaTables { schema } => {
                         match provider.get_cached_tables(&schema).await {
@@ -568,6 +607,16 @@ mod tests {
 
     fn schemas(names: &[&str]) -> Vec<String> {
         names.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// A single-table `Columns` plan, the common case in these tests.
+    fn columns_plan(schema: &str, table: &str) -> CompletionPlan {
+        CompletionPlan::Columns {
+            tables: vec![TableRef {
+                schema: schema.to_string(),
+                table: table.to_string(),
+            }],
+        }
     }
 
     fn ctx(rope: &str, cursor: usize) -> TsCompletionContext {
@@ -702,13 +751,7 @@ mod tests {
             &schemas(&["public", "sales"]),
             true,
         );
-        assert_eq!(
-            plan,
-            CompletionPlan::Columns {
-                schema: "public".to_string(),
-                table: "foo".to_string()
-            }
-        );
+        assert_eq!(plan, columns_plan("public", "foo"));
     }
 
     #[test]
@@ -722,13 +765,7 @@ mod tests {
             &schemas(&["public", "sales"]),
             true,
         );
-        assert_eq!(
-            plan,
-            CompletionPlan::Columns {
-                schema: "sales".to_string(),
-                table: "orders".to_string()
-            }
-        );
+        assert_eq!(plan, columns_plan("sales", "orders"));
     }
 
     #[test]
@@ -746,13 +783,7 @@ mod tests {
             dot_table_name: Some("sales".to_string()),
         };
         let plan = plan_completion(&context, "public", &schemas(&["public", "sales"]), true);
-        assert_eq!(
-            plan,
-            CompletionPlan::Columns {
-                schema: "public".to_string(),
-                table: "shipments".to_string()
-            }
-        );
+        assert_eq!(plan, columns_plan("public", "shipments"));
     }
 
     #[test]
@@ -760,13 +791,7 @@ mod tests {
         // MySQL/SQLite: `db.` should not be treated as a schema drill-down.
         let sql = "SELECT * FROM sales.";
         let plan = plan_completion(&ctx(sql, sql.len()), "public", &schemas(&["sales"]), false);
-        assert_eq!(
-            plan,
-            CompletionPlan::Columns {
-                schema: "public".to_string(),
-                table: "sales".to_string()
-            }
-        );
+        assert_eq!(plan, columns_plan("public", "sales"));
     }
 
     #[test]
@@ -778,11 +803,44 @@ mod tests {
             &schemas(&["public", "sales"]),
             true,
         );
+        assert_eq!(plan, columns_plan("sales", "orders"));
+    }
+
+    #[test]
+    fn test_plan_columns_in_join_union_all_tables() {
+        // In a JOIN, columns from every relation in scope should be offered,
+        // not just the first table.
+        let aliases = vec![
+            TableAlias {
+                table_name: "users".to_string(),
+                alias: "u".to_string(),
+            },
+            TableAlias {
+                table_name: "sales.orders".to_string(),
+                alias: "o".to_string(),
+            },
+        ];
+        let context = TsCompletionContext {
+            current_word: String::new(),
+            clause: Some(SqlClause::Where),
+            table_aliases: aliases,
+            is_dot_notation: false,
+            dot_table_name: None,
+        };
+        let plan = plan_completion(&context, "public", &schemas(&["public", "sales"]), true);
         assert_eq!(
             plan,
             CompletionPlan::Columns {
-                schema: "sales".to_string(),
-                table: "orders".to_string()
+                tables: vec![
+                    TableRef {
+                        schema: "public".to_string(),
+                        table: "users".to_string(),
+                    },
+                    TableRef {
+                        schema: "sales".to_string(),
+                        table: "orders".to_string(),
+                    },
+                ]
             }
         );
     }
