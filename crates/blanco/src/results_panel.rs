@@ -4,13 +4,15 @@ use std::time::Duration;
 use blanco_ui::IconName;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, StatefulInteractiveElement as _, Styled, Subscription,
-    Window, div, prelude::FluentBuilder as _, px,
+    ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled,
+    Subscription, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     ActiveTheme, Icon, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
+    h_flex,
     input::{InputEvent, InputState},
+    scroll::Scrollbar,
     table::{DataTable, TableEvent, TableState},
     tooltip::Tooltip,
     v_flex,
@@ -18,6 +20,7 @@ use gpui_component::{
 
 use blanco_core::ColumnType;
 use blanco_core::QueryResult;
+use blanco_core::{KeyValueResult, RedisValue, ResultPayload};
 
 use crate::transformers::CopyHandler;
 
@@ -79,6 +82,9 @@ pub struct ResultTab {
     pub table_state: Entity<TableState<ResultsTableDelegate>>,
     pub view_mode: ResultViewMode,
     pub chart_view: Entity<ChartView>,
+    /// Set when this tab shows a non-tabular Redis key/value payload. When
+    /// present, the panel renders the key inspector instead of the table/chart.
+    pub key_value: Option<KeyValueResult>,
     pub _subscriptions: Vec<Subscription>,
 }
 
@@ -99,6 +105,8 @@ pub struct ResultsPanel {
     editing_input: Option<Entity<InputState>>,
     editing_cell: Option<(usize, usize)>,
     copy_handler: CopyHandler,
+    /// Scroll position for the key/value inspector body (Redis key view).
+    key_value_scroll_handle: ScrollHandle,
     _subscriptions: Vec<Subscription>, // Store subscriptions to prevent them from being dropped
 }
 
@@ -132,6 +140,7 @@ impl ResultsPanel {
             editing_input: None,
             editing_cell: None,
             copy_handler: CopyHandler::new(),
+            key_value_scroll_handle: ScrollHandle::new(),
             _subscriptions: vec![],
         }
     }
@@ -180,6 +189,7 @@ impl ResultsPanel {
             table_state,
             view_mode: ResultViewMode::default(),
             chart_view,
+            key_value: None,
             _subscriptions: vec![subscription],
         }
     }
@@ -193,12 +203,42 @@ impl ResultsPanel {
         }
     }
 
-    /// Replace all unpinned tabs with one tab per provided result. The first
-    /// newly added tab becomes active; pinned tabs are preserved at the front
-    /// of the strip.
+    /// Replace all unpinned tabs with one tab per provided tabular result. Thin
+    /// wrapper over [`set_result_payloads`] for the SQL execution path.
     pub fn set_query_results(
         &mut self,
         results: Vec<QueryResult>,
+        connection_id: Option<i64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let payloads = results.into_iter().map(ResultPayload::Tabular).collect();
+        self.set_result_payloads(payloads, connection_id, window, cx);
+    }
+
+    /// Show a single Redis key/value payload in a fresh tab and activate it.
+    /// Invoked by the connections sidebar when a Redis key is opened.
+    pub fn set_key_value_result(
+        &mut self,
+        result: KeyValueResult,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_result_payloads(
+            vec![ResultPayload::KeyValue(result)],
+            Some(self.connection_id),
+            window,
+            cx,
+        );
+    }
+
+    /// Replace all unpinned tabs with one tab per provided result. The first
+    /// newly added tab becomes active; pinned tabs are preserved at the front
+    /// of the strip. Tabular payloads feed the SQL results table; key/value
+    /// payloads feed the Redis key inspector.
+    pub fn set_result_payloads(
+        &mut self,
+        results: Vec<ResultPayload>,
         connection_id: Option<i64>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -228,13 +268,15 @@ impl ResultsPanel {
 
         let first_new_index = self.result_tabs.len();
         let total = results.len();
-        for (i, result) in results.into_iter().enumerate() {
-            let title = if total > 1 {
-                SharedString::from(format!("Result {}", i + 1))
-            } else {
-                SharedString::from("Result")
+        for (i, payload) in results.into_iter().enumerate() {
+            let title = match &payload {
+                ResultPayload::KeyValue(kv) => SharedString::from(kv.key.clone()),
+                ResultPayload::Tabular(_) if total > 1 => {
+                    SharedString::from(format!("Result {}", i + 1))
+                }
+                ResultPayload::Tabular(_) => SharedString::from("Result"),
             };
-            let tab = Self::build_result_tab(
+            let mut tab = Self::build_result_tab(
                 self.connection_id,
                 &self.database_name.clone(),
                 self.db_type,
@@ -242,18 +284,25 @@ impl ResultsPanel {
                 window,
                 cx,
             );
-            let query_text = result.query_text.clone();
-            tab.table_state.update(cx, |state, cx| {
-                if let Some(ref q) = query_text {
-                    state.delegate_mut().set_original_query(q.clone());
+            match payload {
+                ResultPayload::Tabular(result) => {
+                    let query_text = result.query_text.clone();
+                    tab.table_state.update(cx, |state, cx| {
+                        if let Some(ref q) = query_text {
+                            state.delegate_mut().set_original_query(q.clone());
+                        }
+                        state.clear_selection(cx);
+                        state.delegate_mut().set_query_result(result, window, cx);
+                        state.refresh(cx);
+                    });
+                    tab.chart_view.update(cx, |view, cx| {
+                        view.rebuild_column_selects(window, cx);
+                    });
                 }
-                state.clear_selection(cx);
-                state.delegate_mut().set_query_result(result, window, cx);
-                state.refresh(cx);
-            });
-            tab.chart_view.update(cx, |view, cx| {
-                view.rebuild_column_selects(window, cx);
-            });
+                ResultPayload::KeyValue(kv) => {
+                    tab.key_value = Some(kv);
+                }
+            }
             self.result_tabs.push(tab);
         }
 
@@ -793,39 +842,191 @@ impl ResultsPanel {
         }
 
         // View-mode toggle (table / chart) for the active tab, anchored right.
+        // Hidden for key/value (Redis) tabs, which have their own inspector view.
         let active_view_mode = self
             .result_tabs
             .get(active)
             .map(|t| t.view_mode)
             .unwrap_or_default();
+        let is_key_value = self
+            .result_tabs
+            .get(active)
+            .is_some_and(|t| t.key_value.is_some());
         let is_table = matches!(active_view_mode, ResultViewMode::Table);
-        strip.child(
-            gpui_component::h_flex()
+        strip.when(!is_key_value, |strip| {
+            strip.child(
+                gpui_component::h_flex()
+                    .gap_1()
+                    .px_2()
+                    .child(
+                        Button::new("view-mode-table")
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::Sheet)
+                            .selected(is_table)
+                            .tooltip("Table view")
+                            .on_click(cx.listener(|this, _ev, _window, cx| {
+                                this.set_view_mode(ResultViewMode::Table, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("view-mode-chart")
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::ChartBar)
+                            .selected(!is_table)
+                            .tooltip("Chart view")
+                            .on_click(cx.listener(|this, _ev, _window, cx| {
+                                this.set_view_mode(ResultViewMode::Chart, cx);
+                            })),
+                    ),
+            )
+        })
+    }
+
+    /// Render the key inspector: a compact metadata header followed by a
+    /// scrollable, monospace value view shaped per the key's type.
+    ///
+    /// The key name already labels the result tab, so it is not repeated here.
+    /// The header mirrors the SQL table's column header (a monospace strip of
+    /// badges); which badges appear is backend-specific. For key/value stores
+    /// (Redis) it shows the value type and TTL.
+    fn render_key_value_inspector(
+        &self,
+        kv: &KeyValueResult,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let muted = cx.theme().muted_foreground;
+        let border_color = cx.theme().border;
+        let mono = cx.theme().mono_font_family.clone();
+
+        let badge = |label: &'static str, value: String| {
+            h_flex()
                 .gap_1()
-                .px_2()
+                .items_center()
+                .child(div().text_color(muted).child(label))
+                .child(SharedString::from(value))
+        };
+        let ttl_value = match kv.ttl {
+            Some(seconds) => format!("{seconds}s"),
+            None => "none".to_string(),
+        };
+
+        let header = h_flex()
+            .gap_4()
+            .items_center()
+            .px_3()
+            .py(px(6.))
+            .border_b_1()
+            .border_color(border_color)
+            .font_family(mono.clone())
+            .text_size(px(12.))
+            .child(badge("type:", kv.key_type.as_str().to_string()))
+            .child(badge("ttl:", ttl_value));
+
+        v_flex().size_full().child(header).child(
+            div()
+                .flex_1()
+                .min_h_0()
                 .child(
-                    Button::new("view-mode-table")
-                        .ghost()
-                        .xsmall()
-                        .icon(IconName::Sheet)
-                        .selected(is_table)
-                        .tooltip("Table view")
-                        .on_click(cx.listener(|this, _ev, _window, cx| {
-                            this.set_view_mode(ResultViewMode::Table, cx);
-                        })),
+                    div()
+                        .id("key-value-body")
+                        .size_full()
+                        .overflow_scroll()
+                        .track_scroll(&self.key_value_scroll_handle)
+                        .font_family(mono)
+                        .child(self.render_redis_value(&kv.value, cx)),
                 )
                 .child(
-                    Button::new("view-mode-chart")
-                        .ghost()
-                        .xsmall()
-                        .icon(IconName::ChartBar)
-                        .selected(!is_table)
-                        .tooltip("Chart view")
-                        .on_click(cx.listener(|this, _ev, _window, cx| {
-                            this.set_view_mode(ResultViewMode::Chart, cx);
-                        })),
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .child(Scrollbar::vertical(&self.key_value_scroll_handle)),
                 ),
         )
+    }
+
+    /// Render a Redis value as a simple key/value or list view. List, set and
+    /// sorted-set members render one per row; hashes and streams render as
+    /// field/value pairs.
+    fn render_redis_value(&self, value: &RedisValue, cx: &Context<Self>) -> impl IntoElement {
+        let border_color = cx.theme().border;
+        let muted = cx.theme().muted_foreground;
+
+        let row = |left: SharedString, right: Option<SharedString>| {
+            h_flex()
+                .gap_3()
+                .px_3()
+                .py_1()
+                .border_b_1()
+                .border_color(border_color)
+                .when_some(right.clone(), |this, _| {
+                    this.child(div().w(px(200.0)).text_color(muted).child(left.clone()))
+                })
+                .child(div().flex_1().child(right.unwrap_or(left)))
+        };
+
+        // Height grows with content so the inspector's outer container handles
+        // scrolling; `size_full`/`overflow_hidden` here would clip long values.
+        let mut container = v_flex().w_full().text_sm();
+        match value {
+            RedisValue::Str(s) => {
+                container = container.child(
+                    div()
+                        .px_3()
+                        .py_2()
+                        .whitespace_normal()
+                        .child(SharedString::from(s.clone())),
+                );
+            }
+            RedisValue::List(items) | RedisValue::Set(items) => {
+                for item in items {
+                    container = container.child(row(SharedString::from(item.clone()), None));
+                }
+            }
+            RedisValue::Hash(pairs) => {
+                for (field, val) in pairs {
+                    container = container.child(row(
+                        SharedString::from(field.clone()),
+                        Some(SharedString::from(val.clone())),
+                    ));
+                }
+            }
+            RedisValue::ZSet(members) => {
+                for (member, score) in members {
+                    container = container.child(row(
+                        SharedString::from(member.clone()),
+                        Some(SharedString::from(score.to_string())),
+                    ));
+                }
+            }
+            RedisValue::Stream(entries) => {
+                for (id, fields) in entries {
+                    let rendered = fields
+                        .iter()
+                        .map(|(f, v)| format!("{}={}", f, v))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    container = container.child(row(
+                        SharedString::from(id.clone()),
+                        Some(SharedString::from(rendered)),
+                    ));
+                }
+            }
+            RedisValue::None => {
+                container = container.child(
+                    div()
+                        .px_3()
+                        .py_2()
+                        .text_color(muted)
+                        .child("(key does not exist)"),
+                );
+            }
+        }
+        container
     }
 }
 
@@ -846,6 +1047,10 @@ impl Render for ResultsPanel {
             .map(|t| t.view_mode)
             .unwrap_or_default();
         let active_chart_view = self.result_tabs.get(active).map(|t| t.chart_view.clone());
+        let active_key_value = self
+            .result_tabs
+            .get(active)
+            .and_then(|t| t.key_value.clone());
 
         v_flex()
             .size_full()
@@ -868,23 +1073,25 @@ impl Render for ResultsPanel {
             .on_action(cx.listener(Self::on_delete_row))
             .on_action(cx.listener(Self::on_set_cell_null))
             .when(show_strip, |this| this.child(self.render_tab_strip(cx)))
-            .child(match (active_view_mode, active_chart_view) {
-                (ResultViewMode::Chart, Some(chart)) => div()
-                    .id("results-chart")
+            .child(
+                div()
+                    .id("results-body")
                     .border_b_1()
                     .border_color(border_color)
                     .flex_1()
                     .overflow_hidden()
                     .min_h(px(200.0))
-                    .child(chart),
-                _ => div()
-                    .id("results-table")
-                    .border_b_1()
-                    .border_color(border_color)
-                    .flex_1()
-                    .overflow_hidden()
-                    .min_h(px(200.0))
-                    .child(DataTable::new(&self.table_state).bordered(false)),
-            })
+                    .child(
+                        match (active_key_value, active_view_mode, active_chart_view) {
+                            (Some(kv), _, _) => {
+                                self.render_key_value_inspector(&kv, cx).into_any_element()
+                            }
+                            (None, ResultViewMode::Chart, Some(chart)) => chart.into_any_element(),
+                            _ => DataTable::new(&self.table_state)
+                                .bordered(false)
+                                .into_any_element(),
+                        },
+                    ),
+            )
     }
 }

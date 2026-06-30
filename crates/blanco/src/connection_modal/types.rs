@@ -7,6 +7,7 @@ pub(super) enum ConnectorType {
     MySQL,
     ClickHouse,
     MsSql,
+    Redis,
 }
 
 impl ConnectorType {
@@ -16,6 +17,7 @@ impl ConnectorType {
             "MySQL" => ConnectorType::MySQL,
             "ClickHouse" => ConnectorType::ClickHouse,
             "SQL Server" => ConnectorType::MsSql,
+            "Redis" => ConnectorType::Redis,
             _ => ConnectorType::SQLite,
         }
     }
@@ -29,6 +31,7 @@ impl From<DriverType> for ConnectorType {
             DriverType::MySQL => ConnectorType::MySQL,
             DriverType::ClickHouse => ConnectorType::ClickHouse,
             DriverType::MsSql => ConnectorType::MsSql,
+            DriverType::Redis => ConnectorType::Redis,
         }
     }
 }
@@ -41,6 +44,7 @@ impl From<ConnectorType> for DriverType {
             ConnectorType::MySQL => DriverType::MySQL,
             ConnectorType::ClickHouse => DriverType::ClickHouse,
             ConnectorType::MsSql => DriverType::MsSql,
+            ConnectorType::Redis => DriverType::Redis,
         }
     }
 }

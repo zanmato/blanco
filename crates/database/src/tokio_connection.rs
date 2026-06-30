@@ -15,7 +15,7 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use blanco_core::{
     connection_trait::{ColumnType, DatabaseSchemaResult, IndexInfo, QueryableEntity, RoutineKind},
-    ColumnInfo, Connection, QueryResult,
+    ColumnInfo, Connection, KeyValueResult, QueryResult,
 };
 use futures::Stream;
 use std::future::Future;
@@ -157,6 +157,14 @@ impl Connection for TokioConnection {
     async fn get_schemas(&self) -> Result<Vec<String>> {
         let inner = Arc::clone(&self.inner);
         self.run(async move { inner.get_schemas().await }).await
+    }
+
+    async fn inspect_key(&self, database_name: Option<&str>, key: &str) -> Result<KeyValueResult> {
+        let inner = Arc::clone(&self.inner);
+        let database_name = database_name.map(str::to_string);
+        let key = key.to_string();
+        self.run(async move { inner.inspect_key(database_name.as_deref(), &key).await })
+            .await
     }
 
     async fn get_tables(&self, schema: Option<&str>) -> Result<Vec<String>> {

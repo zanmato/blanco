@@ -68,3 +68,11 @@ services:
         target: /var/opt/mssql
     ports:
       - "1433:1433"
+
+  # Redis for testing
+  redis:
+    image: redis:latest
+    command: redis-server --requirepass blanco
+    ports:
+      - "6400:6379"
+    restart: unless-stopped

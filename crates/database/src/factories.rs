@@ -4,10 +4,12 @@ pub mod clickhouse;
 pub mod mssql;
 pub mod mysql;
 pub mod postgres;
+pub mod redis;
 pub mod sqlite;
 
 pub use clickhouse::ClickhouseConnectionFactory;
 pub use mssql::MssqlConnectionFactory;
 pub use mysql::MysqlConnectionFactory;
 pub use postgres::PostgresConnectionFactory;
+pub use redis::RedisConnectionFactory;
 pub use sqlite::SqliteConnectionFactory;

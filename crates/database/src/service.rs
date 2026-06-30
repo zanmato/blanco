@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use crate::connection_config::{ConnectionConfig, DatabaseType};
 use crate::factories::{
     ClickhouseConnectionFactory, MssqlConnectionFactory, MysqlConnectionFactory,
-    PostgresConnectionFactory, SqliteConnectionFactory,
+    PostgresConnectionFactory, RedisConnectionFactory, SqliteConnectionFactory,
 };
 use crate::ssh_tunnel::{SshTunnel, SshTunnelConfig, TunnelInfo};
 use crate::tokio_connection::TokioConnection;
@@ -88,6 +88,10 @@ impl DatabaseService {
         factories.insert(
             DatabaseType::MsSql.to_string(),
             Arc::new(MssqlConnectionFactory::new()),
+        );
+        factories.insert(
+            DatabaseType::Redis.to_string(),
+            Arc::new(RedisConnectionFactory::new()),
         );
 
         Self {

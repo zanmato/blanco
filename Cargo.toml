@@ -11,6 +11,7 @@ members = [
     "crates/database",
     "crates/gpui_tokio",
     "crates/mssql",
+    "crates/redis",
 ]
 
 [workspace.package]

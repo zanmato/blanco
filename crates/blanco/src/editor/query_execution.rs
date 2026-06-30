@@ -39,10 +39,30 @@ impl EditorPanel {
             // Clone the values we need
             let connection_id = query_tab.connection_id;
             let database_name = query_tab.database_name.clone();
+            let db_type = query_tab._db_type;
+
+            // Non-SQL backends (Redis) have no grammar to parse and no bind
+            // parameters: treat the buffer as one command per line and run the
+            // line at the cursor (or the selection verbatim).
+            if !db_type.supports_sql() {
+                let command = if !selected_text.trim().is_empty() {
+                    selected_text.trim().to_string()
+                } else {
+                    crate::sql::extract_command_at_cursor(&full_text, cursor_pos)
+                        .unwrap_or_default()
+                };
+                if command.is_empty() {
+                    window.push_notification((NotificationType::Error, "No command to run"), cx);
+                    return;
+                }
+                self.execute_query(command, connection_id, &database_name, window, cx);
+                return;
+            }
+
             // Only treat the dialect's actual placeholder syntaxes as parameters,
             // so e.g. Postgres jsonb operators (`?`, `?|`, `?&`) don't trigger the
             // parameter form.
-            let param_styles = query_tab._db_type.parameter_styles();
+            let param_styles = db_type.parameter_styles();
 
             // Use extract_statement_info to get parameters
             // For selected text, parse from the selection; otherwise use cursor position
@@ -152,6 +172,7 @@ impl EditorPanel {
             let app_database = AppDatabase::global(cx).clone();
             let _title = query_tab.title.clone();
             let connection_id = query_tab.connection_id;
+            let db_type = query_tab._db_type;
 
             cx.spawn(async move |entity_handle, cx| {
                 // Create the final tab data with connection_id
@@ -330,8 +351,10 @@ impl EditorPanel {
                         // Resolve table metadata only when a single statement
                         // ran; merging FK/PK info across N statements would be
                         // ambiguous, and the typical "edit rows in the grid"
-                        // flow targets single SELECTs anyway.
-                        if results.len() == 1
+                        // flow targets single SELECTs anyway. Skipped entirely for
+                        // non-SQL backends, which have no table/column catalog.
+                        if db_type.supports_sql()
+                            && results.len() == 1
                             && let Ok(connection) = db_service
                                 .get_or_create_connection_by_id(connection_id, Some(&database_name))
                                 .await
@@ -352,7 +375,8 @@ impl EditorPanel {
                         }
 
                         // Invalidate completion cache after DDL statements
-                        if is_ddl_query(&query_for_metadata)
+                        if db_type.supports_sql()
+                            && is_ddl_query(&query_for_metadata)
                             && let Some(provider) = &completion_provider
                         {
                             provider.invalidate_cache();

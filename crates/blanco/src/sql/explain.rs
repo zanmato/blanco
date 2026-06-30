@@ -34,5 +34,8 @@ pub fn wrap_explain(db_type: DatabaseType, sql: &str) -> String {
         DatabaseType::MsSql => format!("SET SHOWPLAN_ALL ON; {}; SET SHOWPLAN_ALL OFF", trimmed),
         DatabaseType::SQLite => format!("EXPLAIN QUERY PLAN {}", trimmed),
         DatabaseType::ClickHouse => format!("EXPLAIN PLAN {}", trimmed),
+        // Redis has no EXPLAIN; the Explain action is gated off by
+        // supports_sql() so this arm is never reached in practice.
+        DatabaseType::Redis => trimmed.to_string(),
     }
 }

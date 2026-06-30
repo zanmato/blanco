@@ -228,6 +228,14 @@ impl ConnectionsPanel {
                     return None;
                 }
 
+                // The "Tables" folder is relabeled per backend (e.g. "Keys" for
+                // Redis); other categories keep their static label.
+                let label = if item_type == DatabaseItemType::Table {
+                    db_type.primary_object_category_label()
+                } else {
+                    label
+                };
+
                 let category_key = format!("{category_key_prefix}:{slug}");
                 // Tables are expanded by default; everything else is collapsed.
                 // `expanded_categories` records categories the user has toggled
@@ -252,6 +260,24 @@ impl ConnectionsPanel {
                     loading: false,
                     size_bytes: None,
                     relative_size: None,
+                };
+
+                // Backends that namespace object names with a separator (e.g.
+                // Redis `user:1:name`) fold the flat leaf list into nested
+                // folders. SQL backends return `None` and keep a flat list.
+                let category_children = match db_type.key_namespace_separator() {
+                    Some(separator) => fold_keys_into_namespaces(
+                        separator,
+                        &category_key,
+                        &self.expanded_categories,
+                        &category_metadata,
+                        TreeItemIcon {
+                            icon: IconName::Folder,
+                            color: cx.theme().yellow.into(),
+                        },
+                        category_children,
+                    ),
+                    None => category_children,
                 };
 
                 Some(
@@ -313,6 +339,113 @@ fn build_object_item(
         table.item_type,
         TreeItem::new(item_key, table.name.clone(), metadata),
     )
+}
+
+/// Fold a flat list of namespaced leaf items into a nested folder tree by
+/// splitting each item's label on `separator`. Leaves keep their original
+/// `metadata` (so a click still resolves the full key) and are relabeled to
+/// their trailing segment. Intermediate folders clone `base_metadata` (with
+/// `folder_icon` swapped in) and derive a stable id from the cumulative path
+/// under `id_prefix`, so their expansion survives tree rebuilds via
+/// `expanded_categories`.
+fn fold_keys_into_namespaces(
+    separator: char,
+    id_prefix: &str,
+    expanded_categories: &std::collections::HashSet<String>,
+    base_metadata: &TreeItemMetadata,
+    folder_icon: TreeItemIcon,
+    leaves: Vec<TreeItem<TreeItemMetadata>>,
+) -> Vec<TreeItem<TreeItemMetadata>> {
+    let entries = leaves
+        .into_iter()
+        .map(|leaf| {
+            let segments: Vec<String> = leaf.label.split(separator).map(str::to_string).collect();
+            (segments, leaf)
+        })
+        .collect();
+    fold_namespace_level(
+        id_prefix,
+        expanded_categories,
+        base_metadata,
+        &folder_icon,
+        entries,
+    )
+}
+
+/// One level of the namespace fold: group entries by their leading segment,
+/// recursing into deeper segments. A segment can be both a leaf (`foo`) and a
+/// folder (`foo:bar`); when both occur the direct leaf is listed first inside
+/// the folder. Folders sort before plain leaves, each group alphabetically.
+fn fold_namespace_level(
+    id_prefix: &str,
+    expanded_categories: &std::collections::HashSet<String>,
+    base_metadata: &TreeItemMetadata,
+    folder_icon: &TreeItemIcon,
+    entries: Vec<(Vec<String>, TreeItem<TreeItemMetadata>)>,
+) -> Vec<TreeItem<TreeItemMetadata>> {
+    // BTreeMap keeps segments in stable alphabetical order. Each group holds an
+    // optional direct leaf and the deeper entries below that segment.
+    type Group = (
+        Option<TreeItem<TreeItemMetadata>>,
+        Vec<(Vec<String>, TreeItem<TreeItemMetadata>)>,
+    );
+    let mut groups: std::collections::BTreeMap<String, Group> = std::collections::BTreeMap::new();
+
+    for (mut segments, leaf) in entries {
+        if segments.is_empty() {
+            continue;
+        }
+        let head = segments.remove(0);
+        let group = groups.entry(head).or_default();
+        if segments.is_empty() {
+            group.0 = Some(leaf);
+        } else {
+            group.1.push((segments, leaf));
+        }
+    }
+
+    let mut folders = Vec::new();
+    let mut plain_leaves = Vec::new();
+    for (segment, (direct_leaf, deeper)) in groups {
+        if deeper.is_empty() {
+            if let Some(mut leaf) = direct_leaf {
+                leaf.label = segment.into();
+                plain_leaves.push(leaf);
+            }
+            continue;
+        }
+
+        let folder_id = format!("{id_prefix}|{segment}");
+        let mut children = fold_namespace_level(
+            &folder_id,
+            expanded_categories,
+            base_metadata,
+            folder_icon,
+            deeper,
+        );
+        // A key that is both a value and a prefix (`foo` and `foo:bar`) keeps
+        // its own leaf at the top of the folder it heads.
+        if let Some(mut leaf) = direct_leaf {
+            leaf.label = segment.clone().into();
+            children.insert(0, leaf);
+        }
+
+        // Namespace folders default to collapsed and are recorded in
+        // `expanded_categories` only once opened. This matches the default
+        // assumed by `record_category_expansion` (only `:tables` ids default
+        // open), so a folder's state round-trips across tree rebuilds.
+        let is_expanded = expanded_categories.contains(&folder_id);
+        let mut folder_metadata = base_metadata.clone();
+        folder_metadata.icon = folder_icon.clone();
+        folders.push(
+            TreeItem::new(folder_id, segment, folder_metadata)
+                .expanded(is_expanded)
+                .children(children),
+        );
+    }
+
+    folders.extend(plain_leaves);
+    folders
 }
 
 /// Pick the icon, color, and metadata kind to render for a given object kind.

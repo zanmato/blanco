@@ -5,10 +5,10 @@ use gpui::{
     Window, actions, anchored, deferred, div, point, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    ActiveTheme, IndexPath, Selectable,
+    ActiveTheme, IndexPath, Selectable, h_flex,
     input::{Input, InputEvent, InputState},
     list::{List, ListDelegate, ListEvent, ListState},
-    h_flex, v_flex, window_paddings,
+    v_flex, window_paddings,
 };
 
 use database::{DatabaseService, DatabaseType};
@@ -623,11 +623,10 @@ impl Render for CommandPalette {
                 let chip = div()
                     .id(("crumb", i))
                     .when(!is_last, |el| {
-                        el.cursor_pointer().on_click(cx.listener(
-                            move |this, _, window, cx| {
+                        el.cursor_pointer()
+                            .on_click(cx.listener(move |this, _, window, cx| {
                                 this.navigate_to_depth(i, window, cx);
-                            },
-                        ))
+                            }))
                     })
                     .text_color(if is_last { accent } else { muted })
                     .child(crumb);
@@ -760,6 +759,7 @@ fn execute_command(cmd: &CommandType, window: &mut Window, cx: &mut App) {
                 schema_name: None,
                 table_name: None,
                 environment_type: Some(database.environment_type),
+                inspect_key: false,
             }),
             cx,
         ),
@@ -815,7 +815,12 @@ impl CommandPaletteDelegate {
         self.apply_filter();
     }
 
-    fn push_level(&mut self, crumb: SharedString, items: Vec<CommandItem>, placeholder: SharedString) {
+    fn push_level(
+        &mut self,
+        crumb: SharedString,
+        items: Vec<CommandItem>,
+        placeholder: SharedString,
+    ) {
         self.stack.push(NavLevel {
             crumb,
             items,
@@ -1000,7 +1005,11 @@ fn build_commands(sidebar: &WeakEntity<ConnectionsPanel>, cx: &App) -> Vec<Comma
         leaf("Explain Query", "Query", CommandType::ExplainQuery),
         leaf("Format Query", "Query", CommandType::FormatQuery),
         leaf("New Snippet", "Tab", CommandType::NewSnippet),
-        leaf("New Connection", "Connection", CommandType::OpenNewConnectionModal),
+        leaf(
+            "New Connection",
+            "Connection",
+            CommandType::OpenNewConnectionModal,
+        ),
         leaf("Open Settings", "View", CommandType::OpenSettings),
         leaf("Toggle Sidebar", "View", CommandType::ToggleSidebar),
         leaf("Commit Changes", "Edit", CommandType::CommitChanges),
@@ -1014,8 +1023,16 @@ fn build_commands(sidebar: &WeakEntity<ConnectionsPanel>, cx: &App) -> Vec<Comma
         leaf("Export as TSV", "Results", CommandType::ExportAsTSV),
         leaf("Export as JSON", "Results", CommandType::ExportAsJSON),
         leaf("Export as SQL", "Results", CommandType::ExportAsSQL),
-        leaf("Export as Markdown", "Results", CommandType::ExportAsMarkdown),
-        leaf("Render Whitespace", "View", CommandType::ToggleRenderWhitespace),
+        leaf(
+            "Export as Markdown",
+            "Results",
+            CommandType::ExportAsMarkdown,
+        ),
+        leaf(
+            "Render Whitespace",
+            "View",
+            CommandType::ToggleRenderWhitespace,
+        ),
         leaf("Word Wrap", "View", CommandType::ToggleWordWrap),
     ];
 
@@ -1264,7 +1281,7 @@ mod visual_tests {
                 .expect("failed to create in-memory database");
             cx.set_global(app_database);
 
-            let db_service = DatabaseService::new(runtime_handle.clone());
+            let db_service = DatabaseService::new(runtime_handle);
             cx.set_global(db_service);
 
             let settings = AppSettings::new(cx, Settings::default());

@@ -45,6 +45,10 @@ struct DriverCase {
     /// Substrings that identify an authentication/permission rejection (as
     /// opposed to the server being unreachable).
     auth_markers: &'static [&'static str],
+    /// Query/command to run once connected, with the single-cell value it is
+    /// expected to return. SQL backends run `SELECT 1`; Redis runs `PING`.
+    query: &'static str,
+    expected_cell: &'static str,
 }
 
 /// Reads `BLANCO_<PREFIX>_<FIELD>` if set, otherwise the docker-compose default.
@@ -64,6 +68,8 @@ fn postgres_case() -> DriverCase {
         password: env_or("POSTGRES", "PASSWORD", "blanco"),
         schema_name: Some("public"),
         auth_markers: &["password authentication failed", "authentication"],
+        query: "SELECT 1",
+        expected_cell: "1",
     }
 }
 
@@ -79,6 +85,8 @@ fn mysql_case() -> DriverCase {
         password: env_or("MYSQL", "PASSWORD", "blanco"),
         schema_name: None,
         auth_markers: &["Access denied", "access denied"],
+        query: "SELECT 1",
+        expected_cell: "1",
     }
 }
 
@@ -99,6 +107,8 @@ fn clickhouse_case() -> DriverCase {
             "authentication",
             "password is incorrect",
         ],
+        query: "SELECT 1",
+        expected_cell: "1",
     }
 }
 
@@ -114,6 +124,35 @@ fn mssql_case() -> DriverCase {
         password: env_or("MSSQL", "PASSWORD", "Blanco_Passw0rd!"),
         schema_name: None,
         auth_markers: &["Login failed", "login failed"],
+        query: "SELECT 1",
+        expected_cell: "1",
+    }
+}
+
+fn redis_case() -> DriverCase {
+    DriverCase {
+        label: "Redis",
+        db_type: DatabaseType::Redis,
+        name: "it-redis",
+        host: env_or("REDIS", "HOST", "localhost"),
+        port: env_or("REDIS", "PORT", "6400"),
+        // Redis "database" is a numeric index; db 0 is always present.
+        database: env_or("REDIS", "DB", "0"),
+        // `requirepass` authenticates the default user, so no username is sent;
+        // a connection string of `redis://:<password>@host/db` is generated.
+        username: env_or("REDIS", "USER", ""),
+        password: env_or("REDIS", "PASSWORD", "blanco"),
+        schema_name: None,
+        auth_markers: &[
+            "NOAUTH",
+            "Authentication required",
+            "WRONGPASS",
+            "invalid password",
+        ],
+        // Redis is not SQL: run a plain command. PING replies with PONG, which
+        // the console shapes into a single `value` cell.
+        query: "PING",
+        expected_cell: "PONG",
     }
 }
 
@@ -349,7 +388,7 @@ async fn run_driver_case(
     panel.update_in(cx, |panel, window, cx| {
         let tab = panel.active_query_tab().expect("active query tab");
         tab.editor.update(cx, |state, cx| {
-            state.set_value("SELECT 1", window, cx);
+            state.set_value(case.query, window, cx);
         });
         panel.on_run_query(window, cx);
     });
@@ -358,14 +397,17 @@ async fn run_driver_case(
     assert_eq!(
         first_row_count(&panel, cx),
         Some(1),
-        "{}: SELECT 1 should return exactly one row",
-        case.label
+        "{}: `{}` should return exactly one row",
+        case.label,
+        case.query
     );
     assert_eq!(
         first_cell(&panel, cx),
-        Some(Some("1".to_string())),
-        "{}: SELECT 1 should return the value 1",
-        case.label
+        Some(Some(case.expected_cell.to_string())),
+        "{}: `{}` should return the value {}",
+        case.label,
+        case.query,
+        case.expected_cell
     );
 
     true
@@ -481,4 +523,95 @@ async fn test_mssql_connect_and_query(cx: &mut TestAppContext) {
     let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
     cx.run_until_parked();
     run_driver_case(&harness, mssql_case(), &mut cx).await;
+}
+
+#[gpui::test]
+async fn test_redis_connect_and_query(cx: &mut TestAppContext) {
+    let harness = FullAppHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+    cx.run_until_parked();
+    run_driver_case(&harness, redis_case(), &mut cx).await;
+}
+
+/// Exercises the key-inspection path the sidebar uses: a connection fetched via
+/// `DatabaseService` (so it is wrapped in `TokioConnection`) must forward
+/// `inspect_key` to the Redis driver rather than fall back to the trait
+/// default. Writes a string key, then inspects it.
+#[gpui::test]
+async fn test_redis_inspect_key(cx: &mut TestAppContext) {
+    use database::DatabaseServiceTrait;
+
+    let harness = FullAppHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+    cx.run_until_parked();
+
+    let case = redis_case();
+
+    // Register the connection with the service (no modal needed here).
+    let modal = build_modal(&harness, &case, &case.password, &mut cx);
+    let mut data = modal
+        .read_with(&cx, |modal, cx| modal.get_connection_data(cx))
+        .expect("get_connection_data should return data");
+    data.name = case.name.to_string();
+
+    let connection_id = cx.update(|_window, cx| {
+        let app_database = AppDatabase::global(cx).clone();
+        let db_service = DatabaseService::global(cx).clone();
+        let handle = gpui_tokio::Tokio::handle(cx);
+        handle.block_on(async move {
+            let id = app_database
+                .save_connection(&data)
+                .await
+                .expect("save_connection failed");
+            let mut saved = data;
+            saved.id = Some(id);
+            let config = saved
+                .to_connection_config()
+                .expect("to_connection_config returned None");
+            db_service.add_connection_config(config).await;
+            id
+        })
+    });
+
+    let database = case.database.clone();
+    let inspected = cx.update(|_window, cx| {
+        let db_service = DatabaseService::global(cx).clone();
+        let handle = gpui_tokio::Tokio::handle(cx);
+        handle.block_on(async move {
+            let connection = match db_service
+                .get_or_create_connection_by_id(connection_id, Some(&database))
+                .await
+            {
+                Ok(connection) => connection,
+                Err(e) => return Err(format!("connect failed: {e}")),
+            };
+            // Write a known key, then inspect it through the wrapper.
+            connection
+                .execute_write("SET blanco:it:greeting hello", Some(&database), &[])
+                .await
+                .map_err(|e| format!("SET failed: {e}"))?;
+            connection
+                .inspect_key(Some(&database), "blanco:it:greeting")
+                .await
+                .map_err(|e| format!("inspect_key failed: {e}"))
+        })
+    });
+
+    let inspected = match inspected {
+        Ok(result) => result,
+        Err(message) => {
+            if strict() {
+                panic!("Redis inspect_key: {message}");
+            }
+            eprintln!("skip Redis inspect_key: {message}. Set BLANCO_RUN_DB_TESTS=1 to require.");
+            return;
+        }
+    };
+
+    assert_eq!(inspected.key, "blanco:it:greeting");
+    assert_eq!(inspected.key_type, blanco_core::RedisType::String);
+    assert_eq!(
+        inspected.value,
+        blanco_core::RedisValue::Str("hello".to_string())
+    );
 }

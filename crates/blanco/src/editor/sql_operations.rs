@@ -42,6 +42,11 @@ impl EditorPanel {
             return;
         };
 
+        // Linting is SQL-only (sqruff); non-SQL backends have no linter.
+        if !query_tab._db_type.supports_sql() {
+            return;
+        }
+
         let editor = query_tab.editor.clone();
 
         // Get the text for the given range
@@ -153,6 +158,11 @@ impl EditorPanel {
             window.push_notification((NotificationType::Error, "No query tab active"), cx);
             return;
         };
+
+        // Formatting is SQL-only (sqruff); non-SQL backends have no formatter.
+        if !query_tab._db_type.supports_sql() {
+            return;
+        }
 
         let editor = query_tab.editor.clone();
 

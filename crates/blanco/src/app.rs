@@ -153,6 +153,10 @@ pub struct CreateNewQueryTab {
     pub schema_name: Option<String>,
     pub table_name: Option<String>,
     pub environment_type: Option<EnvironmentType>,
+    /// When set, the new tab immediately inspects `table_name` as a key (used by
+    /// the "Inspect Key" action on key/value backends). Plain "New Query" leaves
+    /// this false and just opens an editor tab.
+    pub inspect_key: bool,
 }
 
 #[derive(Action, Clone, PartialEq, Eq)]
@@ -644,7 +648,7 @@ impl BlancoApp {
     fn on_create_new_query_tab(
         &mut self,
         action: &CreateNewQueryTab,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let title = match (&action.schema_name, &action.table_name) {
@@ -656,17 +660,23 @@ impl BlancoApp {
             (None, Some(table)) => table.to_string(),
         };
 
-        let content = action
-            .table_name
-            .as_ref()
-            .map(|table| match &action.schema_name {
-                Some(schema) => format!("SELECT * FROM {}.{} LIMIT 100;", schema, table),
-                None => format!("SELECT * FROM {} LIMIT 100;", table),
-            });
+        // Non-SQL backends (Redis) don't get a SELECT scaffold; a clicked key
+        // opens the key inspector instead (handled below).
+        let content = if action.db_type.supports_sql() {
+            action
+                .table_name
+                .as_ref()
+                .map(|table| match &action.schema_name {
+                    Some(schema) => format!("SELECT * FROM {}.{} LIMIT 100;", schema, table),
+                    None => format!("SELECT * FROM {} LIMIT 100;", table),
+                })
+        } else {
+            None
+        };
 
         self.editor_panel.update(cx, |panel, cx| {
             panel.create_and_add_tab_with_connection(
-                _window,
+                window,
                 TabCreationParams {
                     title,
                     content,
@@ -681,7 +691,65 @@ impl BlancoApp {
                 cx,
             );
         });
+
+        // The "Inspect Key" action drills the freshly opened tab straight into
+        // the key inspector; plain "New Query" leaves the editor tab empty.
+        if action.inspect_key
+            && let Some(key) = action.table_name.clone()
+        {
+            self.open_redis_key(
+                action.connection_id,
+                action.database_name.clone(),
+                key,
+                window,
+                cx,
+            );
+        }
+
         cx.notify();
+    }
+
+    /// Inspect a Redis key in a background task and route the decoded value to
+    /// the (freshly created, now active) query tab's results panel.
+    fn open_redis_key(
+        &mut self,
+        connection_id: i64,
+        database_name: String,
+        key: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(results_panel) = self.editor_panel.read(cx).active_results_panel() else {
+            return;
+        };
+        let db_service = database::DatabaseService::global(cx).clone();
+
+        cx.spawn_in(window, async move |_, cx| {
+            use database::DatabaseServiceTrait;
+            let connection = match db_service
+                .get_or_create_connection_by_id(connection_id, Some(&database_name))
+                .await
+            {
+                Ok(connection) => connection,
+                Err(e) => {
+                    tracing::error!("Failed to open Redis connection: {e}");
+                    return;
+                }
+            };
+            let result = match connection.inspect_key(Some(&database_name), &key).await {
+                Ok(result) => result,
+                Err(e) => {
+                    tracing::error!("Failed to inspect Redis key {key}: {e}");
+                    return;
+                }
+            };
+            results_panel
+                .update_in(cx, |panel, window, cx| {
+                    panel.set_key_value_result(result, window, cx);
+                })
+                .log_err();
+        })
+        .detach();
     }
 
     fn on_open_table_structure(

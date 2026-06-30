@@ -226,6 +226,9 @@ pub(crate) fn sql_identifier(name: &str, db_type: DatabaseType) -> String {
             format!("\"{}\"", name.replace('"', "\"\""))
         }
         DatabaseType::MsSql => format!("[{}]", name.replace(']', "]]")),
+        // Redis results are not exported as SQL INSERTs; fall back to
+        // double-quote identifier quoting so the match stays exhaustive.
+        DatabaseType::Redis => format!("\"{}\"", name.replace('"', "\"\"")),
     }
 }
 

@@ -88,6 +88,7 @@ pub enum DriverType {
     MySQL,
     ClickHouse,
     MsSql,
+    Redis,
 }
 
 impl DriverType {
@@ -99,6 +100,7 @@ impl DriverType {
             "MySQL" => Some(Self::MySQL),
             "ClickHouse" => Some(Self::ClickHouse),
             "SQL Server" => Some(Self::MsSql),
+            "Redis" => Some(Self::Redis),
             _ => None,
         }
     }
@@ -111,6 +113,7 @@ impl DriverType {
             Self::MySQL => "MySQL",
             Self::ClickHouse => "ClickHouse",
             Self::MsSql => "SQL Server",
+            Self::Redis => "Redis",
         }
     }
 }
@@ -136,6 +139,102 @@ pub struct QueryResult {
     pub connection_id: Option<i64>,
     /// Full column metadata for the table (including foreign keys)
     pub table_columns: Option<Vec<ColumnInfo>>,
+}
+
+/// The Redis type of a key, as reported by the `TYPE` command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RedisType {
+    String,
+    List,
+    Set,
+    Hash,
+    ZSet,
+    Stream,
+    None,
+}
+
+impl RedisType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RedisType::String => "string",
+            RedisType::List => "list",
+            RedisType::Set => "set",
+            RedisType::Hash => "hash",
+            RedisType::ZSet => "zset",
+            RedisType::Stream => "stream",
+            RedisType::None => "none",
+        }
+    }
+
+    pub fn from_type_reply(reply: &str) -> Self {
+        match reply {
+            "string" => RedisType::String,
+            "list" => RedisType::List,
+            "set" => RedisType::Set,
+            "hash" => RedisType::Hash,
+            "zset" => RedisType::ZSet,
+            "stream" => RedisType::Stream,
+            _ => RedisType::None,
+        }
+    }
+}
+
+/// The decoded value of a single Redis key, shaped per its type. Produced by the
+/// key inspector (`Connection::inspect_key`) and rendered by a dedicated
+/// key/value view rather than the tabular results table.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RedisValue {
+    /// A simple string value (GET).
+    Str(String),
+    /// An ordered list (LRANGE).
+    List(Vec<String>),
+    /// A hash of field/value pairs (HGETALL).
+    Hash(Vec<(String, String)>),
+    /// An unordered set of members (SMEMBERS).
+    Set(Vec<String>),
+    /// A sorted set of member/score pairs (ZRANGE WITHSCORES).
+    ZSet(Vec<(String, f64)>),
+    /// A stream of entries: (id, [field/value pairs]) (XRANGE).
+    Stream(Vec<(String, Vec<(String, String)>)>),
+    /// The key does not exist.
+    None,
+}
+
+/// Inspection result for a single Redis key: its name, type, TTL, and decoded
+/// value. The TTL is in seconds; `None` means the key has no expiry (-1) or does
+/// not exist (-2).
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeyValueResult {
+    pub key: String,
+    pub key_type: RedisType,
+    pub ttl: Option<i64>,
+    pub value: RedisValue,
+}
+
+/// A result produced by a backend, either a relational/tabular query result or a
+/// non-tabular key/value payload (Redis). The tabular variant is the common case
+/// and reuses the full SQL results table; the key/value variant drives a
+/// dedicated inspector view.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResultPayload {
+    Tabular(QueryResult),
+    KeyValue(KeyValueResult),
+}
+
+impl ResultPayload {
+    /// Borrow the tabular result, if this payload is tabular.
+    pub fn as_tabular(&self) -> Option<&QueryResult> {
+        match self {
+            ResultPayload::Tabular(result) => Some(result),
+            ResultPayload::KeyValue(_) => None,
+        }
+    }
+}
+
+impl From<QueryResult> for ResultPayload {
+    fn from(result: QueryResult) -> Self {
+        ResultPayload::Tabular(result)
+    }
 }
 
 /// Information about a foreign key relationship
@@ -458,20 +557,27 @@ pub trait Connection: Send + Sync {
     fn supports_schemas(&self) -> bool;
 
     /// Get column information for a specific table
-    /// Returns detailed column metadata including names, types, and constraints
+    /// Returns detailed column metadata including names, types, and constraints.
+    /// Defaults to empty so non-relational drivers (e.g. Redis) that have no
+    /// column catalog need not implement it.
     async fn get_columns_for_table(
         &self,
-        table_name: &str,
-        schema: Option<&str>,
-    ) -> Result<Vec<ColumnInfo>, anyhow::Error>;
+        _table_name: &str,
+        _schema: Option<&str>,
+    ) -> Result<Vec<ColumnInfo>, anyhow::Error> {
+        Ok(Vec::new())
+    }
 
     /// Get index information for a specific table
-    /// Returns detailed index metadata including names, columns, and constraints
+    /// Returns detailed index metadata including names, columns, and constraints.
+    /// Defaults to empty so non-relational drivers need not implement it.
     async fn get_indexes_for_table(
         &self,
-        table_name: &str,
-        schema: Option<&str>,
-    ) -> Result<Vec<IndexInfo>, anyhow::Error>;
+        _table_name: &str,
+        _schema: Option<&str>,
+    ) -> Result<Vec<IndexInfo>, anyhow::Error> {
+        Ok(Vec::new())
+    }
 
     /// Extract the primary table name from a SQL query
     /// Returns None if no table can be extracted (e.g., for complex queries or parsing errors)
@@ -490,14 +596,27 @@ pub trait Connection: Send + Sync {
     }
 
     /// Get database schema with pagination support
-    /// Returns structured schema information including tables and columns
+    /// Returns structured schema information including tables and columns.
+    /// Defaults to an empty schema so non-relational drivers need not implement
+    /// it; relational drivers override with real introspection.
     async fn get_database_schema_paginated(
         &self,
-        database_name: Option<&str>,
-        table_names: Option<&str>,
+        _database_name: Option<&str>,
+        _table_names: Option<&str>,
         limit: Option<i64>,
         offset: Option<i64>,
-    ) -> Result<DatabaseSchemaResult, anyhow::Error>;
+    ) -> Result<DatabaseSchemaResult, anyhow::Error> {
+        Ok(DatabaseSchemaResult {
+            connection_type: self.get_connection_type().to_string(),
+            display_name: self.get_display_name(),
+            tables: Vec::new(),
+            pagination: PaginationInfo {
+                limit,
+                offset,
+                has_more: false,
+            },
+        })
+    }
 
     /// Perform a foreign key lookup that returns all rows for small tables
     /// or just the referenced row for large tables
@@ -511,12 +630,32 @@ pub trait Connection: Send + Sync {
     /// - For small tables (≤20 rows): All rows, with referenced row first
     /// - For large tables: Only the referenced row
     /// - For SQLite (no estimate): Only the referenced row
+    /// Defaults to an error so non-relational drivers (which have no foreign
+    /// keys) need not implement it; the UI only invokes this for relational
+    /// backends.
     async fn foreign_key_lookup(
         &self,
-        table_name: &str,
-        column_name: &str,
-        reference_value: &str,
-    ) -> Result<QueryResult, anyhow::Error>;
+        _table_name: &str,
+        _column_name: &str,
+        _reference_value: &str,
+    ) -> Result<QueryResult, anyhow::Error> {
+        Err(anyhow::anyhow!(
+            "foreign_key_lookup is not supported by this connection type"
+        ))
+    }
+
+    /// Inspect a single key and return its type, TTL and decoded value. This is
+    /// the key/value counterpart to `execute_query` for key/value stores like
+    /// Redis. Defaults to an error; relational drivers never implement it.
+    async fn inspect_key(
+        &self,
+        _database_name: Option<&str>,
+        _key: &str,
+    ) -> Result<KeyValueResult, anyhow::Error> {
+        Err(anyhow::anyhow!(
+            "inspect_key is not supported by this connection type"
+        ))
+    }
 }
 
 /// Factory trait for creating connections of different types

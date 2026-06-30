@@ -11,6 +11,7 @@ pub enum DatabaseType {
     MySQL,
     ClickHouse,
     MsSql,
+    Redis,
 }
 
 /// Which placeholder syntaxes a SQL dialect recognizes as bind parameters.
@@ -63,6 +64,7 @@ impl DatabaseType {
             DatabaseType::MySQL => "MySQL",
             DatabaseType::ClickHouse => "ClickHouse",
             DatabaseType::MsSql => "SQL Server",
+            DatabaseType::Redis => "Redis",
         }
     }
 
@@ -74,6 +76,7 @@ impl DatabaseType {
             "MySQL" => Some(DatabaseType::MySQL),
             "ClickHouse" => Some(DatabaseType::ClickHouse),
             "SQL Server" => Some(DatabaseType::MsSql),
+            "Redis" => Some(DatabaseType::Redis),
             _ => None,
         }
     }
@@ -85,7 +88,79 @@ impl DatabaseType {
             DatabaseType::PostgreSQL
             | DatabaseType::MySQL
             | DatabaseType::ClickHouse
+            | DatabaseType::MsSql
+            | DatabaseType::Redis => true,
+        }
+    }
+
+    /// Whether this backend speaks SQL. When false, the editor disables
+    /// SQL-only machinery (tree-sitter parsing, EXPLAIN, format/lint, bind
+    /// parameter detection, DDL cache invalidation) and treats the editor
+    /// buffer as line-oriented commands instead.
+    pub fn supports_sql(&self) -> bool {
+        match self {
+            DatabaseType::SQLite
+            | DatabaseType::PostgreSQL
+            | DatabaseType::MySQL
+            | DatabaseType::ClickHouse
             | DatabaseType::MsSql => true,
+            DatabaseType::Redis => false,
+        }
+    }
+
+    /// Whether the connections sidebar offers relational table operations for
+    /// this backend's objects: Export Data, Import Data, and Open Structure.
+    /// These all assume a tabular, column-oriented object, so key/value stores
+    /// (Redis) opt out and their keys are inspected instead. Kept separate from
+    /// [`Self::supports_sql`] so a future driver can mix capabilities.
+    pub fn supports_table_operations(&self) -> bool {
+        match self {
+            DatabaseType::SQLite
+            | DatabaseType::PostgreSQL
+            | DatabaseType::MySQL
+            | DatabaseType::ClickHouse
+            | DatabaseType::MsSql => true,
+            DatabaseType::Redis => false,
+        }
+    }
+
+    /// Whether a leaf object is inspected directly rather than queried. Key/
+    /// value stores (Redis) open a key inspector, so their leaf context-menu
+    /// action reads "Inspect Key"; relational tables are a starting point for a
+    /// query, so theirs reads "New Query". Drives the leaf menu label/behavior.
+    pub fn inspects_objects(&self) -> bool {
+        !self.supports_sql()
+    }
+
+    /// Display label for the sidebar folder that groups a connection's primary
+    /// objects. SQL backends list "Tables"; key/value stores list "Keys". Only
+    /// the visible label changes; the folder's internal slug stays `tables` so
+    /// expansion bookkeeping is unaffected.
+    pub fn primary_object_category_label(&self) -> &'static str {
+        match self {
+            DatabaseType::SQLite
+            | DatabaseType::PostgreSQL
+            | DatabaseType::MySQL
+            | DatabaseType::ClickHouse
+            | DatabaseType::MsSql => "Tables",
+            DatabaseType::Redis => "Keys",
+        }
+    }
+
+    /// Separator used to fold flat key names into a nested folder tree in the
+    /// connections sidebar. Key/value stores namespace keys by convention
+    /// (Redis `user:1:name`), so returning `Some(sep)` tells the tree builder
+    /// to group on it. Relational backends have a flat table list and return
+    /// `None`. Keyed on the type so new drivers opt in without sprinkling
+    /// driver checks through the UI.
+    pub fn key_namespace_separator(&self) -> Option<char> {
+        match self {
+            DatabaseType::SQLite
+            | DatabaseType::PostgreSQL
+            | DatabaseType::MySQL
+            | DatabaseType::ClickHouse
+            | DatabaseType::MsSql => None,
+            DatabaseType::Redis => Some(':'),
         }
     }
 
@@ -97,6 +172,9 @@ impl DatabaseType {
             DatabaseType::MySQL => "mysql",
             DatabaseType::ClickHouse => "ansi",
             DatabaseType::MsSql => "tsql",
+            // Redis is not SQL; sqruff is never invoked for it (gated by
+            // supports_sql), but a dialect string is still required here.
+            DatabaseType::Redis => "ansi",
         }
     }
 
@@ -132,6 +210,7 @@ impl DatabaseType {
                 at_named: true,
             },
             DatabaseType::ClickHouse => ParamStyles::none(),
+            DatabaseType::Redis => ParamStyles::none(),
         }
     }
 
@@ -143,6 +222,7 @@ impl DatabaseType {
             "MySQL" => Some(DatabaseType::MySQL),
             "ClickHouse" => Some(DatabaseType::ClickHouse),
             "SQL Server" => Some(DatabaseType::MsSql),
+            "Redis" => Some(DatabaseType::Redis),
             _ => None,
         }
     }
@@ -162,6 +242,7 @@ impl From<DatabaseType> for blanco_core::DriverType {
             DatabaseType::MySQL => blanco_core::DriverType::MySQL,
             DatabaseType::ClickHouse => blanco_core::DriverType::ClickHouse,
             DatabaseType::MsSql => blanco_core::DriverType::MsSql,
+            DatabaseType::Redis => blanco_core::DriverType::Redis,
         }
     }
 }
@@ -506,6 +587,32 @@ impl ConnectionConfig {
                 }
 
                 conn_str
+            }
+            DatabaseType::Redis => {
+                // redis://[:password@]host:port/db-number. The database name is
+                // a numeric DB index (e.g. "0"); default to 0 when not numeric.
+                let db_index = db_name.parse::<u8>().unwrap_or(0);
+                let scheme = match self.ssl_mode.as_deref() {
+                    Some("disabled") | None => "redis",
+                    _ => "rediss",
+                };
+                if let Some(password) = &self.password {
+                    if password.is_empty() {
+                        format!("{}://{}:{}/{}", scheme, conn_host, conn_port, db_index)
+                    } else if self.username.is_empty() {
+                        format!(
+                            "{}://:{}@{}:{}/{}",
+                            scheme, password, conn_host, conn_port, db_index
+                        )
+                    } else {
+                        format!(
+                            "{}://{}:{}@{}:{}/{}",
+                            scheme, self.username, password, conn_host, conn_port, db_index
+                        )
+                    }
+                } else {
+                    format!("{}://{}:{}/{}", scheme, conn_host, conn_port, db_index)
+                }
             }
         }
     }

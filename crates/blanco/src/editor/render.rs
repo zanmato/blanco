@@ -299,6 +299,13 @@ impl EditorPanel {
         query_tab: &QueryTab,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        // Row editing (Add/Duplicate/Delete/Apply/Discard) mutates table rows,
+        // which non-SQL backends (e.g. Redis key/value) don't support, so those
+        // buttons are hidden for them. The SQL Log and Chat toggles stay: Redis
+        // tabs still have a command log view. Gate on the backend capability so
+        // new drivers slot in automatically.
+        let supports_sql = query_tab._db_type.supports_sql();
+
         h_flex()
             .p_2()
             .gap_2()
@@ -306,57 +313,59 @@ impl EditorPanel {
             .bg(cx.theme().title_bar)
             .border_color(cx.theme().border)
             .flex_wrap()
-            .child(
-                Button::new("add-row")
-                    .outline()
-                    .small()
-                    .icon(IconName::Plus)
-                    .label("Add")
-                    .on_click(cx.listener(|this, _, _window, cx| {
-                        this.with_active_results_panel(cx, |panel, cx| {
-                            panel.add_new_row(cx);
-                        });
-                    })),
-            )
-            .child(
-                Button::new("duplicate-row")
-                    .outline()
-                    .small()
-                    .icon(IconName::Copy)
-                    .label("Duplicate")
-                    .on_click(cx.listener(|this, _, _window, cx| {
-                        this.with_active_results_panel(cx, |panel, cx| {
-                            panel.duplicate_row(cx);
-                        });
-                    })),
-            )
-            .child(
-                Button::new("delete-row")
-                    .outline()
-                    .small()
-                    .icon(IconName::Trash)
-                    .label("Delete")
-                    .on_click(cx.listener(|this, _, _window, cx| {
-                        this.with_active_results_panel(cx, |panel, cx| {
-                            panel.delete_row(cx);
-                        });
-                    })),
-            )
-            .child(self.render_apply_edits_button(query_tab, cx))
-            .child(
-                Button::new("rollback-changes")
-                    .outline()
-                    .small()
-                    .icon(IconName::CircleX)
-                    .label("Discard edits")
-                    .tooltip("Discard pending cell edits")
-                    .disabled(!query_tab.results_panel.read(cx).has_pending_edits(cx))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.with_active_results_panel(cx, |panel, cx| {
-                            panel.rollback_changes(window, cx);
-                        });
-                    })),
-            )
+            .when(supports_sql, |bar| {
+                bar.child(
+                    Button::new("add-row")
+                        .outline()
+                        .small()
+                        .icon(IconName::Plus)
+                        .label("Add")
+                        .on_click(cx.listener(|this, _, _window, cx| {
+                            this.with_active_results_panel(cx, |panel, cx| {
+                                panel.add_new_row(cx);
+                            });
+                        })),
+                )
+                .child(
+                    Button::new("duplicate-row")
+                        .outline()
+                        .small()
+                        .icon(IconName::Copy)
+                        .label("Duplicate")
+                        .on_click(cx.listener(|this, _, _window, cx| {
+                            this.with_active_results_panel(cx, |panel, cx| {
+                                panel.duplicate_row(cx);
+                            });
+                        })),
+                )
+                .child(
+                    Button::new("delete-row")
+                        .outline()
+                        .small()
+                        .icon(IconName::Trash)
+                        .label("Delete")
+                        .on_click(cx.listener(|this, _, _window, cx| {
+                            this.with_active_results_panel(cx, |panel, cx| {
+                                panel.delete_row(cx);
+                            });
+                        })),
+                )
+                .child(self.render_apply_edits_button(query_tab, cx))
+                .child(
+                    Button::new("rollback-changes")
+                        .outline()
+                        .small()
+                        .icon(IconName::CircleX)
+                        .label("Discard edits")
+                        .tooltip("Discard pending cell edits")
+                        .disabled(!query_tab.results_panel.read(cx).has_pending_edits(cx))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.with_active_results_panel(cx, |panel, cx| {
+                                panel.rollback_changes(window, cx);
+                            });
+                        })),
+                )
+            })
             .child(div().flex_1())
             .child(
                 Button::new("toggle-sql-log")
@@ -487,6 +496,7 @@ impl EditorPanel {
         query_tab: &QueryTab,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let supports_sql = query_tab._db_type.supports_sql();
         h_resizable("editor-split")
             .with_state(&self.editor_chat_resize_state)
             .child(
@@ -543,24 +553,28 @@ impl EditorPanel {
                                             .child(
                                                 h_flex()
                                                     .gap_2()
-                                                    .child(
-                                                        Button::new("format-query")
-                                                            .outline()
-                                                            .small()
-                                                            .icon(IconName::WandSparkles)
-                                                            .label("Format")
-                                                            .tooltip(format!(
-                                                                "Format ({})",
-                                                                self.format_query_keystroke
-                                                            ))
-                                                            .on_click(cx.listener(
-                                                                |panel, _, window, cx| {
-                                                                    panel.format_current_query(
-                                                                        window, cx,
-                                                                    )
-                                                                },
-                                                            )),
-                                                    )
+                                                    // Format/lint and EXPLAIN are SQL-only; hide
+                                                    // them for non-SQL backends (e.g. Redis).
+                                                    .when(supports_sql, |this| {
+                                                        this.child(
+                                                            Button::new("format-query")
+                                                                .outline()
+                                                                .small()
+                                                                .icon(IconName::WandSparkles)
+                                                                .label("Format")
+                                                                .tooltip(format!(
+                                                                    "Format ({})",
+                                                                    self.format_query_keystroke
+                                                                ))
+                                                                .on_click(cx.listener(
+                                                                    |panel, _, window, cx| {
+                                                                        panel.format_current_query(
+                                                                            window, cx,
+                                                                        )
+                                                                    },
+                                                                )),
+                                                        )
+                                                    })
                                                     .map(|this| {
                                                         if self.loading {
                                                             this.child(
@@ -577,7 +591,8 @@ impl EditorPanel {
                                                             )),
                                                     )
                                                         } else {
-                                                            this.child(
+                                                            this.when(supports_sql, |this| {
+                                                                this.child(
                                                         Button::new("explain-query")
                                                             .outline()
                                                             .small()
@@ -595,22 +610,25 @@ impl EditorPanel {
                                                                 },
                                                             )),
                                                     )
-                                                    .child(
-                                                        Button::new("run-query")
-                                                            .outline()
-                                                            .small()
-                                                            .icon(IconName::Play)
-                                                            .label("Run Current")
-                                                            .tooltip(format!(
-                                                                "Run Current ({})",
-                                                                self.run_query_keystroke
-                                                            ))
-                                                            .on_click(cx.listener(
-                                                                |panel, _, window, cx| {
-                                                                    panel.on_run_query(window, cx)
-                                                                },
-                                                            )),
-                                                    )
+                                                            })
+                                                            .child(
+                                                                Button::new("run-query")
+                                                                    .outline()
+                                                                    .small()
+                                                                    .icon(IconName::Play)
+                                                                    .label("Run Current")
+                                                                    .tooltip(format!(
+                                                                        "Run Current ({})",
+                                                                        self.run_query_keystroke
+                                                                    ))
+                                                                    .on_click(cx.listener(
+                                                                        |panel, _, window, cx| {
+                                                                            panel.on_run_query(
+                                                                                window, cx,
+                                                                            )
+                                                                        },
+                                                                    )),
+                                                            )
                                                         }
                                                     }),
                                             ),

@@ -358,6 +358,32 @@ pub fn extract_statement_info_with_styles(
         .with_borrow_mut(|parser| parser.extract_statement_at_cursor(text, cursor_pos, styles))
 }
 
+/// Extract the single line-oriented command at the cursor for non-SQL backends
+/// (e.g. Redis), where statements are one-per-line rather than `;`-delimited and
+/// there is no grammar to parse. Returns the trimmed text of the line containing
+/// `cursor_byte_pos`, or `None` if that line is blank.
+pub fn extract_command_at_cursor(text: &str, cursor_byte_pos: usize) -> Option<String> {
+    let cursor = cursor_byte_pos.min(text.len());
+
+    // Walk line spans (including their trailing newline) until we find the one
+    // that contains the cursor. A cursor sitting exactly on a newline belongs to
+    // the line it terminates.
+    let mut line_start = 0;
+    for line in text.split_inclusive('\n') {
+        let line_end = line_start + line.len();
+        if cursor < line_end || line_end == text.len() {
+            let trimmed = line.trim();
+            return if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            };
+        }
+        line_start = line_end;
+    }
+    None
+}
+
 /// The SQL clause the cursor is currently in
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SqlClause {
@@ -1027,6 +1053,38 @@ mod tests {
 
     fn create_test_parser() -> SqlStatementParser {
         SqlStatementParser::new().expect("Failed to create test parser")
+    }
+
+    #[test]
+    fn command_at_cursor_returns_line_under_cursor() {
+        let text = "GET foo\nHGETALL bar\nLRANGE q 0 -1\n";
+        // Cursor on the second line (byte offset within "HGETALL bar").
+        let cursor = text.find("bar").unwrap();
+        assert_eq!(
+            extract_command_at_cursor(text, cursor),
+            Some("HGETALL bar".to_string())
+        );
+    }
+
+    #[test]
+    fn command_at_cursor_trims_and_skips_blank_lines() {
+        let text = "  GET foo  \n\nSET k v\n";
+        assert_eq!(
+            extract_command_at_cursor(text, 0),
+            Some("GET foo".to_string())
+        );
+        // Cursor on the blank middle line yields nothing.
+        let blank = text.find("\n\n").unwrap() + 1;
+        assert_eq!(extract_command_at_cursor(text, blank), None);
+    }
+
+    #[test]
+    fn command_at_cursor_handles_cursor_past_end() {
+        let text = "PING";
+        assert_eq!(
+            extract_command_at_cursor(text, 999),
+            Some("PING".to_string())
+        );
     }
 
     /// Helper to convert character position to byte position for tests

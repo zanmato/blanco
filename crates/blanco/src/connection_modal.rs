@@ -2,6 +2,7 @@ mod clickhouse;
 mod mssql;
 mod mysql;
 mod postgres;
+mod redis;
 mod shared;
 mod sqlite;
 mod types;
@@ -37,6 +38,7 @@ pub struct NewConnectionModal {
     mysql_form: MysqlForm,
     clickhouse_form: ClickhouseForm,
     mssql_form: MssqlForm,
+    redis_form: redis::RedisForm,
     is_testing: bool,
     editing_connection_id: Option<i64>,
     db_type_locked: bool,
@@ -60,6 +62,7 @@ impl NewConnectionModal {
             "MySQL".to_string(),
             "ClickHouse".to_string(),
             "SQL Server".to_string(),
+            "Redis".to_string(),
         ];
 
         let (initial_name, initial_db_type, editing_connection_id, db_type_locked) =
@@ -70,6 +73,7 @@ impl NewConnectionModal {
                     database::DatabaseType::MySQL => 2,
                     database::DatabaseType::ClickHouse => 3,
                     database::DatabaseType::MsSql => 4,
+                    database::DatabaseType::Redis => 5,
                     database::DatabaseType::SQLite => 0,
                 };
                 (conn.name.clone(), Some(db_type_index), conn_id, true)
@@ -112,6 +116,7 @@ impl NewConnectionModal {
         let mysql_form = MysqlForm::new(window, cx, conn_ref);
         let clickhouse_form = ClickhouseForm::new(window, cx, conn_ref);
         let mssql_form = MssqlForm::new(window, cx, conn_ref);
+        let redis_form = redis::RedisForm::new(window, cx, conn_ref);
 
         Self {
             focus_handle: cx.focus_handle(),
@@ -123,6 +128,7 @@ impl NewConnectionModal {
             mysql_form,
             clickhouse_form,
             mssql_form,
+            redis_form,
             is_testing: false,
             editing_connection_id,
             db_type_locked,
@@ -162,6 +168,7 @@ impl NewConnectionModal {
             ConnectorType::MySQL => self.mysql_form.validate(cx),
             ConnectorType::ClickHouse => self.clickhouse_form.validate(cx),
             ConnectorType::MsSql => self.mssql_form.validate(cx),
+            ConnectorType::Redis => self.redis_form.validate(cx),
         }
     }
 
@@ -190,6 +197,9 @@ impl NewConnectionModal {
             }
             ConnectorType::MsSql => self
                 .mssql_form
+                .get_connection_data(name, environment_type, cx),
+            ConnectorType::Redis => self
+                .redis_form
                 .get_connection_data(name, environment_type, cx),
         }
     }
@@ -334,6 +344,7 @@ impl NewConnectionModal {
             "MySQL" => 2,
             "ClickHouse" => 3,
             "SQL Server" => 4,
+            "Redis" => 5,
             _ => 0,
         };
         self.db_type_select.update(cx, |state, cx| {
@@ -382,6 +393,13 @@ impl NewConnectionModal {
                 &self.mssql_form.database_input,
                 &self.mssql_form.username_input,
                 &self.mssql_form.password_input,
+            ),
+            ConnectorType::Redis => (
+                &self.redis_form.host_input,
+                &self.redis_form.port_input,
+                &self.redis_form.database_input,
+                &self.redis_form.username_input,
+                &self.redis_form.password_input,
             ),
             ConnectorType::SQLite => {
                 panic!("set_network_credentials called for SQLite; use set_sqlite_path")
@@ -448,6 +466,7 @@ impl Render for NewConnectionModal {
                     ConnectorType::MySQL => mysql::render(self, cx),
                     ConnectorType::ClickHouse => clickhouse::render(self, cx),
                     ConnectorType::MsSql => mssql::render(self, cx),
+                    ConnectorType::Redis => redis::render(self, cx),
                 })
                 .when(self.is_testing, |this| {
                     this.child(

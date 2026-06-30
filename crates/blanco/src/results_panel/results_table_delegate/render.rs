@@ -59,13 +59,7 @@ impl ResultsTableDelegate {
                         .shadow_lg()
                         .on_action(cx.listener(
                             move |table, _event: &gpui_component::input::Escape, window, cx| {
-                                Self::handle_minimize(
-                                    table,
-                                    (col_ix, row_ix),
-                                    is_json,
-                                    window,
-                                    cx,
-                                );
+                                Self::handle_minimize(table, (col_ix, row_ix), is_json, window, cx);
                             },
                         ))
                         .child(

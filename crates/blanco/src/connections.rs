@@ -122,6 +122,7 @@ impl CreateNewQueryTabParams for TreeItemMetadata {
                 schema_name: self.schema_name.clone(),
                 table_name: self.table_name.clone(),
                 environment_type: self.environment_type,
+                inspect_key: false,
             }),
         }
     }

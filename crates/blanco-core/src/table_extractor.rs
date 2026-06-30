@@ -29,6 +29,9 @@ impl TableExtractor {
             DriverType::MySQL => Box::new(MySqlDialect {}),
             DriverType::ClickHouse => Box::new(GenericDialect {}),
             DriverType::MsSql => Box::new(MsSqlDialect {}),
+            // Redis is not SQL; TableExtractor is never used for it (gated by
+            // supports_sql), but the match must remain exhaustive.
+            DriverType::Redis => Box::new(GenericDialect {}),
         };
         Self { dialect }
     }

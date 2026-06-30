@@ -7,7 +7,9 @@ pub mod statement_parser;
 pub use completion::SqlCompletionProvider;
 pub use formatting::SqruffService;
 pub use selection_range_provider::SqlSelectionRangeProvider;
-pub use statement_parser::{extract_statement_info, extract_statement_info_with_styles};
+pub use statement_parser::{
+    extract_command_at_cursor, extract_statement_info, extract_statement_info_with_styles,
+};
 
 use gpui_component::highlighter::{LanguageConfig, LanguageRegistry};
 

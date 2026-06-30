@@ -10,6 +10,7 @@ use gpui_component::{
     tooltip::Tooltip,
 };
 
+use crate::app::CreateNewQueryTab;
 use crate::app::OpenSchemaGraph;
 use crate::app::OpenTableStructure;
 use crate::connections::{
@@ -331,8 +332,31 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                 menu
             }
             TreeItemKind::Category => {
-                // Grouping folders have no contextual operations.
-                menu
+                // Grouping folders have no object operations, but on key/value
+                // backends a key namespace folder is a natural place to start a
+                // new connection-scoped command tab.
+                if metadata.db_type.inspects_objects() {
+                    let action = CreateNewQueryTab {
+                        connection_id: metadata.connection_id,
+                        connection_name: metadata.connection_name.clone(),
+                        db_type: metadata.db_type,
+                        database_name: metadata.database_name.clone().unwrap_or_default(),
+                        schema_name: metadata.schema_name.clone(),
+                        table_name: None,
+                        environment_type: metadata.environment_type,
+                        inspect_key: false,
+                    };
+                    menu.item(
+                        PopupMenuItem::new("New Query").on_click(window.listener_for(
+                            &self.parent,
+                            move |_this, _event, window, cx| {
+                                window.dispatch_action(Box::new(action.clone()), cx);
+                            },
+                        )),
+                    )
+                } else {
+                    menu
+                }
             }
             TreeItemKind::Schema
             | TreeItemKind::Table
@@ -357,34 +381,67 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                     let schema_name_for_import = schema_name.clone();
                     let table_name_for_import = table_name.clone();
 
-                    let mut menu = menu
-                        .item(
-                            PopupMenuItem::new("New Query").on_click(window.listener_for(
-                                &self.parent,
-                                move |_this, _event, window, cx| {
-                                    window.dispatch_action(Box::new(action.clone()), cx);
-                                },
-                            )),
-                        )
-                        .item(
-                            PopupMenuItem::new("Export Data").on_click(window.listener_for(
-                                &self.parent,
-                                move |this, _event, window, cx| {
-                                    this.export_table_data(
-                                        connection_id,
-                                        connection_name.clone(),
-                                        database_name.clone(),
-                                        schema_name.clone(),
-                                        table_name.clone(),
-                                        db_type,
-                                        window,
-                                        cx,
-                                    );
-                                },
-                            )),
-                        );
+                    // Export/Import/Structure are relational-table operations
+                    // (they read or write rows and assume a column layout). Key/
+                    // value stores like Redis surface keys as `Table` items but
+                    // can't be exported or have a column structure; gate on the
+                    // backend capability rather than the concrete driver so
+                    // future drivers slot in automatically.
+                    let supports_table_ops = db_type.supports_table_operations();
 
-                    if matches!(metadata.kind, TreeItemKind::Table) {
+                    // Key/value backends inspect a key directly. They keep the
+                    // plain "New Query" item (opens an empty command tab) and
+                    // gain a separate "Inspect Key" that drills into the key.
+                    let inspect_action = db_type.inspects_objects().then(|| CreateNewQueryTab {
+                        inspect_key: true,
+                        ..action.clone()
+                    });
+
+                    // On key/value backends "New Query" is connection/db-scoped,
+                    // not tied to the clicked key, so it drops the key name; the
+                    // key lives on "Inspect Key" instead. SQL keeps the table so
+                    // it can scaffold a SELECT.
+                    let new_query_action = if db_type.inspects_objects() {
+                        CreateNewQueryTab {
+                            table_name: None,
+                            ..action
+                        }
+                    } else {
+                        action
+                    };
+
+                    let mut menu = menu.item(PopupMenuItem::new("New Query").on_click(
+                        window.listener_for(&self.parent, move |_this, _event, window, cx| {
+                            window.dispatch_action(Box::new(new_query_action.clone()), cx);
+                        }),
+                    ));
+
+                    if let Some(inspect_action) = inspect_action {
+                        menu = menu.item(PopupMenuItem::new("Inspect Key").on_click(
+                            window.listener_for(&self.parent, move |_this, _event, window, cx| {
+                                window.dispatch_action(Box::new(inspect_action.clone()), cx);
+                            }),
+                        ));
+                    }
+
+                    if supports_table_ops {
+                        menu = menu.item(PopupMenuItem::new("Export Data").on_click(
+                            window.listener_for(&self.parent, move |this, _event, window, cx| {
+                                this.export_table_data(
+                                    connection_id,
+                                    connection_name.clone(),
+                                    database_name.clone(),
+                                    schema_name.clone(),
+                                    table_name.clone(),
+                                    db_type,
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        ));
+                    }
+
+                    if supports_table_ops && matches!(metadata.kind, TreeItemKind::Table) {
                         menu = menu.item(PopupMenuItem::new("Import Data").on_click(
                             window.listener_for(&self.parent, move |this, _event, window, cx| {
                                 this.import_table_data(
@@ -401,10 +458,14 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                         ));
                     }
 
-                    if matches!(
-                        metadata.kind,
-                        TreeItemKind::Table | TreeItemKind::View | TreeItemKind::MaterializedView
-                    ) {
+                    if supports_table_ops
+                        && matches!(
+                            metadata.kind,
+                            TreeItemKind::Table
+                                | TreeItemKind::View
+                                | TreeItemKind::MaterializedView
+                        )
+                    {
                         menu =
                             menu.separator()
                                 .item(PopupMenuItem::new("Open Structure").on_click(

@@ -9,7 +9,7 @@ use super::chat_types::{ChatCommand, ChatEvent, ChatMessage, LoadingState, Messa
 use super::streaming::{ChatStreamEvent, StreamingChatProvider};
 use super::tool_handlers::ToolMode;
 use crate::result_ext::ResultExt;
-use database::DatabaseService;
+use database::{DatabaseService, DatabaseType};
 use gpui_component::input::InputState;
 use llm::{FunctionCall, ToolCall, chat::ChatMessage as LlmChatMessage, chat::Tool};
 
@@ -18,6 +18,7 @@ pub struct ChatSessionContext {
     pub input_state: Option<WeakEntity<InputState>>,
     pub connection_id: Option<i64>,
     pub database_name: Option<String>,
+    pub db_type: Option<DatabaseType>,
 }
 
 impl ChatSessionContext {
@@ -26,6 +27,7 @@ impl ChatSessionContext {
             input_state: None,
             connection_id: None,
             database_name: None,
+            db_type: None,
         }
     }
 
@@ -34,9 +36,15 @@ impl ChatSessionContext {
         self
     }
 
-    pub fn with_connection(mut self, connection_id: i64, database_name: String) -> Self {
+    pub fn with_connection(
+        mut self,
+        connection_id: i64,
+        database_name: String,
+        db_type: DatabaseType,
+    ) -> Self {
         self.connection_id = Some(connection_id);
         self.database_name = Some(database_name);
+        self.db_type = Some(db_type);
         self
     }
 }
@@ -61,6 +69,7 @@ pub struct ChatSession {
     pub input_state: Option<WeakEntity<InputState>>,
     pub connection_id: Option<i64>,
     pub database_name: Option<String>,
+    pub db_type: Option<DatabaseType>,
     pub current_message_task: Option<Task<Result<String>>>,
     pending_approvals: HashMap<String, smol::channel::Sender<bool>>,
 }
@@ -87,6 +96,7 @@ impl ChatSession {
             input_state: context.input_state,
             connection_id: context.connection_id,
             database_name: context.database_name,
+            db_type: context.db_type,
             current_message_task: None,
             pending_approvals: HashMap::new(),
         }
@@ -190,7 +200,19 @@ impl ChatSession {
     }
 
     pub fn get_system_prompt(&self) -> String {
-        include_str!("system_prompt.md").to_string()
+        // Exhaustive match (no wildcard) so adding a DatabaseType variant fails
+        // to compile until its agent prompt is chosen deliberately: SQL dialects
+        // share the SQL prompt, key/value stores get a command-oriented one.
+        let prompt = match self.db_type {
+            None
+            | Some(DatabaseType::SQLite)
+            | Some(DatabaseType::PostgreSQL)
+            | Some(DatabaseType::MySQL)
+            | Some(DatabaseType::ClickHouse)
+            | Some(DatabaseType::MsSql) => include_str!("system_prompt.md"),
+            Some(DatabaseType::Redis) => include_str!("redis_system_prompt.md"),
+        };
+        prompt.to_string()
     }
 
     pub fn send_message(

@@ -82,6 +82,14 @@ const LINT_DEBOUNCE_MS: u64 = 500;
 const SQL_QUERY_LOG_MAX_LENGTH: usize = 2000;
 
 impl EditorPanel {
+    /// The results panel of the currently active query tab, if any.
+    pub fn active_results_panel(&self) -> Option<Entity<ResultsPanel>> {
+        match self.tabs.get(self.active_tab_ix) {
+            Some(TabType::Query(tab)) => Some(tab.results_panel.clone()),
+            _ => None,
+        }
+    }
+
     #[cfg(test)]
     pub fn active_query_tab(&self) -> Option<&QueryTab> {
         match self.tabs.get(self.active_tab_ix) {
@@ -745,6 +753,7 @@ impl EditorPanel {
                             .with_connection(
                                 query_tab.connection_id,
                                 query_tab.database_name.clone(),
+                                query_tab._db_type,
                             );
 
                         // Create chat panel with the LLM instance

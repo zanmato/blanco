@@ -1,0 +1,32 @@
+[package]
+name = "redis"
+version = "0.1.0"
+edition = "2024"
+description = "Redis backend implementation for Blanco SQL editor"
+
+[lib]
+path = "src/redis.rs"
+
+[dependencies]
+blanco-core = { path = "../blanco-core" }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+
+fred = { version = "10.1", default-features = false, features = [
+    "i-keys",
+    "i-hashes",
+    "i-lists",
+    "i-sets",
+    "i-sorted-sets",
+    "i-streams",
+    "i-server",
+    "i-std",
+    "transactions",
+] }
+
+[lints]
+workspace = true

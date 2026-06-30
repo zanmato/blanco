@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Name=Blanco
+Comment=SQL Editor
+Exec=blanco
+Icon=blanco
+Terminal=false
+Type=Application
+Categories=Development;IDE;
+StartupWMClass=com.blanco.sql-editor
