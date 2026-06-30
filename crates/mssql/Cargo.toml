@@ -26,13 +26,7 @@ tiberius = { version = "0.12", default-features = false, features = [
     "rust_decimal",
     "rustls",
 ] }
-bb8 = "0.9"
-bb8-tiberius = { version = "0.16", default-features = false, features = [
-    "with-tokio",
-    "tds73",
-    "chrono",
-    "tls",
-] }
+tokio-util = { version = "0.7", features = ["compat"] }
 rust_decimal = { workspace = true }
 
 [dev-dependencies]

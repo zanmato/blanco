@@ -49,6 +49,18 @@ struct DriverCase {
     /// expected to return. SQL backends run `SELECT 1`; Redis runs `PING`.
     query: &'static str,
     expected_cell: &'static str,
+    /// When set, the connection is made through an SSH tunnel. The `host`/`port`
+    /// above must then be the database's address *as seen from the bastion*
+    /// (the docker-internal service name + port).
+    ssh: Option<SshCase>,
+}
+
+/// SSH bastion coordinates for a tunneled `DriverCase`.
+struct SshCase {
+    host: String,
+    port: String,
+    user: String,
+    password: String,
 }
 
 /// Reads `BLANCO_<PREFIX>_<FIELD>` if set, otherwise the docker-compose default.
@@ -70,6 +82,7 @@ fn postgres_case() -> DriverCase {
         auth_markers: &["password authentication failed", "authentication"],
         query: "SELECT 1",
         expected_cell: "1",
+        ssh: None,
     }
 }
 
@@ -87,6 +100,7 @@ fn mysql_case() -> DriverCase {
         auth_markers: &["Access denied", "access denied"],
         query: "SELECT 1",
         expected_cell: "1",
+        ssh: None,
     }
 }
 
@@ -109,6 +123,7 @@ fn clickhouse_case() -> DriverCase {
         ],
         query: "SELECT 1",
         expected_cell: "1",
+        ssh: None,
     }
 }
 
@@ -126,6 +141,7 @@ fn mssql_case() -> DriverCase {
         auth_markers: &["Login failed", "login failed"],
         query: "SELECT 1",
         expected_cell: "1",
+        ssh: None,
     }
 }
 
@@ -153,7 +169,34 @@ fn redis_case() -> DriverCase {
         // the console shapes into a single `value` cell.
         query: "PING",
         expected_cell: "PONG",
+        ssh: None,
     }
+}
+
+/// Bastion coordinates shared by every SSH case (see the `sshbastion` service).
+fn ssh_case() -> SshCase {
+    SshCase {
+        host: env_or("SSH", "HOST", "localhost"),
+        port: env_or("SSH", "PORT", "2222"),
+        user: env_or("SSH", "USER", "blanco"),
+        password: env_or("SSH", "PASSWORD", "blanco"),
+    }
+}
+
+/// Turn a direct `DriverCase` into one tunneled through the bastion: the
+/// database is now addressed by its docker-internal `service:port` (only
+/// reachable from the bastion), and SSH coordinates are attached.
+fn over_ssh(
+    mut case: DriverCase,
+    name: &'static str,
+    internal_host: &str,
+    internal_port: &str,
+) -> DriverCase {
+    case.name = name;
+    case.host = internal_host.to_string();
+    case.port = internal_port.to_string();
+    case.ssh = Some(ssh_case());
+    case
 }
 
 fn is_auth_error(case: &DriverCase, message: &str) -> bool {
@@ -185,6 +228,9 @@ fn build_modal(
             window,
             cx,
         );
+        if let Some(ssh) = &case.ssh {
+            modal.set_ssh_credentials(&ssh.host, &ssh.port, &ssh.user, &ssh.password, window, cx);
+        }
     });
     modal
 }
@@ -531,6 +577,56 @@ async fn test_redis_connect_and_query(cx: &mut TestAppContext) {
     let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
     cx.run_until_parked();
     run_driver_case(&harness, redis_case(), &mut cx).await;
+}
+
+// SSH-tunneled variants: identical to the direct cases but routed through the
+// `sshbastion` service, which reaches each database over the compose-internal
+// network by its service name. These exercise the full SSH path end to end:
+// modal SSH fields -> `requires_ssh_tunnel` -> `SshTunnel` -> driver connect.
+
+#[gpui::test]
+async fn test_postgres_connect_and_query_over_ssh(cx: &mut TestAppContext) {
+    let harness = FullAppHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+    cx.run_until_parked();
+    let case = over_ssh(postgres_case(), "it-postgres-ssh", "postgrestestdb_ssl", "5432");
+    run_driver_case(&harness, case, &mut cx).await;
+}
+
+#[gpui::test]
+async fn test_mysql_connect_and_query_over_ssh(cx: &mut TestAppContext) {
+    let harness = FullAppHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+    cx.run_until_parked();
+    let case = over_ssh(mysql_case(), "it-mysql-ssh", "mysqltestdb", "3306");
+    run_driver_case(&harness, case, &mut cx).await;
+}
+
+#[gpui::test]
+async fn test_clickhouse_connect_and_query_over_ssh(cx: &mut TestAppContext) {
+    let harness = FullAppHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+    cx.run_until_parked();
+    let case = over_ssh(clickhouse_case(), "it-clickhouse-ssh", "clickhousetestdb", "8123");
+    run_driver_case(&harness, case, &mut cx).await;
+}
+
+#[gpui::test]
+async fn test_mssql_connect_and_query_over_ssh(cx: &mut TestAppContext) {
+    let harness = FullAppHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+    cx.run_until_parked();
+    let case = over_ssh(mssql_case(), "it-mssql-ssh", "mssqltestdb", "1433");
+    run_driver_case(&harness, case, &mut cx).await;
+}
+
+#[gpui::test]
+async fn test_redis_connect_and_query_over_ssh(cx: &mut TestAppContext) {
+    let harness = FullAppHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+    cx.run_until_parked();
+    let case = over_ssh(redis_case(), "it-redis-ssh", "redis", "6379");
+    run_driver_case(&harness, case, &mut cx).await;
 }
 
 /// Exercises the key-inspection path the sidebar uses: a connection fetched via

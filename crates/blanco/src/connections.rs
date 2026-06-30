@@ -257,21 +257,22 @@ impl ConnectionsPanel {
                 match metadata.kind {
                     TreeItemKind::Connection => {
                         // Connections are stored with "default" as the database name
+                        let db_type = metadata.db_type;
                         let is_connected = connection_statuses
                             .get(&(metadata.connection_id, "default".to_string()))
                             .map(|status| status.is_connected)
                             .unwrap_or(false);
-                        if is_connected {
-                            entry.item.metadata.icon = TreeItemIcon {
-                                icon: IconName::DatabaseConnected,
-                                color: cx.theme().primary.into(),
-                            };
+                        // Icon reflects the driver type; only the color tracks
+                        // the connected state.
+                        let color = if is_connected {
+                            cx.theme().primary.into()
                         } else {
-                            entry.item.metadata.icon = TreeItemIcon {
-                                icon: IconName::Database,
-                                color: cx.theme().foreground.into(),
-                            };
-                        }
+                            cx.theme().foreground.into()
+                        };
+                        entry.item.metadata.icon = TreeItemIcon {
+                            icon: connection_type_icon(db_type),
+                            color,
+                        };
                     }
                     TreeItemKind::Database => {
                         if let Some(ref db_name) = metadata.database_name {
@@ -279,17 +280,15 @@ impl ConnectionsPanel {
                                 .get(&(metadata.connection_id, db_name.clone()))
                                 .map(|status| status.is_connected)
                                 .unwrap_or(false);
-                            if is_connected {
-                                entry.item.metadata.icon = TreeItemIcon {
-                                    icon: IconName::DatabaseConnected,
-                                    color: cx.theme().primary.into(),
-                                };
+                            let color = if is_connected {
+                                cx.theme().primary.into()
                             } else {
-                                entry.item.metadata.icon = TreeItemIcon {
-                                    icon: IconName::Database,
-                                    color: cx.theme().foreground.into(),
-                                };
-                            }
+                                cx.theme().foreground.into()
+                            };
+                            entry.item.metadata.icon = TreeItemIcon {
+                                icon: IconName::Database,
+                                color,
+                            };
                         }
                     }
                     _ => {}
@@ -309,21 +308,26 @@ impl ConnectionsPanel {
         None
     }
 
-    fn get_connection_icon(&self, connection_id: i64, cx: &Context<Self>) -> TreeItemIcon {
-        // Reflect the known connected state at build time so rebuilding the tree
-        // (on every expand/collapse) doesn't momentarily flip a connected node
-        // back to the disconnected icon before `update_connection_status_in_tree`
-        // reconciles it. A loaded connection is, by definition, connected.
-        if self.loaded_connections.contains(&connection_id) {
-            TreeItemIcon {
-                icon: IconName::DatabaseConnected,
-                color: cx.theme().primary.into(),
-            }
+    fn get_connection_icon(
+        &self,
+        connection_id: i64,
+        db_type: database::DatabaseType,
+        cx: &Context<Self>,
+    ) -> TreeItemIcon {
+        // The icon shows the driver type; connection state is conveyed purely
+        // through color. Reflect the known connected state at build time so
+        // rebuilding the tree (on every expand/collapse) doesn't momentarily
+        // flip a connected node back to the disconnected color before
+        // `update_connection_status_in_tree` reconciles it. A loaded connection
+        // is, by definition, connected.
+        let color = if self.loaded_connections.contains(&connection_id) {
+            cx.theme().primary.into()
         } else {
-            TreeItemIcon {
-                icon: IconName::Database,
-                color: cx.theme().foreground.into(),
-            }
+            cx.theme().foreground.into()
+        };
+        TreeItemIcon {
+            icon: connection_type_icon(db_type),
+            color,
         }
     }
 
@@ -868,6 +872,21 @@ impl Render for ConnectionsPanel {
 }
 
 impl EventEmitter<ConnectionsPanelEvent> for ConnectionsPanel {}
+
+/// Map a connection's driver to its brand icon. Each icon renders as a single
+/// color silhouette (the SVG is tinted by the tree item's color), so the same
+/// icon serves both the connected and disconnected states, distinguished only
+/// by color.
+fn connection_type_icon(db_type: database::DatabaseType) -> IconName {
+    match db_type {
+        database::DatabaseType::SQLite => IconName::Sqlite,
+        database::DatabaseType::PostgreSQL => IconName::Postgresql,
+        database::DatabaseType::MySQL => IconName::Mysql,
+        database::DatabaseType::ClickHouse => IconName::Clickhouse,
+        database::DatabaseType::MsSql => IconName::MsSql,
+        database::DatabaseType::Redis => IconName::Redis,
+    }
+}
 
 // Add display_name method to ConnectionData
 impl ConnectionData {

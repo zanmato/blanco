@@ -256,6 +256,32 @@ impl ConnectionData {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_mysql_with_ssh(
+        name: String,
+        host: String,
+        port: i32,
+        database: String,
+        username: String,
+        password: String,
+        ssh_host: String,
+        ssh_port: i32,
+        ssh_user: String,
+        ssh_password: Option<String>,
+        ssh_private_key_path: Option<String>,
+        ssh_private_key_password: Option<String>,
+    ) -> Self {
+        Self {
+            ssh_host: Some(ssh_host),
+            ssh_port: Some(ssh_port),
+            ssh_user: Some(ssh_user),
+            ssh_password,
+            ssh_private_key_path,
+            ssh_private_key_password,
+            ..Self::new_mysql(name, host, port, database, username, password)
+        }
+    }
+
     pub fn new_clickhouse(
         name: String,
         host: String,
@@ -290,6 +316,32 @@ impl ConnectionData {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_clickhouse_with_ssh(
+        name: String,
+        host: String,
+        port: i32,
+        database: String,
+        username: String,
+        password: String,
+        ssh_host: String,
+        ssh_port: i32,
+        ssh_user: String,
+        ssh_password: Option<String>,
+        ssh_private_key_path: Option<String>,
+        ssh_private_key_password: Option<String>,
+    ) -> Self {
+        Self {
+            ssh_host: Some(ssh_host),
+            ssh_port: Some(ssh_port),
+            ssh_user: Some(ssh_user),
+            ssh_password,
+            ssh_private_key_path,
+            ssh_private_key_password,
+            ..Self::new_clickhouse(name, host, port, database, username, password)
+        }
+    }
+
     pub fn new_mssql(
         name: String,
         host: String,
@@ -321,6 +373,32 @@ impl ConnectionData {
             ssl_key_path: None,
             ssl_cert_path: None,
             ssl_ca_cert_path: None,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_mssql_with_ssh(
+        name: String,
+        host: String,
+        port: i32,
+        database: String,
+        username: String,
+        password: String,
+        ssh_host: String,
+        ssh_port: i32,
+        ssh_user: String,
+        ssh_password: Option<String>,
+        ssh_private_key_path: Option<String>,
+        ssh_private_key_password: Option<String>,
+    ) -> Self {
+        Self {
+            ssh_host: Some(ssh_host),
+            ssh_port: Some(ssh_port),
+            ssh_user: Some(ssh_user),
+            ssh_password,
+            ssh_private_key_path,
+            ssh_private_key_password,
+            ..Self::new_mssql(name, host, port, database, username, password)
         }
     }
 
@@ -363,6 +441,32 @@ impl ConnectionData {
             ssl_key_path: None,
             ssl_cert_path: None,
             ssl_ca_cert_path: None,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_redis_with_ssh(
+        name: String,
+        host: String,
+        port: i32,
+        database: String,
+        username: String,
+        password: String,
+        ssh_host: String,
+        ssh_port: i32,
+        ssh_user: String,
+        ssh_password: Option<String>,
+        ssh_private_key_path: Option<String>,
+        ssh_private_key_password: Option<String>,
+    ) -> Self {
+        Self {
+            ssh_host: Some(ssh_host),
+            ssh_port: Some(ssh_port),
+            ssh_user: Some(ssh_user),
+            ssh_password,
+            ssh_private_key_path,
+            ssh_private_key_password,
+            ..Self::new_redis(name, host, port, database, username, password)
         }
     }
 

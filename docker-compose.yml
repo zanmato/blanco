@@ -76,3 +76,15 @@ services:
     ports:
       - "6400:6379"
     restart: unless-stopped
+
+  # SSH bastion for testing SSH-tunneled connections. It sits on the same
+  # compose network as the database services, so the tunnel target is each
+  # service's internal name + port (e.g. `mysqltestdb:3306`), reached from the
+  # host via `localhost:2222`. Password auth with blanco/blanco; the image
+  # enables `AllowTcpForwarding` so `direct-tcpip` channels can reach siblings.
+  sshbastion:
+    build:
+      context: ./docker/sshbastion
+    ports:
+      - "2222:22"
+    restart: unless-stopped

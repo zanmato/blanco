@@ -20,6 +20,8 @@ mod export;
 mod history_panel;
 mod import;
 mod keybindings;
+mod redis_completion;
+mod redis_syntax;
 mod result_ext;
 mod results_panel;
 mod settings;
@@ -56,6 +58,7 @@ fn main() {
         gpui_tokio::init(cx);
         command_palette::CommandPalette::init(cx);
         sql::register_languages();
+        redis_syntax::register_language();
 
         // Get the tokio runtime handle for automatic SSH tunnel establishment
         let runtime_handle = gpui_tokio::Tokio::handle(cx);

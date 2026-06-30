@@ -419,6 +419,73 @@ impl NewConnectionModal {
             .file_path_input
             .update(cx, |state, cx| state.set_value(path, window, cx));
     }
+
+    /// Enable SSH on the active form and populate its tunnel fields.
+    pub fn set_ssh_credentials(
+        &mut self,
+        ssh_host: &str,
+        ssh_port: &str,
+        ssh_user: &str,
+        ssh_password: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let inputs = match self.get_selected_connector_type(cx) {
+            ConnectorType::PostgreSQL => {
+                self.postgres_form.ssh_enabled = true;
+                (
+                    &self.postgres_form.ssh_host_input,
+                    &self.postgres_form.ssh_port_input,
+                    &self.postgres_form.ssh_user_input,
+                    &self.postgres_form.ssh_password_input,
+                )
+            }
+            ConnectorType::MySQL => {
+                self.mysql_form.ssh_enabled = true;
+                (
+                    &self.mysql_form.ssh_host_input,
+                    &self.mysql_form.ssh_port_input,
+                    &self.mysql_form.ssh_user_input,
+                    &self.mysql_form.ssh_password_input,
+                )
+            }
+            ConnectorType::ClickHouse => {
+                self.clickhouse_form.ssh_enabled = true;
+                (
+                    &self.clickhouse_form.ssh_host_input,
+                    &self.clickhouse_form.ssh_port_input,
+                    &self.clickhouse_form.ssh_user_input,
+                    &self.clickhouse_form.ssh_password_input,
+                )
+            }
+            ConnectorType::MsSql => {
+                self.mssql_form.ssh_enabled = true;
+                (
+                    &self.mssql_form.ssh_host_input,
+                    &self.mssql_form.ssh_port_input,
+                    &self.mssql_form.ssh_user_input,
+                    &self.mssql_form.ssh_password_input,
+                )
+            }
+            ConnectorType::Redis => {
+                self.redis_form.ssh_enabled = true;
+                (
+                    &self.redis_form.ssh_host_input,
+                    &self.redis_form.ssh_port_input,
+                    &self.redis_form.ssh_user_input,
+                    &self.redis_form.ssh_password_input,
+                )
+            }
+            ConnectorType::SQLite => {
+                panic!("set_ssh_credentials called for SQLite; SQLite has no SSH support")
+            }
+        };
+        let (host_input, port_input, user_input, password_input) = inputs;
+        host_input.update(cx, |state, cx| state.set_value(ssh_host, window, cx));
+        port_input.update(cx, |state, cx| state.set_value(ssh_port, window, cx));
+        user_input.update(cx, |state, cx| state.set_value(ssh_user, window, cx));
+        password_input.update(cx, |state, cx| state.set_value(ssh_password, window, cx));
+    }
 }
 
 impl Focusable for NewConnectionModal {

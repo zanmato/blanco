@@ -21,26 +21,45 @@ struct LogEntry {
     highlights: Box<[(Range<usize>, HighlightStyle)]>,
 }
 
-/// SQL view entity for displaying SQL statements (queries, DDL, etc.) with proper syntax highlighting
+/// SQL view entity for displaying executed statements (queries, DDL, etc.) with
+/// proper syntax highlighting. `language` is the registered highlighter language
+/// name (e.g. `"sql"` or `"redis"`) and also selects the statement terminator
+/// and line-comment syntax so logged statements read naturally per backend.
 pub struct SqlView {
     entries: Vec<LogEntry>,
     max_entries: usize,
     theme: Arc<HighlightTheme>,
+    language: SharedString,
     scroll_handle: ScrollHandle,
     copied: bool,
     show_copy_button: bool,
 }
 
 impl SqlView {
-    /// Create a new SQL view with the specified maximum number of entries
-    pub fn new(max_entries: usize, theme: Arc<HighlightTheme>) -> Self {
+    /// Create a new view with the specified maximum number of entries, rendering
+    /// statements with the given highlighter `language`.
+    pub fn new(
+        max_entries: usize,
+        theme: Arc<HighlightTheme>,
+        language: impl Into<SharedString>,
+    ) -> Self {
         Self {
             entries: Vec::new(),
             max_entries,
             theme,
+            language: language.into(),
             scroll_handle: ScrollHandle::default(),
             copied: false,
             show_copy_button: true,
+        }
+    }
+
+    /// Line-comment prefix for the view's language. Redis config-style `#`,
+    /// SQL `--`.
+    fn line_comment_prefix(&self) -> &'static str {
+        match self.language.as_ref() {
+            "redis" => "#",
+            _ => "--",
         }
     }
 
@@ -78,22 +97,26 @@ impl SqlView {
 
     /// Append text to the log, managing entry limits
     pub fn append_text(&mut self, text: &SqlViewMessage, cx: &mut Context<Self>) {
-        // Check if this is a comment or a SQL statement, if it doesn't end with a delimiter, add it
+        // Statements are terminated with `;` for SQL so each logged entry reads
+        // as a complete statement. Line-oriented backends (Redis) have no
+        // terminator, so leave their commands untouched.
         let new_text = match text {
             SqlViewMessage::SqlStatement(statement) => {
-                if !statement.trim_start().ends_with(";") {
+                if self.language == "sql" && !statement.trim_start().ends_with(";") {
                     format!("{};", statement)
                 } else {
                     statement.clone()
                 }
             }
-            SqlViewMessage::Comment(comment) => format!("-- {}", comment),
+            SqlViewMessage::Comment(comment) => {
+                format!("{} {}", self.line_comment_prefix(), comment)
+            }
         };
 
         // Create a new highlighter for this entry, parse, and compute styles once.
         // Highlight ranges are cached on the entry so render() doesn't redo this work
         // on every frame.
-        let mut highlighter = SyntaxHighlighter::new("sql");
+        let mut highlighter = SyntaxHighlighter::new(self.language.as_ref());
         let rope = ropey::Rope::from(&new_text[..]);
         highlighter.update(None, &rope, None);
         let highlights = highlighter

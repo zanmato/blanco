@@ -4,18 +4,34 @@ use blanco_core::{
     ColumnInfo, Connection, QueryResult,
     connection_trait::{
         ColumnType, DatabaseSchemaResult, EntityType, ForeignKeyInfo, InboundForeignKey, IndexInfo,
-        PaginationInfo, QueryableEntity, TableSchemaInfo,
+        PaginationInfo, QueryableEntity, RoutineKind, TableSchemaInfo,
     },
 };
 use futures::Stream;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tiberius::{AuthMethod, Config as TiberiusConfig, Query, Row};
-use tokio::sync::RwLock;
+use tiberius::{AuthMethod, Client, Config as TiberiusConfig, Query, Row};
+use tokio::net::TcpStream;
+use tokio::sync::Mutex;
+use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 
 use crate::schema;
 
-type MssqlPool = bb8::Pool<bb8_tiberius::ConnectionManager>;
+/// A live tiberius client over a tokio TCP stream (tiberius speaks futures-io,
+/// so the stream is adapted with tokio-util's compat shim).
+type MssqlClient = Client<Compat<TcpStream>>;
+
+/// Cap on SQL Server connection redirects (`Error::Routing`, used by named
+/// instances / Azure gateways) before giving up.
+const MAX_ROUTING_REDIRECTS: usize = 2;
+
+/// Whether a tiberius error means the connection is no longer usable and the
+/// cached client should be dropped. `Server` errors are SQL-level (bad query,
+/// permission, ...) and leave the connection healthy; everything else
+/// (I/O, protocol, TLS) indicates a dead transport.
+fn is_connection_lost(error: &tiberius::error::Error) -> bool {
+    !matches!(error, tiberius::error::Error::Server(_))
+}
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct MssqlServerKey {
@@ -27,7 +43,11 @@ pub struct MssqlServerKey {
 }
 
 pub struct MssqlConnection {
-    pools: Arc<RwLock<HashMap<String, MssqlPool>>>,
+    /// One lazily-established client per database. The outer mutex guards the
+    /// map; each inner mutex serializes access to a single client (a tiberius
+    /// client cannot run concurrent queries) and lets a broken client be
+    /// transparently replaced on the next use.
+    clients: Arc<Mutex<HashMap<String, Arc<Mutex<Option<MssqlClient>>>>>>,
     server_key: MssqlServerKey,
     password: String,
     display_name: String,
@@ -76,7 +96,7 @@ impl MssqlConnection {
         let display_name = format!("{username}@{host}:{port}");
 
         Ok(Self {
-            pools: Arc::new(RwLock::new(HashMap::new())),
+            clients: Arc::new(Mutex::new(HashMap::new())),
             server_key: MssqlServerKey {
                 host,
                 port,
@@ -121,31 +141,45 @@ impl MssqlConnection {
             .to_string()
     }
 
-    async fn get_or_create_pool(&self, database: Option<&str>) -> Result<MssqlPool> {
-        let db = self.resolve_database(database);
+    /// Open a fresh tiberius connection for `database`, following SQL Server
+    /// connection redirects (named instances / Azure) up to a small bound.
+    async fn establish(&self, database: Option<&str>) -> Result<MssqlClient> {
+        let mut redirect: Option<(String, u16)> = None;
+        for _ in 0..=MAX_ROUTING_REDIRECTS {
+            let mut config = self.build_tiberius_config(database);
+            if let Some((host, port)) = &redirect {
+                config.host(host);
+                config.port(*port);
+            }
+            let addr = config.get_addr();
 
-        {
-            let pools = self.pools.read().await;
-            if let Some(pool) = pools.get(&db) {
-                return Ok(pool.clone());
+            let tcp = TcpStream::connect(&addr)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to connect to SQL Server at {addr}: {e}"))?;
+            tcp.set_nodelay(true).ok();
+
+            match Client::connect(config, tcp.compat_write()).await {
+                Ok(client) => return Ok(client),
+                Err(tiberius::error::Error::Routing { host, port }) => {
+                    redirect = Some((host, port));
+                }
+                Err(e) => return Err(anyhow::anyhow!("Failed to connect to SQL Server: {e}")),
             }
         }
+        Err(anyhow::anyhow!(
+            "SQL Server kept redirecting after {MAX_ROUTING_REDIRECTS} attempts"
+        ))
+    }
 
-        let mut pools = self.pools.write().await;
-        if let Some(pool) = pools.get(&db) {
-            return Ok(pool.clone());
-        }
-
-        let config = self.build_tiberius_config(Some(&db));
-        let manager = bb8_tiberius::ConnectionManager::new(config);
-        let pool = bb8::Pool::builder()
-            .max_size(1)
-            .build(manager)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to create MSSQL pool for '{db}': {e}"))?;
-
-        pools.insert(db, pool.clone());
-        Ok(pool)
+    /// Get (creating if needed) the per-database client slot. The returned slot
+    /// may hold `None` until first use; callers lock it and establish on demand.
+    async fn client_slot(&self, database: Option<&str>) -> Arc<Mutex<Option<MssqlClient>>> {
+        let db = self.resolve_database(database);
+        let mut clients = self.clients.lock().await;
+        clients
+            .entry(db)
+            .or_insert_with(|| Arc::new(Mutex::new(None)))
+            .clone()
     }
 
     fn column_value_to_string(
@@ -153,40 +187,94 @@ impl MssqlConnection {
         col_index: usize,
         col_type: &ColumnType,
     ) -> Option<String> {
+        // Always use `try_get`, never `get`: tiberius' `get` *panics* on a
+        // Rust/SQL type mismatch, and SQL Server's integer/temporal types map to
+        // several distinct Rust types (INT->i32, BIGINT->i64, DATE->NaiveDate,
+        // ...). We therefore probe the plausible representations in turn.
+        let try_str = |index: usize| -> Option<String> {
+            row.try_get::<&str, _>(index).ok().flatten().map(String::from)
+        };
+
         match col_type {
-            ColumnType::Boolean => row.get::<bool, _>(col_index).map(|v| v.to_string()),
-            ColumnType::Integer => row.get::<i64, _>(col_index).map(|v| v.to_string()),
-            ColumnType::UnsignedInteger => row.get::<i64, _>(col_index).map(|v| v.to_string()),
-            ColumnType::Numeric => {
-                if let Some(val) = row.get::<rust_decimal::Decimal, _>(col_index) {
-                    return Some(val.to_string());
-                }
-                row.get::<f64, _>(col_index).map(|v| v.to_string())
-            }
-            ColumnType::Uuid => row.get::<uuid::Uuid, _>(col_index).map(|v| v.to_string()),
-            ColumnType::DateTime => {
-                if let Some(val) = row.get::<chrono::NaiveDateTime, _>(col_index) {
-                    return Some(val.to_string());
-                }
-                if let Some(val) = row.get::<chrono::NaiveDate, _>(col_index) {
-                    return Some(val.to_string());
-                }
-                if let Some(val) = row.get::<chrono::NaiveTime, _>(col_index) {
-                    return Some(val.to_string());
-                }
-                row.get::<chrono::DateTime<chrono::FixedOffset>, _>(col_index)
-                    .map(|v| v.to_string())
-            }
+            ColumnType::Boolean => row
+                .try_get::<bool, _>(col_index)
+                .ok()
+                .flatten()
+                .map(|v| v.to_string()),
+            ColumnType::Integer | ColumnType::UnsignedInteger => row
+                .try_get::<i32, _>(col_index)
+                .ok()
+                .flatten()
+                .map(|v| v.to_string())
+                .or_else(|| {
+                    row.try_get::<i64, _>(col_index)
+                        .ok()
+                        .flatten()
+                        .map(|v| v.to_string())
+                })
+                .or_else(|| {
+                    row.try_get::<i16, _>(col_index)
+                        .ok()
+                        .flatten()
+                        .map(|v| v.to_string())
+                })
+                .or_else(|| {
+                    row.try_get::<u8, _>(col_index)
+                        .ok()
+                        .flatten()
+                        .map(|v| v.to_string())
+                }),
+            ColumnType::Numeric => row
+                .try_get::<rust_decimal::Decimal, _>(col_index)
+                .ok()
+                .flatten()
+                .map(|v| v.to_string())
+                .or_else(|| {
+                    row.try_get::<f64, _>(col_index)
+                        .ok()
+                        .flatten()
+                        .map(|v| v.to_string())
+                })
+                .or_else(|| {
+                    row.try_get::<f32, _>(col_index)
+                        .ok()
+                        .flatten()
+                        .map(|v| v.to_string())
+                }),
+            ColumnType::Uuid => row
+                .try_get::<uuid::Uuid, _>(col_index)
+                .ok()
+                .flatten()
+                .map(|v| v.to_string()),
+            ColumnType::DateTime => row
+                .try_get::<chrono::NaiveDateTime, _>(col_index)
+                .ok()
+                .flatten()
+                .map(|v| v.to_string())
+                .or_else(|| {
+                    row.try_get::<chrono::NaiveDate, _>(col_index)
+                        .ok()
+                        .flatten()
+                        .map(|v| v.to_string())
+                })
+                .or_else(|| {
+                    row.try_get::<chrono::NaiveTime, _>(col_index)
+                        .ok()
+                        .flatten()
+                        .map(|v| v.to_string())
+                })
+                .or_else(|| {
+                    row.try_get::<chrono::DateTime<chrono::FixedOffset>, _>(col_index)
+                        .ok()
+                        .flatten()
+                        .map(|v| v.to_string())
+                }),
             ColumnType::Binary => row
                 .try_get::<&[u8], _>(col_index)
                 .ok()
                 .flatten()
                 .map(hex::encode),
-            _ => row
-                .try_get::<&str, usize>(col_index)
-                .ok()
-                .flatten()
-                .map(|v| v.to_string()),
+            _ => try_str(col_index),
         }
     }
 
@@ -246,7 +334,7 @@ impl MssqlConnection {
 impl Clone for MssqlConnection {
     fn clone(&self) -> Self {
         Self {
-            pools: Arc::clone(&self.pools),
+            clients: Arc::clone(&self.clients),
             server_key: self.server_key.clone(),
             password: self.password.clone(),
             display_name: self.display_name.clone(),
@@ -341,9 +429,8 @@ impl Connection for MssqlConnection {
     }
 
     async fn connect(&mut self, _connection_string: &str) -> Result<()> {
-        let pool = self.get_or_create_pool(None).await?;
-        let mut client = pool
-            .get()
+        let mut client = self
+            .establish(None)
             .await
             .map_err(|e| anyhow::anyhow!("MSSQL connection test failed: {e}"))?;
         client
@@ -359,27 +446,21 @@ impl Connection for MssqlConnection {
     }
 
     async fn ping(&self) -> Result<()> {
-        use bb8::ManageConnection as _;
-
-        // `ManageConnection::connect` makes a single connection attempt and
-        // surfaces the real error immediately, unlike `Pool::get` which retries
-        // until `connection_timeout` (~30s) and returns a generic timeout,
-        // hiding a bad password or login failure.
-        let config = self.build_tiberius_config(None);
-        let manager = bb8_tiberius::ConnectionManager::new(config);
+        // A throwaway connection surfaces the real login error immediately and
+        // bounds the attempt with the configured connect timeout.
         let timeout = blanco_core::connect_timeout();
 
-        let mut conn = tokio::time::timeout(timeout, manager.connect())
+        let mut client = tokio::time::timeout(timeout, self.establish(None))
             .await
             .map_err(|_| {
                 anyhow::anyhow!(
                     "SQL Server connection timed out after {}s",
                     timeout.as_secs()
                 )
-            })?
-            .map_err(|e| anyhow::anyhow!("Failed to connect to SQL Server: {e}"))?;
+            })??;
 
-        conn.simple_query("SELECT 1")
+        client
+            .simple_query("SELECT 1")
             .await
             .map_err(|e| anyhow::anyhow!("SQL Server connection check failed: {e}"))?;
 
@@ -394,20 +475,31 @@ impl Connection for MssqlConnection {
     ) -> Result<QueryResult> {
         let start = std::time::Instant::now();
 
-        let pool = self.get_or_create_pool(database_name).await?;
-        let mut client = pool
-            .get()
-            .await
-            .map_err(|e| anyhow::anyhow!("MSSQL connection failed: {e}"))?;
+        let slot = self.client_slot(database_name).await;
+        let mut guard = slot.lock().await;
+        if guard.is_none() {
+            *guard = Some(self.establish(database_name).await?);
+        }
+        let client = guard.as_mut().expect("client established above");
 
-        let stream = client
-            .simple_query(query)
-            .await
-            .map_err(|e| anyhow::anyhow!("MSSQL query error: {e}"))?;
-        let result_sets = stream
-            .into_results()
-            .await
-            .map_err(|e| anyhow::anyhow!("MSSQL result fetch error: {e}"))?;
+        // `simple_query` + `into_results` both borrow the client; run them in one
+        // block so only the owned result sets escape. On a transport error drop
+        // the cached client so the next call reconnects.
+        let result_sets = match async {
+            let stream = client.simple_query(query).await?;
+            stream.into_results().await
+        }
+        .await
+        {
+            Ok(result_sets) => result_sets,
+            Err(error) => {
+                if is_connection_lost(&error) {
+                    *guard = None;
+                }
+                return Err(anyhow::anyhow!("MSSQL query error: {error}"));
+            }
+        };
+        drop(guard);
 
         let mut columns: Vec<String> = Vec::new();
         let mut column_types: Vec<ColumnType> = Vec::new();
@@ -455,20 +547,28 @@ impl Connection for MssqlConnection {
         query: &str,
         database_name: Option<&str>,
     ) -> Result<Vec<QueryResult>> {
-        let pool = self.get_or_create_pool(database_name).await?;
-        let mut client = pool
-            .get()
-            .await
-            .map_err(|e| anyhow::anyhow!("MSSQL connection failed: {e}"))?;
+        let slot = self.client_slot(database_name).await;
+        let mut guard = slot.lock().await;
+        if guard.is_none() {
+            *guard = Some(self.establish(database_name).await?);
+        }
+        let client = guard.as_mut().expect("client established above");
 
-        let stream = client
-            .simple_query(query)
-            .await
-            .map_err(|e| anyhow::anyhow!("MSSQL query error: {e}"))?;
-        let result_sets = stream
-            .into_results()
-            .await
-            .map_err(|e| anyhow::anyhow!("MSSQL result fetch error: {e}"))?;
+        let result_sets = match async {
+            let stream = client.simple_query(query).await?;
+            stream.into_results().await
+        }
+        .await
+        {
+            Ok(result_sets) => result_sets,
+            Err(error) => {
+                if is_connection_lost(&error) {
+                    *guard = None;
+                }
+                return Err(anyhow::anyhow!("MSSQL query error: {error}"));
+            }
+        };
+        drop(guard);
 
         let mut out: Vec<QueryResult> = Vec::with_capacity(result_sets.len());
         for result_set in result_sets {
@@ -512,11 +612,12 @@ impl Connection for MssqlConnection {
         database_name: Option<&str>,
         parameters: &[Option<String>],
     ) -> Result<u64> {
-        let pool = self.get_or_create_pool(database_name).await?;
-        let mut client = pool
-            .get()
-            .await
-            .map_err(|e| anyhow::anyhow!("MSSQL connection failed: {e}"))?;
+        let slot = self.client_slot(database_name).await;
+        let mut guard = slot.lock().await;
+        if guard.is_none() {
+            *guard = Some(self.establish(database_name).await?);
+        }
+        let client = guard.as_mut().expect("client established above");
 
         let mut q = Query::new(query);
         for param in parameters {
@@ -526,12 +627,15 @@ impl Connection for MssqlConnection {
             }
         }
 
-        let result = q
-            .execute(&mut client)
-            .await
-            .map_err(|e| anyhow::anyhow!("MSSQL write error: {e}"))?;
-
-        Ok(result.total() as u64)
+        match q.execute(client).await {
+            Ok(result) => Ok(result.total()),
+            Err(error) => {
+                if is_connection_lost(&error) {
+                    *guard = None;
+                }
+                Err(anyhow::anyhow!("MSSQL write error: {error}"))
+            }
+        }
     }
 
     async fn execute_query_stream_rows(
@@ -764,6 +868,98 @@ impl Connection for MssqlConnection {
                 has_more,
             },
         })
+    }
+
+    async fn list_procedures(&self, schema: Option<&str>) -> Result<Vec<String>> {
+        let schema_filter = schema.unwrap_or("dbo").replace('\'', "''");
+        let sql = format!(
+            "SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES \
+             WHERE ROUTINE_TYPE = 'PROCEDURE' AND ROUTINE_SCHEMA = '{schema_filter}' \
+             ORDER BY ROUTINE_NAME"
+        );
+        let result = self
+            .execute_query(&sql, self.initial_database.as_deref(), None)
+            .await?;
+        Ok(result
+            .rows
+            .into_iter()
+            .filter_map(|r| r.into_iter().next().flatten())
+            .collect())
+    }
+
+    async fn list_functions(&self, schema: Option<&str>) -> Result<Vec<String>> {
+        let schema_filter = schema.unwrap_or("dbo").replace('\'', "''");
+        let sql = format!(
+            "SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES \
+             WHERE ROUTINE_TYPE = 'FUNCTION' AND ROUTINE_SCHEMA = '{schema_filter}' \
+             ORDER BY ROUTINE_NAME"
+        );
+        let result = self
+            .execute_query(&sql, self.initial_database.as_deref(), None)
+            .await?;
+        Ok(result
+            .rows
+            .into_iter()
+            .filter_map(|r| r.into_iter().next().flatten())
+            .collect())
+    }
+
+    async fn list_triggers(&self, schema: Option<&str>) -> Result<Vec<String>> {
+        // DML triggers belong to a parent table/view; resolve the parent's
+        // schema. `is_ms_shipped` filters out system triggers.
+        let schema_filter = schema.unwrap_or("dbo").replace('\'', "''");
+        let sql = format!(
+            "SELECT tr.name \
+             FROM sys.triggers tr \
+             JOIN sys.objects o ON o.object_id = tr.parent_id \
+             JOIN sys.schemas s ON s.schema_id = o.schema_id \
+             WHERE s.name = '{schema_filter}' AND tr.is_ms_shipped = 0 \
+             ORDER BY tr.name"
+        );
+        let result = self
+            .execute_query(&sql, self.initial_database.as_deref(), None)
+            .await?;
+        Ok(result
+            .rows
+            .into_iter()
+            .filter_map(|r| r.into_iter().next().flatten())
+            .collect())
+    }
+
+    async fn object_ddl(
+        &self,
+        kind: RoutineKind,
+        schema: Option<&str>,
+        name: &str,
+    ) -> Result<String> {
+        // `OBJECT_DEFINITION` returns the original CREATE text for procedures,
+        // functions and triggers alike, so one query covers every kind.
+        let schema_name = schema.unwrap_or("dbo");
+        let qualified = format!(
+            "[{}].[{}]",
+            schema_name.replace(']', "]]"),
+            name.replace(']', "]]")
+        );
+        let sql = format!(
+            "SELECT OBJECT_DEFINITION(OBJECT_ID('{}'))",
+            qualified.replace('\'', "''")
+        );
+        let result = self
+            .execute_query(&sql, self.initial_database.as_deref(), None)
+            .await?;
+        result
+            .rows
+            .into_iter()
+            .next()
+            .and_then(|row| row.into_iter().next().flatten())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{} '{}.{}' not found",
+                    kind.display_name(),
+                    schema_name,
+                    name
+                )
+            })
     }
 
     async fn foreign_key_lookup(

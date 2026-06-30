@@ -419,7 +419,8 @@ impl EditorPanel {
                 let sql_view = sql_view.clone();
                 let statements = results_panel.read(cx).preview_pending_sql(cx);
                 let preview_log = cx.new(|cx| {
-                    let mut log = SqlView::new(usize::MAX, cx.theme().highlight_theme.clone());
+                    let mut log =
+                        SqlView::new(usize::MAX, cx.theme().highlight_theme.clone(), "sql");
                     if statements.is_empty() {
                         log.append_text(
                             &SqlViewMessage::Comment("no statements to apply".into()),

@@ -7,7 +7,7 @@ pub use connection::MssqlConnection;
 #[allow(clippy::print_stdout, clippy::print_stderr)]
 mod tests {
     use super::*;
-    use blanco_core::{ColumnType, Connection};
+    use blanco_core::{ColumnType, Connection, connection_trait::RoutineKind};
     use std::env;
 
     fn default_connection_string() -> String {
@@ -356,6 +356,82 @@ mod tests {
             elapsed < Duration::from_secs(10),
             "ping should fail fast, took {elapsed:?}"
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_mssql_routines_listed_and_ddl() -> Result<(), Box<dyn std::error::Error>> {
+        let conn = match connect_or_skip("test_mssql_routines_listed_and_ddl").await {
+            ConnectOutcome::Connected(c) => c,
+            ConnectOutcome::Skip(r) => return r,
+        };
+
+        // Clean slate (trigger must go before its table).
+        for stmt in [
+            "IF OBJECT_ID('dbo.blanco_routine_trg', 'TR') IS NOT NULL DROP TRIGGER dbo.blanco_routine_trg",
+            "DROP PROCEDURE IF EXISTS dbo.blanco_routine_proc",
+            "DROP FUNCTION IF EXISTS dbo.blanco_routine_fn",
+            "DROP TABLE IF EXISTS dbo.blanco_routine_tbl",
+        ] {
+            let _ = conn.execute_query(stmt, None, None).await;
+        }
+
+        conn.execute_query("CREATE TABLE dbo.blanco_routine_tbl (id INT)", None, None)
+            .await?;
+        conn.execute_query(
+            "EXEC('CREATE PROCEDURE dbo.blanco_routine_proc AS SELECT 1')",
+            None,
+            None,
+        )
+        .await?;
+        conn.execute_query(
+            "EXEC('CREATE FUNCTION dbo.blanco_routine_fn() RETURNS INT AS BEGIN RETURN 1 END')",
+            None,
+            None,
+        )
+        .await?;
+        conn.execute_query(
+            "EXEC('CREATE TRIGGER dbo.blanco_routine_trg ON dbo.blanco_routine_tbl AFTER INSERT AS SELECT 1')",
+            None,
+            None,
+        )
+        .await?;
+
+        let procedures = conn.list_procedures(Some("dbo")).await?;
+        assert!(
+            procedures.iter().any(|p| p == "blanco_routine_proc"),
+            "stored procedure should be listed, got {procedures:?}"
+        );
+
+        let functions = conn.list_functions(Some("dbo")).await?;
+        assert!(
+            functions.iter().any(|f| f == "blanco_routine_fn"),
+            "function should be listed, got {functions:?}"
+        );
+
+        let triggers = conn.list_triggers(Some("dbo")).await?;
+        assert!(
+            triggers.iter().any(|t| t == "blanco_routine_trg"),
+            "trigger should be listed, got {triggers:?}"
+        );
+
+        let proc_ddl = conn
+            .object_ddl(RoutineKind::Procedure, Some("dbo"), "blanco_routine_proc")
+            .await?;
+        assert!(
+            proc_ddl.contains("CREATE PROCEDURE"),
+            "DDL should contain the CREATE PROCEDURE source, got: {proc_ddl}"
+        );
+
+        for stmt in [
+            "DROP TRIGGER dbo.blanco_routine_trg",
+            "DROP PROCEDURE dbo.blanco_routine_proc",
+            "DROP FUNCTION dbo.blanco_routine_fn",
+            "DROP TABLE dbo.blanco_routine_tbl",
+        ] {
+            let _ = conn.execute_query(stmt, None, None).await;
+        }
 
         Ok(())
     }

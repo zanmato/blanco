@@ -12,6 +12,7 @@ members = [
     "crates/gpui_tokio",
     "crates/mssql",
     "crates/redis",
+    "crates/tree-sitter-redis",
 ]
 
 [workspace.package]

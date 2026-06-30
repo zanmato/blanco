@@ -14,6 +14,8 @@ The SQL grammar lives in the `crates/tree-sitter-sequel` git submodule, tracking
 
 This requires the tree-sitter CLI (`cargo install tree-sitter-cli`). The blanco workspace patches `tree-sitter-sequel` to this submodule via `[patch.crates-io]` in the root `Cargo.toml`. To pull newer grammar later: `git submodule update --remote crates/tree-sitter-sequel && ./scripts/setup.sh`.
 
+`scripts/setup.sh` also generates the in-tree `crates/tree-sitter-redis` grammar, which highlights the editor when the active connection is a Redis (non-SQL) backend. Unlike sequel it is not a submodule (we author it), but its generated `src/parser.c` + `src/tree_sitter/*.h` are likewise gitignored and produced by `tree-sitter generate`. The command/subcommand catalog is codegenned from a live server (`COMMAND LIST` / `COMMAND DOCS`) into two committed artifacts: `grammar/keywords.js` (consumed by the grammar) and `bindings/rust/commands.rs` (exposed as `tree_sitter_redis::commands` + `tree_sitter_redis::subcommands_for`, consumed by the editor's Redis completion provider so highlighting and completion share one command set). Regenerate both after a Redis upgrade with `python3 crates/tree-sitter-redis/scripts/extract-redis-commands.py` (defaults to the docker-compose dev server on `127.0.0.1:6400`). The editor language is chosen per connection by `DatabaseType::editor_language()` (`"sql"` vs `"redis"`); both grammars are registered at startup in `main.rs` (`sql::register_languages` + `redis_syntax::register_language`). Redis tabs get `redis_completion::RedisCompletionProvider` (command/subcommand completion) instead of the SQL completion/selection-range/linting machinery, which is gated behind `supports_sql()`.
+
 ## Architecture
 
 ### File Structure

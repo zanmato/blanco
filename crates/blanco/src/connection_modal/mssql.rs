@@ -1,17 +1,19 @@
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, IntoElement, ParentElement, Styled, Window, div,
+    prelude::FluentBuilder,
 };
 use gpui_component::{
     IndexPath, h_flex,
     input::{Input, InputState},
     select::{Select, SelectState},
+    switch::Switch,
     v_flex,
 };
 
 use crate::app_database::{ConnectionData, EnvironmentType};
 
 use super::NewConnectionModal;
-use super::shared::make_input;
+use super::shared::{make_input, render_ssh_section};
 
 pub(super) struct MssqlForm {
     pub host_input: Entity<InputState>,
@@ -20,6 +22,13 @@ pub(super) struct MssqlForm {
     pub username_input: Entity<InputState>,
     pub password_input: Entity<InputState>,
     pub encrypt_select: Entity<SelectState<Vec<String>>>,
+    pub ssh_enabled: bool,
+    pub ssh_host_input: Entity<InputState>,
+    pub ssh_port_input: Entity<InputState>,
+    pub ssh_user_input: Entity<InputState>,
+    pub ssh_password_input: Entity<InputState>,
+    pub ssh_private_key_input: Entity<InputState>,
+    pub ssh_private_key_password_input: Entity<InputState>,
 }
 
 impl MssqlForm {
@@ -34,6 +43,7 @@ impl MssqlForm {
         let conn = if is_mssql { connection_data } else { None };
 
         let port_initial = conn.and_then(|c| c.port).map(|p| p.to_string());
+        let ssh_port_initial = conn.and_then(|c| c.ssh_port).map(|p| p.to_string());
 
         let host_input = make_input(
             window,
@@ -66,8 +76,52 @@ impl MssqlForm {
         );
 
         let encrypt_modes = vec!["Off".to_string(), "On".to_string(), "Required".to_string()];
-        let encrypt_select =
-            cx.new(|cx| SelectState::new(encrypt_modes, Some(IndexPath::new(0)), window, cx));
+        let encrypt_initial = conn
+            .and_then(|c| c.ssl_mode.as_ref())
+            .and_then(|mode| encrypt_modes.iter().position(|m| m == mode))
+            .unwrap_or(0);
+        let encrypt_select = cx.new(|cx| {
+            SelectState::new(encrypt_modes, Some(IndexPath::new(encrypt_initial)), window, cx)
+        });
+
+        let ssh_host_input = make_input(
+            window,
+            cx,
+            "SSH Host",
+            false,
+            conn.and_then(|c| c.ssh_host.as_deref()),
+        );
+        let ssh_port_input = make_input(window, cx, "22", false, ssh_port_initial.as_deref());
+        let ssh_user_input = make_input(
+            window,
+            cx,
+            "SSH Username",
+            false,
+            conn.and_then(|c| c.ssh_user.as_deref()),
+        );
+        let ssh_password_input = make_input(
+            window,
+            cx,
+            "SSH Password (optional)",
+            true,
+            conn.and_then(|c| c.ssh_password.as_deref()),
+        );
+        let ssh_private_key_input = make_input(
+            window,
+            cx,
+            "Private Key Path (optional)",
+            false,
+            conn.and_then(|c| c.ssh_private_key_path.as_deref()),
+        );
+        let ssh_private_key_password_input = make_input(
+            window,
+            cx,
+            "Private Key Password (optional)",
+            true,
+            conn.and_then(|c| c.ssh_private_key_password.as_deref()),
+        );
+
+        let ssh_enabled = conn.map(|c| c.uses_ssh_tunnel()).unwrap_or(false);
 
         Self {
             host_input,
@@ -76,7 +130,18 @@ impl MssqlForm {
             username_input,
             password_input,
             encrypt_select,
+            ssh_enabled,
+            ssh_host_input,
+            ssh_port_input,
+            ssh_user_input,
+            ssh_password_input,
+            ssh_private_key_input,
+            ssh_private_key_password_input,
         }
+    }
+
+    pub fn toggle_ssh(&mut self) {
+        self.ssh_enabled = !self.ssh_enabled;
     }
 
     pub fn validate(&self, cx: &App) -> Option<String> {
@@ -120,10 +185,54 @@ impl MssqlForm {
         }
         let port = port_str.parse::<i32>().ok()?;
 
-        let mut connection =
-            ConnectionData::new_mssql(name, host, port, database, username, password);
+        let encrypt = self.encrypt_select.read(cx).selected_value().cloned();
+
+        let mut connection = if self.ssh_enabled {
+            let ssh_host = self.ssh_host_input.read(cx).value();
+            let ssh_port_str = self.ssh_port_input.read(cx).value();
+            let ssh_user = self.ssh_user_input.read(cx).value();
+
+            if ssh_host.is_empty() || ssh_user.is_empty() {
+                return None;
+            }
+            let ssh_port = if ssh_port_str.is_empty() {
+                22
+            } else {
+                ssh_port_str.parse::<i32>().ok()?
+            };
+            let ssh_password = optional_path(&self.ssh_password_input, cx);
+            let ssh_private_key_path = optional_path(&self.ssh_private_key_input, cx);
+            let ssh_private_key_password = optional_path(&self.ssh_private_key_password_input, cx);
+
+            ConnectionData::new_mssql_with_ssh(
+                name,
+                host,
+                port,
+                database,
+                username,
+                password,
+                ssh_host.to_string(),
+                ssh_port,
+                ssh_user.to_string(),
+                ssh_password,
+                ssh_private_key_path,
+                ssh_private_key_password,
+            )
+        } else {
+            ConnectionData::new_mssql(name, host, port, database, username, password)
+        };
         connection.environment_type = environment_type;
+        connection.ssl_mode = encrypt;
         Some(connection)
+    }
+}
+
+fn optional_path(input: &Entity<InputState>, cx: &App) -> Option<String> {
+    let value = input.read(cx).value();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
     }
 }
 
@@ -177,9 +286,10 @@ fn render_base_fields(form: &MssqlForm) -> AnyElement {
 
 pub(super) fn render(
     modal: &NewConnectionModal,
-    _cx: &mut Context<NewConnectionModal>,
+    cx: &mut Context<NewConnectionModal>,
 ) -> AnyElement {
     let form = &modal.mssql_form;
+    let ssh_enabled = form.ssh_enabled;
     v_flex()
         .gap_3()
         .child(render_base_fields(form))
@@ -190,5 +300,30 @@ pub(super) fn render(
                 .child(div().text_sm().child("Encryption"))
                 .child(Select::new(&form.encrypt_select)),
         )
+        .child(
+            div().child(
+                h_flex().gap_2().items_center().child(
+                    Switch::new("mssql-ssh-enabled-switch")
+                        .checked(ssh_enabled)
+                        .label("SSH")
+                        .on_click(cx.listener(|modal, _checked, _window, cx| {
+                            modal.mssql_form.toggle_ssh();
+                            cx.notify();
+                        })),
+                ),
+            ),
+        )
+        .when(ssh_enabled, |this| {
+            this.child(render_ssh_section(
+                "mssql",
+                &form.ssh_host_input,
+                &form.ssh_port_input,
+                &form.ssh_user_input,
+                &form.ssh_password_input,
+                &form.ssh_private_key_input,
+                &form.ssh_private_key_password_input,
+                cx,
+            ))
+        })
         .into_any_element()
 }

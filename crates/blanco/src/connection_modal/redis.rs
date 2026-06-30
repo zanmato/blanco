@@ -1,14 +1,18 @@
-use gpui::{AnyElement, App, Context, Entity, IntoElement, ParentElement, Styled, Window, div};
+use gpui::{
+    AnyElement, App, Context, Entity, IntoElement, ParentElement, Styled, Window, div,
+    prelude::FluentBuilder,
+};
 use gpui_component::{
     h_flex,
     input::{Input, InputState},
+    switch::Switch,
     v_flex,
 };
 
 use crate::app_database::{ConnectionData, EnvironmentType};
 
 use super::NewConnectionModal;
-use super::shared::make_input;
+use super::shared::{make_input, render_ssh_section};
 
 pub(super) struct RedisForm {
     pub host_input: Entity<InputState>,
@@ -16,6 +20,13 @@ pub(super) struct RedisForm {
     pub database_input: Entity<InputState>,
     pub username_input: Entity<InputState>,
     pub password_input: Entity<InputState>,
+    pub ssh_enabled: bool,
+    pub ssh_host_input: Entity<InputState>,
+    pub ssh_port_input: Entity<InputState>,
+    pub ssh_user_input: Entity<InputState>,
+    pub ssh_password_input: Entity<InputState>,
+    pub ssh_private_key_input: Entity<InputState>,
+    pub ssh_private_key_password_input: Entity<InputState>,
 }
 
 impl RedisForm {
@@ -30,6 +41,7 @@ impl RedisForm {
         let conn = if is_redis { connection_data } else { None };
 
         let port_initial = conn.and_then(|c| c.port).map(|p| p.to_string());
+        let ssh_port_initial = conn.and_then(|c| c.ssh_port).map(|p| p.to_string());
 
         let host_input = make_input(
             window,
@@ -62,13 +74,63 @@ impl RedisForm {
             conn.and_then(|c| c.password.as_deref()),
         );
 
+        let ssh_host_input = make_input(
+            window,
+            cx,
+            "SSH Host",
+            false,
+            conn.and_then(|c| c.ssh_host.as_deref()),
+        );
+        let ssh_port_input = make_input(window, cx, "22", false, ssh_port_initial.as_deref());
+        let ssh_user_input = make_input(
+            window,
+            cx,
+            "SSH Username",
+            false,
+            conn.and_then(|c| c.ssh_user.as_deref()),
+        );
+        let ssh_password_input = make_input(
+            window,
+            cx,
+            "SSH Password (optional)",
+            true,
+            conn.and_then(|c| c.ssh_password.as_deref()),
+        );
+        let ssh_private_key_input = make_input(
+            window,
+            cx,
+            "Private Key Path (optional)",
+            false,
+            conn.and_then(|c| c.ssh_private_key_path.as_deref()),
+        );
+        let ssh_private_key_password_input = make_input(
+            window,
+            cx,
+            "Private Key Password (optional)",
+            true,
+            conn.and_then(|c| c.ssh_private_key_password.as_deref()),
+        );
+
+        let ssh_enabled = conn.map(|c| c.uses_ssh_tunnel()).unwrap_or(false);
+
         Self {
             host_input,
             port_input,
             database_input,
             username_input,
             password_input,
+            ssh_enabled,
+            ssh_host_input,
+            ssh_port_input,
+            ssh_user_input,
+            ssh_password_input,
+            ssh_private_key_input,
+            ssh_private_key_password_input,
         }
+    }
+
+    pub fn toggle_ssh(&mut self) {
+        self.ssh_enabled = !self.ssh_enabled;
     }
 
     pub fn validate(&self, cx: &App) -> Option<String> {
@@ -115,18 +177,60 @@ impl RedisForm {
         }
         let port = port_str.parse::<i32>().ok()?;
 
-        let mut connection =
-            ConnectionData::new_redis(name, host, port, database, username, password);
+        let mut connection = if self.ssh_enabled {
+            let ssh_host = self.ssh_host_input.read(cx).value();
+            let ssh_port_str = self.ssh_port_input.read(cx).value();
+            let ssh_user = self.ssh_user_input.read(cx).value();
+
+            if ssh_host.is_empty() || ssh_user.is_empty() {
+                return None;
+            }
+            let ssh_port = if ssh_port_str.is_empty() {
+                22
+            } else {
+                ssh_port_str.parse::<i32>().ok()?
+            };
+            let ssh_password = optional_path(&self.ssh_password_input, cx);
+            let ssh_private_key_path = optional_path(&self.ssh_private_key_input, cx);
+            let ssh_private_key_password = optional_path(&self.ssh_private_key_password_input, cx);
+
+            ConnectionData::new_redis_with_ssh(
+                name,
+                host,
+                port,
+                database,
+                username,
+                password,
+                ssh_host.to_string(),
+                ssh_port,
+                ssh_user.to_string(),
+                ssh_password,
+                ssh_private_key_path,
+                ssh_private_key_password,
+            )
+        } else {
+            ConnectionData::new_redis(name, host, port, database, username, password)
+        };
         connection.environment_type = environment_type;
         Some(connection)
     }
 }
 
+fn optional_path(input: &Entity<InputState>, cx: &App) -> Option<String> {
+    let value = input.read(cx).value();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
 pub(super) fn render(
     modal: &NewConnectionModal,
-    _cx: &mut Context<NewConnectionModal>,
+    cx: &mut Context<NewConnectionModal>,
 ) -> AnyElement {
     let form = &modal.redis_form;
+    let ssh_enabled = form.ssh_enabled;
     v_flex()
         .gap_3()
         .child(
@@ -171,5 +275,30 @@ pub(super) fn render(
                 .child(div().text_sm().child("Database (index)"))
                 .child(Input::new(&form.database_input)),
         )
+        .child(
+            div().child(
+                h_flex().gap_2().items_center().child(
+                    Switch::new("redis-ssh-enabled-switch")
+                        .checked(ssh_enabled)
+                        .label("SSH")
+                        .on_click(cx.listener(|modal, _checked, _window, cx| {
+                            modal.redis_form.toggle_ssh();
+                            cx.notify();
+                        })),
+                ),
+            ),
+        )
+        .when(ssh_enabled, |this| {
+            this.child(render_ssh_section(
+                "redis",
+                &form.ssh_host_input,
+                &form.ssh_port_input,
+                &form.ssh_user_input,
+                &form.ssh_password_input,
+                &form.ssh_private_key_input,
+                &form.ssh_private_key_password_input,
+                cx,
+            ))
+        })
         .into_any_element()
 }

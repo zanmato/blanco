@@ -20,7 +20,9 @@ SELECT
     fk.constraint_name
 FROM INFORMATION_SCHEMA.COLUMNS c
 LEFT JOIN (
-    SELECT kc.table_schema, kc.table_name, kc.column_name, kc.column_id
+    -- KEY_COLUMN_USAGE has no `column_id`; `ordinal_position` is the valid
+    -- column and serves equally as the non-null PK-membership marker below.
+    SELECT kc.table_schema, kc.table_name, kc.column_name, kc.ordinal_position AS column_id
     FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kc
     JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         ON tc.constraint_name = kc.constraint_name

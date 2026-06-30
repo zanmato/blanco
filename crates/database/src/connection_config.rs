@@ -164,6 +164,21 @@ impl DatabaseType {
         }
     }
 
+    /// Name of the registered editor language used for syntax highlighting.
+    /// Resolved against gpui-component's `LanguageRegistry` (see
+    /// `blanco::sql::register_languages` / `blanco::redis_syntax::register_language`).
+    /// Exhaustive on purpose: a new driver must pick its highlighting language.
+    pub fn editor_language(&self) -> &'static str {
+        match self {
+            DatabaseType::SQLite
+            | DatabaseType::PostgreSQL
+            | DatabaseType::MySQL
+            | DatabaseType::ClickHouse
+            | DatabaseType::MsSql => "sql",
+            DatabaseType::Redis => "redis",
+        }
+    }
+
     /// Get the Sqruff dialect string for this database type
     pub fn to_sqruff_dialect(&self) -> &'static str {
         match self {
@@ -579,7 +594,11 @@ impl ConnectionConfig {
 
                 let mut params = Vec::new();
                 if let Some(ssl_mode) = &self.ssl_mode {
-                    params.push(format!("encrypt={}", ssl_mode));
+                    // The UI exposes Off/On/Required, but the driver only treats
+                    // true/yes/mandatory as "encrypt"; translate so the choice
+                    // actually takes effect (anything but "Off" enables it).
+                    let encrypt = !ssl_mode.eq_ignore_ascii_case("off");
+                    params.push(format!("encrypt={}", encrypt));
                 }
                 params.push("trust_cert=true".to_string());
                 if !params.is_empty() {
@@ -631,6 +650,20 @@ impl ConnectionConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn editor_language_maps_sql_backends_and_redis() {
+        for db_type in [
+            DatabaseType::SQLite,
+            DatabaseType::PostgreSQL,
+            DatabaseType::MySQL,
+            DatabaseType::ClickHouse,
+            DatabaseType::MsSql,
+        ] {
+            assert_eq!(db_type.editor_language(), "sql", "{db_type:?}");
+        }
+        assert_eq!(DatabaseType::Redis.editor_language(), "redis");
+    }
 
     #[test]
     fn test_postgres_connection_string_generation() {

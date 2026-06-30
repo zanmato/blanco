@@ -27,7 +27,19 @@ pub struct TestHarness {
 
 impl TestHarness {
     pub fn new(cx: &mut TestAppContext) -> Self {
+        Self::new_with_db_type(cx, database::DatabaseType::SQLite)
+    }
+
+    /// Open a harness whose single query tab is backed by `db_type`. Registers
+    /// the editor highlighting languages first so the tab's `code_editor`
+    /// resolves a real grammar (and loads its highlights query, which panics on
+    /// drift). The connection itself is always an in-memory SQLite file, so this
+    /// is only meaningful for render/highlighting tests, not query execution.
+    pub fn new_with_db_type(cx: &mut TestAppContext, db_type: database::DatabaseType) -> Self {
         cx.executor().allow_parking();
+
+        crate::sql::register_languages();
+        crate::redis_syntax::register_language();
 
         let mut editor_panel: Option<gpui::Entity<EditorPanel>> = None;
         let mut status_bar: Option<gpui::Entity<StatusBarState>> = None;
@@ -87,7 +99,7 @@ impl TestHarness {
                     content: None,
                     db_id: None,
                     connection_id,
-                    db_type: database::DatabaseType::SQLite,
+                    db_type,
                     connection_name: Some("test".into()),
                     database_name: "main".into(),
                     schema_name: None,

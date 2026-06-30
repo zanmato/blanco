@@ -3,6 +3,8 @@ mod parameter_form;
 mod query_execution;
 #[cfg(test)]
 mod query_execution_test;
+#[cfg(test)]
+mod redis_highlighting_test;
 mod rename_form;
 mod render;
 pub(crate) mod schema_graph;
@@ -561,6 +563,10 @@ impl EditorPanel {
             db_service,
         );
 
+        // SQL completions and statement-based selection ranges only make sense
+        // for SQL backends. Line-oriented backends (Redis) get neither.
+        let supports_sql = params.db_type.supports_sql();
+
         let editor = cx.new({
             let sql_completion_provider = sql_completion_provider.clone();
             |cx| {
@@ -573,7 +579,7 @@ impl EditorPanel {
                 let tab_size = editor_settings.tab_size;
 
                 let mut editor = InputState::new(window, cx)
-                    .code_editor("sql".to_string())
+                    .code_editor(params.db_type.editor_language().to_string())
                     .line_number(true)
                     .folding(folding)
                     .tab_size(TabSize {
@@ -583,17 +589,23 @@ impl EditorPanel {
                     .soft_wrap(word_wrap)
                     .show_whitespaces(show_whitespace);
 
-                let completion_provider: Rc<dyn gpui_component::input::CompletionProvider> =
-                    Rc::new(sql_completion_provider);
-                editor.lsp.completion_provider = Some(completion_provider);
+                if supports_sql {
+                    let completion_provider: Rc<dyn gpui_component::input::CompletionProvider> =
+                        Rc::new(sql_completion_provider);
+                    editor.lsp.completion_provider = Some(completion_provider);
 
-                // Set up selection range provider for SQL statement highlighting
-                {
+                    // Set up selection range provider for SQL statement highlighting
                     let provider = SqlSelectionRangeProvider::new();
                     let selection_range_provider: Rc<
                         dyn gpui_component::input::SelectionRangeProvider,
                     > = Rc::new(provider);
                     editor.lsp.selection_range_provider = Some(selection_range_provider);
+                } else if params.db_type == database::DatabaseType::Redis {
+                    // Redis gets command/subcommand completion instead of the
+                    // SQL schema-aware completion.
+                    let completion_provider: Rc<dyn gpui_component::input::CompletionProvider> =
+                        Rc::new(crate::redis_completion::RedisCompletionProvider::new());
+                    editor.lsp.completion_provider = Some(completion_provider);
                 }
 
                 editor
@@ -623,22 +635,27 @@ impl EditorPanel {
         });
         self._subscriptions.push(subscription);
 
-        // Create SqruffService for this tab
+        // Create SqruffService for this tab. Sqruff drives SQL formatting and
+        // linting only, so non-SQL backends (Redis) skip it entirely.
         let formatter_settings = AppSettings::global(cx).settings.formatter.clone();
         let editor_settings = AppSettings::global(cx).settings.editor.clone();
-        let sqruff_service = match SqruffService::new(
-            params.db_type.to_sqruff_dialect(),
-            &formatter_settings,
-            &editor_settings,
-        ) {
-            Ok(service) => Some(Arc::new(service)),
-            Err(e) => {
-                error!(
-                    "Failed to create SqruffService for tab '{}': {}",
-                    params.title, e
-                );
-                None
+        let sqruff_service = if supports_sql {
+            match SqruffService::new(
+                params.db_type.to_sqruff_dialect(),
+                &formatter_settings,
+                &editor_settings,
+            ) {
+                Ok(service) => Some(Arc::new(service)),
+                Err(e) => {
+                    error!(
+                        "Failed to create SqruffService for tab '{}': {}",
+                        params.title, e
+                    );
+                    None
+                }
             }
+        } else {
+            None
         };
 
         // Create query tab with the connection string
@@ -668,10 +685,15 @@ impl EditorPanel {
             db_id: params.db_id,
             results_panel,
             sql_view: cx.new(|cx| {
-                SqlView::new(10, cx.theme().highlight_theme.clone()).show_copy_button(false)
+                SqlView::new(
+                    10,
+                    cx.theme().highlight_theme.clone(),
+                    params.db_type.editor_language(),
+                )
+                .show_copy_button(false)
             }),
             sqruff_service,
-            completion_provider: Some(sql_completion_provider),
+            completion_provider: supports_sql.then_some(sql_completion_provider),
             // Chat functionality
             chat_enabled: false,
             chat_panel: None,

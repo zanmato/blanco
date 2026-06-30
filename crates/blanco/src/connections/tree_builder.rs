@@ -35,7 +35,7 @@ impl ConnectionsPanel {
             database_name: None,
             schema_name: None,
             table_name: None,
-            icon: self.get_connection_icon(connection_id, cx),
+            icon: self.get_connection_icon(connection_id, db_type, cx),
             environment_type: Some(connection.environment_type),
             loading: false,
             size_bytes: None,

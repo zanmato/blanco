@@ -39,6 +39,7 @@ ropey = { workspace = true }
 # SQL parsing
 tree-sitter = "0.26"
 tree-sitter-sequel = "0.3.8"
+tree-sitter-redis = { path = "../tree-sitter-redis" }
 once_cell = "1.19.0"
 sqruff-lib = "0.34.1"
 sqruff-lib-dialects = "0.34.1"

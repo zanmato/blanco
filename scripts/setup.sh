@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Initializes the tree-sitter-sequel submodule and generates its parser.
+# Initializes the tree-sitter-sequel submodule and generates the tree-sitter
+# parsers (sequel + redis) whose generated sources are gitignored.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-submodule="$repo_root/crates/tree-sitter-sequel"
 
 git -C "$repo_root" submodule update --init crates/tree-sitter-sequel
 
@@ -13,4 +13,7 @@ if ! command -v tree-sitter >/dev/null 2>&1; then
 fi
 
 echo "Generating tree-sitter-sequel parser..."
-(cd "$submodule" && tree-sitter generate)
+(cd "$repo_root/crates/tree-sitter-sequel" && tree-sitter generate)
+
+echo "Generating tree-sitter-redis parser..."
+(cd "$repo_root/crates/tree-sitter-redis" && tree-sitter generate)

@@ -108,6 +108,10 @@ pub enum IconName {
     WindowRestore,
     Postgresql,
     Sqlite,
+    Mysql,
+    Clickhouse,
+    MsSql,
+    Redis,
     WandSparkles,
     Wrench,
 }
@@ -221,6 +225,10 @@ impl IconName {
             Self::WindowRestore => "icons/window-restore.svg",
             Self::Postgresql => "icons/postgres.svg",
             Self::Sqlite => "icons/sqlite.svg",
+            Self::Mysql => "icons/mysql.svg",
+            Self::Clickhouse => "icons/clickouse.svg",
+            Self::MsSql => "icons/mssql.svg",
+            Self::Redis => "icons/redis.svg",
             Self::WandSparkles => "icons/wand-sparkles.svg",
             Self::Wrench => "icons/wrench.svg",
         }

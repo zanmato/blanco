@@ -225,10 +225,61 @@ impl MysqlForm {
 
         let port = port_str.parse::<i32>().unwrap_or(3306);
 
-        let mut connection =
-            ConnectionData::new_mysql(name, host, port, database, username, password);
+        let ssl_mode = self.ssl_mode_select.read(cx).selected_value().cloned();
+        let ssl_key_path = optional_path(&self.ssl_key_input, cx);
+        let ssl_cert_path = optional_path(&self.ssl_cert_input, cx);
+        let ssl_ca_cert_path = optional_path(&self.ssl_ca_cert_input, cx);
+
+        let mut connection = if self.ssh_enabled {
+            let ssh_host = self.ssh_host_input.read(cx).value();
+            let ssh_port_str = self.ssh_port_input.read(cx).value();
+            let ssh_user = self.ssh_user_input.read(cx).value();
+
+            if ssh_host.is_empty() || ssh_user.is_empty() {
+                return None;
+            }
+            let ssh_port = if ssh_port_str.is_empty() {
+                22
+            } else {
+                ssh_port_str.parse::<i32>().ok()?
+            };
+            let ssh_password = optional_path(&self.ssh_password_input, cx);
+            let ssh_private_key_path = optional_path(&self.ssh_private_key_input, cx);
+            let ssh_private_key_password = optional_path(&self.ssh_private_key_password_input, cx);
+
+            ConnectionData::new_mysql_with_ssh(
+                name,
+                host,
+                port,
+                database,
+                username,
+                password,
+                ssh_host.to_string(),
+                ssh_port,
+                ssh_user.to_string(),
+                ssh_password,
+                ssh_private_key_path,
+                ssh_private_key_password,
+            )
+        } else {
+            ConnectionData::new_mysql(name, host, port, database, username, password)
+        };
+
         connection.environment_type = environment_type;
+        connection.ssl_mode = ssl_mode;
+        connection.ssl_key_path = ssl_key_path;
+        connection.ssl_cert_path = ssl_cert_path;
+        connection.ssl_ca_cert_path = ssl_ca_cert_path;
         Some(connection)
+    }
+}
+
+fn optional_path(input: &Entity<InputState>, cx: &App) -> Option<String> {
+    let value = input.read(cx).value();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
     }
 }
 
