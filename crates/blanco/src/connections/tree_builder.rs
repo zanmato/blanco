@@ -71,7 +71,11 @@ impl ConnectionsPanel {
                         table_name: None,
                         icon: TreeItemIcon {
                             icon: IconName::Database,
-                            color: cx.theme().foreground.into(),
+                            color: if self.loaded_connections.contains(&connection_id) {
+                                cx.theme().primary.into()
+                            } else {
+                                cx.theme().foreground.into()
+                            },
                         },
                         environment_type: Some(connection.environment_type),
                         loading: false,
