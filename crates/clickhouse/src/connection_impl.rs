@@ -103,6 +103,25 @@ impl Connection for ClickhouseConnection {
         })
     }
 
+    async fn execute_script(
+        &self,
+        query: &str,
+        database_name: Option<&str>,
+    ) -> Result<Vec<QueryResult>> {
+        // The HTTP interface runs a single query per request and cannot report
+        // statement boundaries, so split the script ourselves and run each
+        // statement in turn, preserving one `QueryResult` per statement.
+        let statements = split_sql_statements(query);
+        if statements.len() <= 1 {
+            return Ok(vec![self.execute_query(query, database_name, None).await?]);
+        }
+        let mut results = Vec::with_capacity(statements.len());
+        for statement in statements {
+            results.push(self.execute_query(&statement, database_name, None).await?);
+        }
+        Ok(results)
+    }
+
     async fn execute_write(
         &self,
         query: &str,
@@ -391,4 +410,173 @@ fn parse_rows_affected(body: &str) -> u64 {
         .next()
         .and_then(|line| line.trim().parse::<u64>().ok())
         .unwrap_or(0)
+}
+
+/// Split a SQL script into its individual statements on top-level semicolons,
+/// skipping semicolons inside string literals (`'...'`), quoted identifiers
+/// (`"..."`, `` `...` ``), line comments (`-- ...`), and block comments
+/// (`/* ... */`).
+///
+/// ClickHouse's HTTP interface (and its native protocol) runs a single
+/// statement per request and rejects multi-statement scripts, so `execute_script`
+/// splits here and issues one request per statement. The sqlx-based backends
+/// don't need this: their drivers report statement boundaries directly via
+/// `fetch_many`.
+///
+/// Trailing/blank fragments are dropped, so a script ending in `;` does not
+/// yield an empty final statement. The returned statements are trimmed and
+/// exclude the separating semicolon.
+fn split_sql_statements(sql: &str) -> Vec<String> {
+    #[derive(PartialEq)]
+    enum State {
+        Normal,
+        SingleQuote,
+        DoubleQuote,
+        Backtick,
+        LineComment,
+        BlockComment,
+    }
+
+    let mut statements = Vec::new();
+    let mut current = String::new();
+    let mut state = State::Normal;
+    let mut chars = sql.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match state {
+            State::Normal => match ch {
+                '\'' => {
+                    state = State::SingleQuote;
+                    current.push(ch);
+                }
+                '"' => {
+                    state = State::DoubleQuote;
+                    current.push(ch);
+                }
+                '`' => {
+                    state = State::Backtick;
+                    current.push(ch);
+                }
+                '-' if chars.peek() == Some(&'-') => {
+                    state = State::LineComment;
+                    current.push(ch);
+                    current.push(chars.next().unwrap_or('-'));
+                }
+                '/' if chars.peek() == Some(&'*') => {
+                    state = State::BlockComment;
+                    current.push(ch);
+                    current.push(chars.next().unwrap_or('*'));
+                }
+                ';' => {
+                    let trimmed = current.trim();
+                    if !trimmed.is_empty() {
+                        statements.push(trimmed.to_string());
+                    }
+                    current.clear();
+                }
+                _ => current.push(ch),
+            },
+            State::SingleQuote => {
+                current.push(ch);
+                // Doubled quote (`''`) is an escaped quote, staying in-string.
+                if ch == '\'' {
+                    if chars.peek() == Some(&'\'') {
+                        current.push(chars.next().unwrap_or('\''));
+                    } else {
+                        state = State::Normal;
+                    }
+                }
+            }
+            State::DoubleQuote => {
+                current.push(ch);
+                if ch == '"' {
+                    if chars.peek() == Some(&'"') {
+                        current.push(chars.next().unwrap_or('"'));
+                    } else {
+                        state = State::Normal;
+                    }
+                }
+            }
+            State::Backtick => {
+                current.push(ch);
+                if ch == '`' {
+                    state = State::Normal;
+                }
+            }
+            State::LineComment => {
+                current.push(ch);
+                if ch == '\n' {
+                    state = State::Normal;
+                }
+            }
+            State::BlockComment => {
+                current.push(ch);
+                if ch == '*' && chars.peek() == Some(&'/') {
+                    current.push(chars.next().unwrap_or('/'));
+                    state = State::Normal;
+                }
+            }
+        }
+    }
+
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        statements.push(trimmed.to_string());
+    }
+
+    statements
+}
+
+#[cfg(test)]
+mod split_tests {
+    use super::split_sql_statements;
+
+    #[test]
+    fn splits_simple_statements() {
+        assert_eq!(
+            split_sql_statements("SELECT 1; SELECT 2"),
+            vec!["SELECT 1".to_string(), "SELECT 2".to_string()]
+        );
+    }
+
+    #[test]
+    fn trailing_semicolon_yields_no_empty_statement() {
+        assert_eq!(
+            split_sql_statements("SELECT 1;"),
+            vec!["SELECT 1".to_string()]
+        );
+        assert_eq!(split_sql_statements("   ;  ; "), Vec::<String>::new());
+    }
+
+    #[test]
+    fn ignores_semicolons_in_strings_and_comments() {
+        assert_eq!(
+            split_sql_statements("SELECT ';'; SELECT 2"),
+            vec!["SELECT ';'".to_string(), "SELECT 2".to_string()]
+        );
+        assert_eq!(
+            split_sql_statements("SELECT '' '' ;SELECT 2"),
+            vec!["SELECT '' ''".to_string(), "SELECT 2".to_string()]
+        );
+        assert_eq!(
+            split_sql_statements("SELECT 1 -- a; b\n; SELECT 2"),
+            vec!["SELECT 1 -- a; b".to_string(), "SELECT 2".to_string()]
+        );
+        assert_eq!(
+            split_sql_statements("SELECT 1 /* a; b */; SELECT 2"),
+            vec!["SELECT 1 /* a; b */".to_string(), "SELECT 2".to_string()]
+        );
+        assert_eq!(
+            split_sql_statements("SELECT `a;b`, \"c;d\" FROM t"),
+            vec!["SELECT `a;b`, \"c;d\" FROM t".to_string()]
+        );
+    }
+
+    #[test]
+    fn escaped_quotes_stay_in_string() {
+        assert_eq!(
+            split_sql_statements("SELECT 'it''s; fine'; SELECT 2"),
+            vec!["SELECT 'it''s; fine'".to_string(), "SELECT 2".to_string()]
+        );
+    }
 }

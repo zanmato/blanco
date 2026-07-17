@@ -12,7 +12,7 @@ use gpui_component::{
     h_flex,
     menu::AppMenuBar,
     notification::NotificationType,
-    resizable::{ResizableState, h_resizable, resizable_panel},
+    resizable::{ResizablePanel, ResizableState, h_resizable, resizable_panel},
     spinner::Spinner,
     status_bar::StatusBar,
 };
@@ -272,171 +272,29 @@ impl BlancoApp {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         init_menus(cx);
 
-        // Create channel for background action dispatch
-        let (action_sender, action_receiver) =
-            channel::unbounded::<database::DatabaseServiceMessage>();
-
-        // Set sender on DatabaseService using update_global
-        cx.update_global::<database::DatabaseService, _>(
-            |db_service: &mut database::DatabaseService, _cx| {
-                db_service.set_action_sender(action_sender);
-            },
-        );
-
-        // Handle database service messages
-        let action_task = cx.spawn(async move |_weak_handle, cx| {
-            info!("DatabaseServiceMessage listener task started");
-            while let Ok(msg) = action_receiver.recv().await {
-                match msg {
-                    database::DatabaseServiceMessage::Connected(conn_msg) => {
-                        info!(
-                            "DatabaseServiceMessage::Connected received for connection_id: {}, database_name: {}",
-                            conn_msg.connection_id, conn_msg.database_name
-                        );
-                        _weak_handle.update(cx, |_, cx| {
-                            info!("Dispatching DatabaseConnected action to app");
-                            cx.dispatch_action(&DatabaseConnected::from(conn_msg));
-                        }).log_err();
-                    }
-                    database::DatabaseServiceMessage::Disconnected(disconn_msg) => {
-                        info!(
-                            "DatabaseServiceMessage::Disconnected received for connection_id: {}, database_name: {}",
-                            disconn_msg.connection_id, disconn_msg.database_name
-                        );
-                        _weak_handle.update(cx, |_, cx| {
-                            cx.dispatch_action(&DatabaseDisconnected::from(disconn_msg));
-                        }).log_err();
-                    }
-                }
-            }
-            info!("DatabaseServiceMessage listener task ended");
-        });
-
-        // App-wide activity channel feeding the bottom status bar. Any context
-        // (including background tokio tasks without a `cx`) reports work through
-        // the global ActivityReporter; this single task folds messages into the
-        // status entity.
-        let status_bar = cx.new(|_| StatusBarState::default());
-        let (activity_sender, activity_receiver) = channel::unbounded::<ActivityMessage>();
-        cx.set_global(ActivityReporter::new(activity_sender));
-        let activity_task = cx.spawn({
-            let status_bar = status_bar.downgrade();
-            async move |_weak_handle, cx| {
-                while let Ok(message) = activity_receiver.recv().await {
-                    status_bar
-                        .update(cx, |state, cx| state.apply(message, cx))
-                        .log_err();
-                }
-            }
-        });
+        let action_task = Self::spawn_service_listener(cx);
+        let (status_bar, activity_task) = Self::spawn_activity_status(cx);
 
         let sidebar = cx.new(|cx| ConnectionsPanel::new(window, cx));
         let snippets_panel = cx.new(|cx| SnippetsPanel::new(window, cx));
         let history_panel = cx.new(|cx| HistoryPanel::new(window, cx));
         let main_resize_state = cx.new(|_| ResizableState::default());
 
-        // Load saved tabs from database
-        info!("Loading saved tabs from database");
-
-        // Synchronously load tabs from database
-        let app_database = AppDatabase::global(cx);
-        let saved_tabs = gpui_tokio::Tokio::handle(cx).block_on(async {
-            // Database should already be initialized synchronously{
-            match app_database.load_query_tabs().await {
-                Ok(tabs) => {
-                    info!("Loaded {} tabs from database", tabs.len());
-                    for tab in &tabs {
-                        debug!(
-                            "Tab '{}' (db_id: {:?}, connection_id: {:?}, content_len: {})",
-                            tab.title,
-                            tab.id,
-                            tab.connection_id,
-                            tab.content.len()
-                        );
-                    }
-                    tabs
-                }
-                Err(e) => {
-                    error!("Failed to load tabs: {}", e);
-                    Vec::new()
-                }
-            }
-        });
-
+        let saved_tabs = Self::load_saved_tabs(cx);
         let editor_panel =
             cx.new(|cx| EditorPanel::new_with_saved_tabs(window, cx, false, saved_tabs));
         let command_palette = cx.new(|cx| CommandPalette::new(sidebar.downgrade(), window, cx));
         let app_menu_bar = AppMenuBar::new(cx);
 
-        // Set up event subscriptions using subscribe_in pattern
-        let mut subscriptions = Vec::new();
-
-        // Subscribe to sidebar events
-        let subscription = cx.subscribe_in(
+        let subscriptions = Self::wire_subscriptions(
             &sidebar,
-            window,
-            move |app, _sidebar, event, window, cx| match event {
-                ConnectionsPanelEvent::EditConnection {
-                    connection_data, ..
-                } => {
-                    app.open_edit_connection_modal(*connection_data.clone(), window, cx);
-                }
-            },
-        );
-        subscriptions.push(subscription);
-
-        // Subscribe to snippets panel events
-        let subscription = cx.subscribe_in(
             &snippets_panel,
-            window,
-            move |_app, _snippets_panel, event, _window, _cx| {
-                match event {
-                    SnippetsPanelEvent::SnippetDeleted => {
-                        // Snippets panel already refreshed itself
-                    }
-                }
-            },
-        );
-        subscriptions.push(subscription);
-
-        // Subscribe to history panel events: dropping a saved query into the
-        // active editor tab.
-        let subscription = cx.subscribe_in(
             &history_panel,
-            window,
-            move |app, _history_panel, event, window, cx| match event {
-                HistoryPanelEvent::InsertQuery(query) => {
-                    let query = query.clone();
-                    app.editor_panel.update(cx, |editor_panel, cx| {
-                        editor_panel.insert_into_active_query(&query, window, cx);
-                    });
-                }
-            },
-        );
-        subscriptions.push(subscription);
-
-        // Keep the history panel in sync as queries are executed.
-        let subscription = cx.subscribe_in(
             &editor_panel,
+            &status_bar,
             window,
-            move |app, _editor_panel, event, _window, cx| match event {
-                EditorPanelEvent::QueryRecorded => {
-                    app.history_panel.update(cx, |panel, cx| {
-                        panel.reload(cx);
-                    });
-                }
-            },
+            cx,
         );
-        subscriptions.push(subscription);
-
-        // Re-render the status bar whenever the activity state changes.
-        subscriptions.push(cx.observe(&status_bar, |_, _, cx| cx.notify()));
-
-        // Persist window geometry as it changes so it can be restored on the
-        // next launch (see `main.rs`). The save itself is debounced.
-        subscriptions.push(cx.observe_window_bounds(window, |this, window, cx| {
-            this.persist_window_bounds(window, cx);
-        }));
 
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
@@ -467,6 +325,172 @@ impl BlancoApp {
             _activity_task: activity_task,
             _save_window_bounds_task: Task::ready(()),
         }
+    }
+
+    /// Spawn the background task that translates `DatabaseServiceMessage`s
+    /// (emitted from any context, including tokio tasks without a `cx`) into
+    /// dispatched `DatabaseConnected`/`DatabaseDisconnected` actions. Installs
+    /// the message sender on the global `DatabaseService`.
+    fn spawn_service_listener(cx: &mut Context<Self>) -> Task<()> {
+        let (action_sender, action_receiver) =
+            channel::unbounded::<database::DatabaseServiceMessage>();
+
+        cx.update_global::<database::DatabaseService, _>(
+            |db_service: &mut database::DatabaseService, _cx| {
+                db_service.set_action_sender(action_sender);
+            },
+        );
+
+        cx.spawn(async move |_weak_handle, cx| {
+            info!("DatabaseServiceMessage listener task started");
+            while let Ok(msg) = action_receiver.recv().await {
+                match msg {
+                    database::DatabaseServiceMessage::Connected(conn_msg) => {
+                        info!(
+                            "DatabaseServiceMessage::Connected received for connection_id: {}, database_name: {}",
+                            conn_msg.connection_id, conn_msg.database_name
+                        );
+                        _weak_handle.update(cx, |_, cx| {
+                            info!("Dispatching DatabaseConnected action to app");
+                            cx.dispatch_action(&DatabaseConnected::from(conn_msg));
+                        }).log_err();
+                    }
+                    database::DatabaseServiceMessage::Disconnected(disconn_msg) => {
+                        info!(
+                            "DatabaseServiceMessage::Disconnected received for connection_id: {}, database_name: {}",
+                            disconn_msg.connection_id, disconn_msg.database_name
+                        );
+                        _weak_handle.update(cx, |_, cx| {
+                            cx.dispatch_action(&DatabaseDisconnected::from(disconn_msg));
+                        }).log_err();
+                    }
+                }
+            }
+            info!("DatabaseServiceMessage listener task ended");
+        })
+    }
+
+    /// Create the status-bar entity and the background task that folds
+    /// app-wide `ActivityMessage`s (reported through the global
+    /// `ActivityReporter`) into it.
+    fn spawn_activity_status(cx: &mut Context<Self>) -> (Entity<StatusBarState>, Task<()>) {
+        let status_bar = cx.new(|_| StatusBarState::default());
+        let (activity_sender, activity_receiver) = channel::unbounded::<ActivityMessage>();
+        cx.set_global(ActivityReporter::new(activity_sender));
+        let activity_task = cx.spawn({
+            let status_bar = status_bar.downgrade();
+            async move |_weak_handle, cx| {
+                while let Ok(message) = activity_receiver.recv().await {
+                    status_bar
+                        .update(cx, |state, cx| state.apply(message, cx))
+                        .log_err();
+                }
+            }
+        });
+        (status_bar, activity_task)
+    }
+
+    /// Synchronously load the persisted query tabs from the app database. Blocks
+    /// on the tokio runtime because the app cannot render until it knows which
+    /// tabs to restore. Load failures degrade to an empty tab set.
+    fn load_saved_tabs(cx: &mut Context<Self>) -> Vec<crate::app_database::QueryTabData> {
+        info!("Loading saved tabs from database");
+        let app_database = AppDatabase::global(cx);
+        gpui_tokio::Tokio::handle(cx).block_on(async {
+            match app_database.load_query_tabs().await {
+                Ok(tabs) => {
+                    info!("Loaded {} tabs from database", tabs.len());
+                    for tab in &tabs {
+                        debug!(
+                            "Tab '{}' (db_id: {:?}, connection_id: {:?}, content_len: {})",
+                            tab.title,
+                            tab.id,
+                            tab.connection_id,
+                            tab.content.len()
+                        );
+                    }
+                    tabs
+                }
+                Err(e) => {
+                    error!("Failed to load tabs: {}", e);
+                    Vec::new()
+                }
+            }
+        })
+    }
+
+    /// Wire the cross-panel event subscriptions and window observers. Returns
+    /// the subscription guards to be stored on the app so they live as long as
+    /// it does.
+    fn wire_subscriptions(
+        sidebar: &Entity<ConnectionsPanel>,
+        snippets_panel: &Entity<SnippetsPanel>,
+        history_panel: &Entity<HistoryPanel>,
+        editor_panel: &Entity<EditorPanel>,
+        status_bar: &Entity<StatusBarState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<Subscription> {
+        let mut subscriptions = Vec::new();
+
+        // Sidebar: open the edit-connection modal.
+        subscriptions.push(cx.subscribe_in(
+            sidebar,
+            window,
+            move |app, _sidebar, event, window, cx| match event {
+                ConnectionsPanelEvent::EditConnection {
+                    connection_data, ..
+                } => {
+                    app.open_edit_connection_modal(*connection_data.clone(), window, cx);
+                }
+            },
+        ));
+
+        // Snippets panel: deletion already refreshes the panel itself.
+        subscriptions.push(cx.subscribe_in(
+            snippets_panel,
+            window,
+            move |_app, _snippets_panel, event, _window, _cx| match event {
+                SnippetsPanelEvent::SnippetDeleted => {}
+            },
+        ));
+
+        // History panel: drop a saved query into the active editor tab.
+        subscriptions.push(cx.subscribe_in(
+            history_panel,
+            window,
+            move |app, _history_panel, event, window, cx| match event {
+                HistoryPanelEvent::InsertQuery(query) => {
+                    let query = query.clone();
+                    app.editor_panel.update(cx, |editor_panel, cx| {
+                        editor_panel.insert_into_active_query(&query, window, cx);
+                    });
+                }
+            },
+        ));
+
+        // Editor panel: keep the history panel in sync as queries run.
+        subscriptions.push(cx.subscribe_in(
+            editor_panel,
+            window,
+            move |app, _editor_panel, event, _window, cx| match event {
+                EditorPanelEvent::QueryRecorded => {
+                    app.history_panel.update(cx, |panel, cx| {
+                        panel.reload(cx);
+                    });
+                }
+            },
+        ));
+
+        // Re-render the status bar whenever the activity state changes.
+        subscriptions.push(cx.observe(status_bar, |_, _, cx| cx.notify()));
+
+        // Persist window geometry as it changes (debounced in the handler).
+        subscriptions.push(cx.observe_window_bounds(window, |this, window, cx| {
+            this.persist_window_bounds(window, cx);
+        }));
+
+        subscriptions
     }
 
     #[cfg(test)]
@@ -543,6 +567,85 @@ impl BlancoApp {
                 .child(leading)
                 .child(line.text),
         )
+    }
+
+    /// The window title bar: app logo followed by the menu bar.
+    fn render_title_bar(&self, window: &mut Window, cx: &Context<Self>) -> impl IntoElement {
+        TitleBar::new().child(
+            div()
+                .flex()
+                .items_center()
+                .gap_x_3()
+                .bg(cx.theme().title_bar)
+                .child(
+                    svg()
+                        .h(px(40.))
+                        .w(px(128.))
+                        .text_color(window.text_style().color)
+                        .path("images/blanco.svg"),
+                )
+                .child(self.app_menu_bar.clone()),
+        )
+    }
+
+    /// The left sidebar: a segmented tab strip (Connections / Snippets /
+    /// History) over the currently selected panel.
+    fn render_sidebar_panel(&self, cx: &Context<Self>) -> ResizablePanel {
+        resizable_panel()
+            .size(px(288.))
+            .size_range(px(288.)..px(500.))
+            .child(
+                div()
+                    .w_full()
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .child(
+                        div().flex_none().px_2().py_1p5().child(
+                            TabBar::new("sidebar-tabs")
+                                .segmented()
+                                .w_full()
+                                .selected_index(match self.sidebar_tab {
+                                    SidebarTab::Connections => 0,
+                                    SidebarTab::Snippets => 1,
+                                    SidebarTab::History => 2,
+                                })
+                                .on_click({
+                                    let view = cx.entity().downgrade();
+                                    move |ix: &usize, _, _, cx| {
+                                        let tab = match ix {
+                                            1 => SidebarTab::Snippets,
+                                            2 => SidebarTab::History,
+                                            _ => SidebarTab::Connections,
+                                        };
+                                        view.update(cx, |this, cx| {
+                                            this.sidebar_tab = tab;
+                                            // Pick up queries run since this
+                                            // panel was last shown.
+                                            if tab == SidebarTab::History {
+                                                this.history_panel.update(cx, |panel, cx| {
+                                                    panel.reload(cx);
+                                                });
+                                            }
+                                            cx.notify();
+                                        })
+                                        .log_err();
+                                    }
+                                })
+                                .child(Tab::new().label("Connections").flex_1())
+                                .child(Tab::new().label("Snippets").flex_1())
+                                .child(Tab::new().label("History").flex_1()),
+                        ),
+                    )
+                    .child(div().flex_1().min_h_0().overflow_hidden().map(|this| {
+                        match self.sidebar_tab {
+                            SidebarTab::Connections => this.child(self.sidebar.clone()),
+                            SidebarTab::Snippets => this.child(self.snippets_panel.clone()),
+                            SidebarTab::History => this.child(self.history_panel.clone()),
+                        }
+                    })),
+            )
     }
 
     #[cfg(test)]
@@ -1361,23 +1464,7 @@ impl Render for BlancoApp {
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             // Title bar
-            .child(
-                TitleBar::new().child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_x_3()
-                        .bg(cx.theme().title_bar)
-                        .child(
-                            svg()
-                                .h(px(40.))
-                                .w(px(128.))
-                                .text_color(window.text_style().color)
-                                .path("images/blanco.svg"),
-                        )
-                        .child(self.app_menu_bar.clone()),
-                ),
-            )
+            .child(self.render_title_bar(window, cx))
             // Main content area
             .child(
                 div().flex().flex_1().min_h_0().overflow_hidden().child(
@@ -1385,80 +1472,7 @@ impl Render for BlancoApp {
                         .with_state(&self.main_resize_state)
                         // Left side: Connections panel sidebar
                         .when(!self.sidebar_collapsed, |this| {
-                            this.child(
-                                resizable_panel()
-                                    .size(px(288.))
-                                    .size_range(px(288.)..px(500.))
-                                    .child(
-                                        div()
-                                            .w_full()
-                                            .h_full()
-                                            .flex()
-                                            .flex_col()
-                                            .overflow_hidden()
-                                            .child(
-                                                div().flex_none().px_2().py_1p5().child(
-                                                    TabBar::new("sidebar-tabs")
-                                                        .segmented()
-                                                        .w_full()
-                                                        .selected_index(match self.sidebar_tab {
-                                                            SidebarTab::Connections => 0,
-                                                            SidebarTab::Snippets => 1,
-                                                            SidebarTab::History => 2,
-                                                        })
-                                                        .on_click({
-                                                            let view = cx.entity().downgrade();
-                                                            move |ix: &usize, _, _, cx| {
-                                                                let tab = match ix {
-                                                                    1 => SidebarTab::Snippets,
-                                                                    2 => SidebarTab::History,
-                                                                    _ => SidebarTab::Connections,
-                                                                };
-                                                                view.update(cx, |this, cx| {
-                                                                    this.sidebar_tab = tab;
-                                                                    // Pick up queries run since
-                                                                    // this panel was last shown.
-                                                                    if tab == SidebarTab::History {
-                                                                        this.history_panel.update(
-                                                                            cx,
-                                                                            |panel, cx| {
-                                                                                panel.reload(cx);
-                                                                            },
-                                                                        );
-                                                                    }
-                                                                    cx.notify();
-                                                                })
-                                                                .log_err();
-                                                            }
-                                                        })
-                                                        .child(
-                                                            Tab::new()
-                                                                .label("Connections")
-                                                                .flex_1(),
-                                                        )
-                                                        .child(
-                                                            Tab::new().label("Snippets").flex_1(),
-                                                        )
-                                                        .child(
-                                                            Tab::new().label("History").flex_1(),
-                                                        ),
-                                                ),
-                                            )
-                                            .child(div().flex_1().min_h_0().overflow_hidden().map(
-                                                |this| match self.sidebar_tab {
-                                                    SidebarTab::Connections => {
-                                                        this.child(self.sidebar.clone())
-                                                    }
-                                                    SidebarTab::Snippets => {
-                                                        this.child(self.snippets_panel.clone())
-                                                    }
-                                                    SidebarTab::History => {
-                                                        this.child(self.history_panel.clone())
-                                                    }
-                                                },
-                                            )),
-                                    ),
-                            )
+                            this.child(self.render_sidebar_panel(cx))
                         })
                         // Main panel
                         .child(

@@ -17,11 +17,6 @@ impl ResultsPanel {
         self.commit_changes_internal(_window, Some(sql_view), cx)
     }
 
-    #[allow(dead_code)]
-    pub fn commit_changes(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        self.commit_changes_internal(_window, None, cx)
-    }
-
     fn commit_changes_internal(
         &mut self,
         _window: &mut Window,
@@ -70,53 +65,51 @@ impl ResultsPanel {
         let table_operations_task = cx.background_spawn(async move {
             let start_time = std::time::Instant::now();
 
-            // Execute table operations using DatabaseService
+            // Convert table operations to SQL up front so the log reflects
+            // exactly what the transaction attempted, regardless of outcome.
+            let sql_queries: Vec<String> = change_operations_for_pipeline
+                .iter()
+                .map(|operation| (operation as &TableChangeOperation).to_sql_query())
+                .collect();
+
+            // Execute table operations using DatabaseService. The whole batch
+            // runs in one transaction on backends that support DML transactions,
+            // so a mid-batch failure applies nothing and the kept edits can be
+            // retried without double-applying.
             let result = match db_service
                 .get_or_create_connection(connection_id_for_pipeline, Some(&database_name))
                 .await
             {
-                Ok(connection) => {
-                    // Convert table operations to SQL and execute them
-                    let mut total_rows_affected = 0u64;
-                    let mut operations_executed = 0;
-                    let mut error_message = None;
-                    let mut success = true;
-                    let mut sql_queries = Vec::new();
-
-                    for operation in &change_operations_for_pipeline {
-                        tracing::debug!("Got operation {:?}", operation);
-                        let sql_query = (operation as &TableChangeOperation).to_sql_query();
-                        sql_queries.push(sql_query.clone());
-                        match connection
-                            .execute_query(&sql_query, Some(&database_name), None)
-                            .await
-                        {
-                            Ok(query_result) => {
-                                total_rows_affected += query_result.rows_affected;
-                                operations_executed += 1;
-                            }
-                            Err(e) => {
-                                tracing::error!(
-                                    "Failed to execute operation '{}': {}",
-                                    sql_query,
-                                    e
-                                );
-                                success = false;
-                                error_message = Some(format!("{e:#}"));
-                                break;
-                            }
-                        }
-                    }
-
-                    TableOperationResponse {
-                        success,
-                        rows_affected: Some(total_rows_affected),
-                        error_message,
-                        operations_executed,
+                Ok(connection) => match connection
+                    .execute_operations_transactional(&sql_queries, Some(&database_name))
+                    .await
+                {
+                    Ok(outcome) => TableOperationResponse {
+                        success: true,
+                        rows_affected: Some(outcome.rows_affected),
+                        error_message: None,
+                        operations_executed: outcome.operations_executed,
                         duration: start_time.elapsed(),
                         sql_queries,
+                        applied: outcome.operations_executed,
+                    },
+                    Err(failure) => {
+                        tracing::error!(
+                            "table operations failed after {} applied: {:#}",
+                            failure.applied,
+                            failure.error
+                        );
+                        TableOperationResponse {
+                            success: false,
+                            rows_affected: None,
+                            error_message: Some(format!("{:#}", failure.error)),
+                            operations_executed: failure.applied,
+                            duration: start_time.elapsed(),
+                            sql_queries,
+                            applied: failure.applied,
+                        }
                     }
-                }
+                },
                 Err(e) => {
                     tracing::error!("Failed to get connection for table operations: {}", e);
                     TableOperationResponse {
@@ -126,6 +119,7 @@ impl ResultsPanel {
                         operations_executed: 0,
                         duration: start_time.elapsed(),
                         sql_queries: Vec::new(),
+                        applied: 0,
                     }
                 }
             };
@@ -207,7 +201,18 @@ impl ResultsPanel {
                     })
                     .log_err();
             } else {
-                // Handle failed operations, show error but keep edits for retry
+                let partial = response.applied > 0;
+                if partial {
+                    entity
+                        .update(cx, |panel, cx| {
+                            panel.table_state.update(cx, |state, cx| {
+                                state.delegate_mut().edit_state.clear_all();
+                                state.refresh(cx);
+                            });
+                        })
+                        .log_err();
+                }
+
                 if let Some(sql_view) = sql_view_response_entity {
                     let error_message_clone = response.error_message.clone();
                     let sql_queries_clone = response.sql_queries;
@@ -219,10 +224,19 @@ impl ResultsPanel {
                                 cx,
                             );
                         }
-                        let error_msg = format!(
-                            "✗ Table operations failed: {}",
-                            error_message_clone.unwrap_or_else(|| "Unknown error".to_string())
-                        );
+                        let error_msg = if partial {
+                            format!(
+                                "✗ Table operations partially applied ({} of {} committed, backend is not transactional): {}. Re-run the query to see current state.",
+                                response.applied,
+                                sql_queries_clone.len(),
+                                error_message_clone.unwrap_or_else(|| "Unknown error".to_string())
+                            )
+                        } else {
+                            format!(
+                                "✗ Table operations failed (rolled back, no changes applied): {}",
+                                error_message_clone.unwrap_or_else(|| "Unknown error".to_string())
+                            )
+                        };
                         log.append_text(&blanco_ui::SqlViewMessage::Comment(error_msg), cx);
                     });
                 }

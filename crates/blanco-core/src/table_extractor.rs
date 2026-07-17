@@ -135,7 +135,9 @@ impl TableExtractor {
                 SelectItem::UnnamedExpr(expr) | SelectItem::ExprWithAlias { expr, .. } => {
                     match expr {
                         Expr::CompoundIdentifier(parts) if parts.len() >= 2 => {
-                            aliases.insert(parts[0].to_string());
+                            if let Some(first) = parts.first() {
+                                aliases.insert(first.to_string());
+                            }
                         }
                         _ => return AliasResolution::Undetermined,
                     }

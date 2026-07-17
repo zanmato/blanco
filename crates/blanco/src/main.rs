@@ -171,6 +171,7 @@ fn main() {
             show: true,
             kind: gpui::WindowKind::Normal,
             is_movable: true,
+            app_owns_titlebar_drag: true,
             is_minimizable: true,
             is_resizable: true,
             tabbing_identifier: None,

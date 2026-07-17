@@ -61,6 +61,14 @@ impl Connection for SqliteConnection {
         self.execute_query_async(query, parameters).await
     }
 
+    async fn execute_script(
+        &self,
+        query: &str,
+        _database_name: Option<&str>,
+    ) -> Result<Vec<QueryResult>> {
+        self.execute_script_async(query).await
+    }
+
     async fn execute_write(
         &self,
         query: &str,
@@ -81,6 +89,17 @@ impl Connection for SqliteConnection {
         }
         let result = q.execute(pool).await?;
         Ok(result.rows_affected())
+    }
+
+    async fn execute_operations_transactional(
+        &self,
+        operations: &[String],
+        _database_name: Option<&str>,
+    ) -> Result<blanco_core::BatchOutcome, blanco_core::BatchFailure> {
+        let pool = self.pool.as_ref().ok_or_else(|| {
+            blanco_core::BatchFailure::atomic(anyhow::anyhow!("Not connected to database"))
+        })?;
+        blanco_core::run_sqlx_transaction!(pool, operations)
     }
 
     async fn get_schemas(&self) -> Result<Vec<String>> {

@@ -23,6 +23,21 @@ use crate::result_ext::ResultExt;
 use crate::results_panel::ResultsPanel;
 
 impl EditorPanel {
+    fn close_tab_button(
+        &self,
+        id: impl Into<gpui::ElementId>,
+        tab_index: usize,
+        cx: &mut Context<Self>,
+    ) -> Button {
+        Button::new(id)
+            .ghost()
+            .xsmall()
+            .icon(IconName::Close)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.close_tab(tab_index, cx);
+            }))
+    }
+
     /// Create a tab bar click handler closure
     fn tab_bar_click_handler(
         view: WeakEntity<Self>,
@@ -168,15 +183,7 @@ impl EditorPanel {
                                 )
                             })
                             .when(show_close_button, |this| {
-                                this.child(
-                                    Button::new(("close-tab", ix))
-                                        .ghost()
-                                        .xsmall()
-                                        .icon(IconName::Close)
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.close_tab(tab_index, cx);
-                                        })),
-                                )
+                                this.child(self.close_tab_button(("close-tab", ix), tab_index, cx))
                             })
                             .into_any_element(),
                     )
@@ -191,15 +198,7 @@ impl EditorPanel {
                         .items_center()
                         .pr_1()
                         .child(Icon::new(IconName::File).text_color(cx.theme().green))
-                        .child(
-                            Button::new(("close-snippet-tab", ix))
-                                .ghost()
-                                .xsmall()
-                                .icon(IconName::Close)
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.close_tab(tab_index, cx);
-                                })),
-                        ),
+                        .child(self.close_tab_button(("close-snippet-tab", ix), tab_index, cx)),
                 )
             }
             TabType::Settings(settings_tab) => {
@@ -212,15 +211,7 @@ impl EditorPanel {
                         .items_center()
                         .pr_1()
                         .child(Icon::new(IconName::Settings))
-                        .child(
-                            Button::new(("close-settings-tab", ix))
-                                .ghost()
-                                .xsmall()
-                                .icon(IconName::Close)
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.close_tab(tab_index, cx);
-                                })),
-                        ),
+                        .child(self.close_tab_button(("close-settings-tab", ix), tab_index, cx)),
                 )
             }
             TabType::ObjectDdl(object_ddl_tab) => {
@@ -238,15 +229,7 @@ impl EditorPanel {
                         .items_center()
                         .pr_1()
                         .child(Icon::new(icon).text_color(color))
-                        .child(
-                            Button::new(("close-object-ddl-tab", ix))
-                                .ghost()
-                                .xsmall()
-                                .icon(IconName::Close)
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.close_tab(tab_index, cx);
-                                })),
-                        ),
+                        .child(self.close_tab_button(("close-object-ddl-tab", ix), tab_index, cx)),
                 )
             }
             TabType::TableStructure(table_structure_tab) => {
@@ -259,15 +242,11 @@ impl EditorPanel {
                         .items_center()
                         .pr_1()
                         .child(Icon::new(IconName::Sheet).text_color(cx.theme().blue))
-                        .child(
-                            Button::new(("close-table-structure-tab", ix))
-                                .ghost()
-                                .xsmall()
-                                .icon(IconName::Close)
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.close_tab(tab_index, cx);
-                                })),
-                        ),
+                        .child(self.close_tab_button(
+                            ("close-table-structure-tab", ix),
+                            tab_index,
+                            cx,
+                        )),
                 )
             }
             TabType::SchemaGraph(schema_graph_tab) => {
@@ -280,15 +259,11 @@ impl EditorPanel {
                         .items_center()
                         .pr_1()
                         .child(Icon::new(IconName::Network).text_color(cx.theme().cyan))
-                        .child(
-                            Button::new(("close-schema-graph-tab", ix))
-                                .ghost()
-                                .xsmall()
-                                .icon(IconName::Close)
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.close_tab(tab_index, cx);
-                                })),
-                        ),
+                        .child(self.close_tab_button(
+                            ("close-schema-graph-tab", ix),
+                            tab_index,
+                            cx,
+                        )),
                 )
             }
         }

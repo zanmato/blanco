@@ -1,9 +1,11 @@
-use crate::sql::statement_parser::TableAlias;
+use crate::sql::statement_parser::{TableAlias, ident_eq};
 
-/// Resolve table name from alias, returns None if not found
+/// Resolve table name from alias, returns None if not found. Matching is
+/// case-insensitive (and quote-insensitive) so `FROM Users u ... u.` resolves
+/// regardless of how the alias was cased at the reference site.
 pub fn resolve_table_alias(aliases: &[TableAlias], alias_name: &str) -> Option<String> {
     for alias_info in aliases {
-        if alias_info.alias == alias_name {
+        if ident_eq(&alias_info.alias, alias_name) {
             return Some(alias_info.table_name.clone());
         }
     }

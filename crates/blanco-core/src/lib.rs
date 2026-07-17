@@ -10,10 +10,10 @@ pub mod table_extractor;
 
 // Re-export main types for convenience
 pub use connection_trait::{
-    ColumnInfo, ColumnType, Connection, ConnectionFactory, DatabaseSchemaResult, DriverType,
-    EntityType, ForeignKeyInfo, InboundForeignKey, IndexInfo, KeyValueResult, PaginationInfo,
-    QueryResult, QueryableEntity, RedisType, RedisValue, ResultPayload, RoutineKind, TableMetadata,
-    TableSchemaInfo,
+    BatchFailure, BatchOutcome, ColumnInfo, ColumnType, Connection, ConnectionFactory,
+    DatabaseSchemaResult, DriverType, EntityType, ForeignKeyInfo, InboundForeignKey, IndexInfo,
+    KeyValueResult, PaginationInfo, QueryResult, QueryableEntity, RedisType, RedisValue,
+    ResultPayload, RoutineKind, TableMetadata, TableSchemaInfo,
 };
 
 pub use database_service::{ConnectionStatus, DatabaseService};
@@ -123,6 +123,57 @@ mod sqlx_support {
             error
         }
     }
+}
+
+/// A batch of write statements committed as a single transaction.
+///
+/// The sqlx-based drivers (PostgreSQL, MySQL, SQLite) each hold a
+/// `sqlx::Transaction` whose concrete `QueryResult` type exposes
+/// `rows_affected()` (sqlx has no generic trait for it), so this macro stamps
+/// out the identical begin/execute/commit/rollback control flow against a
+/// caller-provided `$transaction` while keeping the per-statement rows-affected
+/// accounting. A failure on any statement rolls the whole batch back, so the
+/// resulting [`BatchFailure`] always reports `applied == 0`.
+#[cfg(feature = "sqlx")]
+#[macro_export]
+macro_rules! run_sqlx_transaction {
+    ($pool:expr, $operations:expr) => {{
+        let pool = $pool;
+        let operations: &[String] = $operations;
+        match pool.begin().await {
+            Ok(mut transaction) => {
+                let mut outcome = $crate::BatchOutcome::default();
+                let mut failed: Option<sqlx::Error> = None;
+                for operation in operations {
+                    match sqlx::query(operation).execute(&mut *transaction).await {
+                        Ok(result) => {
+                            outcome.rows_affected += result.rows_affected();
+                            outcome.operations_executed += 1;
+                        }
+                        Err(error) => {
+                            failed = Some(error);
+                            break;
+                        }
+                    }
+                }
+                // `transaction` is consumed exactly once here (rollback on
+                // failure, commit otherwise), keeping the borrow checker happy.
+                match failed {
+                    Some(error) => {
+                        if let Err(rollback_error) = transaction.rollback().await {
+                            tracing::warn!("transaction rollback failed: {rollback_error}");
+                        }
+                        Err($crate::BatchFailure::atomic($crate::tag_sqlx(error)))
+                    }
+                    None => match transaction.commit().await {
+                        Ok(()) => Ok(outcome),
+                        Err(error) => Err($crate::BatchFailure::atomic($crate::tag_sqlx(error))),
+                    },
+                }
+            }
+            Err(error) => Err($crate::BatchFailure::atomic($crate::tag_sqlx(error))),
+        }
+    }};
 }
 
 #[cfg(feature = "sqlx")]

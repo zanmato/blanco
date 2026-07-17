@@ -48,6 +48,7 @@ pub struct TableOperationResponse {
     pub operations_executed: usize,
     pub duration: Duration,
     pub sql_queries: Vec<String>,
+    pub applied: usize,
 }
 
 // Data structures for copy functionality
@@ -107,6 +108,8 @@ pub struct ResultsPanel {
     copy_handler: CopyHandler,
     /// Scroll position for the key/value inspector body (Redis key view).
     key_value_scroll_handle: ScrollHandle,
+    /// Horizontal scroll position for the result tab strip.
+    tab_strip_scroll_handle: ScrollHandle,
     _subscriptions: Vec<Subscription>, // Store subscriptions to prevent them from being dropped
 }
 
@@ -141,6 +144,7 @@ impl ResultsPanel {
             editing_cell: None,
             copy_handler: CopyHandler::new(),
             key_value_scroll_handle: ScrollHandle::new(),
+            tab_strip_scroll_handle: ScrollHandle::new(),
             _subscriptions: vec![],
         }
     }
@@ -366,17 +370,6 @@ impl ResultsPanel {
     #[cfg(test)]
     pub fn table_state(&self) -> &Entity<TableState<ResultsTableDelegate>> {
         &self.table_state
-    }
-
-    #[allow(dead_code)]
-    pub fn set_query_result(
-        &mut self,
-        result: QueryResult,
-        connection_id: Option<i64>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.set_query_results(vec![result], connection_id, window, cx);
     }
 
     pub fn cancel_current_edit(&mut self, cx: &mut Context<Self>) {
@@ -743,24 +736,23 @@ impl ResultsPanel {
         let tab_count = self.result_tabs.len();
         let show_close = tab_count > 1;
 
-        let mut strip = gpui_component::h_flex()
-            .id("result-tabs-strip")
-            .w_full()
-            .text_sm()
-            .border_b_1()
-            .border_color(border_color)
-            .bg(strip_bg);
+        let mut tabs = h_flex()
+            .id("result-tabs-scroll")
+            .flex_1()
+            .min_w_0()
+            .overflow_x_scroll()
+            .track_scroll(&self.tab_strip_scroll_handle);
         for (idx, tab) in self.result_tabs.iter().enumerate() {
             let is_active = idx == active;
             let label = tab.title.clone();
             let pinned = tab.pinned;
             let is_last = idx == tab_count - 1;
             let read_only = !tab.table_state.read(cx).delegate().is_editable();
-            strip = strip.child(
-                gpui_component::h_flex()
+            tabs = tabs.child(
+                h_flex()
                     .id(("result-tab", idx))
                     .flex_1()
-                    .min_w_0()
+                    .min_w(px(140.))
                     .items_center()
                     .justify_between()
                     .gap_1()
@@ -783,7 +775,7 @@ impl ResultsPanel {
                         }),
                     )
                     .child(
-                        gpui_component::h_flex()
+                        h_flex()
                             .flex_1()
                             .min_w_0()
                             .items_center()
@@ -853,35 +845,46 @@ impl ResultsPanel {
             .get(active)
             .is_some_and(|t| t.key_value.is_some());
         let is_table = matches!(active_view_mode, ResultViewMode::Table);
-        strip.when(!is_key_value, |strip| {
-            strip.child(
-                gpui_component::h_flex()
-                    .gap_1()
-                    .px_2()
-                    .child(
-                        Button::new("view-mode-table")
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::Sheet)
-                            .selected(is_table)
-                            .tooltip("Table view")
-                            .on_click(cx.listener(|this, _ev, _window, cx| {
-                                this.set_view_mode(ResultViewMode::Table, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("view-mode-chart")
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::ChartBar)
-                            .selected(!is_table)
-                            .tooltip("Chart view")
-                            .on_click(cx.listener(|this, _ev, _window, cx| {
-                                this.set_view_mode(ResultViewMode::Chart, cx);
-                            })),
-                    ),
-            )
-        })
+
+        h_flex()
+            .id("result-tabs-strip")
+            .w_full()
+            .text_sm()
+            .border_b_1()
+            .border_color(border_color)
+            .bg(strip_bg)
+            .child(tabs)
+            // View-mode toggle stays anchored right, outside the scroll region.
+            .when(!is_key_value, |strip| {
+                strip.child(
+                    h_flex()
+                        .flex_shrink_0()
+                        .gap_1()
+                        .px_2()
+                        .child(
+                            Button::new("view-mode-table")
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::Sheet)
+                                .selected(is_table)
+                                .tooltip("Table view")
+                                .on_click(cx.listener(|this, _ev, _window, cx| {
+                                    this.set_view_mode(ResultViewMode::Table, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("view-mode-chart")
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::ChartBar)
+                                .selected(!is_table)
+                                .tooltip("Chart view")
+                                .on_click(cx.listener(|this, _ev, _window, cx| {
+                                    this.set_view_mode(ResultViewMode::Chart, cx);
+                                })),
+                        ),
+                )
+            })
     }
 
     /// Render the key inspector: a compact metadata header followed by a

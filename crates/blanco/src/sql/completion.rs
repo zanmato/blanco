@@ -2,7 +2,7 @@ mod cache;
 mod context;
 mod fetch;
 
-use blanco_core::{ColumnInfo, QueryableEntity};
+use blanco_core::{ColumnInfo, DriverType, QueryableEntity};
 pub use cache::{CacheEntry, MetadataCache};
 pub use context::{generate_table_abbreviation, resolve_table_alias};
 pub use fetch::{fetch_columns, fetch_queryable_entities, fetch_schemas};
@@ -10,7 +10,7 @@ pub use fetch::{fetch_columns, fetch_queryable_entities, fetch_schemas};
 use cache::columns_key;
 
 use crate::sql::statement_parser::{
-    self, CompletionContext as TsCompletionContext, SqlClause, TableAlias,
+    self, CompletionContext as TsCompletionContext, SqlClause, TableAlias, ident_eq,
 };
 
 use anyhow::Result;
@@ -26,8 +26,19 @@ use std::time::Duration;
 
 const CACHE_TTL_SECONDS: u64 = 300; // 5 minutes cache TTL
 
-/// Default schema used when a tab has no explicit schema (postgres).
-const DEFAULT_SCHEMA: &str = "public";
+/// Default schema used when a tab has no explicit schema, keyed by backend:
+/// PostgreSQL uses `public`, SQL Server uses `dbo`, and the schema-less backends
+/// (MySQL, SQLite, ClickHouse) fall back to the database name since their
+/// "schema" is effectively the database.
+fn default_schema_for(driver: DriverType, database_name: &str) -> String {
+    match driver {
+        DriverType::PostgreSQL => "public".to_string(),
+        DriverType::MsSql => "dbo".to_string(),
+        DriverType::MySQL | DriverType::SQLite | DriverType::ClickHouse | DriverType::Redis => {
+            database_name.to_string()
+        }
+    }
+}
 
 /// SQL keywords for completion and keyword detection
 const SQL_KEYWORDS: &[&str] = &[
@@ -99,11 +110,12 @@ impl SqlCompletionProvider {
         connection_id: i64,
         database_name: String,
         schema_name: Option<String>,
+        driver: DriverType,
         db_service: Arc<dyn DatabaseServiceTrait>,
     ) -> Self {
         let current_schema = schema_name
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| DEFAULT_SCHEMA.to_string());
+            .unwrap_or_else(|| default_schema_for(driver, &database_name));
         Self {
             connection_id,
             database_name,
@@ -289,7 +301,11 @@ fn split_schema_qualified(name: &str, default_schema: &str) -> (String, String) 
 /// Look up the static columns of a CTE / derived table referenced by `name`,
 /// either directly (`FROM cte`) or via an alias that maps to such a relation.
 fn lookup_derived_columns(context: &TsCompletionContext, name: &str) -> Option<Vec<String>> {
-    if let Some((_, columns)) = context.cte_columns.iter().find(|(key, _)| key == name) {
+    if let Some((_, columns)) = context
+        .cte_columns
+        .iter()
+        .find(|(key, _)| ident_eq(key, name))
+    {
         return Some(columns.clone());
     }
     // `name` may be a table alias that resolves to a CTE name.
@@ -297,7 +313,7 @@ fn lookup_derived_columns(context: &TsCompletionContext, name: &str) -> Option<V
     context
         .cte_columns
         .iter()
-        .find(|(key, _)| *key == resolved)
+        .find(|(key, _)| ident_eq(key, &resolved))
         .map(|(_, columns)| columns.clone())
 }
 
@@ -341,10 +357,10 @@ fn plan_completion(
         // `schema.` in a table position drills into that schema's tables.
         if supports_schemas
             && is_table_clause(context.clause)
-            && known_schemas.iter().any(|s| s == name)
+            && let Some(schema) = known_schemas.iter().find(|s| ident_eq(s, name))
         {
             return CompletionPlan::SchemaTables {
-                schema: name.to_string(),
+                schema: schema.to_string(),
             };
         }
 
@@ -386,7 +402,10 @@ fn plan_completion(
         // Derived relations referenced without a separate alias (e.g. `FROM cte`
         // or `FROM (subquery) sub`) are not in `table_aliases`, so add them here.
         for (name, columns) in &context.cte_columns {
-            if !covered_derived.contains(&name.as_str()) {
+            if !covered_derived
+                .iter()
+                .any(|covered| ident_eq(covered, name.as_str()))
+            {
                 push_unique(&mut sources, ColumnSource::Static(columns.clone()));
             }
         }

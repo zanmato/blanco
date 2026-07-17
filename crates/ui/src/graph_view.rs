@@ -1326,10 +1326,13 @@ impl AStarSearch {
 /// Collapse runs of cells travelling in the same direction down to their
 /// turning points, so the path has a vertex only where it actually bends.
 fn compress_collinear(cells: &[(i32, i32)]) -> Vec<(i32, i32)> {
+    let (Some(first), Some(last)) = (cells.first(), cells.last()) else {
+        return cells.to_vec();
+    };
     if cells.len() <= 2 {
         return cells.to_vec();
     }
-    let mut out = vec![cells[0]];
+    let mut out = vec![*first];
     for window in cells.windows(3) {
         let (a, b, c) = (window[0], window[1], window[2]);
         let d1 = (b.0 - a.0, b.1 - a.1);
@@ -1338,7 +1341,7 @@ fn compress_collinear(cells: &[(i32, i32)]) -> Vec<(i32, i32)> {
             out.push(b);
         }
     }
-    out.push(*cells.last().unwrap());
+    out.push(*last);
     out
 }
 

@@ -560,6 +560,7 @@ impl EditorPanel {
             params.connection_id,
             params.database_name.clone(),
             params.schema_name.clone(),
+            blanco_core::DriverType::from(params.db_type),
             db_service,
         );
 

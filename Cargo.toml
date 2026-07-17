@@ -22,14 +22,14 @@ publish = false
 
 [workspace.dependencies]
 # Core GPUI dependencies
-gpui = { git = "https://github.com/zed-industries/zed", rev = "c545fb67d0ce13e335bff76f7c08986000333f2c" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "c545fb67d0ce13e335bff76f7c08986000333f2c", features = [
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = [
     "font-kit",
     "x11",
     "wayland",
     "runtime_shaders",
 ] }
-gpui_macros = { git = "https://github.com/zed-industries/zed", rev = "c545fb67d0ce13e335bff76f7c08986000333f2c" }
+gpui_macros = { git = "https://github.com/zed-industries/zed" }
 gpui-component = { git = "https://github.com/zanmato/gpui-component", branch = "blanco", features = ["tree-sitter"] }
 gpui-component-macros = { git = "https://github.com/zanmato/gpui-component", branch = "blanco" }
 

@@ -81,7 +81,12 @@ impl MssqlForm {
             .and_then(|mode| encrypt_modes.iter().position(|m| m == mode))
             .unwrap_or(0);
         let encrypt_select = cx.new(|cx| {
-            SelectState::new(encrypt_modes, Some(IndexPath::new(encrypt_initial)), window, cx)
+            SelectState::new(
+                encrypt_modes,
+                Some(IndexPath::new(encrypt_initial)),
+                window,
+                cx,
+            )
         });
 
         let ssh_host_input = make_input(

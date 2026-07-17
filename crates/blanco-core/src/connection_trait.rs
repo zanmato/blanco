@@ -436,6 +436,40 @@ pub trait Connection: Send + Sync {
         parameters: &[Option<String>],
     ) -> Result<u64, anyhow::Error>;
 
+    /// Execute a batch of write statements as a single atomic unit.
+    ///
+    /// Used by the results-panel table editor to commit a set of
+    /// INSERT/UPDATE/DELETE operations at once. The default implementation runs
+    /// them sequentially and is **not** atomic: on a mid-batch failure the
+    /// leading operations stay applied and the returned [`BatchFailure::applied`]
+    /// reports how many. Backends with transactional DML (PostgreSQL, MySQL,
+    /// SQLite, MSSQL) override this to wrap the batch in a real transaction so a
+    /// failure rolls everything back and `applied` is `0`. Backends without
+    /// transactions (Redis, ClickHouse) keep the sequential default, which
+    /// honestly reports partial application rather than pretending atomicity.
+    async fn execute_operations_transactional(
+        &self,
+        operations: &[String],
+        database_name: Option<&str>,
+    ) -> Result<BatchOutcome, BatchFailure> {
+        let mut outcome = BatchOutcome::default();
+        for operation in operations {
+            match self.execute_write(operation, database_name, &[]).await {
+                Ok(rows_affected) => {
+                    outcome.rows_affected += rows_affected;
+                    outcome.operations_executed += 1;
+                }
+                Err(error) => {
+                    return Err(BatchFailure {
+                        error,
+                        applied: outcome.operations_executed,
+                    });
+                }
+            }
+        }
+        Ok(outcome)
+    }
+
     /// Execute a query and return a true stream of rows for large datasets
     /// Returns a stream of row data (Vec<String>) that can be processed incrementally
     async fn execute_query_stream_rows(
@@ -464,7 +498,6 @@ pub trait Connection: Send + Sync {
 
     /// Get list of databases available on this connection
     /// For SQLite, this may return just the current database name
-    #[allow(dead_code)]
     async fn get_databases(&self) -> Result<Vec<String>, anyhow::Error>;
 
     /// Get list of schemas available on this connection
@@ -655,6 +688,34 @@ pub trait Connection: Send + Sync {
         Err(anyhow::anyhow!(
             "inspect_key is not supported by this connection type"
         ))
+    }
+}
+
+/// Outcome of a successful [`Connection::execute_operations_transactional`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BatchOutcome {
+    pub rows_affected: u64,
+    pub operations_executed: usize,
+}
+
+/// Failure from [`Connection::execute_operations_transactional`].
+///
+/// `applied` is the number of leading operations that were actually persisted
+/// before the failure: `0` for atomic backends that rolled the whole batch
+/// back, and the count of committed operations for non-atomic backends (Redis,
+/// ClickHouse) that cannot roll back. Callers use it to drop already-applied
+/// edits from their pending-change state so a retry does not re-apply them.
+#[derive(Debug)]
+pub struct BatchFailure {
+    pub error: anyhow::Error,
+    pub applied: usize,
+}
+
+impl BatchFailure {
+    /// Construct a failure where nothing was applied (the atomic/rolled-back
+    /// case, and the case where the batch never started).
+    pub fn atomic(error: anyhow::Error) -> Self {
+        Self { error, applied: 0 }
     }
 }
 

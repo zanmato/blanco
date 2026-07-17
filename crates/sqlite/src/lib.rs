@@ -241,4 +241,111 @@ mod tests {
 
         Ok(())
     }
+
+    /// A failing statement in a batch must roll the whole batch back, and the
+    /// failure must report `applied == 0` so the results-panel commit path keeps
+    /// its edits for a safe retry instead of double-applying the operations that
+    /// already ran. This is the connection-level guarantee behind the P0 table
+    /// cell-edit commit fix.
+    #[tokio::test]
+    async fn test_execute_operations_transactional_rolls_back_on_failure()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp_file = NamedTempFile::new()?;
+        let path = temp_file.path().to_string_lossy().to_string();
+        let connection_string = format!("sqlite:{}", path);
+
+        let mut connection = crate::SqliteConnection::new(connection_string.clone())?;
+        connection.connect(&connection_string).await?;
+
+        connection
+            .execute_query(
+                "CREATE TABLE account (id INTEGER PRIMARY KEY, balance INTEGER NOT NULL CHECK (balance >= 0))",
+                None,
+                None,
+            )
+            .await?;
+        connection
+            .execute_query(
+                "INSERT INTO account (id, balance) VALUES (1, 100)",
+                None,
+                None,
+            )
+            .await?;
+
+        // First op is valid; second violates the CHECK constraint. The whole
+        // batch must roll back, leaving the first op's write undone.
+        let operations = vec![
+            "UPDATE account SET balance = 50 WHERE id = 1".to_string(),
+            "UPDATE account SET balance = -10 WHERE id = 1".to_string(),
+        ];
+        let failure = connection
+            .execute_operations_transactional(&operations, None)
+            .await
+            .expect_err("second UPDATE should fail the batch");
+        assert_eq!(
+            failure.applied, 0,
+            "atomic backend must report nothing applied so retry is safe"
+        );
+
+        let result = connection
+            .execute_query("SELECT balance FROM account WHERE id = 1", None, None)
+            .await?;
+        let balance = result
+            .rows
+            .first()
+            .and_then(|row| row.first())
+            .and_then(|cell| cell.as_deref())
+            .expect("balance cell");
+        assert_eq!(
+            balance, "100",
+            "the valid first UPDATE must have rolled back"
+        );
+
+        // A fully valid batch commits and reports the operations applied.
+        let good = vec![
+            "UPDATE account SET balance = 70 WHERE id = 1".to_string(),
+            "INSERT INTO account (id, balance) VALUES (2, 5)".to_string(),
+        ];
+        let outcome = connection
+            .execute_operations_transactional(&good, None)
+            .await
+            .expect("valid batch should commit");
+        assert_eq!(outcome.operations_executed, 2);
+
+        let count = connection
+            .execute_query("SELECT COUNT(*) FROM account", None, None)
+            .await?;
+        let rows = count
+            .rows
+            .first()
+            .and_then(|row| row.first())
+            .and_then(|cell| cell.as_deref())
+            .expect("count cell");
+        assert_eq!(rows, "2", "the committed batch should have inserted a row");
+
+        Ok(())
+    }
+
+    /// A multi-statement script must yield one result-set per row-returning
+    /// statement rather than collapsing into a single merged result.
+    #[tokio::test]
+    async fn test_execute_script_splits_statements() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_file = NamedTempFile::new()?;
+        let path = temp_file.path().to_string_lossy().to_string();
+        let connection_string = format!("sqlite:{}", path);
+
+        let mut connection = crate::SqliteConnection::new(connection_string.clone())?;
+        connection.connect(&connection_string).await?;
+
+        let results = connection
+            .execute_script("SELECT 1 AS a; SELECT 2 AS b, 3 AS c;", None)
+            .await?;
+
+        assert_eq!(results.len(), 2, "each SELECT should be its own result-set");
+        assert_eq!(results[0].columns, vec!["a".to_string()]);
+        assert_eq!(results[0].rows.len(), 1);
+        assert_eq!(results[1].columns, vec!["b".to_string(), "c".to_string()]);
+
+        Ok(())
+    }
 }

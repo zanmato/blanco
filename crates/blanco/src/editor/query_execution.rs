@@ -239,6 +239,17 @@ impl EditorPanel {
             let database_name = database_name.to_string();
             let database_name_for_background = database_name.clone();
 
+            // Optional per-query timeout (0 disables it). Enforced below by
+            // racing the execution future against a timer so a runaway query
+            // fails on its own instead of relying solely on manual cancel.
+            let query_timeout = {
+                let seconds = AppSettings::global(cx)
+                    .settings
+                    .database
+                    .query_timeout_seconds;
+                (seconds > 0).then(|| std::time::Duration::from_secs(seconds as u64))
+            };
+
             // The background task drives the actual database call and reports
             // its result back via a oneshot channel. We keep its `Task` handle
             // in `abort_query_task` so the user can cancel: dropping the task
@@ -247,18 +258,25 @@ impl EditorPanel {
             let (tx, rx) = futures::channel::oneshot::channel();
             let query_task = cx.background_spawn(async move {
                 let start_time = std::time::Instant::now();
-                let execution_result = db_service
-                    .execute_script(
-                        connection_id,
-                        Some(&database_name_for_background),
-                        &query_clone,
-                    )
-                    .await;
-                // Measure the duration here, on the background thread, right when
-                // the query completes. Reading the elapsed time on the foreground
-                // task instead would also count the oneshot hand-off plus however
-                // long the GPUI foreground executor takes to poll us back, which
-                // is several milliseconds and unrelated to query execution.
+                let execution_future = db_service.execute_script(
+                    connection_id,
+                    Some(&database_name_for_background),
+                    &query_clone,
+                );
+                let execution_result = match query_timeout {
+                    Some(timeout) => {
+                        let deadline = async {
+                            smol::Timer::after(timeout).await;
+                            Err(anyhow::anyhow!(
+                                "Query exceeded the configured {}s timeout",
+                                timeout.as_secs()
+                            ))
+                        };
+                        smol::future::or(execution_future, deadline).await
+                    }
+                    None => execution_future.await,
+                };
+
                 let elapsed = start_time.elapsed();
                 match &execution_result {
                     Ok(results) => tracing::debug!(

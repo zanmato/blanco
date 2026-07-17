@@ -192,7 +192,10 @@ impl MssqlConnection {
         // several distinct Rust types (INT->i32, BIGINT->i64, DATE->NaiveDate,
         // ...). We therefore probe the plausible representations in turn.
         let try_str = |index: usize| -> Option<String> {
-            row.try_get::<&str, _>(index).ok().flatten().map(String::from)
+            row.try_get::<&str, _>(index)
+                .ok()
+                .flatten()
+                .map(String::from)
         };
 
         match col_type {
@@ -636,6 +639,83 @@ impl Connection for MssqlConnection {
                 Err(anyhow::anyhow!("MSSQL write error: {error}"))
             }
         }
+    }
+
+    async fn execute_operations_transactional(
+        &self,
+        operations: &[String],
+        database_name: Option<&str>,
+    ) -> Result<blanco_core::BatchOutcome, blanco_core::BatchFailure> {
+        use blanco_core::{BatchFailure, BatchOutcome};
+
+        let slot = self.client_slot(database_name).await;
+        let mut guard = slot.lock().await;
+        if guard.is_none() {
+            match self.establish(database_name).await {
+                Ok(client) => *guard = Some(client),
+                Err(error) => return Err(BatchFailure::atomic(error)),
+            }
+        }
+        let client = guard.as_mut().expect("client established above");
+
+        // Use `Query::execute` (which returns an owned `ExecuteResult`) for the
+        // control statements too, rather than `simple_query` whose borrowed
+        // stream would pin the `client` borrow across the whole block and clash
+        // with the `*guard = None` reconnect handling.
+        if let Err(error) = Query::new("BEGIN TRANSACTION").execute(client).await {
+            let lost = is_connection_lost(&error);
+            let failure = BatchFailure::atomic(anyhow::anyhow!("MSSQL begin error: {error}"));
+            if lost {
+                *guard = None;
+            }
+            return Err(failure);
+        }
+
+        let client = guard.as_mut().expect("client established above");
+        let mut outcome = BatchOutcome::default();
+        let mut failed: Option<(anyhow::Error, bool)> = None;
+        for operation in operations {
+            let query = Query::new(operation.as_str());
+            match query.execute(client).await {
+                Ok(result) => {
+                    outcome.rows_affected += result.total();
+                    outcome.operations_executed += 1;
+                }
+                Err(error) => {
+                    let lost = is_connection_lost(&error);
+                    failed = Some((anyhow::anyhow!("MSSQL operation error: {error}"), lost));
+                    break;
+                }
+            }
+        }
+
+        if let Some((error, lost)) = failed {
+            // Roll the whole batch back so nothing is applied. Skip it when the
+            // connection is gone (the rollback would fail too); dropping the
+            // client discards the aborted transaction.
+            if !lost
+                && let Err(rollback_error) =
+                    Query::new("ROLLBACK TRANSACTION").execute(client).await
+            {
+                tracing::warn!("MSSQL rollback failed: {rollback_error}");
+            }
+            if lost {
+                *guard = None;
+            }
+            return Err(BatchFailure::atomic(error));
+        }
+
+        let client = guard.as_mut().expect("client established above");
+        if let Err(error) = Query::new("COMMIT TRANSACTION").execute(client).await {
+            let lost = is_connection_lost(&error);
+            let failure = BatchFailure::atomic(anyhow::anyhow!("MSSQL commit error: {error}"));
+            if lost {
+                *guard = None;
+            }
+            return Err(failure);
+        }
+
+        Ok(outcome)
     }
 
     async fn execute_query_stream_rows(

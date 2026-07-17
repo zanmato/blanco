@@ -199,6 +199,48 @@ impl SqliteConnection {
         })
     }
 
+    /// Execute a multi-statement script, returning one `QueryResult` per
+    /// statement. Each `Either::Left` sqlx yields marks a statement boundary, so
+    /// a script like `SELECT ...; SELECT ...` produces two result-sets instead
+    /// of collapsing into one (the behaviour of the trait's default
+    /// `execute_script`).
+    pub(crate) async fn execute_script_async(&self, query: &str) -> Result<Vec<QueryResult>> {
+        use sqlx::Either;
+
+        let pool = self
+            .pool
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
+
+        let mut results = sqlx::raw_sql(query).fetch_many(pool);
+
+        let mut out: Vec<QueryResult> = Vec::new();
+        let mut current: Option<SqliteStatementAcc> = None;
+
+        while let Some(result) = results.next().await {
+            match result? {
+                Either::Left(execution_result) => {
+                    let mut acc = current.take().unwrap_or_default();
+                    acc.rows_affected += execution_result.rows_affected();
+                    out.push(acc.finalize());
+                }
+                Either::Right(row) => {
+                    let acc = current.get_or_insert_with(SqliteStatementAcc::default);
+                    acc.absorb_row(&row);
+                }
+            }
+        }
+        // A trailing row-returning statement has no Left marker of its own.
+        if let Some(acc) = current.take() {
+            out.push(acc.finalize());
+        }
+
+        if out.is_empty() {
+            out.push(QueryResult::default());
+        }
+        Ok(out)
+    }
+
     /// Generate a human-readable display name for the connection
     fn generate_display_name(database_path: &str) -> String {
         let path = std::path::Path::new(database_path);
@@ -419,5 +461,65 @@ fn convert_sqlite_row_value_to_string(
             None
         }
         _ => None,
+    }
+}
+
+/// Per-statement accumulator used by `execute_script_async` to keep the columns
+/// and rows of one result-set isolated from the next.
+#[derive(Default)]
+struct SqliteStatementAcc {
+    columns: Vec<String>,
+    column_types: Vec<ColumnType>,
+    raw_column_types: Vec<String>,
+    rows: Vec<Vec<Option<String>>>,
+    rows_affected: u64,
+}
+
+impl SqliteStatementAcc {
+    fn absorb_row(&mut self, row: &sqlx::sqlite::SqliteRow) {
+        if self.columns.is_empty() {
+            self.columns = row
+                .columns()
+                .iter()
+                .map(|col| col.name().to_string())
+                .collect();
+            let (types, raw_types): (Vec<ColumnType>, Vec<String>) = row
+                .columns()
+                .iter()
+                .map(|col| {
+                    let raw_type = col.type_info().name().to_string();
+                    (SqliteConnection::map_sqlite_type(&raw_type), raw_type)
+                })
+                .unzip();
+            self.column_types = types;
+            self.raw_column_types = raw_types;
+        }
+
+        let row_data: Vec<Option<String>> = (0..self.columns.len())
+            .map(|i| {
+                convert_sqlite_row_value_to_string(
+                    row,
+                    i,
+                    &self.column_types,
+                    &self.raw_column_types,
+                )
+            })
+            .collect();
+        self.rows.push(row_data);
+    }
+
+    fn finalize(self) -> QueryResult {
+        QueryResult {
+            columns: self.columns,
+            column_types: self.column_types,
+            rows: self.rows,
+            rows_affected: self.rows_affected,
+            query_text: None,
+            execution_time_ms: None,
+            is_error: false,
+            table_name: None,
+            connection_id: None,
+            table_columns: None,
+        }
     }
 }

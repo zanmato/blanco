@@ -1,6 +1,24 @@
 use sqlx::sqlite::SqlitePool;
 use std::path::PathBuf;
 
+/// Run an `ALTER TABLE ... ADD COLUMN`, tolerating only the "column already
+/// exists" case. SQLite reports this as a database error whose message is
+/// "duplicate column name: <name>". Every other failure (a locked database, a
+/// corrupt file, a typo in the DDL) is propagated.
+async fn add_column_if_missing(pool: &SqlitePool, alter_sql: &str) -> Result<(), sqlx::Error> {
+    match sqlx::query(alter_sql).execute(pool).await {
+        Ok(_) => Ok(()),
+        Err(error) if is_duplicate_column_error(&error) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+/// True when `error` is SQLite's "duplicate column name" error, i.e. the column
+/// an `ADD COLUMN` tried to add is already present.
+fn is_duplicate_column_error(error: &sqlx::Error) -> bool {
+    matches!(error, sqlx::Error::Database(db_error) if db_error.message().contains("duplicate column name"))
+}
+
 /// Initialize the database schema with all required tables
 pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // Query tabs table
@@ -21,65 +39,30 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
-    // Migrate existing query_tabs table if needed (add connection_id column)
-    sqlx::query(
-        r#"
-        ALTER TABLE query_tabs ADD COLUMN connection_id INTEGER
-        "#,
+    // Incrementally migrate the query_tabs table. Each column is added if it is
+    // not already present; a real error (not "column exists") aborts init.
+    add_column_if_missing(
+        pool,
+        "ALTER TABLE query_tabs ADD COLUMN connection_id INTEGER",
     )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    // Add connection_type column for distinguishing SQLite vs PostgreSQL
-    sqlx::query(
-        r#"
-        ALTER TABLE query_tabs ADD COLUMN connection_type TEXT
-        "#,
+    .await?;
+    add_column_if_missing(
+        pool,
+        "ALTER TABLE query_tabs ADD COLUMN connection_type TEXT",
     )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    // Add pg_connection_key column for PostgreSQL connection identification
-    sqlx::query(
-        r#"
-        ALTER TABLE query_tabs ADD COLUMN pg_connection_key TEXT
-        "#,
+    .await?;
+    add_column_if_missing(
+        pool,
+        "ALTER TABLE query_tabs ADD COLUMN pg_connection_key TEXT",
     )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    // Add file_uri column for file-based storage
-    sqlx::query(
-        r#"
-        ALTER TABLE query_tabs ADD COLUMN file_uri TEXT
-        "#,
+    .await?;
+    add_column_if_missing(pool, "ALTER TABLE query_tabs ADD COLUMN file_uri TEXT").await?;
+    add_column_if_missing(
+        pool,
+        "ALTER TABLE query_tabs ADD COLUMN database_name TEXT NOT NULL DEFAULT 'default'",
     )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    // Add database_name column for database-aware query tabs
-    sqlx::query(
-        r#"
-        ALTER TABLE query_tabs ADD COLUMN database_name TEXT NOT NULL DEFAULT 'default'
-        "#,
-    )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    // Add schema_name column for schema context
-    sqlx::query(
-        r#"
-        ALTER TABLE query_tabs ADD COLUMN schema_name TEXT
-        "#,
-    )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
+    .await?;
+    add_column_if_missing(pool, "ALTER TABLE query_tabs ADD COLUMN schema_name TEXT").await?;
 
     // Query history table
     sqlx::query(
@@ -99,36 +82,21 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
-    // Add connection_id column so history can be labeled/filtered per connection
-    sqlx::query(
-        r#"
-        ALTER TABLE query_history ADD COLUMN connection_id INTEGER
-        "#,
+    add_column_if_missing(
+        pool,
+        "ALTER TABLE query_history ADD COLUMN connection_id INTEGER",
     )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    // Add connection_name column to preserve a readable label even after a
-    // connection is deleted
-    sqlx::query(
-        r#"
-        ALTER TABLE query_history ADD COLUMN connection_name TEXT
-        "#,
+    .await?;
+    add_column_if_missing(
+        pool,
+        "ALTER TABLE query_history ADD COLUMN connection_name TEXT",
     )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    // Add database_name column for database context
-    sqlx::query(
-        r#"
-        ALTER TABLE query_history ADD COLUMN database_name TEXT
-        "#,
+    .await?;
+    add_column_if_missing(
+        pool,
+        "ALTER TABLE query_history ADD COLUMN database_name TEXT",
     )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
+    .await?;
 
     // Index for the history panel's reverse-chronological listing
     sqlx::query(
@@ -164,208 +132,78 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
-    // Migrate existing connections table if needed (add new columns for PostgreSQL support)
-    sqlx::query(
-        r#"
-        ALTER TABLE connections ADD COLUMN db_type TEXT NOT NULL DEFAULT 'SQLite'
-        "#,
+    // Incrementally migrate the connections table (PostgreSQL support, SSH
+    // tunneling, SSL, and environment labeling were all added over time).
+    add_column_if_missing(
+        pool,
+        "ALTER TABLE connections ADD COLUMN db_type TEXT NOT NULL DEFAULT 'SQLite'",
     )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    sqlx::query(
-        r#"
-        ALTER TABLE connections ADD COLUMN host TEXT
-        "#,
+    .await?;
+    add_column_if_missing(pool, "ALTER TABLE connections ADD COLUMN host TEXT").await?;
+    add_column_if_missing(pool, "ALTER TABLE connections ADD COLUMN port INTEGER").await?;
+    add_column_if_missing(
+        pool,
+        "ALTER TABLE connections ADD COLUMN database_name TEXT",
     )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    sqlx::query(
-        r#"
-        ALTER TABLE connections ADD COLUMN port INTEGER
-        "#,
+    .await?;
+    add_column_if_missing(pool, "ALTER TABLE connections ADD COLUMN username TEXT").await?;
+    add_column_if_missing(pool, "ALTER TABLE connections ADD COLUMN password TEXT").await?;
+    add_column_if_missing(
+        pool,
+        "ALTER TABLE connections ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))",
     )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    sqlx::query(
-        r#"
-        ALTER TABLE connections ADD COLUMN database_name TEXT
-        "#,
+    .await?;
+    add_column_if_missing(
+        pool,
+        "ALTER TABLE connections ADD COLUMN connection_string TEXT",
     )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    sqlx::query(
-        r#"
-        ALTER TABLE connections ADD COLUMN username TEXT
-        "#,
+    .await?;
+    add_column_if_missing(
+        pool,
+        "ALTER TABLE connections ADD COLUMN is_active INTEGER DEFAULT 1",
     )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    sqlx::query(
-        r#"
-        ALTER TABLE connections ADD COLUMN password TEXT
-        "#,
+    .await?;
+    add_column_if_missing(
+        pool,
+        "ALTER TABLE connections ADD COLUMN connection_params TEXT",
     )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    sqlx::query(
-        r#"
-        ALTER TABLE connections ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
-        "#,
+    .await?;
+    add_column_if_missing(pool, "ALTER TABLE connections ADD COLUMN ssh_host TEXT").await?;
+    add_column_if_missing(pool, "ALTER TABLE connections ADD COLUMN ssh_port INTEGER").await?;
+    add_column_if_missing(pool, "ALTER TABLE connections ADD COLUMN ssh_user TEXT").await?;
+    add_column_if_missing(pool, "ALTER TABLE connections ADD COLUMN ssh_password TEXT").await?;
+    add_column_if_missing(
+        pool,
+        "ALTER TABLE connections ADD COLUMN ssh_private_key_path TEXT",
     )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    // Add new columns for unified connection management
-    sqlx::query(
-        r#"
-        ALTER TABLE connections ADD COLUMN connection_string TEXT
-        "#,
+    .await?;
+    add_column_if_missing(
+        pool,
+        "ALTER TABLE connections ADD COLUMN ssh_private_key_password TEXT",
     )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    sqlx::query(
-        r#"
-        ALTER TABLE connections ADD COLUMN is_active INTEGER DEFAULT 1
-        "#,
+    .await?;
+    add_column_if_missing(
+        pool,
+        "ALTER TABLE connections ADD COLUMN local_tunnel_port INTEGER",
     )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    sqlx::query(
-        r#"
-        ALTER TABLE connections ADD COLUMN connection_params TEXT
-        "#,
+    .await?;
+    add_column_if_missing(
+        pool,
+        "ALTER TABLE connections ADD COLUMN environment_type INTEGER NOT NULL DEFAULT 1",
     )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    // Add SSH tunnel support columns
-    sqlx::query(
-        r#"
-        ALTER TABLE connections ADD COLUMN ssh_host TEXT
-        "#,
+    .await?;
+    add_column_if_missing(pool, "ALTER TABLE connections ADD COLUMN ssl_mode TEXT").await?;
+    add_column_if_missing(pool, "ALTER TABLE connections ADD COLUMN ssl_key_path TEXT").await?;
+    add_column_if_missing(
+        pool,
+        "ALTER TABLE connections ADD COLUMN ssl_cert_path TEXT",
     )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    sqlx::query(
-        r#"
-        ALTER TABLE connections ADD COLUMN ssh_port INTEGER
-        "#,
+    .await?;
+    add_column_if_missing(
+        pool,
+        "ALTER TABLE connections ADD COLUMN ssl_ca_cert_path TEXT",
     )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    sqlx::query(
-        r#"
-        ALTER TABLE connections ADD COLUMN ssh_user TEXT
-        "#,
-    )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    sqlx::query(
-        r#"
-        ALTER TABLE connections ADD COLUMN ssh_password TEXT
-        "#,
-    )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    sqlx::query(
-        r#"
-        ALTER TABLE connections ADD COLUMN ssh_private_key_path TEXT
-        "#,
-    )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    sqlx::query(
-        r#"
-        ALTER TABLE connections ADD COLUMN ssh_private_key_password TEXT
-        "#,
-    )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    sqlx::query(
-        r#"
-        ALTER TABLE connections ADD COLUMN local_tunnel_port INTEGER
-        "#,
-    )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    // Add environment_type column for connection environment labeling
-    sqlx::query(
-        r#"
-        ALTER TABLE connections ADD COLUMN environment_type INTEGER NOT NULL DEFAULT 1
-        "#,
-    )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    // Add SSL support columns
-    sqlx::query(
-        r#"
-        ALTER TABLE connections ADD COLUMN ssl_mode TEXT
-        "#,
-    )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    sqlx::query(
-        r#"
-        ALTER TABLE connections ADD COLUMN ssl_key_path TEXT
-        "#,
-    )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    sqlx::query(
-        r#"
-        ALTER TABLE connections ADD COLUMN ssl_cert_path TEXT
-        "#,
-    )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
-
-    sqlx::query(
-        r#"
-        ALTER TABLE connections ADD COLUMN ssl_ca_cert_path TEXT
-        "#,
-    )
-    .execute(pool)
-    .await
-    .ok(); // Ignore error if column already exists
+    .await?;
 
     // Note: database_path NOT NULL constraint has been manually fixed
     // The database schema now allows NULL database_path for PostgreSQL connections
@@ -414,4 +252,39 @@ pub fn app_db_path() -> PathBuf {
     std::fs::create_dir_all(&path).ok();
     path.push("blanco.db");
     path
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    #[tokio::test]
+    async fn init_schema_is_idempotent_and_tolerates_existing_columns() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory pool");
+
+        // Running twice must succeed: the second pass hits every ADD COLUMN as a
+        // duplicate and must swallow only that, not error out.
+        init_schema(&pool).await.expect("first init");
+        init_schema(&pool).await.expect("second init idempotent");
+    }
+
+    #[tokio::test]
+    async fn add_column_if_missing_propagates_real_errors() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory pool");
+
+        // Altering a table that does not exist is a genuine error and must not
+        // be swallowed like a duplicate-column case.
+        let result =
+            add_column_if_missing(&pool, "ALTER TABLE does_not_exist ADD COLUMN x TEXT").await;
+        assert!(result.is_err(), "missing-table error must propagate");
+    }
 }

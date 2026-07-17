@@ -4,7 +4,7 @@ use blanco_core::{
     ColumnInfo, Connection, QueryResult, connection_trait::ColumnType,
     connection_trait::ForeignKeyInfo, connection_trait::IndexInfo, connection_trait::RoutineKind,
 };
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use sqlx::{Column, Row};
 
 use super::{MysqlConnection, MysqlConnectionKey};
@@ -236,6 +236,78 @@ impl Connection for MysqlConnection {
         }
         let result = q.execute(&pool).await.map_err(blanco_core::tag_sqlx)?;
         Ok(result.rows_affected())
+    }
+
+    async fn execute_operations_transactional(
+        &self,
+        operations: &[String],
+        database_name: Option<&str>,
+    ) -> Result<blanco_core::BatchOutcome, blanco_core::BatchFailure> {
+        let database = database_name
+            .or(self.initial_database.as_deref())
+            .ok_or_else(|| {
+                blanco_core::BatchFailure::atomic(anyhow::anyhow!("No database specified"))
+            })?;
+        let pool = self
+            .get_or_create_pool(database)
+            .await
+            .map_err(blanco_core::BatchFailure::atomic)?;
+        blanco_core::run_sqlx_transaction!(&pool, operations)
+    }
+
+    async fn execute_query_stream_rows(
+        &self,
+        query: &str,
+        database_name: Option<&str>,
+    ) -> Result<
+        (
+            Vec<String>,
+            Vec<ColumnType>,
+            Box<dyn Stream<Item = Result<Vec<Option<String>>, anyhow::Error>> + Send + Unpin>,
+        ),
+        anyhow::Error,
+    > {
+        let database = database_name
+            .or(self.initial_database.as_deref())
+            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+        let pool = self.get_or_create_pool(database).await?;
+
+        // Use `sqlx::query().fetch()` to consume the result set row-by-row,
+        // mirroring the PostgreSQL driver, rather than the trait default which
+        // routes through `execute_query` and builds a full `QueryResult` first.
+        let mut stream = sqlx::query(query).fetch(&pool);
+        let mut columns: Vec<String> = Vec::new();
+        let mut column_types: Vec<ColumnType> = Vec::new();
+        let mut raw_column_types: Vec<String> = Vec::new();
+        let mut rows: Vec<Vec<Option<String>>> = Vec::new();
+
+        while let Some(row_result) = stream.next().await {
+            let row = row_result.map_err(blanco_core::tag_sqlx)?;
+            if columns.is_empty() {
+                columns = row
+                    .columns()
+                    .iter()
+                    .map(|col| col.name().to_string())
+                    .collect();
+                let (types, raw_types): (Vec<ColumnType>, Vec<String>) = row
+                    .columns()
+                    .iter()
+                    .map(|col| {
+                        let raw_type = col.type_info().to_string();
+                        (Self::map_mysql_type(&raw_type), raw_type)
+                    })
+                    .unzip();
+                column_types = types;
+                raw_column_types = raw_types;
+            }
+            let row_data: Vec<Option<String>> = (0..columns.len())
+                .map(|i| self.convert_row_value_to_string(&row, i, &column_types, &raw_column_types))
+                .collect();
+            rows.push(row_data);
+        }
+
+        let all_rows = futures::stream::iter(rows.into_iter().map(Ok));
+        Ok((columns, column_types, Box::new(all_rows)))
     }
 
     async fn get_databases(&self) -> Result<Vec<String>, anyhow::Error> {

@@ -589,7 +589,12 @@ async fn test_postgres_connect_and_query_over_ssh(cx: &mut TestAppContext) {
     let harness = FullAppHarness::new(cx);
     let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
     cx.run_until_parked();
-    let case = over_ssh(postgres_case(), "it-postgres-ssh", "postgrestestdb_ssl", "5432");
+    let case = over_ssh(
+        postgres_case(),
+        "it-postgres-ssh",
+        "postgrestestdb_ssl",
+        "5432",
+    );
     run_driver_case(&harness, case, &mut cx).await;
 }
 
@@ -607,7 +612,12 @@ async fn test_clickhouse_connect_and_query_over_ssh(cx: &mut TestAppContext) {
     let harness = FullAppHarness::new(cx);
     let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
     cx.run_until_parked();
-    let case = over_ssh(clickhouse_case(), "it-clickhouse-ssh", "clickhousetestdb", "8123");
+    let case = over_ssh(
+        clickhouse_case(),
+        "it-clickhouse-ssh",
+        "clickhousetestdb",
+        "8123",
+    );
     run_driver_case(&harness, case, &mut cx).await;
 }
 

@@ -1,8 +1,48 @@
 mod connection_impl;
 
 use anyhow::Result;
+use blanco_core::ConnectionLost;
 use blanco_core::connection_trait::ColumnType;
 use reqwest::Client as HttpClient;
+
+/// Convert a reqwest error into an `anyhow::Error`, attaching the shared
+/// [`ConnectionLost`] marker when it represents a dropped or unreachable server.
+/// ClickHouse talks HTTP over reqwest rather than sqlx, so without this its
+/// dropped connections would never be classified and the reconnect UX would
+/// diverge from the sqlx-based backends.
+fn tag_reqwest(error: reqwest::Error) -> anyhow::Error {
+    if reqwest_connection_lost(&error) {
+        anyhow::Error::new(error).context(ConnectionLost)
+    } else {
+        anyhow::Error::new(error)
+    }
+}
+
+/// True when a reqwest error means the connection to the server failed: an
+/// unreachable/refused host, a timeout, or a socket dropped mid-request
+/// (broken pipe, reset, unexpected EOF) found by walking the source chain.
+fn reqwest_connection_lost(error: &reqwest::Error) -> bool {
+    if error.is_connect() || error.is_timeout() {
+        return true;
+    }
+    let mut source: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(error);
+    while let Some(current) = source {
+        if let Some(io) = current.downcast_ref::<std::io::Error>()
+            && matches!(
+                io.kind(),
+                std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::UnexpectedEof
+                    | std::io::ErrorKind::NotConnected
+            )
+        {
+            return true;
+        }
+        source = current.source();
+    }
+    false
+}
 
 pub struct ClickhouseConnection {
     http: HttpClient,
@@ -129,9 +169,15 @@ impl ClickhouseConnection {
 
     async fn raw_query(&self, sql: &str, database: Option<&str>) -> Result<String> {
         let url = self.build_query_url(database, &[]);
-        let response = self.http.post(&url).body(sql.to_string()).send().await?;
+        let response = self
+            .http
+            .post(&url)
+            .body(sql.to_string())
+            .send()
+            .await
+            .map_err(tag_reqwest)?;
         let status = response.status();
-        let body = response.text().await?;
+        let body = response.text().await.map_err(tag_reqwest)?;
         if !status.is_success() {
             return Err(anyhow::anyhow!(
                 "ClickHouse query failed ({}): {}",

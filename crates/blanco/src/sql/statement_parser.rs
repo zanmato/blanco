@@ -710,6 +710,18 @@ fn push_named(out: &mut Vec<(String, Vec<String>)>, name: String, columns: Vec<S
     }
 }
 
+/// Normalize a possibly-quoted, possibly schema-qualified object reference by
+/// quote-stripping each dot-separated part (`[dbo].[Order]` -> `dbo.Order`,
+/// `"public"."Users"` -> `public.Users`) so it matches the cache's unquoted,
+/// dotted keys.
+fn normalize_object_reference(reference: &str) -> String {
+    reference
+        .split('.')
+        .map(strip_identifier_quotes)
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
 fn collect_table_aliases(node: Node, source: &str, aliases: &mut Vec<TableAlias>) {
     if node.kind() == "relation" {
         let mut table_name: Option<String> = None;
@@ -719,17 +731,20 @@ fn collect_table_aliases(node: Node, source: &str, aliases: &mut Vec<TableAlias>
             if let Some(child) = node.child(i) {
                 match child.kind() {
                     "object_reference" => {
-                        // The table name is the text of the object_reference
+                        // The table name is the text of the object_reference.
+                        // Strip quotes so `"Order"`/`` `t` ``/`[t]` match the
+                        // unquoted cache keys and per-part quoting in a
+                        // schema-qualified name is normalized.
                         let range = child.byte_range();
                         if range.end <= source.len() {
-                            table_name = Some(source[range].to_string());
+                            table_name = Some(normalize_object_reference(&source[range]));
                         }
                     }
                     "identifier" => {
                         // The alias is a bare identifier after the object_reference
                         let range = child.byte_range();
                         if range.end <= source.len() {
-                            alias = Some(source[range].to_string());
+                            alias = Some(strip_identifier_quotes(&source[range]).to_string());
                         }
                     }
                     _ => {}
@@ -753,33 +768,85 @@ fn collect_table_aliases(node: Node, source: &str, aliases: &mut Vec<TableAlias>
     }
 }
 
-/// Detect dot notation by scanning backwards from cursor.
-/// Returns (is_dot, optional_table_name).
-fn detect_dot_notation(text: &str, cursor_byte_pos: usize) -> (bool, Option<String>) {
-    let before_cursor = &text[..cursor_byte_pos.min(text.len())];
-
-    // Check if cursor is right after a dot or after "identifier.partial"
-    // Walk backwards: first skip any identifier chars (partial column name being typed)
-    let trimmed = before_cursor.as_bytes();
-    let mut pos = trimmed.len();
-
-    // Skip current word (partial column name after dot)
-    while pos > 0 && (trimmed[pos - 1].is_ascii_alphanumeric() || trimmed[pos - 1] == b'_') {
-        pos -= 1;
+/// Strip a single pair of surrounding SQL quote characters from an identifier:
+/// double quotes (ANSI/PostgreSQL), backticks (MySQL), or square brackets
+/// (MSSQL, `[dbo]`). Quoted identifiers preserve case and may contain characters
+/// the bare-word scanner stops on, so callers normalize by removing the quotes
+/// before matching against the metadata cache (whose keys are stored unquoted).
+pub fn strip_identifier_quotes(ident: &str) -> &str {
+    let bytes = ident.as_bytes();
+    if bytes.len() >= 2 {
+        let first = bytes[0];
+        let last = bytes[bytes.len() - 1];
+        if matches!((first, last), (b'"', b'"') | (b'`', b'`') | (b'[', b']')) {
+            return &ident[1..ident.len() - 1];
+        }
     }
+    ident
+}
 
-    // Check if there's a dot
-    if pos > 0 && trimmed[pos - 1] == b'.' {
-        pos -= 1;
-        // Extract the identifier before the dot
-        let dot_pos = pos;
-        while pos > 0 && (trimmed[pos - 1].is_ascii_alphanumeric() || trimmed[pos - 1] == b'_') {
+/// Case-insensitive equality for SQL identifiers. Unquoted identifiers are
+/// case-folded by every supported engine, so alias/CTE/schema matching must
+/// ignore case (`FROM Users u ... u.` should resolve). Surrounding quotes are
+/// stripped first so `"Users"` and `users` compare equal at the boundary where
+/// the cache already holds unquoted names.
+pub fn ident_eq(a: &str, b: &str) -> bool {
+    strip_identifier_quotes(a).eq_ignore_ascii_case(strip_identifier_quotes(b))
+}
+
+/// Scan backwards from `end` over the bytes to the start of the identifier that
+/// ends there, understanding the three quoting styles. A trailing closing quote
+/// (`"`, `` ` ``, `]`) consumes back to its matching opening quote; otherwise a
+/// bare run of `[A-Za-z0-9_]` is consumed. Returns the start index (== `end`
+/// when there is no identifier immediately before `end`).
+fn identifier_start(bytes: &[u8], end: usize) -> usize {
+    if end == 0 {
+        return 0;
+    }
+    let closing = bytes[end - 1];
+    let opening = match closing {
+        b'"' => Some(b'"'),
+        b'`' => Some(b'`'),
+        b']' => Some(b'['),
+        _ => None,
+    };
+    if let Some(open) = opening {
+        // Walk back to the matching opening quote.
+        let mut pos = end - 1;
+        while pos > 0 && bytes[pos - 1] != open {
             pos -= 1;
         }
-        if dot_pos > pos {
-            let table_name = std::str::from_utf8(&trimmed[pos..dot_pos])
+        // Include the opening quote itself if found.
+        return pos.saturating_sub(1);
+    }
+
+    let mut pos = end;
+    while pos > 0 && (bytes[pos - 1].is_ascii_alphanumeric() || bytes[pos - 1] == b'_') {
+        pos -= 1;
+    }
+    pos
+}
+
+/// Detect dot notation by scanning backwards from cursor.
+/// Returns (is_dot, optional_table_name). The returned table name is
+/// quote-stripped so quoted identifiers (`"Order".`, `` `tbl`. ``, `[dbo].`)
+/// resolve against the unquoted cache keys.
+fn detect_dot_notation(text: &str, cursor_byte_pos: usize) -> (bool, Option<String>) {
+    let before_cursor = &text[..cursor_byte_pos.min(text.len())];
+    let trimmed = before_cursor.as_bytes();
+
+    // Skip the partial word being typed after the dot (bare or quoted).
+    let pos = identifier_start(trimmed, trimmed.len());
+
+    // Check if there's a dot immediately before it.
+    if pos > 0 && trimmed[pos - 1] == b'.' {
+        let dot_pos = pos - 1;
+        // Extract the (possibly quoted) identifier before the dot.
+        let ident_start = identifier_start(trimmed, dot_pos);
+        if ident_start < dot_pos {
+            let table_name = std::str::from_utf8(&trimmed[ident_start..dot_pos])
                 .ok()
-                .map(|s| s.to_string());
+                .map(|s| strip_identifier_quotes(s).to_string());
             return (true, table_name);
         }
         return (true, None);
@@ -1053,6 +1120,56 @@ mod tests {
 
     fn create_test_parser() -> SqlStatementParser {
         SqlStatementParser::new().expect("Failed to create test parser")
+    }
+
+    #[test]
+    fn strip_identifier_quotes_handles_all_dialects() {
+        assert_eq!(strip_identifier_quotes("\"Order\""), "Order");
+        assert_eq!(strip_identifier_quotes("`tbl`"), "tbl");
+        assert_eq!(strip_identifier_quotes("[dbo]"), "dbo");
+        assert_eq!(strip_identifier_quotes("plain"), "plain");
+        // Mismatched or single char left untouched.
+        assert_eq!(strip_identifier_quotes("\""), "\"");
+        assert_eq!(strip_identifier_quotes("[t\""), "[t\"");
+    }
+
+    #[test]
+    fn ident_eq_is_case_and_quote_insensitive() {
+        assert!(ident_eq("Users", "users"));
+        assert!(ident_eq("\"Users\"", "users"));
+        assert!(ident_eq("u", "U"));
+        assert!(!ident_eq("users", "orders"));
+    }
+
+    #[test]
+    fn detect_dot_notation_handles_quoted_identifiers() {
+        // Double-quoted (ANSI/Postgres)
+        let text = "SELECT * FROM \"Order\".";
+        assert_eq!(
+            detect_dot_notation(text, text.len()),
+            (true, Some("Order".to_string()))
+        );
+        // Backtick (MySQL) with a partial column typed after the dot
+        let text = "SELECT `tbl`.na";
+        assert_eq!(
+            detect_dot_notation(text, text.len()),
+            (true, Some("tbl".to_string()))
+        );
+        // Bracketed (MSSQL)
+        let text = "SELECT [T].";
+        assert_eq!(
+            detect_dot_notation(text, text.len()),
+            (true, Some("T".to_string()))
+        );
+        // Bare identifier still works
+        let text = "SELECT u.";
+        assert_eq!(
+            detect_dot_notation(text, text.len()),
+            (true, Some("u".to_string()))
+        );
+        // No dot
+        let text = "SELECT foo";
+        assert_eq!(detect_dot_notation(text, text.len()), (false, None));
     }
 
     #[test]

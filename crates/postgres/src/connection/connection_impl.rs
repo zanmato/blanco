@@ -156,6 +156,21 @@ impl Connection for PostgresConnection {
         Ok(result.rows_affected())
     }
 
+    async fn execute_operations_transactional(
+        &self,
+        operations: &[String],
+        database_name: Option<&str>,
+    ) -> Result<blanco_core::BatchOutcome, blanco_core::BatchFailure> {
+        let database_name = database_name.ok_or_else(|| {
+            blanco_core::BatchFailure::atomic(anyhow::anyhow!("missing database"))
+        })?;
+        let pool = self
+            .get_or_create_pool(database_name)
+            .await
+            .map_err(blanco_core::BatchFailure::atomic)?;
+        blanco_core::run_sqlx_transaction!(&pool, operations)
+    }
+
     async fn get_databases(&self) -> Result<Vec<String>> {
         let result = self
             .execute_query(
