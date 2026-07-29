@@ -22,6 +22,22 @@ use std::future::Future;
 use std::sync::Arc;
 use tokio::runtime::Handle;
 
+struct AbortOnDrop(Option<tokio::task::AbortHandle>);
+
+impl AbortOnDrop {
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        if let Some(handle) = self.0.take() {
+            handle.abort();
+        }
+    }
+}
+
 pub struct TokioConnection {
     inner: Arc<dyn Connection>,
     runtime: Handle,
@@ -37,10 +53,13 @@ impl TokioConnection {
         F: Future<Output = Result<T>> + Send + 'static,
         T: Send + 'static,
     {
-        self.runtime
-            .spawn(fut)
+        let task = self.runtime.spawn(fut);
+        let mut abort_on_drop = AbortOnDrop(Some(task.abort_handle()));
+        let result = task
             .await
-            .map_err(|e| anyhow!("tokio task join failed: {e}"))?
+            .map_err(|e| anyhow!("tokio task join failed: {e}"))?;
+        abort_on_drop.disarm();
+        result
     }
 }
 
@@ -134,14 +153,17 @@ impl Connection for TokioConnection {
         let inner = Arc::clone(&self.inner);
         let query = query.to_string();
         let database_name = database_name.map(str::to_string);
-        self.runtime
-            .spawn(async move {
-                inner
-                    .execute_query_stream_rows(&query, database_name.as_deref())
-                    .await
-            })
+        let task = self.runtime.spawn(async move {
+            inner
+                .execute_query_stream_rows(&query, database_name.as_deref())
+                .await
+        });
+        let mut abort_on_drop = AbortOnDrop(Some(task.abort_handle()));
+        let result = task
             .await
-            .map_err(|e| anyhow!("tokio task join failed: {e}"))?
+            .map_err(|e| anyhow!("tokio task join failed: {e}"))?;
+        abort_on_drop.disarm();
+        result
     }
 
     async fn ping(&self) -> Result<()> {
@@ -318,5 +340,43 @@ impl Connection for TokioConnection {
                 .await
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
+    use super::AbortOnDrop;
+
+    struct DropFlag(Arc<AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn abort_guard_cancels_spawned_task_when_dropped() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let task = tokio::spawn({
+            let dropped = Arc::clone(&dropped);
+            async move {
+                let _drop_flag = DropFlag(dropped);
+                std::future::pending::<()>().await;
+            }
+        });
+        tokio::task::yield_now().await;
+
+        let guard = AbortOnDrop(Some(task.abort_handle()));
+        drop(guard);
+
+        let join_error = task.await.expect_err("task should be cancelled");
+        assert!(join_error.is_cancelled());
+        assert!(dropped.load(Ordering::SeqCst));
     }
 }

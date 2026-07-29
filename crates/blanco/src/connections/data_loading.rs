@@ -277,8 +277,7 @@ impl ConnectionsPanel {
                             this.set_item_loading(&item_id, false, cx);
                             // Drop any state a racing connect may have recorded so
                             // the tree rebuild reflects the disconnected state.
-                            this.loaded_connections.remove(&connection_id);
-                            this.expanded_connections.remove(&connection_id);
+                            this.forget_connection(connection_id);
                             this.update_tree_items(cx);
                             cx.notify();
                         })

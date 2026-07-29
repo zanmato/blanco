@@ -7,6 +7,7 @@ pub use delegate::ConnectionsTreeDelegate;
 
 use crate::app::CreateNewQueryTab;
 use crate::app_database::{AppDatabase, ConnectionData, EnvironmentType};
+use crate::connection_credentials;
 use crate::export::modal::ExportModal;
 use crate::import::modal::ImportModal;
 use crate::result_ext::ResultExt;
@@ -58,6 +59,12 @@ pub struct ConnectionsPanel {
     // Track which object-type category folders (Tables, Views, ...) are
     // expanded, keyed by the category tree item id.
     expanded_categories: std::collections::HashSet<String>,
+    // Live per-database connection status, keyed by connection id. This is the
+    // single source of truth for the "connected" icon color: it is read while
+    // *building* tree items so that a rebuild (or the tree widget
+    // re-materializing children on expand/collapse) always produces the same
+    // colors, instead of being patched onto the flattened entries afterwards.
+    connected_databases: std::collections::HashMap<i64, std::collections::HashSet<String>>,
 }
 
 /// Type of tree item in the metadata context
@@ -132,7 +139,7 @@ impl ConnectionsPanel {
     pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
         // Load initial connections
         let app_database = AppDatabase::global(cx);
-        let connections = gpui_tokio::Tokio::handle(cx).block_on(async {
+        let mut connections = gpui_tokio::Tokio::handle(cx).block_on(async {
             match app_database.load_connections().await {
                 Ok(connections) => connections,
                 Err(e) => {
@@ -141,11 +148,18 @@ impl ConnectionsPanel {
                 }
             }
         });
+        if let Err(error) = smol::block_on(connection_credentials::hydrate_connections(
+            &mut connections,
+            cx,
+        )) {
+            tracing::error!("Failed to load connection credentials: {error}");
+        }
 
         let database_metadata = std::collections::HashMap::new();
         let loaded_connections = std::collections::HashSet::new();
         let expanded_connections = std::collections::HashSet::new();
         let expanded_categories = std::collections::HashSet::new();
+        let connected_databases = std::collections::HashMap::new();
 
         // Create delegate with parent reference
         let panel_entity = cx.entity();
@@ -161,6 +175,7 @@ impl ConnectionsPanel {
             loaded_connections,
             expanded_connections,
             expanded_categories,
+            connected_databases,
         };
 
         cx.spawn(async |this_handle, cx| {
@@ -182,7 +197,12 @@ impl ConnectionsPanel {
             let connections = app_database.load_connections().await;
             this_handle
                 .update(cx, |this, cx| match connections {
-                    Ok(connections) => {
+                    Ok(mut connections) => {
+                        if let Err(error) = smol::block_on(
+                            connection_credentials::hydrate_connections(&mut connections, cx),
+                        ) {
+                            tracing::error!("Failed to reload connection credentials: {error}");
+                        }
                         this.connections = connections;
                         this.update_tree_items(cx);
                         cx.notify();
@@ -196,44 +216,40 @@ impl ConnectionsPanel {
         .detach();
     }
 
-    /// Update tree items from connections data and update connection status directly
+    /// Refresh the live connection statuses, then rebuild the tree from them.
+    ///
+    /// Statuses have to be fetched asynchronously, so they are cached on the
+    /// panel and the tree is only rebuilt once they land. Rebuilding first and
+    /// patching the flattened entries afterwards (as this used to do) both
+    /// produced a visible flash of stale colors and left the *nested* child
+    /// items unpatched, so the tree widget resurrected the stale colors the
+    /// next time it re-materialized children on expand/collapse.
     fn update_tree_items(&mut self, cx: &mut Context<Self>) {
         let db_service = DatabaseService::global(cx).clone();
 
-        // Get active connections and current tree state to update metadata
         cx.spawn(async move |this_handle, cx| {
-            // Get active connection statuses from DatabaseService
-            let connection_statuses = match db_service.get_active_connection_statuses().await {
-                Ok(statuses) => statuses,
-                Err(e) => {
-                    tracing::error!("Failed to get connection statuses: {}", e);
-                    return;
-                }
-            };
+            let connection_statuses = db_service.get_active_connection_statuses().await;
 
-            // Update connection status directly in tree metadata
             this_handle
                 .update(cx, |this, cx| {
-                    // Rebuild tree items with updated metadata
-                    let tree_items: Vec<TreeItem<TreeItemMetadata>> = this
-                        .connections
-                        .iter()
-                        .map(|conn| {
-                            this.build_connection_tree_item_with_expand(
-                                conn,
-                                this.expanded_connections.contains(&conn.id.unwrap_or(0)),
-                                cx,
-                            )
-                        })
-                        .collect();
+                    match connection_statuses {
+                        Ok(statuses) => {
+                            this.connected_databases.clear();
+                            for ((connection_id, database_name), status) in statuses {
+                                if status.is_connected {
+                                    this.connected_databases
+                                        .entry(connection_id)
+                                        .or_default()
+                                        .insert(database_name);
+                                }
+                            }
+                        }
+                        // Keep the last known statuses rather than blanking
+                        // every icon on a transient failure.
+                        Err(e) => tracing::error!("Failed to get connection statuses: {}", e),
+                    }
 
-                    this.tree_state.update(cx, |state, cx| {
-                        state.set_items(tree_items, cx);
-                    });
-
-                    // Update connection status directly in tree entries
-                    this.update_connection_status_in_tree(&connection_statuses, cx);
-
+                    this.rebuild_tree(cx);
                     cx.notify();
                 })
                 .log_err();
@@ -241,60 +257,35 @@ impl ConnectionsPanel {
         .detach();
     }
 
-    /// Update connection status directly in tree entries using ConnectionStatus
-    fn update_connection_status_in_tree(
-        &mut self,
-        connection_statuses: &std::collections::HashMap<
-            (i64, String),
-            blanco_core::ConnectionStatus,
-        >,
-        cx: &mut Context<Self>,
-    ) {
-        self.tree_state.update(cx, |tree_state, cx| {
-            // Check each entry and update its status
-            for entry in tree_state.entries_mut() {
-                let metadata = &entry.item.metadata;
-                match metadata.kind {
-                    TreeItemKind::Connection => {
-                        // Connections are stored with "default" as the database name
-                        let db_type = metadata.db_type;
-                        let is_connected = connection_statuses
-                            .get(&(metadata.connection_id, "default".to_string()))
-                            .map(|status| status.is_connected)
-                            .unwrap_or(false);
-                        // Icon reflects the driver type; only the color tracks
-                        // the connected state.
-                        let color = if is_connected {
-                            cx.theme().primary.into()
-                        } else {
-                            cx.theme().foreground.into()
-                        };
-                        entry.item.metadata.icon = TreeItemIcon {
-                            icon: connection_type_icon(db_type),
-                            color,
-                        };
-                    }
-                    TreeItemKind::Database => {
-                        if let Some(ref db_name) = metadata.database_name {
-                            let is_connected = connection_statuses
-                                .get(&(metadata.connection_id, db_name.clone()))
-                                .map(|status| status.is_connected)
-                                .unwrap_or(false);
-                            let color = if is_connected {
-                                cx.theme().primary.into()
-                            } else {
-                                cx.theme().foreground.into()
-                            };
-                            entry.item.metadata.icon = TreeItemIcon {
-                                icon: IconName::Database,
-                                color,
-                            };
-                        }
-                    }
-                    _ => {}
-                }
-            }
+    /// Rebuild the tree items from the panel's current state. All expansion and
+    /// connection state is read from the panel here, so the result is fully
+    /// determined by that state and rebuilding is idempotent.
+    fn rebuild_tree(&mut self, cx: &mut Context<Self>) {
+        let tree_items: Vec<TreeItem<TreeItemMetadata>> = self
+            .connections
+            .iter()
+            .map(|connection| {
+                self.build_connection_tree_item_with_expand(
+                    connection,
+                    self.expanded_connections
+                        .contains(&connection.id.unwrap_or(0)),
+                    cx,
+                )
+            })
+            .collect();
+
+        self.tree_state.update(cx, |state, cx| {
+            state.set_items(tree_items, cx);
         });
+    }
+
+    /// Whether a specific database within a connection currently has a live
+    /// connection. Connections themselves are tracked under the `"default"`
+    /// database name by `DatabaseService`.
+    fn is_database_connected(&self, connection_id: i64, database_name: &str) -> bool {
+        self.connected_databases
+            .get(&connection_id)
+            .is_some_and(|databases| databases.contains(database_name))
     }
 
     /// Find tree item metadata by searching through the tree entries
@@ -315,12 +306,12 @@ impl ConnectionsPanel {
         cx: &Context<Self>,
     ) -> TreeItemIcon {
         // The icon shows the driver type; connection state is conveyed purely
-        // through color. Reflect the known connected state at build time so
-        // rebuilding the tree (on every expand/collapse) doesn't momentarily
-        // flip a connected node back to the disconnected color before
-        // `update_connection_status_in_tree` reconciles it. A loaded connection
-        // is, by definition, connected.
-        let color = if self.loaded_connections.contains(&connection_id) {
+        // through color. A loaded connection is by definition connected, and
+        // `DatabaseService` files connection-level handles under the "default"
+        // database name.
+        let connected = self.loaded_connections.contains(&connection_id)
+            || self.is_database_connected(connection_id, "default");
+        let color = if connected {
             cx.theme().primary.into()
         } else {
             cx.theme().foreground.into()
@@ -350,9 +341,12 @@ impl ConnectionsPanel {
                         self.set_item_loading(item_id, true, cx);
                         self.load_connection_children(connection_id, true, cx);
                     } else {
-                        // Already loaded, toggle expand/collapse the tree
-                        tracing::debug!("Toggling expansion for connection {}", connection_id);
-                        self.toggle_connection_expansion(connection_id, window, cx);
+                        // Already loaded. The tree widget toggled this node
+                        // itself on mouse-down (before this click handler), so
+                        // we only mirror the resulting state; toggling again
+                        // here would fight it, and rebuilding would re-apply
+                        // stored state to every other node.
+                        self.record_connection_expansion(connection_id, item_id, cx);
                     }
                 }
                 TreeItemKind::Database => {
@@ -370,12 +364,10 @@ impl ConnectionsPanel {
                             self.set_item_loading(item_id, true, cx);
                             self.load_database_children(connection_id, database_name.clone(), cx);
                         } else {
-                            // Already loaded, toggle expansion
-                            tracing::debug!("Toggling expansion for database: {}", database_name);
-                            self.toggle_database_expansion(
+                            self.record_database_expansion(
                                 connection_id,
                                 database_name,
-                                window,
+                                item_id,
                                 cx,
                             );
                         }
@@ -406,16 +398,11 @@ impl ConnectionsPanel {
                                 cx,
                             );
                         } else {
-                            // Already loaded, toggle expansion
-                            tracing::debug!(
-                                "Toggling expansion for schema: {} in database: {}",
-                                schema_name,
-                                database_name
-                            );
-                            self.toggle_schema_expansion(
+                            self.record_schema_expansion(
                                 connection_id,
                                 database_name,
                                 schema_name,
+                                item_id,
                                 cx,
                             );
                         }
@@ -477,60 +464,68 @@ impl ConnectionsPanel {
         }
     }
 
-    /// Toggle connection expansion in the tree
-    fn toggle_connection_expansion(
-        &mut self,
-        connection_id: i64,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        // Toggle the expansion state
-        if self.expanded_connections.contains(&connection_id) {
-            tracing::debug!("Collapsing connection {}", connection_id);
-            self.expanded_connections.remove(&connection_id);
-        } else {
-            tracing::debug!("Expanding connection {}", connection_id);
-            self.expanded_connections.insert(connection_id);
-        }
-
-        // Rebuild tree with updated expansion state
-        self.update_tree_items(cx);
+    /// Read back the expansion state the tree widget applied to `item_id` when
+    /// it handled the mouse-down that preceded the current click.
+    ///
+    /// The widget owns the actual toggle; every `record_*_expansion` below
+    /// mirrors its result into the panel's own state so it survives the next
+    /// tree rebuild. Mirroring instead of independently toggling is what keeps
+    /// the two in sync: if the panel toggled on its own, any click the widget
+    /// swallowed (or handled for a node the panel didn't expect to be a folder)
+    /// would leave the panel one toggle out of phase, and the next rebuild
+    /// would snap the node back open.
+    fn widget_expansion(&self, item_id: &str, cx: &Context<Self>) -> bool {
+        self.tree_state
+            .read(cx)
+            .entries()
+            .iter()
+            .find(|entry| entry.item().id == item_id)
+            .is_some_and(|entry| entry.is_expanded())
     }
 
-    /// Toggle database expansion in the tree
-    fn toggle_database_expansion(
+    /// Record a connection's expansion after the tree widget toggled it.
+    fn record_connection_expansion(
+        &mut self,
+        connection_id: i64,
+        item_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if self.widget_expansion(item_id, cx) {
+            self.expanded_connections.insert(connection_id);
+        } else {
+            self.expanded_connections.remove(&connection_id);
+        }
+    }
+
+    /// Record a database's expansion after the tree widget toggled it.
+    fn record_database_expansion(
         &mut self,
         connection_id: i64,
         database_name: &str,
-        _window: &mut Window,
+        item_id: &str,
         cx: &mut Context<Self>,
     ) {
+        let expanded = self.widget_expansion(item_id, cx);
         if let Some(metadata) = self.database_metadata.get_mut(&connection_id)
             && let Some(database) = metadata
                 .databases
                 .iter_mut()
                 .find(|db| db.name == database_name)
         {
-            database.is_expanded = !database.is_expanded;
-            tracing::debug!(
-                "Toggling database '{}' expansion to: {}",
-                database_name,
-                database.is_expanded
-            );
-
-            // Rebuild tree with updated expansion state
-            self.update_tree_items(cx);
+            database.is_expanded = expanded;
         }
     }
 
-    /// Toggle schema expansion in the tree
-    fn toggle_schema_expansion(
+    /// Record a schema's expansion after the tree widget toggled it.
+    fn record_schema_expansion(
         &mut self,
         connection_id: i64,
         database_name: &str,
         schema_name: &str,
+        item_id: &str,
         cx: &mut Context<Self>,
     ) {
+        let expanded = self.widget_expansion(item_id, cx);
         if let Some(metadata) = self.database_metadata.get_mut(&connection_id)
             && let Some(database) = metadata
                 .databases
@@ -538,16 +533,7 @@ impl ConnectionsPanel {
                 .find(|db| db.name == database_name)
             && let Some(schema) = database.schemas.iter_mut().find(|s| s.name == schema_name)
         {
-            schema.is_expanded = !schema.is_expanded;
-            tracing::debug!(
-                "Toggling schema '{}' in database '{}' expansion to: {}",
-                schema_name,
-                database_name,
-                schema.is_expanded
-            );
-
-            // Rebuild tree with updated expansion state
-            self.update_tree_items(cx);
+            schema.is_expanded = expanded;
         }
     }
 
@@ -556,15 +542,7 @@ impl ConnectionsPanel {
     /// stores only categories toggled *away* from their default (Tables open,
     /// the rest closed), matching the XOR used when building the tree.
     fn record_category_expansion(&mut self, category_key: &str, cx: &mut Context<Self>) {
-        let expanded = self
-            .tree_state
-            .read(cx)
-            .entries()
-            .iter()
-            .find(|entry| entry.item().id == category_key)
-            .map(|entry| entry.is_expanded())
-            .unwrap_or(false);
-
+        let expanded = self.widget_expansion(category_key, cx);
         let default_expanded = category_key.ends_with(":tables");
         if expanded == default_expanded {
             self.expanded_categories.remove(category_key);
@@ -602,14 +580,25 @@ impl ConnectionsPanel {
             // Update the UI
             this_handle
                 .update(cx, |this, cx| {
-                    this.loaded_connections.remove(&connection_id);
-                    this.expanded_connections.remove(&connection_id);
+                    this.forget_connection(connection_id);
                     this.update_tree_items(cx);
                     cx.notify();
                 })
                 .log_err();
         })
         .detach();
+    }
+
+    /// Drop all cached state for a connection that is no longer live. The
+    /// cached object tree has to go with it: leaving it behind keeps the node
+    /// rendering as an expandable folder, so the tree widget would keep
+    /// toggling it open on click while the panel treated the click as a
+    /// reconnect request.
+    fn forget_connection(&mut self, connection_id: i64) {
+        self.loaded_connections.remove(&connection_id);
+        self.expanded_connections.remove(&connection_id);
+        self.database_metadata.remove(&connection_id);
+        self.connected_databases.remove(&connection_id);
     }
 
     /// Disconnect a specific database within a connection
@@ -654,7 +643,13 @@ impl ConnectionsPanel {
 
     /// Validate and mark a connection as connected after successful query execution
     pub fn validate_connection_as_connected(&mut self, connection_id: i64, cx: &mut Context<Self>) {
-        self.load_connection_children(connection_id, false, cx);
+        if self.loaded_connections.contains(&connection_id) {
+            // Children are already loaded, but the query may have opened a
+            // database that wasn't connected before, so refresh live status.
+            self.update_tree_items(cx);
+        } else {
+            self.load_connection_children(connection_id, false, cx);
+        }
         cx.notify();
     }
 
@@ -666,8 +661,7 @@ impl ConnectionsPanel {
             return;
         }
         tracing::info!("Marking connection {} as disconnected", connection_id);
-        self.loaded_connections.remove(&connection_id);
-        self.expanded_connections.remove(&connection_id);
+        self.forget_connection(connection_id);
         self.update_tree_items(cx);
         cx.notify();
     }
@@ -812,6 +806,11 @@ impl ConnectionsPanel {
                                 move |_, window, cx| {
                                     let this_handle = this_handle.clone();
                                     let app_database = AppDatabase::global(cx).clone();
+                                    let credential_tasks =
+                                        connection_credentials::start_deleting_connection(
+                                            connection_id,
+                                            cx,
+                                        );
                                     cx.spawn(async move |cx| {
                                         if let Err(e) =
                                             app_database.delete_connection(connection_id).await
@@ -819,14 +818,20 @@ impl ConnectionsPanel {
                                             tracing::error!("Failed to delete connection: {}", e);
                                             return;
                                         }
+                                        if let Err(error) =
+                                            connection_credentials::finish_writing(credential_tasks)
+                                                .await
+                                        {
+                                            tracing::error!(
+                                                "Failed to delete connection credentials: {error}"
+                                            );
+                                        }
 
                                         this_handle
                                             .update(cx, |this, cx| {
                                                 this.connections
                                                     .retain(|c| c.id != Some(connection_id));
-                                                this.loaded_connections.remove(&connection_id);
-                                                this.expanded_connections.remove(&connection_id);
-                                                this.database_metadata.remove(&connection_id);
+                                                this.forget_connection(connection_id);
                                                 this.update_tree_items(cx);
                                                 cx.notify();
                                             })

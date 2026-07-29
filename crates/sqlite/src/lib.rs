@@ -348,4 +348,44 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn foreign_key_lookup_quotes_identifiers_and_escapes_values()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp_file = NamedTempFile::new()?;
+        let path = temp_file.path().to_string_lossy().to_string();
+        let connection_string = format!("sqlite:{}", path);
+
+        let mut connection = crate::SqliteConnection::new(connection_string.clone())?;
+        connection.connect(&connection_string).await?;
+        connection
+            .execute_query(
+                "CREATE TABLE \"order\" (\"select\" TEXT PRIMARY KEY, \"value\" TEXT)",
+                None,
+                None,
+            )
+            .await?;
+        connection
+            .execute_query(
+                "INSERT INTO \"order\" (\"select\", \"value\") VALUES ('O''Brien', 'found')",
+                None,
+                None,
+            )
+            .await?;
+
+        let result = connection
+            .foreign_key_lookup("order", "select", "O'Brien")
+            .await?;
+
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result
+                .rows
+                .first()
+                .and_then(|row| row.get(1))
+                .and_then(Option::as_deref),
+            Some("found")
+        );
+        Ok(())
+    }
 }

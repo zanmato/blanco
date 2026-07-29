@@ -11,6 +11,7 @@ mod app_database;
 mod app_settings;
 mod assets;
 mod command_palette;
+mod connection_credentials;
 #[cfg(test)]
 mod connection_integration_test;
 mod connection_modal;
@@ -80,15 +81,52 @@ fn main() {
             }
         }
 
+        let app_database = AppDatabase::global(cx).clone();
+        let legacy_credentials = runtime_handle.block_on({
+            let app_database = app_database.clone();
+            async move { app_database.load_legacy_connection_credentials().await }
+        });
+        if let Ok(legacy_credentials) = legacy_credentials {
+            match smol::block_on(connection_credentials::migrate_legacy_credentials(
+                &legacy_credentials,
+                cx,
+            )) {
+                Ok(()) => {
+                    if let Err(error) = runtime_handle.block_on(async move {
+                        app_database
+                            .drop_legacy_connection_credential_columns()
+                            .await
+                    }) {
+                        tracing::error!(
+                            "Failed to remove legacy plaintext credential columns: {error}"
+                        );
+                    }
+                }
+                Err(error) => {
+                    tracing::error!(
+                        "Failed to migrate connection credentials to secure storage: {error}"
+                    );
+                }
+            }
+        } else if let Err(error) = legacy_credentials {
+            tracing::error!("Failed to read legacy connection credentials: {error}");
+        }
+
         // Initialize database service with tokio runtime handle for automatic SSH tunnel establishment
         let db_service = DatabaseService::new(runtime_handle.clone());
         cx.set_global(db_service);
 
         // Load connections from app database and add them to the database service
         let app_database = AppDatabase::global(cx).clone();
-        let connections = runtime_handle
+        let mut connections = runtime_handle
             .block_on(async move { app_database.load_connections().await })
             .unwrap_or_default();
+        if let Err(error) = smol::block_on(connection_credentials::hydrate_connections(
+            &mut connections,
+            cx,
+        )) {
+            tracing::error!("Failed to load connection credentials: {error}");
+        }
 
         for connection in connections {
             if let Some(config) = connection.to_connection_config() {

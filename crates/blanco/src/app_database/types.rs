@@ -91,7 +91,7 @@ pub struct SnippetData {
 }
 
 /// Data for a database connection
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct ConnectionData {
     pub id: Option<i64>,
     pub name: String,
@@ -117,6 +117,44 @@ pub struct ConnectionData {
     pub ssl_key_path: Option<String>,
     pub ssl_cert_path: Option<String>,
     pub ssl_ca_cert_path: Option<String>,
+    pub trust_server_certificate: bool,
+}
+
+impl std::fmt::Debug for ConnectionData {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ConnectionData")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("db_type", &self.db_type)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("database_name", &self.database_name)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+            .field("database_path", &self.database_path)
+            .field("last_used_at", &self.last_used_at)
+            .field("is_active", &self.is_active)
+            .field("environment_type", &self.environment_type)
+            .field("ssh_host", &self.ssh_host)
+            .field("ssh_port", &self.ssh_port)
+            .field("ssh_user", &self.ssh_user)
+            .field(
+                "ssh_password",
+                &self.ssh_password.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("ssh_private_key_path", &self.ssh_private_key_path)
+            .field(
+                "ssh_private_key_password",
+                &self.ssh_private_key_password.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("ssl_mode", &self.ssl_mode)
+            .field("ssl_key_path", &self.ssl_key_path)
+            .field("ssl_cert_path", &self.ssl_cert_path)
+            .field("ssl_ca_cert_path", &self.ssl_ca_cert_path)
+            .field("trust_server_certificate", &self.trust_server_certificate)
+            .finish()
+    }
 }
 
 impl ConnectionData {
@@ -144,6 +182,7 @@ impl ConnectionData {
             ssl_key_path: None,
             ssl_cert_path: None,
             ssl_ca_cert_path: None,
+            trust_server_certificate: false,
         }
     }
 
@@ -178,6 +217,7 @@ impl ConnectionData {
             ssl_key_path: None,
             ssl_cert_path: None,
             ssl_ca_cert_path: None,
+            trust_server_certificate: false,
         }
     }
 
@@ -219,6 +259,7 @@ impl ConnectionData {
             ssl_key_path: None,
             ssl_cert_path: None,
             ssl_ca_cert_path: None,
+            trust_server_certificate: false,
         }
     }
 
@@ -253,6 +294,7 @@ impl ConnectionData {
             ssl_key_path: None,
             ssl_cert_path: None,
             ssl_ca_cert_path: None,
+            trust_server_certificate: false,
         }
     }
 
@@ -313,6 +355,7 @@ impl ConnectionData {
             ssl_key_path: None,
             ssl_cert_path: None,
             ssl_ca_cert_path: None,
+            trust_server_certificate: false,
         }
     }
 
@@ -373,6 +416,7 @@ impl ConnectionData {
             ssl_key_path: None,
             ssl_cert_path: None,
             ssl_ca_cert_path: None,
+            trust_server_certificate: false,
         }
     }
 
@@ -441,6 +485,7 @@ impl ConnectionData {
             ssl_key_path: None,
             ssl_cert_path: None,
             ssl_ca_cert_path: None,
+            trust_server_certificate: false,
         }
     }
 
@@ -526,6 +571,7 @@ impl ConnectionData {
                     self.ssl_cert_path.clone(),
                     self.ssl_ca_cert_path.clone(),
                 );
+                config = config.with_trust_server_certificate(self.trust_server_certificate);
 
                 config
             }

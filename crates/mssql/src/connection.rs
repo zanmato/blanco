@@ -1048,10 +1048,24 @@ impl Connection for MssqlConnection {
         column_name: &str,
         reference_value: &str,
     ) -> Result<QueryResult> {
+        let quote_identifier = |identifier: &str| {
+            identifier
+                .split('.')
+                .map(|part| {
+                    let part = part.trim();
+                    let unquoted = part
+                        .strip_prefix('[')
+                        .and_then(|value| value.strip_suffix(']'))
+                        .unwrap_or(part);
+                    format!("[{}]", unquoted.replace(']', "]]"))
+                })
+                .collect::<Vec<_>>()
+                .join(".")
+        };
         let sql = format!(
-            "SELECT TOP 100 * FROM [{}] WHERE [{}] = '{}'",
-            table_name.replace(']', "]]"),
-            column_name.replace(']', "]]"),
+            "SELECT TOP 100 * FROM {} WHERE {} = '{}'",
+            quote_identifier(table_name),
+            quote_identifier(column_name),
             reference_value.replace('\'', "''")
         );
         self.execute_query(&sql, None, None).await

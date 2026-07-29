@@ -1,8 +1,8 @@
 use blanco_ui::{Tab, TabBar};
 use gpui::{
     Action, App, AppContext, BorrowAppContext, Context, Entity, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, Menu, MenuItem, ParentElement, Render, Styled, Subscription,
-    Task, Window, actions, div, prelude::FluentBuilder, px, svg,
+    InteractiveElement, IntoElement, Menu, MenuItem, ParentElement, Render, SharedString, Styled,
+    Subscription, Task, Window, actions, div, prelude::FluentBuilder, px, svg,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Root, Sizable as _, TitleBar, WindowExt as _,
@@ -24,6 +24,7 @@ use crate::{
     app_database::{AppDatabase, ConnectionData, EnvironmentType},
     app_settings::AppSettings,
     command_palette::CommandPalette,
+    connection_credentials,
     connection_modal::NewConnectionModal,
     connections::{ConnectionsPanel, ConnectionsPanelEvent},
     editor::{
@@ -1123,37 +1124,84 @@ impl BlancoApp {
                             let app_database = AppDatabase::global(cx).clone();
                             let db_service = database::DatabaseService::global(cx).clone();
                             let sidebar = sidebar.clone();
-                            cx.spawn(async move |cx| {
-                                match app_database.save_connection(&conn_data).await {
-                                    Ok(connection_id) => {
-                                        tracing::info!(
-                                            "Connection saved with ID: {}",
-                                            connection_id
-                                        );
-                                        let mut conn_data_with_id = conn_data;
-                                        conn_data_with_id.id = Some(connection_id);
-                                        if let Some(config) =
-                                            conn_data_with_id.to_connection_config()
+                            window
+                                .spawn(cx, async move |cx| {
+                                    let result: anyhow::Result<()> = async {
+                                        let connection_id =
+                                            app_database.save_connection(&conn_data).await?;
+                                        tracing::info!("Connection saved with ID: {connection_id}");
+                                        let mut connection_data = conn_data;
+                                        connection_data.id = Some(connection_id);
+                                        let credential_tasks = cx.update(|_, cx| {
+                                            connection_credentials::start_writing_connection(
+                                                connection_id,
+                                                &connection_data,
+                                                cx,
+                                            )
+                                        })?;
+                                        if let Err(error) =
+                                            connection_credentials::finish_writing(credential_tasks)
+                                                .await
+                                        {
+                                            if let Err(cleanup_error) = app_database
+                                                .delete_connection(connection_id)
+                                                .await
+                                            {
+                                                tracing::error!(
+                                                    "Failed to remove connection metadata after credential storage failed: {cleanup_error}"
+                                                );
+                                            }
+                                            let cleanup_tasks = cx.update(|_, cx| {
+                                                connection_credentials::start_deleting_connection(
+                                                    connection_id,
+                                                    cx,
+                                                )
+                                            })?;
+                                            if let Err(cleanup_error) =
+                                                connection_credentials::finish_writing(cleanup_tasks)
+                                                    .await
+                                            {
+                                                tracing::error!(
+                                                    "Failed to remove partially saved credentials: {cleanup_error}"
+                                                );
+                                            }
+                                            return Err(error);
+                                        }
+                                        if let Some(config) = connection_data.to_connection_config()
                                         {
                                             db_service.add_connection_config(config).await;
                                         }
-                                        cx.update(|cx| {
-                                            sidebar.update(cx, |panel, cx| {
-                                                panel.reload_connections(cx);
-                                            });
-                                        });
+                                        sidebar.update_in(cx, |panel, _window, cx| {
+                                            panel.reload_connections(cx);
+                                        })?;
+                                        Ok(())
                                     }
-                                    Err(e) => {
-                                        tracing::error!("Failed to save connection: {}", e);
-                                    }
-                                }
-                            })
-                            .detach();
+                                    .await;
 
-                            window.push_notification(
-                                (NotificationType::Success, "Connection saved successfully"),
-                                cx,
-                            );
+                                    cx.update(|window, cx| match result {
+                                        Ok(()) => window.push_notification(
+                                            (
+                                                NotificationType::Success,
+                                                "Connection saved successfully",
+                                            ),
+                                            cx,
+                                        ),
+                                        Err(error) => {
+                                            tracing::error!("Failed to save connection: {error:#}");
+                                            window.push_notification(
+                                                (
+                                                    NotificationType::Error,
+                                                    SharedString::from(format!(
+                                                        "Failed to save connection: {error:#}"
+                                                    )),
+                                                ),
+                                                cx,
+                                            );
+                                        }
+                                    })
+                                    .log_err();
+                                })
+                                .detach();
                             true
                         } else {
                             window.push_notification(
@@ -1239,37 +1287,62 @@ impl BlancoApp {
                             let app_database = AppDatabase::global(cx).clone();
                             let db_service = database::DatabaseService::global(cx).clone();
                             let sidebar = sidebar.clone();
-                            cx.spawn(async move |cx| {
-                                match app_database.save_connection(&conn_data).await {
-                                    Ok(connection_id) => {
+                            window
+                                .spawn(cx, async move |cx| {
+                                    let result: anyhow::Result<()> = async {
+                                        let connection_id =
+                                            app_database.save_connection(&conn_data).await?;
                                         tracing::info!(
-                                            "Connection updated with ID: {}",
-                                            connection_id
+                                            "Connection updated with ID: {connection_id}"
                                         );
-                                        let mut conn_data_with_id = conn_data;
-                                        conn_data_with_id.id = Some(connection_id);
-                                        if let Some(config) =
-                                            conn_data_with_id.to_connection_config()
+                                        let mut connection_data = conn_data;
+                                        connection_data.id = Some(connection_id);
+                                        let credential_tasks = cx.update(|_, cx| {
+                                            connection_credentials::start_writing_connection(
+                                                connection_id,
+                                                &connection_data,
+                                                cx,
+                                            )
+                                        })?;
+                                        connection_credentials::finish_writing(credential_tasks)
+                                            .await?;
+                                        if let Some(config) = connection_data.to_connection_config()
                                         {
                                             db_service.add_connection_config(config).await;
                                         }
-                                        cx.update(|cx| {
-                                            sidebar.update(cx, |panel, cx| {
-                                                panel.reload_connections(cx);
-                                            });
-                                        });
+                                        sidebar.update_in(cx, |panel, _window, cx| {
+                                            panel.reload_connections(cx);
+                                        })?;
+                                        Ok(())
                                     }
-                                    Err(e) => {
-                                        tracing::error!("Failed to update connection: {}", e);
-                                    }
-                                }
-                            })
-                            .detach();
+                                    .await;
 
-                            window.push_notification(
-                                (NotificationType::Success, "Connection updated successfully"),
-                                cx,
-                            );
+                                    cx.update(|window, cx| match result {
+                                        Ok(()) => window.push_notification(
+                                            (
+                                                NotificationType::Success,
+                                                "Connection updated successfully",
+                                            ),
+                                            cx,
+                                        ),
+                                        Err(error) => {
+                                            tracing::error!(
+                                                "Failed to update connection: {error:#}"
+                                            );
+                                            window.push_notification(
+                                                (
+                                                    NotificationType::Error,
+                                                    SharedString::from(format!(
+                                                        "Failed to update connection: {error:#}"
+                                                    )),
+                                                ),
+                                                cx,
+                                            );
+                                        }
+                                    })
+                                    .log_err();
+                                })
+                                .detach();
                             true
                         } else {
                             window.push_notification(
@@ -1434,7 +1507,7 @@ impl Render for BlancoApp {
 
         div()
             .track_focus(&self.focus_handle)
-            .key_context("BroquestApp")
+            .key_context("BlancoApp")
             .flex()
             .flex_col()
             .on_action(cx.listener(Self::on_quit))

@@ -22,6 +22,7 @@ pub(super) struct MssqlForm {
     pub username_input: Entity<InputState>,
     pub password_input: Entity<InputState>,
     pub encrypt_select: Entity<SelectState<Vec<String>>>,
+    pub trust_server_certificate: bool,
     pub ssh_enabled: bool,
     pub ssh_host_input: Entity<InputState>,
     pub ssh_port_input: Entity<InputState>,
@@ -88,6 +89,9 @@ impl MssqlForm {
                 cx,
             )
         });
+        let trust_server_certificate = conn
+            .map(|connection| connection.trust_server_certificate)
+            .unwrap_or(false);
 
         let ssh_host_input = make_input(
             window,
@@ -135,6 +139,7 @@ impl MssqlForm {
             username_input,
             password_input,
             encrypt_select,
+            trust_server_certificate,
             ssh_enabled,
             ssh_host_input,
             ssh_port_input,
@@ -147,6 +152,10 @@ impl MssqlForm {
 
     pub fn toggle_ssh(&mut self) {
         self.ssh_enabled = !self.ssh_enabled;
+    }
+
+    pub fn set_trust_server_certificate(&mut self, trust: bool) {
+        self.trust_server_certificate = trust;
     }
 
     pub fn validate(&self, cx: &App) -> Option<String> {
@@ -228,6 +237,7 @@ impl MssqlForm {
         };
         connection.environment_type = environment_type;
         connection.ssl_mode = encrypt;
+        connection.trust_server_certificate = self.trust_server_certificate;
         Some(connection)
     }
 }
@@ -295,6 +305,7 @@ pub(super) fn render(
 ) -> AnyElement {
     let form = &modal.mssql_form;
     let ssh_enabled = form.ssh_enabled;
+    let trust_server_certificate = form.trust_server_certificate;
     v_flex()
         .gap_3()
         .child(render_base_fields(form))
@@ -304,6 +315,15 @@ pub(super) fn render(
                 .gap_2()
                 .child(div().text_sm().child("Encryption"))
                 .child(Select::new(&form.encrypt_select)),
+        )
+        .child(
+            Switch::new("mssql-trust-server-certificate-switch")
+                .checked(trust_server_certificate)
+                .label("Trust server certificate (insecure)")
+                .on_click(cx.listener(|modal, checked, _window, cx| {
+                    modal.mssql_form.set_trust_server_certificate(*checked);
+                    cx.notify();
+                })),
         )
         .child(
             div().child(

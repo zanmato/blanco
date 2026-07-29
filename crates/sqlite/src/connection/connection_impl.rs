@@ -456,9 +456,25 @@ impl Connection for SqliteConnection {
         reference_value: &str,
     ) -> Result<QueryResult, anyhow::Error> {
         // SQLite doesn't provide table statistics, so always fetch only the referenced row
+        let quote_identifier = |identifier: &str| {
+            identifier
+                .split('.')
+                .map(|part| {
+                    let part = part.trim();
+                    let unquoted = part
+                        .strip_prefix('"')
+                        .and_then(|value| value.strip_suffix('"'))
+                        .unwrap_or(part);
+                    format!("\"{}\"", unquoted.replace('"', "\"\""))
+                })
+                .collect::<Vec<_>>()
+                .join(".")
+        };
         let query = format!(
             "SELECT * FROM {} WHERE {} = '{}'",
-            table_name, column_name, reference_value
+            quote_identifier(table_name),
+            quote_identifier(column_name),
+            reference_value.replace('\'', "''")
         );
         self.execute_query(&query, None, None).await
     }

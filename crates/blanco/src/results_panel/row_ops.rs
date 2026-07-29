@@ -5,6 +5,10 @@ use crate::app::{AddRow, DeleteRow, DuplicateRow, SetCellNull};
 
 impl ResultsPanel {
     pub fn add_new_row(&mut self, cx: &mut Context<Self>) {
+        if self.commit_in_progress {
+            return;
+        }
+
         self.table_state.update(cx, |state, cx| {
             let delegate = state.delegate_mut();
             let column_count = delegate.columns.len();
@@ -46,6 +50,10 @@ impl ResultsPanel {
     }
 
     pub fn duplicate_row(&mut self, cx: &mut Context<Self>) {
+        if self.commit_in_progress {
+            return;
+        }
+
         let selected_rows = self.table_state.read(cx).selected_rows().clone();
         for row_ix in selected_rows {
             self.duplicate_row_with_row(row_ix, cx);
@@ -53,6 +61,10 @@ impl ResultsPanel {
     }
 
     pub fn duplicate_row_with_row(&mut self, row_ix: usize, cx: &mut Context<Self>) {
+        if self.commit_in_progress {
+            return;
+        }
+
         self.table_state.update(cx, |state, cx| {
             let delegate = state.delegate_mut();
             if let Some(row_to_duplicate) = delegate.rows.get(row_ix).cloned() {
@@ -89,6 +101,10 @@ impl ResultsPanel {
     }
 
     pub fn delete_row(&mut self, cx: &mut Context<Self>) {
+        if self.commit_in_progress {
+            return;
+        }
+
         let selected_rows = self.table_state.read(cx).selected_rows().clone();
         for row_ix in selected_rows {
             self.delete_row_with_row(row_ix, cx);
@@ -96,6 +112,10 @@ impl ResultsPanel {
     }
 
     pub fn delete_row_with_row(&mut self, row_ix: usize, cx: &mut Context<Self>) {
+        if self.commit_in_progress {
+            return;
+        }
+
         self.table_state.update(cx, |state, cx| {
             let delegate = state.delegate_mut();
 
@@ -187,6 +207,10 @@ impl ResultsPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.commit_in_progress {
+            return;
+        }
+
         self.table_state.update(cx, |state, cx| {
             let delegate = state.delegate_mut();
 

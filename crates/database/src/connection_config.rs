@@ -263,7 +263,7 @@ impl From<DatabaseType> for blanco_core::DriverType {
 }
 
 /// Connection configuration loaded from app database
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ConnectionConfig {
     pub id: i64,
     pub name: String,
@@ -289,6 +289,42 @@ pub struct ConnectionConfig {
     pub ssl_key_path: Option<String>,
     pub ssl_cert_path: Option<String>,
     pub ssl_ca_cert_path: Option<String>,
+    pub trust_server_certificate: bool,
+}
+
+impl std::fmt::Debug for ConnectionConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ConnectionConfig")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("db_type", &self.db_type)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("database", &self.database)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+            .field("path", &self.path)
+            .field("ssh_host", &self.ssh_host)
+            .field("ssh_port", &self.ssh_port)
+            .field("ssh_user", &self.ssh_user)
+            .field(
+                "ssh_password",
+                &self.ssh_password.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("ssh_private_key_path", &self.ssh_private_key_path)
+            .field(
+                "ssh_private_key_password",
+                &self.ssh_private_key_password.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("is_active", &self.is_active)
+            .field("ssl_mode", &self.ssl_mode)
+            .field("ssl_key_path", &self.ssl_key_path)
+            .field("ssl_cert_path", &self.ssl_cert_path)
+            .field("ssl_ca_cert_path", &self.ssl_ca_cert_path)
+            .field("trust_server_certificate", &self.trust_server_certificate)
+            .finish()
+    }
 }
 
 impl ConnectionConfig {
@@ -325,6 +361,7 @@ impl ConnectionConfig {
             ssl_key_path: None,
             ssl_cert_path: None,
             ssl_ca_cert_path: None,
+            trust_server_certificate: false,
         }
     }
 
@@ -351,6 +388,7 @@ impl ConnectionConfig {
             ssl_key_path: None,
             ssl_cert_path: None,
             ssl_ca_cert_path: None,
+            trust_server_certificate: false,
         }
     }
 
@@ -385,6 +423,11 @@ impl ConnectionConfig {
         self.ssl_key_path = ssl_key_path;
         self.ssl_cert_path = ssl_cert_path;
         self.ssl_ca_cert_path = ssl_ca_cert_path;
+        self
+    }
+
+    pub fn with_trust_server_certificate(mut self, trust: bool) -> Self {
+        self.trust_server_certificate = trust;
         self
     }
 
@@ -600,7 +643,9 @@ impl ConnectionConfig {
                     let encrypt = !ssl_mode.eq_ignore_ascii_case("off");
                     params.push(format!("encrypt={}", encrypt));
                 }
-                params.push("trust_cert=true".to_string());
+                if self.trust_server_certificate {
+                    params.push("trust_cert=true".to_string());
+                }
                 if !params.is_empty() {
                     conn_str = format!("{}?{}", conn_str, params.join("&"));
                 }
@@ -709,6 +754,59 @@ mod tests {
 
         let override_db = config.connection_string(Some("new_db"), None, None);
         assert_eq!(override_db, "mysql://user:pass@localhost:3306/new_db");
+    }
+
+    #[test]
+    fn mssql_only_trusts_server_certificate_when_explicitly_enabled() {
+        let config = ConnectionConfig::new(
+            1,
+            "SQL Server".to_string(),
+            DatabaseType::MsSql,
+            "localhost".to_string(),
+            1433,
+            "master".to_string(),
+            "sa".to_string(),
+            Some("pass".to_string()),
+        );
+
+        assert_eq!(
+            config.connection_string(None, None, None),
+            "mssql://sa:pass@localhost:1433/master"
+        );
+        assert_eq!(
+            config
+                .with_trust_server_certificate(true)
+                .connection_string(None, None, None),
+            "mssql://sa:pass@localhost:1433/master?trust_cert=true"
+        );
+    }
+
+    #[test]
+    fn debug_output_redacts_credentials() {
+        let config = ConnectionConfig::new(
+            1,
+            "Postgres".to_string(),
+            DatabaseType::PostgreSQL,
+            "localhost".to_string(),
+            5432,
+            "postgres".to_string(),
+            "user".to_string(),
+            Some("database-secret".to_string()),
+        )
+        .with_ssh_config(
+            "bastion".to_string(),
+            "ssh-user".to_string(),
+            Some("ssh-secret".to_string()),
+            None,
+            Some("key-secret".to_string()),
+            None,
+        );
+
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("database-secret"));
+        assert!(!debug.contains("ssh-secret"));
+        assert!(!debug.contains("key-secret"));
+        assert!(debug.contains("[REDACTED]"));
     }
 
     #[test]

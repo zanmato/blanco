@@ -119,7 +119,6 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             port INTEGER,
             database_name TEXT,
             username TEXT,
-            password TEXT,
             database_path TEXT,
             last_used_at INTEGER,
             created_at INTEGER NOT NULL,
@@ -147,7 +146,6 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .await?;
     add_column_if_missing(pool, "ALTER TABLE connections ADD COLUMN username TEXT").await?;
-    add_column_if_missing(pool, "ALTER TABLE connections ADD COLUMN password TEXT").await?;
     add_column_if_missing(
         pool,
         "ALTER TABLE connections ADD COLUMN created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))",
@@ -171,15 +169,9 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     add_column_if_missing(pool, "ALTER TABLE connections ADD COLUMN ssh_host TEXT").await?;
     add_column_if_missing(pool, "ALTER TABLE connections ADD COLUMN ssh_port INTEGER").await?;
     add_column_if_missing(pool, "ALTER TABLE connections ADD COLUMN ssh_user TEXT").await?;
-    add_column_if_missing(pool, "ALTER TABLE connections ADD COLUMN ssh_password TEXT").await?;
     add_column_if_missing(
         pool,
         "ALTER TABLE connections ADD COLUMN ssh_private_key_path TEXT",
-    )
-    .await?;
-    add_column_if_missing(
-        pool,
-        "ALTER TABLE connections ADD COLUMN ssh_private_key_password TEXT",
     )
     .await?;
     add_column_if_missing(
@@ -202,6 +194,11 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     add_column_if_missing(
         pool,
         "ALTER TABLE connections ADD COLUMN ssl_ca_cert_path TEXT",
+    )
+    .await?;
+    add_column_if_missing(
+        pool,
+        "ALTER TABLE connections ADD COLUMN trust_server_certificate INTEGER NOT NULL DEFAULT 0",
     )
     .await?;
 

@@ -69,9 +69,14 @@ impl ConnectionsPanel {
                         database_name: Some(database.name.clone()),
                         schema_name: None,
                         table_name: None,
+                        // Each database has its own connection in the pool, so
+                        // the color tracks that database specifically. Coloring
+                        // by the parent connection's state (as this once did)
+                        // lit up every database as soon as any one of them was
+                        // opened.
                         icon: TreeItemIcon {
                             icon: IconName::Database,
-                            color: if self.loaded_connections.contains(&connection_id) {
+                            color: if self.is_database_connected(connection_id, &database.name) {
                                 cx.theme().primary.into()
                             } else {
                                 cx.theme().foreground.into()

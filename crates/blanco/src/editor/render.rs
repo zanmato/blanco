@@ -280,6 +280,7 @@ impl EditorPanel {
         // tabs still have a command log view. Gate on the backend capability so
         // new drivers slot in automatically.
         let supports_sql = query_tab._db_type.supports_sql();
+        let commit_in_progress = query_tab.results_panel.read(cx).is_commit_in_progress();
 
         h_flex()
             .p_2()
@@ -295,6 +296,7 @@ impl EditorPanel {
                         .small()
                         .icon(IconName::Plus)
                         .label("Add")
+                        .disabled(commit_in_progress)
                         .on_click(cx.listener(|this, _, _window, cx| {
                             this.with_active_results_panel(cx, |panel, cx| {
                                 panel.add_new_row(cx);
@@ -307,6 +309,7 @@ impl EditorPanel {
                         .small()
                         .icon(IconName::Copy)
                         .label("Duplicate")
+                        .disabled(commit_in_progress)
                         .on_click(cx.listener(|this, _, _window, cx| {
                             this.with_active_results_panel(cx, |panel, cx| {
                                 panel.duplicate_row(cx);
@@ -319,6 +322,7 @@ impl EditorPanel {
                         .small()
                         .icon(IconName::Trash)
                         .label("Delete")
+                        .disabled(commit_in_progress)
                         .on_click(cx.listener(|this, _, _window, cx| {
                             this.with_active_results_panel(cx, |panel, cx| {
                                 panel.delete_row(cx);
@@ -333,7 +337,10 @@ impl EditorPanel {
                         .icon(IconName::CircleX)
                         .label("Discard edits")
                         .tooltip("Discard pending cell edits")
-                        .disabled(!query_tab.results_panel.read(cx).has_pending_edits(cx))
+                        .disabled(
+                            commit_in_progress
+                                || !query_tab.results_panel.read(cx).has_pending_edits(cx),
+                        )
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.with_active_results_panel(cx, |panel, cx| {
                                 panel.rollback_changes(window, cx);
@@ -371,16 +378,18 @@ impl EditorPanel {
         query_tab: &QueryTab,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let has_pending = query_tab.results_panel.read(cx).has_pending_edits(cx);
+        let results_panel = query_tab.results_panel.read(cx);
+        let has_pending = results_panel.has_pending_edits(cx);
+        let commit_in_progress = results_panel.is_commit_in_progress();
         let button = Button::new("commit-changes")
             .outline()
             .small()
             .icon(IconName::Check)
             .label("Apply edits")
             .tooltip("Apply pending cell edits to the database")
-            .disabled(!has_pending);
+            .disabled(!has_pending || commit_in_progress);
 
-        if !has_pending {
+        if !has_pending || commit_in_progress {
             return button.into_any_element();
         }
 

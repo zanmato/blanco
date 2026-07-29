@@ -1,5 +1,5 @@
 //! End-to-end integration tests that walk the real connection-creation flow
-//! for every database driver against the services in `docker-compose.yml`.
+//! for every database driver.
 //!
 //! For each driver the test:
 //!   1. builds a `NewConnectionModal` and selects the driver,
@@ -9,11 +9,6 @@
 //!   4. saves the connection (persist + register with `DatabaseService`) and
 //!      asserts it round-trips back out of `AppDatabase`,
 //!   5. opens a tab bound to it and asserts `SELECT 1` returns the value `1`.
-//!
-//! The suite stays green without docker: when a server is unreachable the test
-//! prints a skip and returns, unless `BLANCO_RUN_DB_TESTS=1` is set, in which
-//! case an unreachable server is a hard failure (mirrors the per-crate db
-//! tests, e.g. `crates/postgres/src/lib.rs`).
 #![allow(clippy::print_stderr)]
 
 use std::env;
@@ -465,7 +460,7 @@ async fn test_sqlite_connect_and_query(cx: &mut TestAppContext) {
     let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
     cx.run_until_parked();
 
-    // SQLite has no password; just exercise create -> test -> save -> query
+    // SQLite has no password, just exercise create -> test -> save -> query
     // against a fresh temp file.
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let db_path = temp_dir.path().join("integration.db");

@@ -301,7 +301,9 @@ impl Connection for MysqlConnection {
                 raw_column_types = raw_types;
             }
             let row_data: Vec<Option<String>> = (0..columns.len())
-                .map(|i| self.convert_row_value_to_string(&row, i, &column_types, &raw_column_types))
+                .map(|i| {
+                    self.convert_row_value_to_string(&row, i, &column_types, &raw_column_types)
+                })
                 .collect();
             rows.push(row_data);
         }
@@ -709,6 +711,23 @@ impl Connection for MysqlConnection {
     ) -> Result<QueryResult, anyhow::Error> {
         const ROW_ESTIMATE_THRESHOLD: i64 = 20;
         const LIMIT_THRESHOLD: i64 = 100;
+        let quote_identifier = |identifier: &str| {
+            identifier
+                .split('.')
+                .map(|part| {
+                    let part = part.trim();
+                    let unquoted = part
+                        .strip_prefix('`')
+                        .and_then(|value| value.strip_suffix('`'))
+                        .unwrap_or(part);
+                    format!("`{}`", unquoted.replace('`', "``"))
+                })
+                .collect::<Vec<_>>()
+                .join(".")
+        };
+        let table_identifier = quote_identifier(table_name);
+        let column_identifier = quote_identifier(column_name);
+        let reference_value = reference_value.replace('\'', "''");
 
         // Get row estimate from INFORMATION_SCHEMA.TABLES
         let estimate_query = "SELECT TABLE_ROWS FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = ? AND TABLE_SCHEMA = DATABASE()";
@@ -730,7 +749,7 @@ impl Connection for MysqlConnection {
             // Small table: fetch all rows with referenced row first
             let query = format!(
                 "SELECT * FROM {} ORDER BY {} = '{}' DESC LIMIT {}",
-                table_name, column_name, reference_value, LIMIT_THRESHOLD
+                table_identifier, column_identifier, reference_value, LIMIT_THRESHOLD
             );
             return self.execute_query(&query, None, None).await;
         }
@@ -738,7 +757,7 @@ impl Connection for MysqlConnection {
         // Large table or estimate unavailable: fetch only referenced row
         let query = format!(
             "SELECT * FROM {} WHERE {} = '{}'",
-            table_name, column_name, reference_value
+            table_identifier, column_identifier, reference_value
         );
         self.execute_query(&query, None, None).await
     }

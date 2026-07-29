@@ -23,6 +23,10 @@ impl ResultsPanel {
         sql_view: Option<&Entity<blanco_ui::SqlView>>,
         cx: &mut Context<Self>,
     ) {
+        if self.commit_in_progress {
+            return;
+        }
+
         // First, commit any currently editing cell
         if let Some((row, col)) = self.get_current_editing_cell(cx) {
             // Get the current value from the input
@@ -49,6 +53,9 @@ impl ResultsPanel {
             return;
         }
 
+        self.commit_in_progress = true;
+        cx.notify();
+
         tracing::debug!("committing {} table operation(s)", change_operations.len());
 
         let delegate = self.table_state.read(cx).delegate();
@@ -56,11 +63,11 @@ impl ResultsPanel {
         let change_operations_for_pipeline = change_operations;
         let connection_id_for_pipeline = delegate.connection_id;
         let database_name = delegate.database_name.clone();
+        let database_type = delegate.db_type.unwrap_or(self.db_type);
 
         // Spawn background task to execute table operations
         let db_service = DatabaseService::global(cx).clone();
-        let _table_entity = self.table_state.clone();
-        let _sql_view_entity: Option<Entity<blanco_ui::SqlView>> = sql_view.cloned();
+        let table_entity = self.table_state.clone();
 
         let table_operations_task = cx.background_spawn(async move {
             let start_time = std::time::Instant::now();
@@ -69,7 +76,7 @@ impl ResultsPanel {
             // exactly what the transaction attempted, regardless of outcome.
             let sql_queries: Vec<String> = change_operations_for_pipeline
                 .iter()
-                .map(|operation| (operation as &TableChangeOperation).to_sql_query())
+                .map(|operation| (operation as &TableChangeOperation).to_sql_query(database_type))
                 .collect();
 
             // Execute table operations using DatabaseService. The whole batch
@@ -149,7 +156,7 @@ impl ResultsPanel {
                 // Clear edits, remove deleted rows, and refresh the table
                 entity
                     .update(cx, |panel, cx| {
-                        panel.table_state.update(cx, |state, cx| {
+                        table_entity.update(cx, |state, cx| {
                             let delegate = state.delegate_mut();
 
                             // Collect deleted row indices and sort in reverse order to remove from bottom up
@@ -171,6 +178,8 @@ impl ResultsPanel {
                             delegate.edit_state.clear_edits();
                             state.refresh(cx);
                         });
+                        panel.commit_in_progress = false;
+                        cx.notify();
 
                         // Update SQL log with queries and success message
                         if let Some(sql_view) = sql_view_response_entity {
@@ -205,10 +214,19 @@ impl ResultsPanel {
                 if partial {
                     entity
                         .update(cx, |panel, cx| {
-                            panel.table_state.update(cx, |state, cx| {
+                            table_entity.update(cx, |state, cx| {
                                 state.delegate_mut().edit_state.clear_all();
                                 state.refresh(cx);
                             });
+                            panel.commit_in_progress = false;
+                            cx.notify();
+                        })
+                        .log_err();
+                } else {
+                    entity
+                        .update(cx, |panel, cx| {
+                            panel.commit_in_progress = false;
+                            cx.notify();
                         })
                         .log_err();
                 }
@@ -247,6 +265,10 @@ impl ResultsPanel {
 
     /// Rollback all pending changes
     pub fn rollback_changes(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.commit_in_progress {
+            return;
+        }
+
         let changes = self
             .table_state
             .read(cx)

@@ -105,6 +105,7 @@ pub struct ResultsPanel {
     db_type: database::DatabaseType,
     editing_input: Option<Entity<InputState>>,
     editing_cell: Option<(usize, usize)>,
+    commit_in_progress: bool,
     copy_handler: CopyHandler,
     /// Scroll position for the key/value inspector body (Redis key view).
     key_value_scroll_handle: ScrollHandle,
@@ -142,6 +143,7 @@ impl ResultsPanel {
             focus_handle: cx.focus_handle(),
             editing_input: None,
             editing_cell: None,
+            commit_in_progress: false,
             copy_handler: CopyHandler::new(),
             key_value_scroll_handle: ScrollHandle::new(),
             tab_strip_scroll_handle: ScrollHandle::new(),
@@ -388,6 +390,10 @@ impl ResultsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.commit_in_progress {
+            return;
+        }
+
         // Get the current cell value
         let current_value = self
             .table_state
@@ -652,6 +658,10 @@ impl ResultsPanel {
             || !edit_state.pending_deleted_rows.is_empty()
     }
 
+    pub fn is_commit_in_progress(&self) -> bool {
+        self.commit_in_progress
+    }
+
     /// Generate the SQL statements that would be executed by Apply edits,
     /// without committing or executing anything.
     pub fn preview_pending_sql(&self, cx: &App) -> Vec<String> {
@@ -660,7 +670,7 @@ impl ResultsPanel {
             .delegate()
             .create_change_operations()
             .iter()
-            .map(|op| op.to_sql_query())
+            .map(|operation| operation.to_sql_query(self.db_type))
             .collect()
     }
 

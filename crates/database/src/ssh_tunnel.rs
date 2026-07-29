@@ -5,7 +5,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use russh::client as russh_client;
 use russh::client::{Config as SshConfig, Handle as SshHandle};
-use russh::keys::load_secret_key;
+use russh::keys::{check_known_hosts, load_secret_key};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Instant;
 use tokio::io::copy_bidirectional;
@@ -58,6 +58,8 @@ pub enum TunnelStatus {
 struct SshClientHandler {
     status: Arc<StdMutex<TunnelStatus>>,
     is_running: Arc<StdMutex<bool>>,
+    host: String,
+    port: u16,
 }
 
 #[async_trait]
@@ -66,10 +68,18 @@ impl russh_client::Handler for SshClientHandler {
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &russh::keys::key::PublicKey,
+        server_public_key: &russh::keys::key::PublicKey,
     ) -> Result<bool, Self::Error> {
-        tracing::debug!("Accepting SSH server key");
-        Ok(true)
+        let trusted = check_known_hosts(&self.host, self.port, server_public_key)?;
+        if !trusted {
+            tracing::error!(
+                host = %self.host,
+                port = self.port,
+                fingerprint = %server_public_key.fingerprint(),
+                "SSH server key is not present in known_hosts"
+            );
+        }
+        Ok(trusted)
     }
 }
 
@@ -183,6 +193,8 @@ impl SshTunnel {
         let handler = SshClientHandler {
             status: Arc::clone(&self.status),
             is_running: Arc::clone(&self.is_running),
+            host: self.config.ssh_host.clone(),
+            port: self.config.ssh_port,
         };
 
         // Connect to SSH server
@@ -199,15 +211,21 @@ impl SshTunnel {
             let key = load_secret_key(key_path, self.config.ssh_private_key_password.as_deref())
                 .map_err(|e| anyhow::anyhow!("Failed to load private key: {}", e))?;
 
-            session
+            let authenticated = session
                 .authenticate_publickey(&self.config.ssh_user, Arc::new(key))
                 .await
                 .map_err(|e| anyhow::anyhow!("SSH key authentication failed: {}", e))?;
+            if !authenticated {
+                anyhow::bail!("SSH key authentication was rejected");
+            }
         } else if let Some(password) = &self.config.ssh_password {
-            session
+            let authenticated = session
                 .authenticate_password(&self.config.ssh_user, password)
                 .await
                 .map_err(|e| anyhow::anyhow!("SSH password authentication failed: {}", e))?;
+            if !authenticated {
+                anyhow::bail!("SSH password authentication was rejected");
+            }
         } else {
             anyhow::bail!("No authentication method provided");
         }

@@ -6,6 +6,7 @@ mod settings;
 mod snippets;
 mod types;
 
+pub use connections::LegacyConnectionCredentials;
 pub use schema::{app_db_path, init_schema};
 pub use types::{ConnectionData, EnvironmentType, QueryHistoryData, QueryTabData, SnippetData};
 
