@@ -237,6 +237,7 @@ mod tests {
     use crate::results_panel::table_operations::{
         OperationType, RowIdentifier, TableChangeOperation,
     };
+    use crate::results_panel::{ChangeType, TableChange};
 
     #[test]
     fn test_cell_edit_state() {
@@ -307,6 +308,36 @@ mod tests {
         assert!(!edit_state.is_editing(0, 0));
         assert!(!edit_state.is_edited(0, 0));
         assert!(edit_state.pending_new_rows.is_empty());
+    }
+
+    #[test]
+    fn test_cell_edit_state_clear_edits_drops_committed_changes() {
+        let mut edit_state = CellEditState::default();
+
+        edit_state
+            .original_values
+            .insert((0, 1), Some("original".to_string()));
+        edit_state
+            .edited_values
+            .insert((0, 1), Some("modified".to_string()));
+        edit_state.add_change(TableChange::new(
+            ChangeType::UpdateCell,
+            "test_table".to_string(),
+            0,
+            Some(1),
+            Some("original".to_string()),
+            Some("modified".to_string()),
+            vec![("id".to_string(), Some("1".to_string()))],
+            None,
+        ));
+
+        edit_state.clear_edits();
+
+        assert!(!edit_state.is_edited(0, 1));
+        assert!(
+            edit_state.changes.is_empty(),
+            "committed changes must not survive into the next commit"
+        );
     }
 
     #[test]

@@ -105,7 +105,12 @@ impl CellEditState {
         self.editing_input.clone()
     }
 
+    /// Reset every trace of pending edits after they have been persisted.
+    /// `changes` must go with them: it is the list the SQL is generated from,
+    /// so leaving it populated makes the next commit replay already-applied
+    /// edits even though the cells no longer render as uncommitted.
     pub fn clear_edits(&mut self) {
+        self.changes.clear();
         self.edited_values.clear();
         self.original_values.clear();
         self.pending_new_rows.clear();
