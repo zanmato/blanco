@@ -18,7 +18,7 @@ use gpui_component::{
 
 use super::rename_form::RenameTabForm;
 use super::{EditorPanel, QueryTab, TabType};
-use crate::app::{ExecuteSubstitutedQuery, FormatQuery, RenameTab, ToggleSidebar};
+use crate::app::{ExecuteSubstitutedQuery, FormatQuery, RenameTab};
 use crate::result_ext::ResultExt;
 use crate::results_panel::ResultsPanel;
 
@@ -288,6 +288,10 @@ impl EditorPanel {
             .border_t_1()
             .bg(cx.theme().title_bar)
             .border_color(cx.theme().border)
+            // Sits flush against the bottom of the editor card, and GPUI's
+            // content mask is rectangular, so it has to round its own corners
+            // or it squares off the card's.
+            .rounded_b(crate::app::PANEL_RADIUS)
             .flex_wrap()
             .when(supports_sql, |bar| {
                 bar.child(
@@ -709,33 +713,26 @@ impl Render for EditorPanel {
             .on_action(cx.listener(|this, _: &FormatQuery, window, cx| {
                 this.format_current_query(window, cx);
             }))
+            // The segmented trough paints its own background, and padding on
+            // the bar itself would make it taller rather than inset it, which
+            // squares off the card's top corners. Inset it with a wrapper.
+            // `min_w_0` is what lets the strip overflow and scroll.
             .child(
-                TabBar::new("editor-tabs")
-                    .menu(true)
-                    .w_full()
-                    .pt(px(4.))
-                    .selected_index(self.active_tab_ix)
-                    .on_click(Self::tab_bar_click_handler(cx.entity().downgrade()))
-                    .prefix(
-                        Button::new("toggle-sidebar")
-                            .ghost()
-                            .small()
-                            .icon(if self.sidebar_collapsed {
-                                Icon::new(IconName::PanelLeftOpen).size_4()
-                            } else {
-                                Icon::new(IconName::PanelLeftClose).size_4()
-                            })
-                            .on_click(cx.listener(|_, _, window, cx| {
-                                window.dispatch_action(Box::new(ToggleSidebar), cx);
-                            })),
-                    )
-                    .children(
-                        self.tabs
-                            .iter()
-                            .enumerate()
-                            .map(|(ix, tab)| self.render_tab_bar_item(ix, tab, cx)),
-                    )
-                    .track_scroll(&self.tabbar_scroll_handle),
+                div().p(crate::app::PANEL_GAP).min_w_0().child(
+                    TabBar::new("editor-tabs")
+                        .segmented()
+                        .menu(true)
+                        .w_full()
+                        .selected_index(self.active_tab_ix)
+                        .on_click(Self::tab_bar_click_handler(cx.entity().downgrade()))
+                        .children(
+                            self.tabs
+                                .iter()
+                                .enumerate()
+                                .map(|(ix, tab)| self.render_tab_bar_item(ix, tab, cx)),
+                        )
+                        .track_scroll(&self.tabbar_scroll_handle),
+                ),
             )
             .child(
                 div()

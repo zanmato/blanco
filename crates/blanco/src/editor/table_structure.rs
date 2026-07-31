@@ -210,7 +210,8 @@ impl Render for TableStructureTab {
             .h_full()
             .w_full()
             .overflow_hidden()
-            .bg(theme.background)
+            // No background: the editor card owns this surface. A square fill
+            // here would cover the card's rounded corners.
             .child(
                 v_flex()
                     .flex_1()

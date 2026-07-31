@@ -705,6 +705,19 @@ impl RenderOnce for Tab {
 
         let use_chrome_shape = self.selected && self.variant == TabVariant::Tab && !self.disabled;
 
+        // `inner_content` holds only the label, so painting the selected fill
+        // on it leaves any prefix and suffix (close button, connection name)
+        // outside the highlight. Upstream paints the fill as a separate layer
+        // spanning the whole tab instead; do the same, and let that layer be
+        // the single owner of the fill.
+        let use_inner_bg_layer = self.variant == TabVariant::Segmented && self.selected;
+        let inner_bg_layer_color = tab_style.inner_bg;
+        let (inner_bg, hover_inner_bg) = if use_inner_bg_layer {
+            (cx.theme().transparent, cx.theme().transparent)
+        } else {
+            (tab_style.inner_bg, hover_style.inner_bg)
+        };
+
         let inner_content = h_flex()
             .flex_1()
             .h(inner_height)
@@ -732,10 +745,12 @@ impl RenderOnce for Tab {
                     })
                     .children(self.children),
             })
-            .bg(tab_style.inner_bg)
+            .bg(inner_bg)
             .rounded(inner_radius)
-            .when(tab_style.shadow, |this| this.shadow_xs())
-            .hover(|this| this.bg(hover_style.inner_bg).rounded(inner_radius));
+            .when(tab_style.shadow && !use_inner_bg_layer, |this| {
+                this.shadow_xs()
+            })
+            .hover(|this| this.bg(hover_inner_bg).rounded(inner_radius));
 
         let include_left = self.ix != 0 || tab_bar_prefix;
 
@@ -795,7 +810,8 @@ impl RenderOnce for Tab {
                         .when_some(self.suffix, |this, suffix| this.child(suffix)),
                 )
         } else {
-            base.flex_wrap()
+            base.relative()
+                .flex_wrap()
                 .gap_1()
                 .items_center()
                 .overflow_hidden()
@@ -820,6 +836,27 @@ impl RenderOnce for Tab {
                             .border_color(hover_style.border_color)
                             .rounded(radius)
                     })
+                })
+                // Added before the content so it paints behind it.
+                .when(use_inner_bg_layer, |this| {
+                    this.child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .top_0()
+                            .bottom_0()
+                            .flex()
+                            .items_center()
+                            .child(
+                                div()
+                                    .w_full()
+                                    .h(inner_height)
+                                    .bg(inner_bg_layer_color)
+                                    .rounded(inner_radius)
+                                    .when(tab_style.shadow, |this| this.shadow_xs()),
+                            ),
+                    )
                 })
                 .when_some(self.prefix, |this, prefix| this.child(prefix))
                 .child(inner_content)

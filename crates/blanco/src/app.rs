@@ -243,6 +243,14 @@ impl From<database::DatabaseDisconnectedMessage> for DatabaseDisconnected {
     }
 }
 
+/// Corner radius of the sidebar and editor cards. Deliberately separate from
+/// `theme.radius`, which stays smaller for the controls inside the cards.
+pub(crate) const PANEL_RADIUS: gpui::Pixels = px(8.);
+
+/// Gap between the cards and the window edges. Half of it is applied as padding
+/// on each side of the split so the two cards end up `PANEL_GAP` apart.
+pub(crate) const PANEL_GAP: gpui::Pixels = px(6.);
+
 /// Which view is active in the sidebar's segmented tab bar.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SidebarTab {
@@ -282,8 +290,7 @@ impl BlancoApp {
         let main_resize_state = cx.new(|_| ResizableState::default());
 
         let saved_tabs = Self::load_saved_tabs(cx);
-        let editor_panel =
-            cx.new(|cx| EditorPanel::new_with_saved_tabs(window, cx, false, saved_tabs));
+        let editor_panel = cx.new(|cx| EditorPanel::new_with_saved_tabs(window, cx, saved_tabs));
         let command_palette = cx.new(|cx| CommandPalette::new(sidebar.downgrade(), window, cx));
         let app_menu_bar = AppMenuBar::new(cx);
 
@@ -570,82 +577,119 @@ impl BlancoApp {
         )
     }
 
-    /// The window title bar: app logo followed by the menu bar.
+    /// The window title bar: app logo and menu bar on the left, the sidebar
+    /// toggle on the right. `TitleBar` lays its children out left of the window
+    /// controls, so a trailing child lands next to minimize/maximize/close.
     fn render_title_bar(&self, window: &mut Window, cx: &Context<Self>) -> impl IntoElement {
         TitleBar::new().child(
             div()
                 .flex()
                 .items_center()
-                .gap_x_3()
-                .bg(cx.theme().title_bar)
+                .justify_between()
+                .w_full()
                 .child(
-                    svg()
-                        .h(px(40.))
-                        .w(px(128.))
-                        .text_color(window.text_style().color)
-                        .path("images/blanco.svg"),
+                    h_flex()
+                        .items_center()
+                        .gap_x_3()
+                        .child(
+                            svg()
+                                .h(px(40.))
+                                .w(px(128.))
+                                .text_color(window.text_style().color)
+                                .path("images/blanco.svg"),
+                        )
+                        .child(self.app_menu_bar.clone()),
                 )
-                .child(self.app_menu_bar.clone()),
+                .child(self.render_sidebar_toggle(cx)),
         )
+    }
+
+    fn render_sidebar_toggle(&self, _cx: &Context<Self>) -> impl IntoElement {
+        Button::new("toggle-sidebar")
+            .ghost()
+            .small()
+            .icon(if self.sidebar_collapsed {
+                Icon::new(IconName::PanelLeftOpen).size_4()
+            } else {
+                Icon::new(IconName::PanelLeftClose).size_4()
+            })
+            .tooltip("Toggle Sidebar")
+            .on_click(|_, window, cx| {
+                window.dispatch_action(Box::new(ToggleSidebar), cx);
+            })
     }
 
     /// The left sidebar: a segmented tab strip (Connections / Snippets /
     /// History) over the currently selected panel.
     fn render_sidebar_panel(&self, cx: &Context<Self>) -> ResizablePanel {
         resizable_panel()
+            // Kept in the tree while collapsed rather than omitted, so the
+            // group's state retains the width across a collapse/re-open.
+            .visible(!self.sidebar_collapsed)
             .size(px(288.))
             .size_range(px(288.)..px(500.))
+            .flex_none()
             .child(
-                div()
-                    .w_full()
-                    .h_full()
-                    .flex()
-                    .flex_col()
-                    .overflow_hidden()
-                    .child(
-                        div().flex_none().px_2().py_1p5().child(
-                            TabBar::new("sidebar-tabs")
-                                .segmented()
-                                .w_full()
-                                .selected_index(match self.sidebar_tab {
-                                    SidebarTab::Connections => 0,
-                                    SidebarTab::Snippets => 1,
-                                    SidebarTab::History => 2,
-                                })
-                                .on_click({
-                                    let view = cx.entity().downgrade();
-                                    move |ix: &usize, _, _, cx| {
-                                        let tab = match ix {
-                                            1 => SidebarTab::Snippets,
-                                            2 => SidebarTab::History,
-                                            _ => SidebarTab::Connections,
-                                        };
-                                        view.update(cx, |this, cx| {
-                                            this.sidebar_tab = tab;
-                                            // Pick up queries run since this
-                                            // panel was last shown.
-                                            if tab == SidebarTab::History {
-                                                this.history_panel.update(cx, |panel, cx| {
-                                                    panel.reload(cx);
-                                                });
-                                            }
-                                            cx.notify();
-                                        })
-                                        .log_err();
-                                    }
-                                })
-                                .child(Tab::new().label("Connections").flex_1())
-                                .child(Tab::new().label("Snippets").flex_1())
-                                .child(Tab::new().label("History").flex_1()),
-                        ),
-                    )
-                    .child(div().flex_1().min_h_0().overflow_hidden().map(|this| {
-                        match self.sidebar_tab {
-                            SidebarTab::Connections => this.child(self.sidebar.clone()),
-                            SidebarTab::Snippets => this.child(self.snippets_panel.clone()),
-                            SidebarTab::History => this.child(self.history_panel.clone()),
-                        }
-                    })),
+                div().size_full().pr(PANEL_GAP / 2.).child(
+                    div()
+                        .w_full()
+                        .h_full()
+                        .flex()
+                        .flex_col()
+                        .overflow_hidden()
+                        .bg(cx.theme().sidebar)
+                        .rounded(PANEL_RADIUS)
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        // The segmented trough paints its own background, so it
+                        // is inset by this wrapper rather than padding the bar
+                        // itself, which would otherwise square the card's top
+                        // corners.
+                        .child(
+                            div().flex_none().p(PANEL_GAP).child(
+                                TabBar::new("sidebar-tabs")
+                                    .segmented()
+                                    .w_full()
+                                    .selected_index(match self.sidebar_tab {
+                                        SidebarTab::Connections => 0,
+                                        SidebarTab::Snippets => 1,
+                                        SidebarTab::History => 2,
+                                    })
+                                    .on_click({
+                                        let view = cx.entity().downgrade();
+                                        move |ix: &usize, _, _, cx| {
+                                            let tab = match ix {
+                                                1 => SidebarTab::Snippets,
+                                                2 => SidebarTab::History,
+                                                _ => SidebarTab::Connections,
+                                            };
+                                            view.update(cx, |this, cx| {
+                                                this.sidebar_tab = tab;
+                                                // Pick up queries run since this
+                                                // panel was last shown.
+                                                if tab == SidebarTab::History {
+                                                    this.history_panel.update(cx, |panel, cx| {
+                                                        panel.reload(cx);
+                                                    });
+                                                }
+                                                cx.notify();
+                                            })
+                                            .log_err();
+                                        }
+                                    })
+                                    .child(Tab::new().label("Connections").flex_1())
+                                    .child(Tab::new().label("Snippets").flex_1())
+                                    .child(Tab::new().label("History").flex_1()),
+                            ),
+                        )
+                        .child(div().flex_1().min_h_0().overflow_hidden().map(|this| {
+                            match self.sidebar_tab {
+                                SidebarTab::Connections => this.child(self.sidebar.clone()),
+                                SidebarTab::Snippets => this.child(self.snippets_panel.clone()),
+                                SidebarTab::History => this.child(self.history_panel.clone()),
+                            }
+                        })),
+                ),
             )
     }
 
@@ -665,12 +709,6 @@ impl BlancoApp {
 
     fn toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
         self.sidebar_collapsed = !self.sidebar_collapsed;
-
-        // Update editor panel's sidebar state
-        self.editor_panel.update(cx, |panel, cx| {
-            panel.set_sidebar_collapsed(self.sidebar_collapsed, cx);
-        });
-
         cx.notify();
     }
 
@@ -1538,27 +1576,61 @@ impl Render for BlancoApp {
             .text_color(cx.theme().foreground)
             // Title bar
             .child(self.render_title_bar(window, cx))
-            // Main content area
+            // Main content area: the cards, inset from the window edges. The
+            // vertical insets are kept minimal so the cards sit close under the
+            // title bar and just above the status bar; only the sides and the
+            // split between the cards get the full gap.
             .child(
-                div().flex().flex_1().min_h_0().overflow_hidden().child(
-                    h_resizable("main-layout")
-                        .with_state(&self.main_resize_state)
-                        // Left side: Connections panel sidebar
-                        .when(!self.sidebar_collapsed, |this| {
-                            this.child(self.render_sidebar_panel(cx))
-                        })
-                        // Main panel
-                        .child(
-                            resizable_panel().child(
-                                div()
-                                    .flex()
-                                    .flex_1()
-                                    .h_full()
-                                    .overflow_hidden()
-                                    .child(self.editor_panel.clone()),
+                div()
+                    .flex()
+                    .flex_1()
+                    .w_full()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .px(PANEL_GAP)
+                    .pb(px(2.))
+                    .pt(px(1.))
+                    .child(
+                        h_resizable("main-layout")
+                            .with_state(&self.main_resize_state)
+                            // The cards draw their own borders, so the handle
+                            // only needs to stay draggable; its line would
+                            // otherwise float in the gutter and overshoot the
+                            // rounded corners.
+                            .invisible_handles()
+                            // Left side: Connections panel sidebar
+                            .child(self.render_sidebar_panel(cx))
+                            // Main panel
+                            .child(
+                                resizable_panel().child(
+                                    div()
+                                        .size_full()
+                                        .when(!self.sidebar_collapsed, |this| {
+                                            this.pl(PANEL_GAP / 2.)
+                                        })
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .flex_1()
+                                                // Let this shrink below its
+                                                // content width, or the panel
+                                                // grows to fit the widest tab
+                                                // and the tab bar never scrolls.
+                                                .min_w_0()
+                                                .h_full()
+                                                .overflow_hidden()
+                                                .bg(cx.theme().background)
+                                                .rounded(PANEL_RADIUS)
+                                                // This card shares the shell
+                                                // colour, so the border is what
+                                                // makes its outline readable.
+                                                .border_1()
+                                                .border_color(cx.theme().border)
+                                                .child(self.editor_panel.clone()),
+                                        ),
+                                ),
                             ),
-                        ),
-                ),
+                    ),
             )
             // Status bar pinned to the bottom, spanning the full window width.
             .child(self.render_status_bar(cx))

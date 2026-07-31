@@ -4065,7 +4065,7 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.5.2"
-source = "git+https://github.com/zanmato/gpui-component?branch=blanco#a51f6b08c343bf2d404c7b86e8b1d9e548dec8d0"
+source = "git+https://github.com/zanmato/gpui-component?branch=blanco#43651ec533a847d2d8e035fae69b287dcf695549"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -4115,7 +4115,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-assets"
 version = "0.5.1"
-source = "git+https://github.com/zanmato/gpui-component?branch=blanco#a51f6b08c343bf2d404c7b86e8b1d9e548dec8d0"
+source = "git+https://github.com/zanmato/gpui-component?branch=blanco#43651ec533a847d2d8e035fae69b287dcf695549"
 dependencies = [
  "anyhow",
  "gpui",
@@ -4129,7 +4129,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-macros"
 version = "0.5.1"
-source = "git+https://github.com/zanmato/gpui-component?branch=blanco#a51f6b08c343bf2d404c7b86e8b1d9e548dec8d0"
+source = "git+https://github.com/zanmato/gpui-component?branch=blanco#43651ec533a847d2d8e035fae69b287dcf695549"
 dependencies = [
  "proc-macro2",
  "quote",

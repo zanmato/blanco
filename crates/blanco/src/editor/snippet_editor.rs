@@ -162,6 +162,9 @@ impl Render for SnippetEditor {
                     .border_t_1()
                     .bg(cx.theme().title_bar)
                     .border_color(cx.theme().border)
+                    // Flush against the bottom of the editor card; the content
+                    // mask is rectangular, so round the corners here too.
+                    .rounded_b(crate::app::PANEL_RADIUS)
                     .items_center()
                     .child(div().flex_1().child(Input::new(&self.name_input).small()))
                     .child(

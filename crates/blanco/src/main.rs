@@ -36,7 +36,7 @@ mod transformers;
 
 use assets::Assets;
 use database::DatabaseService;
-use gpui::{AppContext, SharedString, WindowBounds, WindowOptions, px, size};
+use gpui::{AppContext, AssetSource as _, SharedString, WindowBounds, WindowOptions, px, size};
 use gpui_component::{Theme, ThemeRegistry};
 use gpui_platform::application;
 use std::path::PathBuf;
@@ -155,6 +155,13 @@ fn main() {
         // Apply theme
         let theme_name = SharedString::from(&AppSettings::global(cx).settings.appearance.theme);
         if let Err(err) = ThemeRegistry::watch_dir(PathBuf::from("./themes"), cx, move |cx| {
+            // `ThemeRegistry::reload` clears the registry and repopulates it
+            // from the watched directory alone, and it runs just before this
+            // callback, so the embedded themes have to be (re)loaded here
+            // rather than once at startup. `load_themes_from_str` skips names
+            // that are already present, so a `./themes/*.json` on disk still
+            // wins and hot-reload keeps working during development.
+            load_embedded_themes(cx);
             if let Some(theme) = ThemeRegistry::global(cx).themes().get(&theme_name).cloned() {
                 Theme::global_mut(cx).apply_config(&theme);
             }
@@ -230,4 +237,93 @@ fn main() {
 
         cx.activate(true);
     });
+}
+
+/// Register the themes compiled into the binary, so an installed build has the
+/// full set without needing a `themes/` directory next to the working
+/// directory.
+fn load_embedded_themes(cx: &mut gpui::App) {
+    let paths = match Assets.list("themes/") {
+        Ok(paths) => paths,
+        Err(error) => {
+            tracing::error!("Failed to list embedded themes: {error}");
+            return;
+        }
+    };
+
+    for path in paths {
+        let content = match Assets.load(&path) {
+            Ok(Some(content)) => content,
+            Ok(None) => continue,
+            Err(error) => {
+                tracing::error!("Failed to read embedded theme {path}: {error}");
+                continue;
+            }
+        };
+        let content = match std::str::from_utf8(&content) {
+            Ok(content) => content,
+            Err(error) => {
+                tracing::error!("Embedded theme {path} is not valid UTF-8: {error}");
+                continue;
+            }
+        };
+        if let Err(error) = ThemeRegistry::global_mut(cx).load_themes_from_str(content) {
+            tracing::error!("Failed to load embedded theme {path}: {error}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The themes are only reachable in an installed build if they are embedded
+    /// in the binary; before they lived at the repo root and resolved through
+    /// the working directory, so a packaged build silently fell back to
+    /// gpui-component's built-in theme.
+    #[test]
+    fn embedded_themes_are_registered_and_parse() {
+        let paths = Assets.list("themes/").expect("themes should be embedded");
+        assert!(
+            paths.iter().any(|p| p.as_ref() == "themes/catppuccin.json"),
+            "catppuccin.json missing from the embedded assets, got {paths:?}"
+        );
+
+        let mut names = Vec::new();
+        for path in &paths {
+            let bytes = Assets
+                .load(path)
+                .unwrap_or_else(|error| panic!("failed to read {path}: {error}"))
+                .unwrap_or_else(|| panic!("{path} has no content"));
+            let parsed: serde_json::Value = serde_json::from_slice(&bytes)
+                .unwrap_or_else(|error| panic!("{path} is not valid JSON: {error}"));
+            for theme in parsed["themes"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{path} has no themes array"))
+            {
+                names.push(theme["name"].as_str().unwrap_or_default().to_string());
+                // Cards are drawn against these, and a misspelled key is
+                // silently ignored by the theme loader.
+                for key in ["background", "sidebar.background", "border"] {
+                    assert!(
+                        theme["colors"][key].is_string(),
+                        "{path}: {} is missing {key}",
+                        theme["name"]
+                    );
+                }
+            }
+        }
+
+        for expected in [
+            "Catppuccin Latte",
+            "Catppuccin Frappe",
+            "Catppuccin Macchiato",
+            "Catppuccin Mocha",
+        ] {
+            assert!(
+                names.iter().any(|n| n == expected),
+                "{expected} missing from the embedded themes, got {names:?}"
+            );
+        }
+    }
 }

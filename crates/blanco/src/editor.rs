@@ -48,7 +48,6 @@ pub struct EditorPanel {
     focus_handle: FocusHandle,
     tabs: Vec<TabType>,
     active_tab_ix: usize,
-    sidebar_collapsed: bool,
     tabbar_scroll_handle: gpui::ScrollHandle,
     _subscriptions: Vec<gpui::Subscription>,
     run_query_keystroke: KeybindingKeystroke,
@@ -103,11 +102,6 @@ impl EditorPanel {
     #[cfg(test)]
     pub fn is_loading(&self) -> bool {
         self.loading
-    }
-
-    pub fn set_sidebar_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
-        self.sidebar_collapsed = collapsed;
-        cx.notify();
     }
 
     pub fn set_all_editors_show_whitespace(
@@ -415,7 +409,6 @@ impl EditorPanel {
     pub fn new_with_saved_tabs(
         window: &mut Window,
         cx: &mut Context<Self>,
-        sidebar_collapsed: bool,
         saved_tabs: Vec<QueryTabData>,
     ) -> Self {
         info!("Loading {} saved tabs", saved_tabs.len());
@@ -428,7 +421,6 @@ impl EditorPanel {
             focus_handle: cx.focus_handle(),
             tabs: vec![],
             active_tab_ix: 0,
-            sidebar_collapsed,
             tabbar_scroll_handle: gpui::ScrollHandle::default(),
             _subscriptions: Vec::new(),
             run_query_keystroke: Keystroke::parse("secondary-enter")

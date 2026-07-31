@@ -91,8 +91,7 @@ impl TestHarness {
             });
 
             cx.open_window(Default::default(), |window, cx| {
-                let panel =
-                    cx.new(|cx| EditorPanel::new_with_saved_tabs(window, cx, false, vec![]));
+                let panel = cx.new(|cx| EditorPanel::new_with_saved_tabs(window, cx, vec![]));
 
                 let params = TabCreationParams {
                     title: "Test Query".into(),

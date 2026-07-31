@@ -319,7 +319,8 @@ impl Render for ChatPanel {
         v_flex()
             .size_full()
             .min_h_0()
-            .bg(cx.theme().sidebar_primary_foreground)
+            // No background: this panel reaches the editor card's bottom-right
+            // corner, and a square fill would cover the border's arc.
             .text_color(cx.theme().foreground)
             .child(
                 h_flex()

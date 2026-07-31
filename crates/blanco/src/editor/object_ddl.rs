@@ -92,8 +92,9 @@ impl Render for ObjectDdlTab {
         };
 
         v_flex()
+            // No background: the editor card owns this surface. A square fill
+            // here would cover the card's rounded corners.
             .size_full()
-            .bg(theme.background)
             .child(
                 div()
                     .px_3()

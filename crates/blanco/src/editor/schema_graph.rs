@@ -2,7 +2,7 @@ use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
     Styled, Window,
 };
-use gpui_component::{ActiveTheme, v_flex};
+use gpui_component::v_flex;
 
 use crate::app_database::EnvironmentType;
 use blanco_core::connection_trait::TableSchemaInfo;
@@ -182,13 +182,14 @@ impl Focusable for SchemaGraphTab {
 }
 
 impl Render for SchemaGraphTab {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .flex_1()
             .h_full()
             .w_full()
             .overflow_hidden()
-            .bg(cx.theme().background)
+            // No background: the editor card owns this surface, and a square
+            // fill here would cover its rounded corners even in the same colour.
             .child(self.graph_view.clone())
     }
 }
