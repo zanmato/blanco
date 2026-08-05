@@ -1,6 +1,6 @@
 use sqlx::Row;
 
-use crate::app_database::{AppDatabase, EnvironmentType, QueryTabData};
+use crate::app_database::{AppDatabase, EditorKind, EnvironmentType, QueryTabData};
 
 impl AppDatabase {
     pub async fn save_query_tab(&self, tab: &QueryTabData) -> Result<i64, sqlx::Error> {
@@ -13,7 +13,7 @@ impl AppDatabase {
                 sqlx::query(
                     r#"
                     UPDATE query_tabs
-                    SET title = ?, content = ?, position = ?, connection_id = ?, connection_type = ?, database_name = ?, schema_name = ?, updated_at = ?
+                    SET title = ?, content = ?, position = ?, connection_id = ?, connection_type = ?, database_name = ?, schema_name = ?, tab_kind = ?, updated_at = ?
                     WHERE id = ?
                     "#,
                 )
@@ -24,6 +24,7 @@ impl AppDatabase {
                 .bind(&tab.connection_type)
                 .bind(&tab.database_name)
                 .bind(&tab.schema_name)
+                .bind(tab.tab_kind.as_str())
                 .bind(now)
                 .bind(id)
                 .execute(&pool)
@@ -33,8 +34,8 @@ impl AppDatabase {
                 // Insert new tab
                 let result = sqlx::query(
                     r#"
-                    INSERT INTO query_tabs (title, content, position, connection_id, connection_type, database_name, schema_name, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO query_tabs (title, content, position, connection_id, connection_type, database_name, schema_name, tab_kind, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     "#,
                 )
                 .bind(&tab.title)
@@ -44,6 +45,7 @@ impl AppDatabase {
                 .bind(&tab.connection_type)
                 .bind(&tab.database_name)
                 .bind(&tab.schema_name)
+                .bind(tab.tab_kind.as_str())
                 .bind(now)
                 .bind(now)
                 .execute(&pool)
@@ -60,7 +62,7 @@ impl AppDatabase {
         self.run(async move {
             let rows = sqlx::query(
                 r#"
-                SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type, c.name, qt.database_name, qt.schema_name, c.environment_type
+                SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type, c.name, qt.database_name, qt.schema_name, c.environment_type, qt.tab_kind
                 FROM query_tabs qt
                 INNER JOIN connections c ON c.id = qt.connection_id
                 ORDER BY qt.position ASC
@@ -94,6 +96,7 @@ impl AppDatabase {
                         environment_type: Some(EnvironmentType::from_i32(
                             row.get::<i64, _>(9) as i32,
                         )),
+                        tab_kind: EditorKind::from_stored(&row.get::<String, _>(10)),
                     }
                 })
                 .collect();
@@ -108,7 +111,7 @@ impl AppDatabase {
         self.run(async move {
             let row = sqlx::query(
                 r#"
-                SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type, c.name, qt.database_name, qt.schema_name
+                SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type, c.name, qt.database_name, qt.schema_name, qt.tab_kind
                 FROM query_tabs qt
                 INNER JOIN connections c ON c.id = qt.connection_id
                 WHERE qt.id = ?
@@ -139,6 +142,7 @@ impl AppDatabase {
                     database_name: Some(row.get(7)),
                     schema_name: row.get(8),
                     environment_type: None,
+                    tab_kind: EditorKind::from_stored(&row.get::<String, _>(9)),
                 }))
             } else {
                 Ok(None)

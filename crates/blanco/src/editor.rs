@@ -8,13 +8,17 @@ mod redis_highlighting_test;
 mod rename_form;
 mod render;
 pub(crate) mod schema_graph;
+mod script_execution;
+#[cfg(test)]
+mod script_execution_test;
 mod snippet_editor;
 mod sql_operations;
 mod table_structure;
 mod tabs;
 
 pub use tabs::{
-    ObjectDdlParams, QueryTab, SettingsTab, TabCreationParams, TabType, TableStructureParams,
+    ObjectDdlParams, QueryTab, ScriptTab, SettingsTab, TabCreationParams, TabType,
+    TableStructureParams,
 };
 
 use blanco_core::{ColumnInfo, IndexInfo};
@@ -33,12 +37,13 @@ use tracing::{debug, error, info};
 use self::object_ddl::ObjectDdlTab;
 use self::snippet_editor::SnippetEditor;
 use self::table_structure::TableStructureTab;
-use crate::agent::{ChatPanel, ChatProviderResolver, ChatSessionContext};
+use crate::agent::{ChatPanel, ChatProviderResolver, ChatSessionContext, TabLanguage};
 use crate::app_database::AppDatabase;
 use crate::app_database::QueryTabData;
 use crate::app_settings::AppSettings;
 use crate::result_ext::ResultExt;
 use crate::results_panel::ResultsPanel;
+use crate::script_completion::ScriptCompletionProvider;
 use crate::settings::SettingsView;
 use crate::sql::{SqlCompletionProvider, SqlSelectionRangeProvider, SqruffService};
 use blanco_ui::SqlView;
@@ -53,6 +58,9 @@ pub struct EditorPanel {
     run_query_keystroke: KeybindingKeystroke,
     format_query_keystroke: KeybindingKeystroke,
     editor_chat_resize_state: Entity<ResizableState>,
+    /// Kept separate from [`Self::editor_chat_resize_state`] so a script tab's
+    /// chat width does not follow a query tab's, and vice versa.
+    script_editor_chat_resize_state: Entity<ResizableState>,
     editor_results_resize_state: Entity<ResizableState>,
     results_log_resize_state: Entity<ResizableState>,
     loading: bool,
@@ -63,6 +71,10 @@ pub struct EditorPanel {
     /// future (cancelling the query) while the foreground task keeps running
     /// to report the cancellation back to the UI.
     abort_query_task: Option<Task<()>>,
+    /// Cancel flag for the script currently running in a script tab. Scripts
+    /// can't be stopped by dropping their task (they own an OS thread), so Stop
+    /// raises this flag and the script thread unwinds itself.
+    script_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     _lint_debounce_task: Task<()>,
 }
 
@@ -82,6 +94,29 @@ const LINT_DEBOUNCE_MS: u64 = 500;
 /// Queries longer than this will be truncated to avoid performance issues
 const SQL_QUERY_LOG_MAX_LENGTH: usize = 2000;
 
+/// Highlighter language used by script tabs, for both the editor and its log.
+pub(crate) const SCRIPT_EDITOR_LANGUAGE: &str = "javascript";
+
+/// Console output can be chatty, so a script's log keeps more scrollback than
+/// the query log's handful of statements.
+const SCRIPT_LOG_MAX_LINES: usize = 500;
+
+/// Starting content of a new script tab: a short reference for the injected
+/// `db` API, since it exists nowhere else in the UI.
+const DEFAULT_SCRIPT: &str = r#"// JavaScript runs against the tab's connection through `db`.
+// Every call is synchronous and blocks until the database answers.
+//
+//   db.query(sql, params?)   -> { columns, rows: [{column: value|null}], rowsAffected, executionTimeMs }
+//   db.execute(sql, params?) -> number of affected rows
+//   db.transaction([sql, …]) -> { rowsAffected, operationsExecuted }
+//   db.display(value)        -> render a result (or any array/object) in the grid
+//   console.log / warn / error write to the log below.
+
+const tables = db.query("SELECT 1 AS example");
+console.log("rows:", tables.rows.length);
+db.display(tables);
+"#;
+
 impl EditorPanel {
     /// The results panel of the currently active query tab, if any.
     pub fn active_results_panel(&self) -> Option<Entity<ResultsPanel>> {
@@ -100,8 +135,29 @@ impl EditorPanel {
     }
 
     #[cfg(test)]
+    pub fn active_script_tab(&self) -> Option<&ScriptTab> {
+        match self.tabs.get(self.active_tab_ix) {
+            Some(TabType::Script(tab)) => Some(tab),
+            _ => None,
+        }
+    }
+
+    #[cfg(test)]
     pub fn is_loading(&self) -> bool {
         self.loading
+    }
+
+    /// The code editors of every connection-backed tab (query and script), the
+    /// ones that follow the global editor settings.
+    fn connection_backed_editors(&self) -> Vec<Entity<InputState>> {
+        self.tabs
+            .iter()
+            .filter_map(|tab| match tab {
+                TabType::Query(query_tab) => Some(query_tab.editor.clone()),
+                TabType::Script(script_tab) => Some(script_tab.editor.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     pub fn set_all_editors_show_whitespace(
@@ -110,12 +166,8 @@ impl EditorPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        for tab in &mut self.tabs {
-            if let TabType::Query(query_tab) = tab {
-                query_tab
-                    .editor
-                    .update(cx, |state, cx| state.set_show_whitespaces(show, window, cx));
-            }
+        for editor in self.connection_backed_editors() {
+            editor.update(cx, |state, cx| state.set_show_whitespaces(show, window, cx));
         }
     }
 
@@ -125,22 +177,18 @@ impl EditorPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        for tab in &mut self.tabs {
-            if let TabType::Query(query_tab) = tab {
-                query_tab
-                    .editor
-                    .update(cx, |state, cx| state.set_soft_wrap(wrap, window, cx));
-            }
+        for editor in self.connection_backed_editors() {
+            editor.update(cx, |state, cx| state.set_soft_wrap(wrap, window, cx));
         }
     }
 
     fn close_tab(&mut self, tab_index: usize, cx: &mut Context<Self>) {
         if tab_index < self.tabs.len() && self.tabs.len() > 1 {
             // Get the db_id before removing the tab
-            let db_id = if let Some(TabType::Query(query_tab)) = self.tabs.get(tab_index) {
-                query_tab.db_id
-            } else {
-                None
+            let db_id = match self.tabs.get(tab_index) {
+                Some(TabType::Query(query_tab)) => query_tab.db_id,
+                Some(TabType::Script(script_tab)) => script_tab.db_id,
+                _ => None,
             };
 
             // Remove tab from UI
@@ -168,14 +216,21 @@ impl EditorPanel {
     }
 
     pub fn rename_tab(&mut self, tab_index: usize, new_name: &str, cx: &mut Context<Self>) {
-        if tab_index < self.tabs.len()
-            && let Some(TabType::Query(query_tab)) = self.tabs.get_mut(tab_index)
-        {
-            let old_name = query_tab.title.clone();
-            query_tab.title = new_name.to_string();
+        let renamed = match self.tabs.get_mut(tab_index) {
+            Some(TabType::Query(query_tab)) => {
+                let old_name = std::mem::replace(&mut query_tab.title, new_name.to_string());
+                Some((old_name, query_tab.db_id))
+            }
+            Some(TabType::Script(script_tab)) => {
+                let old_name = std::mem::replace(&mut script_tab.title, new_name.to_string());
+                Some((old_name, script_tab.db_id))
+            }
+            _ => None,
+        };
 
+        if let Some((old_name, db_id)) = renamed {
             // Update database if this tab has a db_id
-            if let Some(db_id) = query_tab.db_id {
+            if let Some(db_id) = db_id {
                 let app_database = AppDatabase::global(cx).clone();
                 let new_name = new_name.to_string(); // Convert to owned String
 
@@ -239,7 +294,9 @@ impl EditorPanel {
     }
 
     pub fn create_snippet_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let snippet_editor = cx.new(|cx| SnippetEditor::new(window, cx));
+        // New snippets start as queries; the footer toggle switches them.
+        let snippet_editor =
+            cx.new(|cx| SnippetEditor::new(crate::app_database::EditorKind::Query, window, cx));
 
         self.tabs.push(TabType::Snippet(snippet_editor));
         self.active_tab_ix = self.tabs.len() - 1;
@@ -254,13 +311,22 @@ impl EditorPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let snippet_editor = cx.new(|cx| SnippetEditor::new(window, cx));
-
-        // Load snippet data
+        // Load the snippet first so the editor can be built with the right
+        // language rather than built as SQL and immediately rebuilt.
         let app_database = AppDatabase::global(cx);
-        if let Ok(Some(snippet_data)) = gpui_tokio::Tokio::handle(cx)
+        let snippet_data = gpui_tokio::Tokio::handle(cx)
             .block_on(async { app_database.get_snippet_by_id(snippet_id).await })
-        {
+            .map_err(anyhow::Error::from)
+            .log_err()
+            .flatten();
+
+        let kind = snippet_data
+            .as_ref()
+            .map(|snippet| snippet.kind)
+            .unwrap_or_default();
+        let snippet_editor = cx.new(|cx| SnippetEditor::new(kind, window, cx));
+
+        if let Some(snippet_data) = snippet_data {
             snippet_editor.update(cx, |editor, cx| {
                 editor.load_snippet(snippet_data, window, cx);
             });
@@ -414,6 +480,7 @@ impl EditorPanel {
         info!("Loading {} saved tabs", saved_tabs.len());
 
         let editor_chat_resize_state = cx.new(|_| ResizableState::default());
+        let script_editor_chat_resize_state = cx.new(|_| ResizableState::default());
         let editor_results_resize_state = cx.new(|_| ResizableState::default());
         let results_log_resize_state = cx.new(|_| ResizableState::default());
 
@@ -430,12 +497,14 @@ impl EditorPanel {
                 .map(KeybindingKeystroke::from_keystroke)
                 .expect("valid keystroke literal"),
             editor_chat_resize_state,
+            script_editor_chat_resize_state,
             editor_results_resize_state,
             results_log_resize_state,
             loading: false,
             linting_enabled: false,
             _run_query_task: Task::ready(()),
             abort_query_task: None,
+            script_cancel: None,
             _lint_debounce_task: Task::ready(()),
         };
 
@@ -522,7 +591,11 @@ impl EditorPanel {
                     schema_name: None, // Schema not yet persisted in query tabs
                     environment_type: tab_data.environment_type,
                 };
-                self.create_and_add_tab_with_connection(window, params, cx);
+                if tab_data.tab_kind == crate::app_database::EditorKind::Script {
+                    self.create_and_add_script_tab(window, params, cx);
+                } else {
+                    self.create_and_add_tab_with_connection(window, params, cx);
+                }
                 restored_count += 1;
             } else {
                 debug!(
@@ -701,6 +774,100 @@ impl EditorPanel {
         cx.notify();
     }
 
+    /// Create a JavaScript script tab bound to the same connection identity as
+    /// a query tab. Scripts drive the database through the injected `db` object
+    /// rather than through the SQL pipeline, so this deliberately skips the
+    /// completion, selection-range, formatter and linter wiring.
+    pub fn create_and_add_script_tab(
+        &mut self,
+        window: &mut Window,
+        params: TabCreationParams,
+        cx: &mut Context<Self>,
+    ) {
+        let editor_settings = AppSettings::global(cx).settings.editor.clone();
+        let db_type = params.db_type;
+        let editor = cx.new(|cx| {
+            let mut editor = InputState::new(window, cx)
+                .code_editor(SCRIPT_EDITOR_LANGUAGE.to_string())
+                .line_number(true)
+                .folding(editor_settings.folding)
+                .tab_size(TabSize {
+                    tab_size: editor_settings.tab_size as usize,
+                    hard_tabs: editor_settings.hard_tabs,
+                })
+                .soft_wrap(editor_settings.word_wrap)
+                .show_whitespaces(editor_settings.show_whitespace);
+
+            // The injected `db` object is the only API a script has that the
+            // editor can't infer, so that is what gets completed.
+            let completion_provider: Rc<dyn gpui_component::input::CompletionProvider> =
+                Rc::new(ScriptCompletionProvider::new(db_type));
+            editor.lsp.completion_provider = Some(completion_provider);
+            editor
+        });
+
+        let content = params.content.unwrap_or_else(|| DEFAULT_SCRIPT.to_string());
+        editor.update(cx, |state, cx| {
+            state.replace(&content, window, cx);
+        });
+
+        let subscription = cx.subscribe_in(&editor, window, |this, _editor, event, window, cx| {
+            if let InputEvent::SelectionRangeChange { .. } = event {
+                if this.linting_enabled {
+                    this.lint_current_script_debounced(cx);
+                }
+                cx.notify();
+            } else if let InputEvent::PressEnter { secondary, .. } = event
+                && *secondary
+            {
+                this.on_run_query(window, cx);
+            }
+        });
+        self._subscriptions.push(subscription);
+
+        let results_panel = cx.new(|cx| {
+            ResultsPanel::new(
+                params.connection_id,
+                &params.database_name,
+                params.db_type,
+                window,
+                cx,
+            )
+        });
+        self._subscriptions
+            .push(cx.observe(&results_panel, |_, _, cx| cx.notify()));
+
+        let script_tab = ScriptTab {
+            title: params.title,
+            connection_id: params.connection_id,
+            db_type,
+            connection_name: params.connection_name,
+            database_name: params.database_name,
+            schema_name: params.schema_name,
+            environment_type: params.environment_type,
+            editor,
+            db_id: params.db_id,
+            results_panel,
+            log_view: cx.new(|cx| {
+                SqlView::new(
+                    SCRIPT_LOG_MAX_LINES,
+                    cx.theme().highlight_theme.clone(),
+                    SCRIPT_EDITOR_LANGUAGE,
+                )
+                .show_copy_button(false)
+            }),
+            log_visible: true,
+            chat_enabled: false,
+            chat_panel: None,
+        };
+
+        self.tabs.push(TabType::Script(Box::new(script_tab)));
+        self.active_tab_ix = self.tabs.len() - 1;
+        self.scroll_tabbar_to_the_end(window, cx);
+
+        cx.notify();
+    }
+
     fn scroll_tabbar_to_the_end(&self, window: &mut Window, _: &mut Context<Self>) {
         let scroll_handle = self.tabbar_scroll_handle.clone();
         window.on_next_frame(move |window, _| {
@@ -755,48 +922,82 @@ impl EditorPanel {
 
     /// Toggle chat for the active tab
     pub fn toggle_chat_for_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(TabType::Query(query_tab)) = self.tabs.get_mut(self.active_tab_ix) {
-            query_tab.chat_enabled = !query_tab.chat_enabled;
-
-            if query_tab.chat_enabled && query_tab.chat_panel.is_none() {
-                // Create LLM instance for this connection
-                match ChatProviderResolver::get_llm_for_connection(cx) {
-                    Ok(llm_instance) => {
-                        // Build the session context from QueryTab
-                        let session_context = ChatSessionContext::new()
-                            .with_input_state(query_tab.editor.downgrade())
-                            .with_connection(
-                                query_tab.connection_id,
-                                query_tab.database_name.clone(),
-                                query_tab._db_type,
-                            );
-
-                        // Create chat panel with the LLM instance
-                        let llm_for_panel = llm_instance.llm.clone();
-                        let chat_panel = cx.new(|cx| {
-                            ChatPanel::new(
-                                llm_for_panel,
-                                llm_instance.provider_name.clone(),
-                                llm_instance.model_name.clone(),
-                                session_context,
-                                window,
-                                cx,
-                            )
-                        });
-                        query_tab.chat_panel = Some(chat_panel);
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            "Failed to create chat provider: {}. Not creating chat panel.",
-                            e
-                        );
-                        query_tab.chat_enabled = false;
-                    }
+        // The two tab kinds differ only in which fields hold the connection
+        // identity and what language the tab's buffer is in; the panel itself
+        // is built the same way, so both branches go through
+        // `create_chat_panel`.
+        let (enabled, panel) = match self.tabs.get_mut(self.active_tab_ix) {
+            Some(TabType::Query(query_tab)) => {
+                query_tab.chat_enabled = !query_tab.chat_enabled;
+                if !query_tab.chat_enabled || query_tab.chat_panel.is_some() {
+                    cx.notify();
+                    return;
                 }
+                let context = ChatSessionContext::new()
+                    .with_input_state(query_tab.editor.downgrade())
+                    .with_connection(
+                        query_tab.connection_id,
+                        query_tab.database_name.clone(),
+                        query_tab._db_type,
+                    )
+                    .with_tab_language(TabLanguage::Query);
+                (
+                    &mut query_tab.chat_enabled,
+                    (&mut query_tab.chat_panel, context),
+                )
             }
+            Some(TabType::Script(script_tab)) => {
+                script_tab.chat_enabled = !script_tab.chat_enabled;
+                if !script_tab.chat_enabled || script_tab.chat_panel.is_some() {
+                    cx.notify();
+                    return;
+                }
+                let context = ChatSessionContext::new()
+                    .with_input_state(script_tab.editor.downgrade())
+                    .with_connection(
+                        script_tab.connection_id,
+                        script_tab.database_name.clone(),
+                        script_tab.db_type,
+                    )
+                    .with_tab_language(TabLanguage::Script);
+                (
+                    &mut script_tab.chat_enabled,
+                    (&mut script_tab.chat_panel, context),
+                )
+            }
+            _ => return,
+        };
 
-            cx.notify();
+        let (chat_panel, session_context) = panel;
+        match Self::create_chat_panel(session_context, window, cx) {
+            Ok(panel) => *chat_panel = Some(panel),
+            Err(error) => {
+                tracing::error!(
+                    "Failed to create chat provider: {error}. Not creating chat panel."
+                );
+                *enabled = false;
+            }
         }
+
+        cx.notify();
+    }
+
+    fn create_chat_panel(
+        session_context: ChatSessionContext,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<Entity<ChatPanel>> {
+        let llm_instance = ChatProviderResolver::get_llm_for_connection(cx)?;
+        Ok(cx.new(|cx| {
+            ChatPanel::new(
+                llm_instance.llm.clone(),
+                llm_instance.provider_name.clone(),
+                llm_instance.model_name.clone(),
+                session_context,
+                window,
+                cx,
+            )
+        }))
     }
 
     pub fn toggle_sql_view_for_active_tab(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -814,16 +1015,16 @@ impl EditorPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if let Some(TabType::Query(query_tab)) = self.tabs.get(self.active_tab_ix) {
-            let editor = query_tab.editor.clone();
-            editor.update(cx, |state, cx| {
-                state.focus(window, cx);
-                state.insert(text, window, cx);
-            });
-            cx.notify();
-            true
-        } else {
-            false
-        }
+        let editor = match self.tabs.get(self.active_tab_ix) {
+            Some(TabType::Query(query_tab)) => query_tab.editor.clone(),
+            Some(TabType::Script(script_tab)) => script_tab.editor.clone(),
+            _ => return false,
+        };
+        editor.update(cx, |state, cx| {
+            state.focus(window, cx);
+            state.insert(text, window, cx);
+        });
+        cx.notify();
+        true
     }
 }

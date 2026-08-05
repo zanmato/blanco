@@ -697,6 +697,26 @@ impl DatabaseServiceTrait for DatabaseService {
         result
     }
 
+    async fn execute_operations_transactional(
+        &self,
+        connection_id: i64,
+        database: Option<&str>,
+        operations: &[String],
+    ) -> Result<blanco_core::BatchOutcome, blanco_core::BatchFailure> {
+        let connection = self
+            .get_or_create_connection(connection_id, database)
+            .await
+            .map_err(blanco_core::BatchFailure::atomic)?;
+        let result = connection
+            .execute_operations_transactional(operations, database)
+            .await;
+        if let Err(failure) = &result {
+            self.note_possible_disconnect(connection_id, database, &failure.error)
+                .await;
+        }
+        result
+    }
+
     async fn get_connection_status(
         &self,
         connection_id: i64,

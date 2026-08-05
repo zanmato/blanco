@@ -16,9 +16,10 @@ use database::{DatabaseService, DatabaseType};
 use crate::{
     app::{
         CommitChanges, ConnectToConnection, CopyAsCSV, CopyAsJSON, CopyAsMarkdown, CopyAsSQL,
-        CopyAsTSV, CreateNewQueryTab, ExplainQuery, ExportAsCSV, ExportAsJSON, ExportAsMarkdown,
-        ExportAsSQL, ExportAsTSV, FormatQuery, NewSnippet, OpenNewConnectionModal, OpenSettings,
-        RollbackChanges, RunQuery, ToggleRenderWhitespace, ToggleSidebar, ToggleWordWrap,
+        CopyAsTSV, CreateNewQueryTab, CreateNewScriptTab, ExplainQuery, ExportAsCSV, ExportAsJSON,
+        ExportAsMarkdown, ExportAsSQL, ExportAsTSV, FormatQuery, NewSnippet,
+        OpenNewConnectionModal, OpenSettings, RollbackChanges, RunQuery, ToggleRenderWhitespace,
+        ToggleSidebar, ToggleWordWrap,
     },
     app_database::EnvironmentType,
     connections::ConnectionsPanel,
@@ -112,6 +113,7 @@ pub enum CommandType {
     ToggleRenderWhitespace,
     ToggleWordWrap,
     NewQueryForDatabase(DatabaseRef),
+    NewScriptForDatabase(DatabaseRef),
 }
 
 /// One pushed level of the navigation stack. `crumb` labels the breadcrumb
@@ -269,8 +271,8 @@ impl CommandPalette {
             }
             ItemKind::Database(database) => {
                 let crumb: SharedString = database.database_name.clone().into();
-                let leaf = new_query_leaf(&database);
-                self.push_level(crumb, vec![leaf], "Search actions...", window, cx);
+                let leaves = database_action_leaves(&database);
+                self.push_level(crumb, leaves, "Search actions...", window, cx);
             }
         }
     }
@@ -444,8 +446,8 @@ impl CommandPalette {
                                 environment_type: connection.environment_type,
                                 database_name: connection.default_database.clone(),
                             };
-                            let leaf = new_query_leaf(&database);
-                            this.push_level(crumb, vec![leaf], "Search actions...", window, cx);
+                            let leaves = database_action_leaves(&database);
+                            this.push_level(crumb, leaves, "Search actions...", window, cx);
                         }
                     }
                 }
@@ -763,6 +765,17 @@ fn execute_command(cmd: &CommandType, window: &mut Window, cx: &mut App) {
             }),
             cx,
         ),
+        CommandType::NewScriptForDatabase(database) => window.dispatch_action(
+            Box::new(CreateNewScriptTab {
+                connection_id: database.connection_id,
+                connection_name: database.connection_name.clone(),
+                db_type: database.db_type,
+                database_name: database.database_name.clone(),
+                schema_name: None,
+                environment_type: Some(database.environment_type),
+            }),
+            cx,
+        ),
     }
 }
 
@@ -975,12 +988,24 @@ fn leaf(label: &str, group: &str, command: CommandType) -> CommandItem {
     }
 }
 
-/// The leaf action shown at the bottom of a navigation drill-down.
+/// The leaf actions shown at the bottom of a navigation drill-down.
+fn database_action_leaves(database: &DatabaseRef) -> Vec<CommandItem> {
+    vec![new_query_leaf(database), new_script_leaf(database)]
+}
+
 fn new_query_leaf(database: &DatabaseRef) -> CommandItem {
     CommandItem {
         label: "New query".into(),
         group: "Action".into(),
         kind: ItemKind::Command(CommandType::NewQueryForDatabase(database.clone())),
+    }
+}
+
+fn new_script_leaf(database: &DatabaseRef) -> CommandItem {
+    CommandItem {
+        label: "New script".into(),
+        group: "Action".into(),
+        kind: ItemKind::Command(CommandType::NewScriptForDatabase(database.clone())),
     }
 }
 
@@ -1421,8 +1446,8 @@ mod visual_tests {
         let labels = palette.read_with(&cx, |p, cx| p.filtered_labels(cx));
         assert_eq!(
             labels,
-            vec!["New query".to_string()],
-            "database level should hold exactly the New query leaf, got {labels:?}"
+            vec!["New query".to_string(), "New script".to_string()],
+            "database level should hold the New query and New script leaves, got {labels:?}"
         );
 
         let crumbs = palette.read_with(&cx, |p, cx| p.breadcrumbs_for_test(cx));

@@ -28,19 +28,7 @@ impl ResultsPanel {
         }
 
         // First, commit any currently editing cell
-        if let Some((row, col)) = self.get_current_editing_cell(cx) {
-            // Get the current value from the input
-            if let Some(input) = &self.editing_input {
-                let current_value = input.read(cx).text().to_string();
-                // Update the cell value before committing
-                self.update_editing_cell_value(row, col, current_value.clone(), cx);
-
-                // Commit the cell edit
-                self.commit_cell_edit(row, col, current_value, cx);
-            } else {
-                self.cancel_current_edit(cx);
-            }
-        }
+        self.finalize_active_cell_edit(cx);
 
         // Get changes and convert to database-agnostic operations
         let change_operations = self

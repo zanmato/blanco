@@ -5,7 +5,7 @@ mod tree_builder;
 pub use data_loading::DatabaseMetadata;
 pub use delegate::ConnectionsTreeDelegate;
 
-use crate::app::CreateNewQueryTab;
+use crate::app::{CreateNewQueryTab, CreateNewScriptTab};
 use crate::app_database::{AppDatabase, ConnectionData, EnvironmentType};
 use crate::connection_credentials;
 use crate::export::modal::ExportModal;
@@ -107,6 +107,10 @@ pub struct TreeItemMetadata {
 /// Trait to convert metadata into CreateNewQueryTab actions
 pub trait CreateNewQueryTabParams {
     fn create_new_query_tab_action(&self) -> Option<CreateNewQueryTab>;
+
+    /// Script tabs are scoped to the connection/database, not to the clicked
+    /// object, so this is available on every node that carries a database.
+    fn create_new_script_tab_action(&self) -> CreateNewScriptTab;
 }
 
 impl CreateNewQueryTabParams for TreeItemMetadata {
@@ -131,6 +135,17 @@ impl CreateNewQueryTabParams for TreeItemMetadata {
                 environment_type: self.environment_type,
                 inspect_key: false,
             }),
+        }
+    }
+
+    fn create_new_script_tab_action(&self) -> CreateNewScriptTab {
+        CreateNewScriptTab {
+            connection_id: self.connection_id,
+            connection_name: self.connection_name.clone(),
+            db_type: self.db_type,
+            database_name: self.database_name.clone().unwrap_or_default(),
+            schema_name: self.schema_name.clone(),
+            environment_type: self.environment_type,
         }
     }
 }

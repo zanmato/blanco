@@ -25,6 +25,8 @@ use blanco_core::{KeyValueResult, RedisValue, ResultPayload};
 use crate::transformers::CopyHandler;
 
 mod cell_edit_state;
+#[cfg(test)]
+mod cell_edit_test;
 mod chart_view;
 mod clipboard;
 mod commit;
@@ -103,8 +105,6 @@ pub struct ResultsPanel {
     connection_id: i64,
     database_name: String,
     db_type: database::DatabaseType,
-    editing_input: Option<Entity<InputState>>,
-    editing_cell: Option<(usize, usize)>,
     commit_in_progress: bool,
     copy_handler: CopyHandler,
     /// Scroll position for the key/value inspector body (Redis key view).
@@ -141,8 +141,6 @@ impl ResultsPanel {
             database_name: database_name.to_string(),
             db_type,
             focus_handle: cx.focus_handle(),
-            editing_input: None,
-            editing_cell: None,
             commit_in_progress: false,
             copy_handler: CopyHandler::new(),
             key_value_scroll_handle: ScrollHandle::new(),
@@ -315,8 +313,6 @@ impl ResultsPanel {
         self.active_tab = first_new_index;
         self.table_state = self.result_tabs[self.active_tab].table_state.clone();
         self.has_results = true;
-        self.editing_input = None;
-        self.editing_cell = None;
         let _ = connection_id; // accepted for API parity with single-result path
         cx.notify();
     }
@@ -327,8 +323,6 @@ impl ResultsPanel {
         }
         self.active_tab = index;
         self.table_state = self.result_tabs[index].table_state.clone();
-        self.editing_input = None;
-        self.editing_cell = None;
         cx.notify();
     }
 
@@ -364,8 +358,6 @@ impl ResultsPanel {
             }
             self.table_state = self.result_tabs[self.active_tab].table_state.clone();
         }
-        self.editing_input = None;
-        self.editing_cell = None;
         cx.notify();
     }
 
@@ -438,10 +430,6 @@ impl ResultsPanel {
 
         // Focus the input automatically when editing starts
         input.focus_handle(cx).focus(window, cx);
-
-        // Store the editing state in the panel for commit/cancel operations
-        self.editing_input = Some(input.clone());
-        self.editing_cell = Some((row, col));
     }
 
     /// Subscribe to input events (blur/change) for a given cell
@@ -568,9 +556,6 @@ impl ResultsPanel {
             state.refresh(cx);
         });
 
-        self.editing_input = None;
-        self.editing_cell = None;
-
         cx.notify();
         committed_value
     }
@@ -582,10 +567,6 @@ impl ResultsPanel {
             state.delegate_mut().edit_state.stop_editing();
             state.refresh(cx);
         });
-
-        // Clear panel editing state
-        self.editing_input = None;
-        self.editing_cell = None;
 
         cx.notify();
     }
@@ -648,6 +629,43 @@ impl ResultsPanel {
 
     pub fn get_current_editing_cell(&self, cx: &App) -> Option<(usize, usize)> {
         self.table_state.read(cx).delegate().edit_state.editing_cell
+    }
+
+    /// Commit the cell currently being edited (if any) into a tracked change,
+    /// using the delegate's live input. The delegate's `editing_input` is the
+    /// single source of truth: maximize/minimize recreate the input entity, so
+    /// any other handle to it goes stale and would commit outdated text.
+    pub fn finalize_active_cell_edit(&mut self, cx: &mut Context<Self>) {
+        let Some((row, col)) = self.get_current_editing_cell(cx) else {
+            return;
+        };
+
+        let editing_input = self
+            .table_state
+            .read(cx)
+            .delegate()
+            .edit_state
+            .get_editing_input();
+
+        if let Some(input) = editing_input {
+            // Only commit if the user actually typed (a Change event recorded
+            // the cell as edited); otherwise an untouched editor would emit a
+            // no-op UPDATE, and turn a NULL into an empty string.
+            if !self
+                .table_state
+                .read(cx)
+                .delegate()
+                .edit_state
+                .is_edited(row, col)
+            {
+                return;
+            }
+            let current_value = input.read(cx).text().to_string();
+            self.update_editing_cell_value(row, col, current_value.clone(), cx);
+            self.commit_cell_edit(row, col, current_value, cx);
+        } else {
+            self.cancel_current_edit(cx);
+        }
     }
 
     /// Whether there are any uncommitted cell edits, pending new rows, or pending deletions.

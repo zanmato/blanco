@@ -20,6 +20,7 @@ use super::table_structure::TableStructureTab;
 
 pub enum TabType {
     Query(Box<QueryTab>),
+    Script(Box<ScriptTab>),
     Settings(SettingsTab),
     Snippet(Entity<SnippetEditor>),
     TableStructure(Entity<TableStructureTab>),
@@ -49,6 +50,29 @@ pub struct QueryTab {
     /// to prefill the parameter modal on subsequent runs within the same
     /// session.
     pub last_parameter_values: HashMap<String, String>,
+}
+
+/// A JavaScript script tab. Mirrors [`QueryTab`] minus the SQL-only machinery
+/// (formatter, linter, SQL completion, parameter modal): a script's "query" is
+/// an arbitrary program, so none of those apply. It keeps the results panel
+/// (fed only by explicit `db.display(...)` calls), the log view that the
+/// script's `console` output streams into, and the chat panel, whose session is
+/// told the tab holds JavaScript.
+pub struct ScriptTab {
+    pub title: String,
+    pub connection_id: i64,
+    pub db_type: database::DatabaseType,
+    pub connection_name: Option<String>,
+    pub database_name: String,
+    pub schema_name: Option<String>,
+    pub environment_type: Option<EnvironmentType>,
+    pub editor: Entity<InputState>,
+    pub db_id: Option<i64>,
+    pub results_panel: Entity<ResultsPanel>,
+    pub log_view: Entity<SqlView>,
+    pub log_visible: bool,
+    pub chat_enabled: bool,
+    pub chat_panel: Option<Entity<ChatPanel>>,
 }
 
 pub struct SettingsTab {

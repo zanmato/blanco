@@ -11,7 +11,11 @@ use llm::{
 use super::{AgentToolHandler, ToolContext};
 
 /// Write tab tool handler with multiple operation modes
-pub struct WriteTabHandler;
+pub struct WriteTabHandler {
+    /// What the tab holds ("SQL query", "JavaScript script", …), so the model
+    /// is told what kind of content it is expected to write.
+    pub content_noun: &'static str,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum WriteOperation {
@@ -195,7 +199,7 @@ impl AgentToolHandler for WriteTabHandler {
             "content".to_string(),
             ParameterProperty {
                 property_type: "string".to_string(),
-                description: "The SQL query content to write/insert.".to_string(),
+                description: format!("The {} content to write/insert.", self.content_noun),
                 items: None,
                 enum_list: None,
             },
@@ -223,12 +227,16 @@ impl AgentToolHandler for WriteTabHandler {
             tool_type: "function".to_string(),
             function: FunctionTool {
                 name: "write-tab".to_string(),
-                description: "Write content to the current query tab. Supports three modes: replace all content (default), insert before a specific line, or replace a specific range of lines.".to_string(),
+                description: format!(
+                    "Write content to the current tab, which holds the {}. Supports three modes: replace all content (default), insert before a specific line, or replace a specific range of lines.",
+                    self.content_noun
+                ),
                 parameters: serde_json::to_value(ParametersSchema {
                     schema_type: "object".to_string(),
                     properties,
                     required: vec!["content".to_string()],
-                }).unwrap_or_default(),
+                })
+                .unwrap_or_default(),
             },
             cache_control: None,
         }

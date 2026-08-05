@@ -47,6 +47,50 @@ impl std::fmt::Display for EnvironmentType {
     }
 }
 
+/// What an editor buffer holds: statements for the connection's own dialect, or
+/// a JavaScript program that drives the connection through the injected `db`
+/// object. Persisted in `query_tabs.tab_kind` and `snippets.kind`; anything
+/// unrecognised (an older or newer profile) reads back as [`EditorKind::Query`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EditorKind {
+    #[default]
+    Query,
+    Script,
+}
+
+impl EditorKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EditorKind::Query => "query",
+            EditorKind::Script => "script",
+        }
+    }
+
+    pub fn from_stored(value: &str) -> Self {
+        match value {
+            "script" => EditorKind::Script,
+            _ => EditorKind::Query,
+        }
+    }
+
+    /// Highlighter language for a buffer with no connection behind it (a
+    /// snippet). Connection-backed tabs use `DatabaseType::editor_language()`
+    /// instead, which distinguishes SQL from line-oriented backends.
+    pub fn standalone_language(self) -> &'static str {
+        match self {
+            EditorKind::Query => "sql",
+            EditorKind::Script => "javascript",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            EditorKind::Query => "Query",
+            EditorKind::Script => "Script",
+        }
+    }
+}
+
 /// Data for a query tab stored in the database
 #[derive(Debug, Clone)]
 pub struct QueryTabData {
@@ -60,6 +104,7 @@ pub struct QueryTabData {
     pub database_name: Option<String>,
     pub schema_name: Option<String>,
     pub environment_type: Option<EnvironmentType>,
+    pub tab_kind: EditorKind,
 }
 
 /// A single recorded query execution, stored in the `query_history` table.
@@ -85,6 +130,9 @@ pub struct SnippetData {
     pub id: Option<i64>,
     pub name: String,
     pub content: String,
+    /// Groups are containers and carry no content, so their kind is unused and
+    /// stored as the default.
+    pub kind: EditorKind,
     pub parent_id: Option<i64>,
     pub is_group: bool,
     pub position: i32,

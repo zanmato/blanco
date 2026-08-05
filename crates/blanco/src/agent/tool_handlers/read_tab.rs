@@ -14,7 +14,10 @@ use super::{AgentToolHandler, ToolContext};
 const READ_TAB_DEFAULT_LIMIT: usize = 200;
 
 /// Read tab tool handler with optional line range support
-pub struct ReadTabHandler;
+pub struct ReadTabHandler {
+    /// What the tab holds ("SQL query", "JavaScript script", …).
+    pub content_noun: &'static str,
+}
 
 #[async_trait(?Send)]
 impl AgentToolHandler for ReadTabHandler {
@@ -140,8 +143,8 @@ impl AgentToolHandler for ReadTabHandler {
             function: FunctionTool {
                 name: "read-tab".to_string(),
                 description: format!(
-                    "Read the current query tab content with optional line range. Returns line-numbered content. If the tab has more than {} lines and no range is specified, returns only the first {} lines with a hint to read more.",
-                    READ_TAB_DEFAULT_LIMIT, READ_TAB_DEFAULT_LIMIT
+                    "Read the current tab's content (the {}) with optional line range. Returns line-numbered content. If the tab has more than {} lines and no range is specified, returns only the first {} lines with a hint to read more.",
+                    self.content_noun, READ_TAB_DEFAULT_LIMIT, READ_TAB_DEFAULT_LIMIT
                 ),
                 parameters: serde_json::to_value(ParametersSchema {
                     schema_type: "object".to_string(),

@@ -77,6 +77,24 @@ pub trait DatabaseService: Send + Sync {
             .await
     }
 
+    /// Execute a batch of write statements as a single atomic unit on the
+    /// connection identified by `connection_id`. Atomicity depends on the
+    /// backend: see [`Connection::execute_operations_transactional`].
+    async fn execute_operations_transactional(
+        &self,
+        connection_id: i64,
+        database: Option<&str>,
+        operations: &[String],
+    ) -> Result<crate::BatchOutcome, crate::BatchFailure> {
+        let connection = self
+            .get_or_create_connection_by_id(connection_id, database)
+            .await
+            .map_err(crate::BatchFailure::atomic)?;
+        connection
+            .execute_operations_transactional(operations, database)
+            .await
+    }
+
     /// Get database schema information as JSON with pagination support
     async fn get_database_schema_paginated(
         &self,

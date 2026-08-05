@@ -55,10 +55,11 @@ impl SqlView {
     }
 
     /// Line-comment prefix for the view's language. Redis config-style `#`,
-    /// SQL `--`.
+    /// JavaScript `//`, SQL `--`.
     fn line_comment_prefix(&self) -> &'static str {
         match self.language.as_ref() {
             "redis" => "#",
+            "javascript" => "//",
             _ => "--",
         }
     }
@@ -70,7 +71,7 @@ impl SqlView {
     }
 
     /// Concatenate every entry's text, in order, for copying to the clipboard.
-    fn all_text(&self) -> String {
+    pub fn all_text(&self) -> String {
         self.entries
             .iter()
             .map(|entry| entry.text.as_ref())
@@ -108,9 +109,7 @@ impl SqlView {
                     statement.clone()
                 }
             }
-            SqlViewMessage::Comment(comment) => {
-                format!("{} {}", self.line_comment_prefix(), comment)
-            }
+            SqlViewMessage::Comment(comment) => comment_lines(self.line_comment_prefix(), comment),
         };
 
         // Create a new highlighter for this entry, parse, and compute styles once.
@@ -216,5 +215,59 @@ impl Render for SqlView {
                     ),
                 )
             })
+    }
+}
+
+/// Comment out every line of `text`, not just the first. Log messages carry
+/// multi-line payloads (a JS stack trace, a driver error with detail lines),
+/// and prefixing only the first line leaves the rest highlighted as code and
+/// invalid if copied back out.
+fn comment_lines(prefix: &str, text: &str) -> String {
+    if text.is_empty() {
+        return prefix.to_string();
+    }
+    text.lines()
+        .map(|line| {
+            // Don't leave trailing whitespace on blank lines.
+            if line.is_empty() {
+                prefix.to_string()
+            } else {
+                format!("{prefix} {line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::comment_lines;
+
+    #[test]
+    fn single_line_gets_one_prefix() {
+        assert_eq!(comment_lines("--", "42 rows in 3ms"), "-- 42 rows in 3ms");
+    }
+
+    #[test]
+    fn every_line_of_a_stack_trace_is_commented() {
+        let message = "script failed: Error: not a function\n    at <eval> (eval_script:12:8)";
+        assert_eq!(
+            comment_lines("//", message),
+            "// script failed: Error: not a function\n//     at <eval> (eval_script:12:8)"
+        );
+    }
+
+    #[test]
+    fn blank_lines_carry_no_trailing_whitespace() {
+        assert_eq!(
+            comment_lines("//", "first\n\nthird"),
+            "// first\n//\n// third"
+        );
+        assert_eq!(comment_lines("//", ""), "//");
+    }
+
+    #[test]
+    fn a_trailing_newline_does_not_add_an_empty_comment() {
+        assert_eq!(comment_lines("#", "done\n"), "# done");
     }
 }

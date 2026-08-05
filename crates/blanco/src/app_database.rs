@@ -8,7 +8,9 @@ mod types;
 
 pub use connections::LegacyConnectionCredentials;
 pub use schema::{app_db_path, init_schema};
-pub use types::{ConnectionData, EnvironmentType, QueryHistoryData, QueryTabData, SnippetData};
+pub use types::{
+    ConnectionData, EditorKind, EnvironmentType, QueryHistoryData, QueryTabData, SnippetData,
+};
 
 use gpui::{App, Global};
 use sqlx::ConnectOptions;

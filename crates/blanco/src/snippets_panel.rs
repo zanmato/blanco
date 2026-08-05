@@ -3,7 +3,7 @@ mod delegate;
 pub use delegate::{SnippetItemMetadata, SnippetsTreeDelegate};
 
 use crate::app::{NewSnippet, OpenSnippetEditor};
-use crate::app_database::{AppDatabase, SnippetData};
+use crate::app_database::{AppDatabase, EditorKind, SnippetData};
 use crate::result_ext::ResultExt;
 use blanco_ui::draggable_tree::{DraggableTree, DraggableTreeState, TreeItem};
 use gpui::{
@@ -251,6 +251,7 @@ impl SnippetsPanel {
             id: None,
             name: name.clone(),
             content: String::new(),
+            kind: EditorKind::default(),
             parent_id: None,
             is_group: true,
             position: 0,

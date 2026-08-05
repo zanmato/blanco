@@ -27,6 +27,11 @@ impl EditorPanel {
         // Extract the values we need before any mutable borrows
         let tab_index = self.active_tab_ix;
 
+        if matches!(self.tabs.get(tab_index), Some(TabType::Script(_))) {
+            self.execute_script_tab(window, cx);
+            return;
+        }
+
         if let Some(tab) = self.tabs.get(tab_index)
             && let TabType::Query(query_tab) = tab
         {
@@ -166,6 +171,7 @@ impl EditorPanel {
                 database_name: Some(query_tab.database_name.clone()),
                 schema_name: query_tab.schema_name.clone(),
                 environment_type: query_tab.environment_type,
+                tab_kind: crate::app_database::EditorKind::Query,
             };
 
             // Trigger the save operation in background

@@ -28,6 +28,19 @@ pub struct ConnectionsTreeDelegate {
 }
 
 impl ConnectionsTreeDelegate {
+    /// "New Script" menu entry for a tree node. Available on every backend:
+    /// scripts drive the connection through the `db` object, which is
+    /// driver-agnostic.
+    fn new_script_item(&self, metadata: &TreeItemMetadata, window: &mut Window) -> PopupMenuItem {
+        let action = metadata.create_new_script_tab_action();
+        PopupMenuItem::new("New Script").on_click(window.listener_for(
+            &self.parent,
+            move |_this, _event, window, cx| {
+                window.dispatch_action(Box::new(action.clone()), cx);
+            },
+        ))
+    }
+
     pub fn new(parent: &Entity<ConnectionsPanel>) -> Self {
         Self {
             parent: parent.clone(),
@@ -297,6 +310,8 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                     menu
                 };
 
+                menu = menu.item(self.new_script_item(metadata, window));
+
                 let connection_name_for_graph = connection_name;
                 let database_name_for_graph = database_name.clone();
                 menu =
@@ -354,6 +369,7 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                             },
                         )),
                     )
+                    .item(self.new_script_item(metadata, window))
                 } else {
                     menu
                 }
@@ -410,11 +426,16 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                         action
                     };
 
-                    let mut menu = menu.item(PopupMenuItem::new("New Query").on_click(
-                        window.listener_for(&self.parent, move |_this, _event, window, cx| {
-                            window.dispatch_action(Box::new(new_query_action.clone()), cx);
-                        }),
-                    ));
+                    let mut menu = menu
+                        .item(
+                            PopupMenuItem::new("New Query").on_click(window.listener_for(
+                                &self.parent,
+                                move |_this, _event, window, cx| {
+                                    window.dispatch_action(Box::new(new_query_action.clone()), cx);
+                                },
+                            )),
+                        )
+                        .item(self.new_script_item(metadata, window));
 
                     if let Some(inspect_action) = inspect_action {
                         menu = menu.item(PopupMenuItem::new("Inspect Key").on_click(

@@ -30,7 +30,7 @@ gpui_platform = { git = "https://github.com/zed-industries/zed", features = [
     "runtime_shaders",
 ] }
 gpui_macros = { git = "https://github.com/zed-industries/zed" }
-gpui-component = { git = "https://github.com/zanmato/gpui-component", branch = "blanco", features = ["tree-sitter"] }
+gpui-component = { git = "https://github.com/zanmato/gpui-component", branch = "blanco", features = ["tree-sitter", "tree-sitter-javascript"] }
 gpui-component-macros = { git = "https://github.com/zanmato/gpui-component", branch = "blanco" }
 
 # Additional dependencies for gpui-component compatibility

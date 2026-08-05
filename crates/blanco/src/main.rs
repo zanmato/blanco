@@ -25,6 +25,8 @@ mod redis_completion;
 mod redis_syntax;
 mod result_ext;
 mod results_panel;
+mod script_completion;
+mod scripting;
 mod settings;
 mod snippets_panel;
 mod sql;

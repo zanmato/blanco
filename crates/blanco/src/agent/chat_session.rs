@@ -13,12 +13,78 @@ use database::{DatabaseService, DatabaseType};
 use gpui_component::input::InputState;
 use llm::{FunctionCall, ToolCall, chat::ChatMessage as LlmChatMessage, chat::Tool};
 
+/// What the tab the chat is attached to actually contains. The database it
+/// talks to is the same either way, so this is separate from [`DatabaseType`]:
+/// together they decide which system prompt the session gets and how the
+/// tab-editing tools describe the buffer.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub enum TabLanguage {
+    /// A query tab: SQL, or Redis commands, per the connection's type.
+    #[default]
+    Query,
+    /// A script tab: JavaScript driving the connection through `db`.
+    Script,
+}
+
+/// The system prompt for a tab holding `tab_language` against `db_type`.
+fn system_prompt_for(tab_language: TabLanguage, db_type: Option<DatabaseType>) -> String {
+    match tab_language {
+        TabLanguage::Query => {
+            // Exhaustive match (no wildcard) so adding a DatabaseType variant
+            // fails to compile until its agent prompt is chosen deliberately:
+            // SQL dialects share the SQL prompt, key/value stores get a
+            // command-oriented one.
+            let prompt = match db_type {
+                None
+                | Some(DatabaseType::SQLite)
+                | Some(DatabaseType::PostgreSQL)
+                | Some(DatabaseType::MySQL)
+                | Some(DatabaseType::ClickHouse)
+                | Some(DatabaseType::MsSql) => include_str!("system_prompt.md"),
+                Some(DatabaseType::Redis) => include_str!("redis_system_prompt.md"),
+            };
+            prompt.to_string()
+        }
+        TabLanguage::Script => script_system_prompt(db_type),
+    }
+}
+
+/// The script-tab prompt is assembled rather than a fixed file: the `db` API
+/// reference comes from the same tables the editor completes from, and what the
+/// statement strings passed to `db` actually are depends on the connection.
+fn script_system_prompt(db_type: Option<DatabaseType>) -> String {
+    let supports_sql = db_type.map(|db| db.supports_sql()).unwrap_or(true);
+    let dialect = match db_type {
+        Some(db_type) if supports_sql => format!(
+            "The connection is {}, so every statement string you pass to `db.query`, \
+             `db.execute` and `db.transaction` must be {} SQL.",
+            db_type.as_str(),
+            db_type.as_str()
+        ),
+        Some(db_type) => format!(
+            "The connection is {}, which does not speak SQL: the strings you pass to `db.query`, \
+             `db.execute` and `db.transaction` are command text in `redis-cli` syntax (e.g. \
+             `GET user:1`), one command per call, and bind parameters are unavailable.",
+            db_type.as_str()
+        ),
+        None => "The connection's type is unknown; write portable SQL.".to_string(),
+    };
+
+    format!(
+        "{}\n{}\n\nThe injected API:\n\n{}",
+        include_str!("script_system_prompt.md"),
+        dialect,
+        crate::script_completion::api_reference(supports_sql)
+    )
+}
+
 /// Context for creating a ChatSession with database/editor access
 pub struct ChatSessionContext {
     pub input_state: Option<WeakEntity<InputState>>,
     pub connection_id: Option<i64>,
     pub database_name: Option<String>,
     pub db_type: Option<DatabaseType>,
+    pub tab_language: TabLanguage,
 }
 
 impl ChatSessionContext {
@@ -28,6 +94,7 @@ impl ChatSessionContext {
             connection_id: None,
             database_name: None,
             db_type: None,
+            tab_language: TabLanguage::default(),
         }
     }
 
@@ -45,6 +112,11 @@ impl ChatSessionContext {
         self.connection_id = Some(connection_id);
         self.database_name = Some(database_name);
         self.db_type = Some(db_type);
+        self
+    }
+
+    pub fn with_tab_language(mut self, tab_language: TabLanguage) -> Self {
+        self.tab_language = tab_language;
         self
     }
 }
@@ -70,6 +142,7 @@ pub struct ChatSession {
     pub connection_id: Option<i64>,
     pub database_name: Option<String>,
     pub db_type: Option<DatabaseType>,
+    pub tab_language: TabLanguage,
     pub current_message_task: Option<Task<Result<String>>>,
     pending_approvals: HashMap<String, smol::channel::Sender<bool>>,
 }
@@ -90,13 +163,14 @@ impl ChatSession {
             loading_state: LoadingState::Idle,
             streaming_message_id: None,
             tool_registry: Some(std::sync::Arc::new(
-                super::tool_handlers::AgentToolRegistry::new(),
+                super::tool_handlers::AgentToolRegistry::new(context.tab_language, context.db_type),
             )),
             tool_mode: ToolMode::default(),
             input_state: context.input_state,
             connection_id: context.connection_id,
             database_name: context.database_name,
             db_type: context.db_type,
+            tab_language: context.tab_language,
             current_message_task: None,
             pending_approvals: HashMap::new(),
         }
@@ -200,19 +274,7 @@ impl ChatSession {
     }
 
     pub fn get_system_prompt(&self) -> String {
-        // Exhaustive match (no wildcard) so adding a DatabaseType variant fails
-        // to compile until its agent prompt is chosen deliberately: SQL dialects
-        // share the SQL prompt, key/value stores get a command-oriented one.
-        let prompt = match self.db_type {
-            None
-            | Some(DatabaseType::SQLite)
-            | Some(DatabaseType::PostgreSQL)
-            | Some(DatabaseType::MySQL)
-            | Some(DatabaseType::ClickHouse)
-            | Some(DatabaseType::MsSql) => include_str!("system_prompt.md"),
-            Some(DatabaseType::Redis) => include_str!("redis_system_prompt.md"),
-        };
-        prompt.to_string()
+        system_prompt_for(self.tab_language, self.db_type)
     }
 
     pub fn send_message(
@@ -838,3 +900,29 @@ impl ChatSession {
 }
 
 impl EventEmitter<ChatEvent> for ChatSession {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn script_tabs_get_a_javascript_prompt() {
+        let query = system_prompt_for(TabLanguage::Query, Some(DatabaseType::PostgreSQL));
+        let script = system_prompt_for(TabLanguage::Script, Some(DatabaseType::PostgreSQL));
+
+        assert_ne!(query, script);
+        assert!(script.contains("JavaScript"), "{script}");
+        assert!(script.contains("db.display"), "{script}");
+        assert!(script.contains("PostgreSQL SQL"), "{script}");
+        assert!(!query.contains("db.display"), "{query}");
+    }
+
+    #[test]
+    fn a_script_on_a_non_sql_connection_is_told_it_writes_commands() {
+        let script = system_prompt_for(TabLanguage::Script, Some(DatabaseType::Redis));
+
+        assert!(script.contains("redis-cli"), "{script}");
+        assert!(!script.contains("Redis SQL"), "{script}");
+        assert!(script.contains("no bind parameters"), "{script}");
+    }
+}

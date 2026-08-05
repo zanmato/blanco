@@ -63,6 +63,12 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .await?;
     add_column_if_missing(pool, "ALTER TABLE query_tabs ADD COLUMN schema_name TEXT").await?;
+    // Existing profiles predate script tabs, so every stored tab is a query.
+    add_column_if_missing(
+        pool,
+        "ALTER TABLE query_tabs ADD COLUMN tab_kind TEXT NOT NULL DEFAULT 'query'",
+    )
+    .await?;
 
     // Query history table
     sqlx::query(
@@ -222,6 +228,13 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "#,
     )
     .execute(pool)
+    .await?;
+
+    // Snippets predate script tabs, so everything already stored is SQL.
+    add_column_if_missing(
+        pool,
+        "ALTER TABLE snippets ADD COLUMN kind TEXT NOT NULL DEFAULT 'query'",
+    )
     .await?;
 
     // Settings table

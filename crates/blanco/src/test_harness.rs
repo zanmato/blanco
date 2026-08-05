@@ -22,6 +22,9 @@ pub struct TestHarness {
     pub editor_panel: gpui::Entity<EditorPanel>,
     pub window_handle: gpui::WindowHandle<Root>,
     pub status_bar: gpui::Entity<StatusBarState>,
+    /// The temp-SQLite connection every tab in this harness is bound to.
+    pub connection_id: i64,
+    pub db_type: database::DatabaseType,
     _activity_task: Task<()>,
 }
 
@@ -44,6 +47,7 @@ impl TestHarness {
         let mut editor_panel: Option<gpui::Entity<EditorPanel>> = None;
         let mut status_bar: Option<gpui::Entity<StatusBarState>> = None;
         let mut activity_task: Option<Task<()>> = None;
+        let mut harness_connection_id: Option<i64> = None;
         let window_handle = cx.update(|cx| {
             gpui_component::init(cx);
             gpui_tokio::init(cx);
@@ -78,6 +82,7 @@ impl TestHarness {
             cx.set_global(settings);
 
             let connection_id = next_connection_id();
+            harness_connection_id = Some(connection_id);
             let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
             let db_path = temp_dir.path().join("test.db");
             let db_path_str = db_path.to_string_lossy().to_string();
@@ -118,8 +123,29 @@ impl TestHarness {
             editor_panel: editor_panel.expect("editor_panel should be set"),
             window_handle,
             status_bar: status_bar.expect("status_bar should be set"),
+            connection_id: harness_connection_id.expect("connection_id should be set"),
+            db_type,
             _activity_task: activity_task.expect("activity_task should be set"),
         }
+    }
+
+    /// Add a JavaScript script tab on the harness's connection and make it
+    /// active. `content` of `None` uses the default scaffold.
+    pub fn add_script_tab(&self, content: Option<&str>, cx: &mut VisualTestContext) {
+        let params = TabCreationParams {
+            title: "Test Script".into(),
+            content: content.map(str::to_string),
+            db_id: None,
+            connection_id: self.connection_id,
+            db_type: self.db_type,
+            connection_name: Some("test".into()),
+            database_name: "main".into(),
+            schema_name: None,
+            environment_type: None,
+        };
+        self.editor_panel.update_in(cx, |panel, window, cx| {
+            panel.create_and_add_script_tab(window, params, cx);
+        });
     }
 }
 
@@ -239,6 +265,62 @@ pub fn set_editor_text(harness: &TestHarness, text: &str, cx: &mut VisualTestCon
     });
 }
 
+pub fn set_script_text(harness: &TestHarness, text: &str, cx: &mut VisualTestContext) {
+    let text = text.to_string();
+    harness.editor_panel.update_in(cx, |panel, window, cx| {
+        let tab = panel
+            .active_script_tab()
+            .expect("no script tab at active index");
+        tab.editor.update(cx, |state, cx| {
+            state.set_value(&text, window, cx);
+        });
+    });
+}
+
+/// Everything written to the active script tab's console log so far.
+pub fn script_log_text(harness: &TestHarness, cx: &VisualTestContext) -> String {
+    harness.editor_panel.read_with(cx, |panel, cx| {
+        panel
+            .active_script_tab()
+            .expect("no script tab at active index")
+            .log_view
+            .read_with(cx, |log, _cx| log.all_text())
+    })
+}
+
+pub fn script_result_row_count(harness: &TestHarness, cx: &VisualTestContext) -> Option<usize> {
+    harness.editor_panel.read_with(cx, |panel, cx| {
+        let tab = panel.active_script_tab()?;
+        Some(tab.results_panel.read_with(cx, |results, cx| {
+            results
+                .table_state()
+                .read_with(cx, |state, _cx| state.delegate().rows.len())
+        }))
+    })
+}
+
+pub fn script_result_cell(
+    harness: &TestHarness,
+    row: usize,
+    col: usize,
+    cx: &VisualTestContext,
+) -> Option<Option<String>> {
+    harness.editor_panel.read_with(cx, |panel, cx| {
+        let tab = panel.active_script_tab()?;
+        Some(tab.results_panel.read_with(cx, |results, cx| {
+            results.table_state().read_with(cx, |state, _cx| {
+                state
+                    .delegate()
+                    .rows
+                    .get(row)
+                    .and_then(|r| r.get(col))
+                    .cloned()
+                    .unwrap_or(None)
+            })
+        }))
+    })
+}
+
 pub fn run_query(harness: &TestHarness, cx: &mut VisualTestContext) {
     harness.editor_panel.update_in(cx, |panel, window, cx| {
         panel.on_run_query(window, cx);
@@ -298,6 +380,21 @@ pub fn is_loading(harness: &TestHarness, cx: &VisualTestContext) -> bool {
     harness
         .editor_panel
         .read_with(cx, |panel, _cx| panel.is_loading())
+}
+
+/// Scripts run on their own OS thread and can do many round trips, so they get
+/// a much longer budget than a single query.
+pub async fn wait_for_script(harness: &TestHarness, cx: &mut VisualTestContext) {
+    for _ in 0..500 {
+        cx.run_until_parked();
+        if !is_loading(harness, cx) {
+            return;
+        }
+        cx.executor()
+            .timer(std::time::Duration::from_millis(20))
+            .await;
+    }
+    panic!("Script did not complete within timeout");
 }
 
 pub async fn wait_for_query(harness: &TestHarness, cx: &mut VisualTestContext) {

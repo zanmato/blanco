@@ -10,7 +10,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use blanco_core::DatabaseService;
+use database::DatabaseType;
 use llm::{FunctionCall, ToolCall, chat::Tool};
+
+use super::chat_session::TabLanguage;
 
 mod execute_sql;
 mod explore_tables;
@@ -24,6 +27,19 @@ use explore_tables::ExploreTablesHandler;
 use list_tables::ListTablesHandler;
 use read_tab::ReadTabHandler;
 use write_tab::WriteTabHandler;
+
+/// What the tab the tools read and write actually holds, in the words the
+/// tool descriptions use. A script tab is JavaScript regardless of the
+/// connection; a query tab follows the backend.
+pub fn tab_content_noun(tab_language: TabLanguage, db_type: Option<DatabaseType>) -> &'static str {
+    match tab_language {
+        TabLanguage::Script => "JavaScript script",
+        TabLanguage::Query => match db_type {
+            Some(db_type) if !db_type.supports_sql() => "Redis command",
+            _ => "SQL query",
+        },
+    }
+}
 
 /// Context for executing tools with GPUI/database access
 pub struct ToolContext {
@@ -66,15 +82,17 @@ pub struct AgentToolRegistry {
 }
 
 impl AgentToolRegistry {
-    pub fn new() -> Self {
+    pub fn new(tab_language: TabLanguage, db_type: Option<DatabaseType>) -> Self {
         let mut registry = Self {
             handlers: HashMap::new(),
         };
 
+        let content_noun = tab_content_noun(tab_language, db_type);
+
         registry.register(Box::new(ExploreTablesHandler));
         registry.register(Box::new(ListTablesHandler));
-        registry.register(Box::new(ReadTabHandler));
-        registry.register(Box::new(WriteTabHandler));
+        registry.register(Box::new(ReadTabHandler { content_noun }));
+        registry.register(Box::new(WriteTabHandler { content_noun }));
         registry.register(Box::new(ExecuteSqlHandler));
 
         registry
@@ -190,6 +208,6 @@ impl AgentToolRegistry {
 
 impl Default for AgentToolRegistry {
     fn default() -> Self {
-        Self::new()
+        Self::new(TabLanguage::default(), None)
     }
 }

@@ -160,6 +160,19 @@ pub struct CreateNewQueryTab {
     pub inspect_key: bool,
 }
 
+/// Open a JavaScript script tab on a connection. Scripts are connection-scoped
+/// rather than object-scoped, so there is no table to scaffold from.
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct CreateNewScriptTab {
+    pub connection_id: i64,
+    pub connection_name: String,
+    pub db_type: database::DatabaseType,
+    pub database_name: String,
+    pub schema_name: Option<String>,
+    pub environment_type: Option<EnvironmentType>,
+}
+
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
 pub struct OpenObjectDdl {
@@ -847,6 +860,38 @@ impl BlancoApp {
                 cx,
             );
         }
+
+        cx.notify();
+    }
+
+    fn on_create_new_script_tab(
+        &mut self,
+        action: &CreateNewScriptTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let title = match &action.schema_name {
+            Some(schema) => format!("{}.{} script", action.database_name, schema),
+            None => format!("{} script", action.database_name),
+        };
+
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.create_and_add_script_tab(
+                window,
+                TabCreationParams {
+                    title,
+                    content: None,
+                    db_id: None,
+                    connection_id: action.connection_id,
+                    db_type: action.db_type,
+                    connection_name: Some(action.connection_name.clone()),
+                    database_name: action.database_name.clone(),
+                    schema_name: action.schema_name.clone(),
+                    environment_type: action.environment_type,
+                },
+                cx,
+            );
+        });
 
         cx.notify();
     }
@@ -1552,6 +1597,7 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::on_settings))
             .on_action(cx.listener(Self::on_create_new_query_tab))
+            .on_action(cx.listener(Self::on_create_new_script_tab))
             .on_action(cx.listener(Self::on_open_table_structure))
             .on_action(cx.listener(Self::on_open_object_ddl))
             .on_action(cx.listener(Self::on_open_schema_graph))

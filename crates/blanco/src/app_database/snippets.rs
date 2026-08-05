@@ -1,6 +1,6 @@
 use sqlx::Row;
 
-use crate::app_database::{AppDatabase, SnippetData};
+use crate::app_database::{AppDatabase, EditorKind, SnippetData};
 
 impl AppDatabase {
     pub async fn save_snippet(&self, snippet: &SnippetData) -> Result<i64, sqlx::Error> {
@@ -12,12 +12,13 @@ impl AppDatabase {
                 sqlx::query(
                     r#"
                     UPDATE snippets
-                    SET name = ?, content = ?, parent_id = ?, is_group = ?, position = ?, updated_at = ?
+                    SET name = ?, content = ?, kind = ?, parent_id = ?, is_group = ?, position = ?, updated_at = ?
                     WHERE id = ?
                     "#,
                 )
                 .bind(&snippet.name)
                 .bind(&snippet.content)
+                .bind(snippet.kind.as_str())
                 .bind(snippet.parent_id)
                 .bind(snippet.is_group as i64)
                 .bind(snippet.position)
@@ -29,12 +30,13 @@ impl AppDatabase {
             } else {
                 let result = sqlx::query(
                     r#"
-                    INSERT INTO snippets (name, content, parent_id, is_group, position, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO snippets (name, content, kind, parent_id, is_group, position, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     "#,
                 )
                 .bind(&snippet.name)
                 .bind(&snippet.content)
+                .bind(snippet.kind.as_str())
                 .bind(snippet.parent_id)
                 .bind(snippet.is_group as i64)
                 .bind(snippet.position)
@@ -54,7 +56,7 @@ impl AppDatabase {
         self.run(async move {
             let rows = sqlx::query(
                 r#"
-                SELECT id, name, content, parent_id, is_group, position, created_at, updated_at
+                SELECT id, name, content, parent_id, is_group, position, kind
                 FROM snippets
                 ORDER BY position, name
                 "#,
@@ -71,6 +73,7 @@ impl AppDatabase {
                     parent_id: row.get(3),
                     is_group: row.get::<i64, _>(4) != 0,
                     position: row.get(5),
+                    kind: EditorKind::from_stored(&row.get::<String, _>(6)),
                 })
                 .collect();
 
@@ -84,7 +87,7 @@ impl AppDatabase {
         self.run(async move {
             let row = sqlx::query(
                 r#"
-                SELECT id, name, content, parent_id, is_group, position
+                SELECT id, name, content, parent_id, is_group, position, kind
                 FROM snippets
                 WHERE id = ?
                 "#,
@@ -101,6 +104,7 @@ impl AppDatabase {
                     parent_id: row.get(3),
                     is_group: row.get::<i64, _>(4) != 0,
                     position: row.get(5),
+                    kind: EditorKind::from_stored(&row.get::<String, _>(6)),
                 }))
             } else {
                 Ok(None)
@@ -144,5 +148,88 @@ impl AppDatabase {
             Ok(())
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn in_memory_db() -> AppDatabase {
+        AppDatabase::new_in_memory(tokio::runtime::Handle::current())
+            .await
+            .expect("failed to create in-memory database")
+    }
+
+    fn snippet(name: &str, content: &str, kind: EditorKind) -> SnippetData {
+        SnippetData {
+            id: None,
+            name: name.to_string(),
+            content: content.to_string(),
+            kind,
+            parent_id: None,
+            is_group: false,
+            position: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn script_snippets_round_trip_their_kind() {
+        let db = in_memory_db().await;
+
+        let query_id = db
+            .save_snippet(&snippet("counts", "SELECT 1", EditorKind::Query))
+            .await
+            .expect("failed to save query snippet");
+        let script_id = db
+            .save_snippet(&snippet(
+                "drop templates",
+                "db.execute('DROP DATABASE x');",
+                EditorKind::Script,
+            ))
+            .await
+            .expect("failed to save script snippet");
+
+        let loaded = db
+            .get_snippet_by_id(script_id)
+            .await
+            .expect("load failed")
+            .expect("script snippet should exist");
+        assert_eq!(loaded.kind, EditorKind::Script);
+
+        let all = db.load_snippets().await.expect("load failed");
+        let kind_of = |id: i64| {
+            all.iter()
+                .find(|snippet| snippet.id == Some(id))
+                .map(|snippet| snippet.kind)
+        };
+        assert_eq!(kind_of(query_id), Some(EditorKind::Query));
+        assert_eq!(kind_of(script_id), Some(EditorKind::Script));
+    }
+
+    #[tokio::test]
+    async fn changing_a_snippets_kind_is_persisted() {
+        let db = in_memory_db().await;
+
+        let id = db
+            .save_snippet(&snippet("later a script", "SELECT 1", EditorKind::Query))
+            .await
+            .expect("failed to save snippet");
+
+        let mut updated = snippet(
+            "later a script",
+            "db.query('SELECT 1');",
+            EditorKind::Script,
+        );
+        updated.id = Some(id);
+        db.save_snippet(&updated).await.expect("failed to update");
+
+        let loaded = db
+            .get_snippet_by_id(id)
+            .await
+            .expect("load failed")
+            .expect("snippet should exist");
+        assert_eq!(loaded.kind, EditorKind::Script);
+        assert_eq!(loaded.content, "db.query('SELECT 1');");
     }
 }
