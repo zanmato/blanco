@@ -64,7 +64,9 @@ struct TreeItemState {
 pub struct TreeItem<M> {
     pub id: SharedString,
     pub label: SharedString,
-    pub children: Vec<TreeItem<M>>,
+    /// Shared so cloning a `TreeItem` (which happens for every entry on each
+    /// rebuild) does not deep-copy the subtree.
+    pub children: Rc<Vec<TreeItem<M>>>,
     pub metadata: M,
     state: Rc<RefCell<TreeItemState>>,
 }
@@ -129,25 +131,13 @@ impl<M> TreeItem<M> {
         Self {
             id: id.into(),
             label: label.into(),
-            children: Vec::new(),
+            children: Rc::new(Vec::new()),
             metadata,
             state: Rc::new(RefCell::new(TreeItemState {
                 expanded: false,
                 disabled: false,
             })),
         }
-    }
-
-    /// Add a child item to this tree item.
-    pub fn child(mut self, child: TreeItem<M>) -> Self {
-        self.children.push(child);
-        self
-    }
-
-    /// Add multiple child items to this tree item.
-    pub fn children(mut self, children: impl IntoIterator<Item = TreeItem<M>>) -> Self {
-        self.children.extend(children);
-        self
     }
 
     /// Set expanded state for this tree item.
@@ -177,6 +167,20 @@ impl<M> TreeItem<M> {
     #[inline]
     pub fn is_expanded(&self) -> bool {
         self.state.borrow().expanded
+    }
+}
+
+impl<M: Clone> TreeItem<M> {
+    /// Add a child item to this tree item.
+    pub fn child(mut self, child: TreeItem<M>) -> Self {
+        Rc::make_mut(&mut self.children).push(child);
+        self
+    }
+
+    /// Add multiple child items to this tree item.
+    pub fn children(mut self, children: impl IntoIterator<Item = TreeItem<M>>) -> Self {
+        Rc::make_mut(&mut self.children).extend(children);
+        self
     }
 }
 
@@ -294,7 +298,7 @@ impl<D: TreeDelegate> TreeState<D> {
             depth,
         });
         if item.is_expanded() {
-            for child in &item.children {
+            for child in item.children.iter() {
                 self.add_entry(child.clone(), depth + 1);
             }
         }

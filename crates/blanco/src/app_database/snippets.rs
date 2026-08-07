@@ -125,27 +125,33 @@ impl AppDatabase {
         .await
     }
 
-    pub async fn move_snippet(
+    /// Reparent and renumber a set of snippets in one transaction.
+    ///
+    /// A reorder renumbers every sibling in the affected group, so the updates
+    /// have to land together: a partial write would leave duplicate or gapped
+    /// positions and the tree would come back in a different order.
+    pub async fn reorder_snippets(
         &self,
-        id: i64,
-        new_parent_id: Option<i64>,
-        new_position: i32,
+        updates: Vec<(i64, Option<i64>, i32)>,
     ) -> Result<(), sqlx::Error> {
         let pool = self.pool();
         self.run(async move {
-            sqlx::query(
-                r#"
-                UPDATE snippets
-                SET parent_id = ?, position = ?
-                WHERE id = ?
-                "#,
-            )
-            .bind(new_parent_id)
-            .bind(new_position)
-            .bind(id)
-            .execute(&pool)
-            .await?;
-            Ok(())
+            let mut transaction = pool.begin().await?;
+            for (id, parent_id, position) in updates {
+                sqlx::query(
+                    r#"
+                    UPDATE snippets
+                    SET parent_id = ?, position = ?
+                    WHERE id = ?
+                    "#,
+                )
+                .bind(parent_id)
+                .bind(position)
+                .bind(id)
+                .execute(&mut *transaction)
+                .await?;
+            }
+            transaction.commit().await
         })
         .await
     }
@@ -205,6 +211,52 @@ mod tests {
         };
         assert_eq!(kind_of(query_id), Some(EditorKind::Query));
         assert_eq!(kind_of(script_id), Some(EditorKind::Script));
+    }
+
+    #[tokio::test]
+    async fn reordering_persists_the_new_parent_and_order() {
+        let db = in_memory_db().await;
+
+        let mut ids = Vec::new();
+        for name in ["first", "second", "third"] {
+            ids.push(
+                db.save_snippet(&snippet(name, "SELECT 1", EditorKind::Query))
+                    .await
+                    .expect("failed to save snippet"),
+            );
+        }
+        let group_id = {
+            let mut group = snippet("group", "", EditorKind::Query);
+            group.is_group = true;
+            db.save_snippet(&group).await.expect("failed to save group")
+        };
+
+        // "third" moves into the group, and the remaining roots are renumbered.
+        db.reorder_snippets(vec![(ids[2], Some(group_id), 0)])
+            .await
+            .expect("failed to reorder");
+        db.reorder_snippets(vec![(ids[1], None, 0), (ids[0], None, 1)])
+            .await
+            .expect("failed to reorder");
+
+        let loaded = db.load_snippets().await.expect("load failed");
+        let by_id = |id: i64| {
+            loaded
+                .iter()
+                .find(|snippet| snippet.id == Some(id))
+                .expect("snippet should exist")
+        };
+
+        assert_eq!(by_id(ids[2]).parent_id, Some(group_id));
+        assert_eq!(by_id(ids[1]).position, 0);
+        assert_eq!(by_id(ids[0]).position, 1);
+
+        let root_order: Vec<&str> = loaded
+            .iter()
+            .filter(|snippet| snippet.parent_id.is_none() && !snippet.is_group)
+            .map(|snippet| snippet.name.as_str())
+            .collect();
+        assert_eq!(root_order, vec!["second", "first"]);
     }
 
     #[tokio::test]

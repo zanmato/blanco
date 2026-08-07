@@ -13,5 +13,9 @@ smallvec = { workspace = true }
 # Text handling
 ropey = { workspace = true }
 
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+gpui-component = { workspace = true }
+
 [lints]
 workspace = true

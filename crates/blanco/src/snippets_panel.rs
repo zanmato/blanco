@@ -22,6 +22,17 @@ pub enum SnippetsPanelEvent {
     SnippetDeleted,
 }
 
+/// Where a dragged snippet should land.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DropPlacement {
+    /// Append to the top level.
+    Root,
+    /// Append as the last child of a group.
+    IntoGroup(i64),
+    /// Reorder next to an existing snippet, becoming its sibling.
+    Beside { sibling_id: i64, after: bool },
+}
+
 impl EventEmitter<SnippetsPanelEvent> for SnippetsPanel {}
 
 pub struct SnippetsPanel {
@@ -185,35 +196,21 @@ impl SnippetsPanel {
     pub fn handle_drop(
         &mut self,
         snippet_id: i64,
-        new_parent_id: Option<i64>,
+        placement: DropPlacement,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let app_database = AppDatabase::global(cx).clone();
+        let (new_parent_id, ordered_siblings) = plan_drop(&self.snippets, snippet_id, placement);
 
-        let position = if let Some(parent_id) = new_parent_id {
-            self.snippets
-                .iter()
-                .filter(|s| s.parent_id == Some(parent_id))
-                .map(|s| s.position)
-                .max()
-                .unwrap_or(0)
-                + 1
-        } else {
-            self.snippets
-                .iter()
-                .filter(|s| s.parent_id.is_none())
-                .map(|s| s.position)
-                .max()
-                .unwrap_or(0)
-                + 1
-        };
+        let updates: Vec<(i64, Option<i64>, i32)> = ordered_siblings
+            .iter()
+            .enumerate()
+            .map(|(index, id)| (*id, new_parent_id, index as i32))
+            .collect();
 
         cx.spawn(async move |weak_panel, cx: &mut gpui::AsyncApp| {
-            match app_database
-                .move_snippet(snippet_id, new_parent_id, position)
-                .await
-            {
+            match app_database.reorder_snippets(updates).await {
                 Ok(_) => {
                     tracing::info!("Moved snippet {} to parent {:?}", snippet_id, new_parent_id);
                 }
@@ -340,5 +337,152 @@ impl Render for SnippetsPanel {
                     .child(DraggableTree::new(&self.tree_state))
                     .overflow_y_scrollbar(),
             )
+    }
+}
+
+/// Work out where a dropped snippet lands: its new parent, and the order of
+/// that parent's children once it has been inserted.
+///
+/// Returns the new parent and the full ordered list of child ids, so the caller
+/// can renumber the whole sibling group instead of guessing a position that
+/// might collide with an existing one.
+fn plan_drop(
+    snippets: &[SnippetData],
+    snippet_id: i64,
+    placement: DropPlacement,
+) -> (Option<i64>, Vec<i64>) {
+    let (new_parent_id, insert_index) = match placement {
+        DropPlacement::Root => (None, usize::MAX),
+        DropPlacement::IntoGroup(group_id) => (Some(group_id), usize::MAX),
+        DropPlacement::Beside { sibling_id, after } => {
+            let sibling_parent = snippets
+                .iter()
+                .find(|snippet| snippet.id == Some(sibling_id))
+                .and_then(|snippet| snippet.parent_id);
+
+            let index = ordered_children(snippets, sibling_parent, Some(snippet_id))
+                .iter()
+                .position(|id| *id == sibling_id)
+                .map(|index| if after { index + 1 } else { index })
+                .unwrap_or(usize::MAX);
+
+            (sibling_parent, index)
+        }
+    };
+
+    let mut siblings = ordered_children(snippets, new_parent_id, Some(snippet_id));
+    let insert_index = insert_index.min(siblings.len());
+    siblings.insert(insert_index, snippet_id);
+
+    (new_parent_id, siblings)
+}
+
+/// The ids of `parent_id`'s children in display order, optionally skipping one
+/// (the snippet being moved, which is about to be re-inserted).
+fn ordered_children(
+    snippets: &[SnippetData],
+    parent_id: Option<i64>,
+    exclude: Option<i64>,
+) -> Vec<i64> {
+    let mut children: Vec<&SnippetData> = snippets
+        .iter()
+        .filter(|snippet| snippet.parent_id == parent_id && snippet.id != exclude)
+        .collect();
+    children.sort_by(|a, b| {
+        a.position
+            .cmp(&b.position)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    children
+        .into_iter()
+        .filter_map(|snippet| snippet.id)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two root snippets (1, 2), a root group (3) holding snippets 4 and 5.
+    fn snippets() -> Vec<SnippetData> {
+        let snippet =
+            |id: i64, parent_id: Option<i64>, position: i32, is_group: bool| SnippetData {
+                id: Some(id),
+                name: format!("snippet-{id}"),
+                content: String::new(),
+                kind: EditorKind::default(),
+                parent_id,
+                is_group,
+                position,
+            };
+
+        vec![
+            snippet(1, None, 0, false),
+            snippet(2, None, 1, false),
+            snippet(3, None, 2, true),
+            snippet(4, Some(3), 0, false),
+            snippet(5, Some(3), 1, false),
+        ]
+    }
+
+    #[test]
+    fn dropping_after_a_sibling_reorders_within_the_parent() {
+        let (parent, order) = plan_drop(
+            &snippets(),
+            1,
+            DropPlacement::Beside {
+                sibling_id: 2,
+                after: true,
+            },
+        );
+
+        assert_eq!(parent, None);
+        assert_eq!(order, vec![2, 1, 3]);
+    }
+
+    #[test]
+    fn dropping_before_a_sibling_reorders_within_the_parent() {
+        let (parent, order) = plan_drop(
+            &snippets(),
+            3,
+            DropPlacement::Beside {
+                sibling_id: 1,
+                after: false,
+            },
+        );
+
+        assert_eq!(parent, None);
+        assert_eq!(order, vec![3, 1, 2]);
+    }
+
+    #[test]
+    fn dropping_beside_a_group_child_moves_into_that_group() {
+        let (parent, order) = plan_drop(
+            &snippets(),
+            1,
+            DropPlacement::Beside {
+                sibling_id: 5,
+                after: false,
+            },
+        );
+
+        assert_eq!(parent, Some(3));
+        assert_eq!(order, vec![4, 1, 5]);
+    }
+
+    #[test]
+    fn dropping_into_a_group_appends() {
+        let (parent, order) = plan_drop(&snippets(), 1, DropPlacement::IntoGroup(3));
+
+        assert_eq!(parent, Some(3));
+        assert_eq!(order, vec![4, 5, 1]);
+    }
+
+    #[test]
+    fn dropping_on_the_background_appends_to_the_root() {
+        let (parent, order) = plan_drop(&snippets(), 4, DropPlacement::Root);
+
+        assert_eq!(parent, None);
+        assert_eq!(order, vec![1, 2, 3, 4]);
     }
 }

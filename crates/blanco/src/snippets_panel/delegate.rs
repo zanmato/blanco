@@ -1,5 +1,5 @@
 use crate::app::NewSnippet;
-use crate::snippets_panel::{CreateGroup, SnippetsPanel};
+use crate::snippets_panel::{CreateGroup, DropPlacement, SnippetsPanel};
 use gpui::ClickEvent;
 use gpui::{
     App, Entity, InteractiveElement, ParentElement, Styled, Window, div, prelude::FluentBuilder, px,
@@ -11,7 +11,9 @@ use gpui_component::{
     menu::{PopupMenu, PopupMenuItem},
 };
 
-use blanco_ui::draggable_tree::{DraggableTreeDelegate, DraggedTreeItem, TreeEntry};
+use blanco_ui::draggable_tree::{
+    DraggableTreeDelegate, DraggedTreeItem, InsertPosition, TreeEntry,
+};
 
 /// Metadata for snippet items in the tree
 #[derive(Clone, Debug)]
@@ -49,6 +51,29 @@ impl SnippetsTreeDelegate {
             }
         }
         None
+    }
+
+    /// Whether `candidate_id` sits somewhere under `ancestor_id`.
+    fn is_descendant_of(&self, candidate_id: i64, ancestor_id: i64, cx: &App) -> bool {
+        let snippets = &self.parent.read(cx).snippets;
+        let mut current = Some(candidate_id);
+
+        // A malformed parent chain (a cycle already in the data) would other-
+        // wise spin here, so bound the walk by the number of snippets.
+        for _ in 0..snippets.len() {
+            let Some(id) = current else {
+                return false;
+            };
+            if id == ancestor_id {
+                return true;
+            }
+            current = snippets
+                .iter()
+                .find(|snippet| snippet.id == Some(id))
+                .and_then(|snippet| snippet.parent_id);
+        }
+
+        false
     }
 }
 
@@ -200,15 +225,30 @@ impl DraggableTreeDelegate for SnippetsTreeDelegate {
 
     fn can_drop_on(
         &self,
-        _dragged_item: &DraggedTreeItem,
+        dragged_item: &DraggedTreeItem,
         target_entry: &TreeEntry,
+        position: InsertPosition,
         cx: &App,
     ) -> bool {
-        let item_id = target_entry.item().id.as_ref();
-        if let Some(metadata) = self.get_snippet_metadata(item_id, cx) {
-            metadata.is_group
-        } else {
-            false
+        let Some(dragged_id) = snippet_id(dragged_item.item_id.as_ref()) else {
+            return false;
+        };
+        let Some(target) = self.get_snippet_metadata(target_entry.item().id.as_ref(), cx) else {
+            return false;
+        };
+
+        if target.id == dragged_id {
+            return false;
+        }
+        // Moving a group next to or into one of its own descendants would
+        // detach that subtree from the root.
+        if self.is_descendant_of(target.id, dragged_id, cx) {
+            return false;
+        }
+
+        match position {
+            InsertPosition::Inside => target.is_group,
+            InsertPosition::Before | InsertPosition::After => true,
         }
     }
 
@@ -220,32 +260,36 @@ impl DraggableTreeDelegate for SnippetsTreeDelegate {
         &mut self,
         dragged_item: &DraggedTreeItem,
         target_entry_id: Option<&str>,
+        position: InsertPosition,
         window: &mut Window,
         cx: &mut App,
     ) {
-        let snippet_id =
-            if let Some(id_str) = dragged_item.item_id.as_ref().strip_prefix("snippet:") {
-                if let Ok(id) = id_str.parse::<i64>() {
-                    id
-                } else {
-                    return;
-                }
-            } else {
-                return;
-            };
+        let Some(dragged_id) = snippet_id(dragged_item.item_id.as_ref()) else {
+            return;
+        };
 
-        let parent_id = if let Some(target_id) = target_entry_id {
-            if let Some(id_str) = target_id.strip_prefix("snippet:") {
-                id_str.parse::<i64>().ok()
-            } else {
-                None
-            }
-        } else {
-            None
+        let placement = match target_entry_id.and_then(snippet_id) {
+            None => DropPlacement::Root,
+            Some(target_id) => match position {
+                InsertPosition::Inside => DropPlacement::IntoGroup(target_id),
+                InsertPosition::Before => DropPlacement::Beside {
+                    sibling_id: target_id,
+                    after: false,
+                },
+                InsertPosition::After => DropPlacement::Beside {
+                    sibling_id: target_id,
+                    after: true,
+                },
+            },
         };
 
         self.parent.update(cx, |this, cx| {
-            this.handle_drop(snippet_id, parent_id, window, cx);
+            this.handle_drop(dragged_id, placement, window, cx);
         });
     }
+}
+
+/// Parse the `snippet:<id>` item id used for tree items.
+fn snippet_id(item_id: &str) -> Option<i64> {
+    item_id.strip_prefix("snippet:")?.parse().ok()
 }
