@@ -26,7 +26,7 @@ use super::ResultsTableDelegate;
 use crate::app::{
     AddRow, CopyAsCSV, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CopyAsVALUES, DeleteRow,
     DuplicateRow, ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV,
-    SetCellNull,
+    SetCellDefault, SetCellNull,
 };
 use crate::results_panel::cell_edit_state::{CellInput, compare_numeric, format_value_for_display};
 use crate::results_panel::foreign_key_popover::ForeignKeyPopover;
@@ -195,6 +195,9 @@ impl ResultsTableDelegate {
         let is_json = column_type == Some(ColumnType::Json);
 
         div()
+            // Scopes the tab/shift-tab -> Edit{Next,Prev}Cell bindings to the
+            // inline editor, so they outrank the table's own tab bindings.
+            .key_context("CellEditor")
             .font_family(cx.theme().mono_font_family.clone())
             .text_xs()
             .size_full()
@@ -264,7 +267,12 @@ impl ResultsTableDelegate {
         };
 
         let is_null = current_value.is_none();
-        let display_text = if is_null {
+        // Untouched cells of a pending new row show the server default that
+        // will apply because the column is omitted from the INSERT.
+        let uses_default = is_null && self.cell_uses_default(row_ix, col_ix);
+        let display_text = if uses_default {
+            "DEFAULT".to_string()
+        } else if is_null {
             "NULL".to_string()
         } else {
             format_value_for_display(current_value.as_deref().unwrap_or(""))
@@ -613,6 +621,12 @@ impl TableDelegate for ResultsTableDelegate {
             .table_columns
             .get(cell.1)
             .is_some_and(|c| c.is_nullable);
+        // "Set DEFAULT" only makes sense on a pending new row whose column has
+        // a server default: it reverts the cell so the INSERT omits the column.
+        let can_set_default = self.edit_state.is_new_row(cell.0)
+            && self
+                .table_column_info(cell.1)
+                .is_some_and(|info| info.default_value.is_some());
 
         menu.menu_with_icon(
             "Copy as CSV",
@@ -689,6 +703,16 @@ impl TableDelegate for ResultsTableDelegate {
                 "Set NULL",
                 Icon::new(IconName::CircleX),
                 Box::new(SetCellNull {
+                    row: cell.0,
+                    col: cell.1,
+                }),
+            )
+        })
+        .when(can_set_default, |this| {
+            this.menu_with_icon(
+                "Set DEFAULT",
+                Icon::new(IconName::RotateCcw),
+                Box::new(SetCellDefault {
                     row: cell.0,
                     col: cell.1,
                 }),

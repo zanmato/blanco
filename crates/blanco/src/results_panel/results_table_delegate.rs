@@ -39,6 +39,39 @@ impl ResultsTableDelegate {
             .and_then(|row_data| row_data.get_mut(col))
     }
 
+    /// Table metadata for a result column, matched by name because the query's
+    /// column order need not match the table's (`SELECT b, a FROM t`).
+    pub fn table_column_info(&self, data_index: usize) -> Option<&blanco_core::ColumnInfo> {
+        let column = self.columns.get(data_index)?;
+        self.table_columns
+            .iter()
+            .find(|info| info.name.as_str() == column.name.as_str())
+    }
+
+    /// Whether a cell in a pending new row still holds its untouched initial
+    /// NULL while the column has a server-side default. Such cells display as
+    /// `DEFAULT` and are omitted from the generated INSERT so the default
+    /// applies (SQLite has no `DEFAULT` keyword in a VALUES list, so omitting
+    /// the column is the portable form).
+    pub fn cell_uses_default(&self, row_index: usize, data_index: usize) -> bool {
+        if !self.edit_state.is_new_row(row_index) {
+            return false;
+        }
+        let untouched = !self
+            .edit_state
+            .edited_values
+            .contains_key(&(row_index, data_index))
+            && self
+                .rows
+                .get(row_index)
+                .and_then(|row| row.get(data_index))
+                .is_none_or(|value| value.is_none());
+        untouched
+            && self
+                .table_column_info(data_index)
+                .is_some_and(|info| info.default_value.is_some())
+    }
+
     /// Set the connection ID for database operations
     pub fn set_connection_id(
         &mut self,
@@ -238,6 +271,7 @@ mod tests {
         OperationType, RowIdentifier, TableChangeOperation,
     };
     use crate::results_panel::{ChangeType, TableChange};
+    use blanco_core::ColumnInfo;
 
     #[test]
     fn test_cell_edit_state() {
@@ -342,8 +376,6 @@ mod tests {
 
     #[test]
     fn test_primary_key_update_preserves_original_value() {
-        use blanco_core::ColumnInfo;
-
         let mut delegate = ResultsTableDelegate {
             table_name: Some("test_table".to_string()),
             table_columns: vec![
@@ -410,6 +442,125 @@ mod tests {
         } else {
             panic!("Expected Update operation");
         }
+    }
+
+    fn column_info(name: &str, is_primary_key: bool, default_value: Option<&str>) -> ColumnInfo {
+        ColumnInfo {
+            name: name.to_string(),
+            data_type: "text".to_string(),
+            is_nullable: !is_primary_key,
+            is_primary_key,
+            default_value: default_value.map(str::to_string),
+            character_maximum_length: None,
+            foreign_key: None,
+        }
+    }
+
+    fn delegate_with_defaults() -> ResultsTableDelegate {
+        ResultsTableDelegate {
+            table_name: Some("items".to_string()),
+            table_columns: vec![
+                column_info("id", true, Some("nextval('items_id_seq')")),
+                column_info("created_at", false, Some("now()")),
+                column_info("name", false, None),
+                column_info("note", false, None),
+            ],
+            columns: vec![
+                Column::new("col_1".to_string(), "id".to_string()),
+                Column::new("col_2".to_string(), "created_at".to_string()),
+                Column::new("col_3".to_string(), "name".to_string()),
+                Column::new("col_4".to_string(), "note".to_string()),
+            ],
+            rows: vec![vec![None, None, None, None]],
+            ..Default::default()
+        }
+    }
+
+    fn track_insert(delegate: &mut ResultsTableDelegate, row: usize) {
+        delegate.edit_state.pending_new_rows.push(row);
+        delegate.edit_state.add_change(TableChange::new(
+            ChangeType::InsertRow,
+            "items".to_string(),
+            row,
+            None,
+            None,
+            None,
+            Vec::new(),
+            None,
+        ));
+    }
+
+    #[test]
+    fn test_new_row_insert_omits_untouched_default_columns() {
+        use database::DatabaseType;
+
+        let mut delegate = delegate_with_defaults();
+        track_insert(&mut delegate, 0);
+        // The user only typed into "name"; "created_at" keeps its default,
+        // "note" has no default and stays an explicit NULL.
+        delegate
+            .edit_state
+            .edited_values
+            .insert((0, 2), Some("gls".to_string()));
+
+        let operations = delegate.create_change_operations();
+        assert_eq!(operations.len(), 1);
+        assert_eq!(
+            operations[0].to_sql_query(DatabaseType::PostgreSQL),
+            r#"INSERT INTO "items" ("name", "note") VALUES ('gls', NULL)"#
+        );
+    }
+
+    #[test]
+    fn test_new_row_insert_keeps_explicitly_nulled_default_column() {
+        use database::DatabaseType;
+
+        let mut delegate = delegate_with_defaults();
+        track_insert(&mut delegate, 0);
+        delegate
+            .edit_state
+            .edited_values
+            .insert((0, 2), Some("gls".to_string()));
+        // Explicit Set NULL on a defaulted column must survive as NULL.
+        delegate.edit_state.edited_values.insert((0, 1), None);
+
+        let operations = delegate.create_change_operations();
+        assert_eq!(
+            operations[0].to_sql_query(DatabaseType::PostgreSQL),
+            r#"INSERT INTO "items" ("created_at", "name", "note") VALUES (NULL, 'gls', NULL)"#
+        );
+    }
+
+    #[test]
+    fn test_fully_untouched_row_emits_all_default_insert() {
+        use database::DatabaseType;
+
+        // Every non-PK column has a default, so an untouched row omits all
+        // columns and falls back to the per-backend all-default INSERT form.
+        let mut delegate = ResultsTableDelegate {
+            table_name: Some("items".to_string()),
+            table_columns: vec![
+                column_info("id", true, Some("nextval('items_id_seq')")),
+                column_info("created_at", false, Some("now()")),
+            ],
+            columns: vec![
+                Column::new("col_1".to_string(), "id".to_string()),
+                Column::new("col_2".to_string(), "created_at".to_string()),
+            ],
+            rows: vec![vec![None, None]],
+            ..Default::default()
+        };
+        track_insert(&mut delegate, 0);
+
+        let operations = delegate.create_change_operations();
+        assert_eq!(
+            operations[0].to_sql_query(DatabaseType::PostgreSQL),
+            r#"INSERT INTO "items" DEFAULT VALUES"#
+        );
+        assert_eq!(
+            operations[0].to_sql_query(DatabaseType::MySQL),
+            "INSERT INTO `items` () VALUES ()"
+        );
     }
 
     /// Consolidated UPDATE operations must come out in a stable, first-seen order

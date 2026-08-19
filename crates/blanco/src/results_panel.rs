@@ -375,6 +375,145 @@ impl ResultsPanel {
         }
     }
 
+    /// Start editing the table's selected cell (Enter / F2 on the table).
+    fn on_start_cell_edit(
+        &mut self,
+        _action: &crate::app::StartCellEdit,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.commit_in_progress || self.get_current_editing_cell(cx).is_some() {
+            return;
+        }
+        let (selected_cell, is_editable) = {
+            let state = self.table_state.read(cx);
+            (state.selected_cell(), state.delegate().is_editable())
+        };
+        let Some((row, col)) = selected_cell else {
+            return;
+        };
+        if !is_editable {
+            return;
+        }
+        self.table_state.update(cx, |state, _cx| {
+            state.delegate_mut().clear_selection();
+        });
+        self.start_cell_edit(row, col, window, cx);
+    }
+
+    /// Commit the in-flight cell edit (Enter inside the cell input). The
+    /// single-line input propagates its Enter action, so this fires on the
+    /// panel while a cell editor is focused.
+    fn on_input_enter(
+        &mut self,
+        _action: &gpui_component::input::Enter,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(cell) = self.get_current_editing_cell(cx) else {
+            cx.propagate();
+            return;
+        };
+        self.finalize_active_cell_edit(cx);
+        self.stop_editing_and_focus_table(cell, window, cx);
+    }
+
+    /// Cancel the in-flight cell edit (Escape inside the cell input). The
+    /// expanded editor overlay handles Escape itself (minimize), so this only
+    /// sees the inline case.
+    fn on_input_escape(
+        &mut self,
+        _action: &gpui_component::input::Escape,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(cell) = self.get_current_editing_cell(cx) else {
+            cx.propagate();
+            return;
+        };
+        self.cancel_current_edit(cx);
+        self.stop_editing_and_focus_table(cell, window, cx);
+    }
+
+    fn on_edit_next_cell(
+        &mut self,
+        _action: &crate::app::EditNextCell,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_cell_edit(true, window, cx);
+    }
+
+    fn on_edit_prev_cell(
+        &mut self,
+        _action: &crate::app::EditPrevCell,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_cell_edit(false, window, cx);
+    }
+
+    /// Commit the current cell edit and start editing the neighbouring cell,
+    /// wrapping across row boundaries at either end.
+    fn move_cell_edit(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((row, col)) = self.get_current_editing_cell(cx) else {
+            return;
+        };
+        // Fold the typed text into tracked edits; a no-op for untouched input.
+        self.finalize_active_cell_edit(cx);
+        self.table_state.update(cx, |state, cx| {
+            state.delegate_mut().edit_state.stop_editing();
+            state.refresh(cx);
+        });
+
+        let (row_count, col_count) = {
+            let delegate = self.table_state.read(cx).delegate();
+            (delegate.rows.len(), delegate.columns.len())
+        };
+        let target = if forward {
+            if col + 1 < col_count {
+                Some((row, col + 1))
+            } else if row + 1 < row_count {
+                Some((row + 1, 0))
+            } else {
+                None
+            }
+        } else if col > 0 {
+            Some((row, col - 1))
+        } else if row > 0 && col_count > 0 {
+            Some((row - 1, col_count - 1))
+        } else {
+            None
+        };
+
+        match target {
+            Some((next_row, next_col)) => {
+                self.table_state.update(cx, |state, cx| {
+                    state.set_selected_cell(next_row, next_col, cx);
+                });
+                self.start_cell_edit(next_row, next_col, window, cx);
+            }
+            None => self.stop_editing_and_focus_table((row, col), window, cx),
+        }
+    }
+
+    /// Return keyboard focus to the table and leave the finished cell selected,
+    /// so arrow-key navigation picks up where the edit ended.
+    fn stop_editing_and_focus_table(
+        &mut self,
+        cell: (usize, usize),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.table_state.update(cx, |state, cx| {
+            state.delegate_mut().edit_state.stop_editing();
+            state.set_selected_cell(cell.0, cell.1, cx);
+            state.refresh(cx);
+        });
+        self.table_state.focus_handle(cx).focus(window, cx);
+        cx.notify();
+    }
+
     pub fn start_cell_edit(
         &mut self,
         row: usize,
@@ -1121,6 +1260,12 @@ impl Render for ResultsPanel {
             .on_action(cx.listener(Self::on_duplicate_row))
             .on_action(cx.listener(Self::on_delete_row))
             .on_action(cx.listener(Self::on_set_cell_null))
+            .on_action(cx.listener(Self::on_set_cell_default))
+            .on_action(cx.listener(Self::on_start_cell_edit))
+            .on_action(cx.listener(Self::on_edit_next_cell))
+            .on_action(cx.listener(Self::on_edit_prev_cell))
+            .on_action(cx.listener(Self::on_input_enter))
+            .on_action(cx.listener(Self::on_input_escape))
             .when(show_strip, |this| this.child(self.render_tab_strip(cx)))
             .child(
                 div()

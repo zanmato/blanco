@@ -45,8 +45,13 @@ impl ResultsTableDelegate {
         }
     }
 
-    /// Get column names for INSERT operations, excluding primary key (for new rows)
-    pub fn get_insert_column_names(&self, exclude_primary_key: bool) -> Vec<String> {
+    /// Get column names for INSERT operations, excluding primary key (for new
+    /// rows) and untouched columns with a server-side default.
+    pub fn get_insert_column_names(
+        &self,
+        row_index: usize,
+        exclude_primary_key: bool,
+    ) -> Vec<String> {
         let pk_indices = if exclude_primary_key {
             self.primary_key_column_indices()
         } else {
@@ -63,12 +68,16 @@ impl ResultsTableDelegate {
                 {
                     return None;
                 }
+                if self.cell_uses_default(row_index, data_index) {
+                    return None;
+                }
                 Some(col.name.to_string())
             })
             .collect()
     }
 
-    /// Get column values for INSERT operations, excluding primary key (for new rows)
+    /// Get column values for INSERT operations, excluding primary key (for new
+    /// rows) and untouched columns with a server-side default.
     pub fn get_insert_values(
         &self,
         row_index: usize,
@@ -89,6 +98,9 @@ impl ResultsTableDelegate {
                         && pk_indices.contains(&data_index)
                     {
                         return None; // Skip primary key column
+                    }
+                    if self.cell_uses_default(row_index, data_index) {
+                        return None;
                     }
 
                     // Check if there's an edited value for this cell
@@ -186,7 +198,8 @@ impl ResultsTableDelegate {
                         })
                     });
 
-                    let column_names = self.get_insert_column_names(exclude_primary_key);
+                    let column_names =
+                        self.get_insert_column_names(change.row_index, exclude_primary_key);
                     let row_values = self.get_insert_values(change.row_index, exclude_primary_key);
 
                     let column_changes: Vec<ColumnChange> = column_names

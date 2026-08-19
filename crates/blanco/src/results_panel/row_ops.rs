@@ -1,7 +1,7 @@
 use gpui::{Context, Window};
 
 use super::{ChangeType, ResultsPanel, TableChange};
-use crate::app::{AddRow, DeleteRow, DuplicateRow, SetCellNull};
+use crate::app::{AddRow, DeleteRow, DuplicateRow, SetCellDefault, SetCellNull};
 
 impl ResultsPanel {
     pub fn add_new_row(&mut self, cx: &mut Context<Self>) {
@@ -24,7 +24,7 @@ impl ResultsPanel {
             // Track the INSERT change with NULL values (excluding primary key columns)
             if let Some(table_name) = &delegate.table_name {
                 // For new rows, exclude primary key to avoid UPDATE/INSERT confusion
-                let column_names = delegate.get_insert_column_names(true); // exclude_primary_key = true
+                let column_names = delegate.get_insert_column_names(new_row_index, true); // exclude_primary_key = true
                 // Use None for all NULL values (new row starts with all NULLs)
                 let values_vec = column_names
                     .iter()
@@ -78,7 +78,6 @@ impl ResultsPanel {
                 // Track the INSERT change with proper column values (excluding primary key columns)
                 if let Some(table_name) = &delegate.table_name {
                     // For new rows (duplicated rows), exclude primary key to avoid UPDATE/INSERT confusion
-                    let _column_names = delegate.get_insert_column_names(true); // exclude_primary_key = true
                     let values_vec = delegate.get_insert_values(new_row_index, true); // exclude_primary_key = true
 
                     let change = TableChange::new(
@@ -230,6 +229,41 @@ impl ResultsPanel {
             // Set the cell to NULL
             delegate.update_cell_value(action.row, action.col, None);
             delegate.commit_cell_edit(action.row, action.col);
+            state.refresh(cx);
+        });
+
+        cx.notify();
+    }
+
+    /// Revert a cell in a pending new row to its untouched state, so the
+    /// column is omitted from the INSERT and the server default applies.
+    pub(super) fn on_set_cell_default(
+        &mut self,
+        action: &SetCellDefault,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.commit_in_progress {
+            return;
+        }
+
+        self.table_state.update(cx, |state, cx| {
+            let delegate = state.delegate_mut();
+            if !delegate.edit_state.is_new_row(action.row) {
+                return;
+            }
+
+            delegate
+                .edit_state
+                .edited_values
+                .remove(&(action.row, action.col));
+            delegate
+                .edit_state
+                .original_values
+                .remove(&(action.row, action.col));
+            if let Some(cell) = delegate.get_cell_mut(action.row, action.col) {
+                *cell = None;
+            }
             state.refresh(cx);
         });
 

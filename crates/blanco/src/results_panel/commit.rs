@@ -52,9 +52,14 @@ impl ResultsPanel {
         let connection_id_for_pipeline = delegate.connection_id;
         let database_name = delegate.database_name.clone();
         let database_type = delegate.db_type.unwrap_or(self.db_type);
+        // The query that produced this grid, re-run after a successful commit
+        // so server-generated values (sequences, defaults, triggers) show up.
+        let original_query = delegate.original_query.clone();
 
         // Spawn background task to execute table operations
         let db_service = DatabaseService::global(cx).clone();
+        let db_service_for_refresh = db_service.clone();
+        let database_name_for_refresh = database_name.clone();
         let table_entity = self.table_state.clone();
 
         let table_operations_task = cx.background_spawn(async move {
@@ -130,6 +135,7 @@ impl ResultsPanel {
 
         // Spawn async task to handle the response
         let sql_view_response_entity: Option<Entity<blanco_ui::SqlView>> = sql_view.cloned();
+        let sql_view_for_refresh = sql_view_response_entity.clone();
         cx.spawn(async move |entity, cx| {
             let response = table_operations_task.await;
 
@@ -197,6 +203,67 @@ impl ResultsPanel {
                         }
                     })
                     .log_err();
+
+                // Re-run the originating query so the grid reflects what the
+                // server actually stored. The commit itself already succeeded,
+                // so a refresh failure is only logged, never surfaced as a
+                // commit error.
+                if let Some(query) = original_query {
+                    let refresh_task = cx.background_spawn({
+                        let database_name = database_name_for_refresh.clone();
+                        async move {
+                            let connection = db_service_for_refresh
+                                .get_or_create_connection(
+                                    connection_id_for_pipeline,
+                                    Some(&database_name),
+                                )
+                                .await?;
+                            connection
+                                .execute_query(&query, Some(&database_name), None)
+                                .await
+                        }
+                    });
+                    match refresh_task.await {
+                        Ok(result) => {
+                            entity
+                                .update(cx, |_panel, cx| {
+                                    table_entity.update(cx, |state, cx| {
+                                        let delegate = state.delegate_mut();
+                                        // Replace data in place; the column set is
+                                        // unchanged by a data refresh, so a shape
+                                        // mismatch means the query no longer matches
+                                        // this grid and the stale rows are kept.
+                                        if delegate.columns.len() == result.columns.len() {
+                                            delegate.rows = result.rows;
+                                            state.refresh(cx);
+                                        } else {
+                                            tracing::warn!(
+                                                "post-commit refresh returned {} columns, grid has {}; keeping current rows",
+                                                result.columns.len(),
+                                                delegate.columns.len()
+                                            );
+                                        }
+                                    });
+                                    cx.notify();
+                                })
+                                .log_err();
+                        }
+                        Err(error) => {
+                            tracing::warn!("post-commit refresh failed: {:#}", error);
+                            if let Some(sql_view) = sql_view_for_refresh {
+                                sql_view.update(cx, |log, cx| {
+                                    log.append_text(
+                                        &blanco_ui::SqlViewMessage::Comment(format!(
+                                            "✗ Failed to refresh results after commit: {:#}",
+                                            error
+                                        )),
+                                        cx,
+                                    );
+                                });
+                            }
+                        }
+                    }
+                }
             } else {
                 let partial = response.applied > 0;
                 if partial {

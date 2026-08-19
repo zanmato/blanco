@@ -199,6 +199,16 @@ impl TableChangeOperation {
                 }
             }
             OperationType::Insert => {
+                // Every column was omitted (all defaults): MySQL has no
+                // `DEFAULT VALUES` form, everything else has no `()` form.
+                if self.changes.is_empty() {
+                    return match database_type {
+                        database::DatabaseType::MySQL => {
+                            format!("INSERT INTO {table_name} () VALUES ()")
+                        }
+                        _ => format!("INSERT INTO {table_name} DEFAULT VALUES"),
+                    };
+                }
                 let columns: Vec<String> = self
                     .changes
                     .iter()

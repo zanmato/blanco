@@ -64,6 +64,9 @@ actions!(
         RunQuery,
         ExplainQuery,
         ToggleCommandPalette,
+        StartCellEdit,
+        EditNextCell,
+        EditPrevCell,
     ]
 );
 
@@ -112,6 +115,13 @@ pub struct DeleteRow {
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
 pub struct SetCellNull {
+    pub row: usize,
+    pub col: usize,
+}
+
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct SetCellDefault {
     pub row: usize,
     pub col: usize,
 }
@@ -1699,6 +1709,18 @@ fn init_menus(cx: &mut App) {
         gpui::KeyBinding::new("cmd-q", Quit, None),
         #[cfg(not(target_os = "macos"))]
         gpui::KeyBinding::new("alt-f4", Quit, None),
+    ]);
+
+    // Results-table cell editing. "DataTable" is the table's own key context;
+    // "CellEditor" wraps the inline cell input, so its bindings win over the
+    // table's tab -> SelectNextColumn while an edit is in flight (the input's
+    // own tab -> IndentInline binding matches first but is unhandled for
+    // single-line inputs, so the keystroke falls through to these).
+    cx.bind_keys([
+        gpui::KeyBinding::new("enter", StartCellEdit, Some("DataTable")),
+        gpui::KeyBinding::new("f2", StartCellEdit, Some("DataTable")),
+        gpui::KeyBinding::new("tab", EditNextCell, Some("CellEditor")),
+        gpui::KeyBinding::new("shift-tab", EditPrevCell, Some("CellEditor")),
     ]);
 
     cx.set_menus(build_menu());
