@@ -1,7 +1,83 @@
 use std::collections::{HashMap, HashSet};
 
-use gpui::Entity;
-use gpui_component::input::InputState;
+use gpui::{App, Entity, Pixels, Point, Size, px, size};
+use gpui_component::input::{EditorState, InputState};
+
+/// Starting size of the expanded cell editor, before the user drags it.
+pub const EXPANDED_EDITOR_SIZE: Size<Pixels> = Size {
+    width: px(600.),
+    height: px(200.),
+};
+
+/// Smallest the expanded cell editor can be dragged to. Below this the gutter
+/// and the minimize affordance crowd out the text.
+const EXPANDED_EDITOR_MIN_SIZE: Size<Pixels> = Size {
+    width: px(240.),
+    height: px(80.),
+};
+
+/// The size of the expanded cell editor, and the drag that is changing it.
+///
+/// The overlay is anchored to the cell's top-right corner, so the grip sits on
+/// the opposite (bottom-left) corner: dragging left widens it and dragging down
+/// makes it taller. Sizes accumulate from pointer deltas rather than from the
+/// pointer position, so the grip does not jump to the cursor on the first move.
+#[derive(Clone, Debug)]
+pub struct ExpandedEditorSize {
+    size: Size<Pixels>,
+    last_drag_position: Option<Point<Pixels>>,
+}
+
+impl Default for ExpandedEditorSize {
+    fn default() -> Self {
+        Self {
+            size: EXPANDED_EDITOR_SIZE,
+            last_drag_position: None,
+        }
+    }
+}
+
+impl ExpandedEditorSize {
+    pub fn size(&self) -> Size<Pixels> {
+        self.size
+    }
+
+    /// Begin a drag, so the next move measures from where the pointer is now.
+    pub fn start_drag(&mut self) {
+        self.last_drag_position = None;
+    }
+
+    /// Grow or shrink by how far the pointer moved since the last call.
+    pub fn drag_to(&mut self, position: Point<Pixels>) {
+        if let Some(last) = self.last_drag_position {
+            self.size = size(
+                (self.size.width + (last.x - position.x)).max(EXPANDED_EDITOR_MIN_SIZE.width),
+                (self.size.height + (position.y - last.y)).max(EXPANDED_EDITOR_MIN_SIZE.height),
+            );
+        }
+        self.last_drag_position = Some(position);
+    }
+}
+
+/// The state behind the cell editor.
+///
+/// A cell edits inline in a single-line input, and expands into a larger
+/// multi-line editor. Those are two different state types, so the cell holds
+/// whichever one it currently shows; maximize and minimize swap it.
+#[derive(Clone, Debug)]
+pub enum CellInput {
+    Inline(Entity<InputState>),
+    Expanded(Entity<EditorState>),
+}
+
+impl CellInput {
+    pub fn text(&self, cx: &App) -> String {
+        match self {
+            Self::Inline(input) => input.read(cx).text().to_string(),
+            Self::Expanded(editor) => editor.read(cx).text().to_string(),
+        }
+    }
+}
 
 /// Format a value for display in table cells, replacing whitespace with visual indicators
 /// to maintain table layout while showing multi-line content.
@@ -57,10 +133,12 @@ pub struct CellEditState {
     pub edited_values: HashMap<(usize, usize), Option<String>>,
     pub pending_new_rows: Vec<usize>, // Track rows that are newly added
     pub pending_deleted_rows: HashSet<usize>, // Track rows marked for deletion
-    pub editing_input: Option<Entity<InputState>>, // Store input state per delegate
-    pub changes: Vec<TableChange>,    // Track all changes for SQL generation
+    pub editing_input: Option<CellInput>, // Store input state per delegate
+    /// Size of the expanded editor overlay, kept while a cell stays expanded.
+    pub expanded_size: ExpandedEditorSize,
+    pub changes: Vec<TableChange>, // Track all changes for SQL generation
     pub selected_rows: HashSet<usize>, // Track selected rows
-    pub current_column: usize,        // Track current column for selection
+    pub current_column: usize,     // Track current column for selection
 }
 
 impl CellEditState {
@@ -80,6 +158,7 @@ impl CellEditState {
         if self.expanded_cell == Some((row, col)) {
             tracing::debug!("Collapsing cell at ({}, {})", row, col);
             self.expanded_cell = None;
+            self.expanded_size = ExpandedEditorSize::default();
         } else {
             tracing::debug!("Expanding cell at ({}, {})", row, col);
             self.expanded_cell = Some((row, col));
@@ -90,7 +169,7 @@ impl CellEditState {
         self.edited_values.get(&(row, col))
     }
 
-    pub fn start_editing(&mut self, row: usize, col: usize, input: Entity<InputState>) {
+    pub fn start_editing(&mut self, row: usize, col: usize, input: CellInput) {
         self.editing_cell = Some((row, col));
         self.editing_input = Some(input);
     }
@@ -101,7 +180,7 @@ impl CellEditState {
         self.expanded_cell = None;
     }
 
-    pub fn get_editing_input(&self) -> Option<Entity<InputState>> {
+    pub fn get_editing_input(&self) -> Option<CellInput> {
         self.editing_input.clone()
     }
 

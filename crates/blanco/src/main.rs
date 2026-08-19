@@ -165,7 +165,13 @@ fn main() {
             // wins and hot-reload keeps working during development.
             load_embedded_themes(cx);
             if let Some(theme) = ThemeRegistry::global(cx).themes().get(&theme_name).cloned() {
+                let mode = theme.mode;
                 Theme::global_mut(cx).apply_config(&theme);
+                // `apply_config` only touches the gpui-component theme. `change`
+                // re-applies the config we just stored and pushes it into the
+                // base layer (scrollbars, resize handles, input frame), which
+                // otherwise keeps the theme installed by `gpui_component::init`.
+                Theme::change(mode, None, cx);
             }
             settings::apply_font_settings(cx);
         }) {

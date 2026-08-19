@@ -10,7 +10,7 @@ use super::streaming::{ChatStreamEvent, StreamingChatProvider};
 use super::tool_handlers::ToolMode;
 use crate::result_ext::ResultExt;
 use database::{DatabaseService, DatabaseType};
-use gpui_component::input::InputState;
+use gpui_component::input::EditorState;
 use llm::{FunctionCall, ToolCall, chat::ChatMessage as LlmChatMessage, chat::Tool};
 
 /// What the tab the chat is attached to actually contains. The database it
@@ -80,7 +80,7 @@ fn script_system_prompt(db_type: Option<DatabaseType>) -> String {
 
 /// Context for creating a ChatSession with database/editor access
 pub struct ChatSessionContext {
-    pub input_state: Option<WeakEntity<InputState>>,
+    pub input_state: Option<WeakEntity<EditorState>>,
     pub connection_id: Option<i64>,
     pub database_name: Option<String>,
     pub db_type: Option<DatabaseType>,
@@ -98,7 +98,7 @@ impl ChatSessionContext {
         }
     }
 
-    pub fn with_input_state(mut self, input_state: WeakEntity<InputState>) -> Self {
+    pub fn with_input_state(mut self, input_state: WeakEntity<EditorState>) -> Self {
         self.input_state = Some(input_state);
         self
     }
@@ -138,7 +138,7 @@ pub struct ChatSession {
     pub streaming_message_id: Option<String>,
     pub tool_registry: Option<std::sync::Arc<super::tool_handlers::AgentToolRegistry>>,
     pub tool_mode: ToolMode,
-    pub input_state: Option<WeakEntity<InputState>>,
+    pub input_state: Option<WeakEntity<EditorState>>,
     pub connection_id: Option<i64>,
     pub database_name: Option<String>,
     pub db_type: Option<DatabaseType>,

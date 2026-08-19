@@ -15,8 +15,8 @@ use crate::sql::statement_parser::{
 
 use anyhow::Result;
 use database::DatabaseServiceTrait;
-use gpui::{AppContext as _, Context, Task, Window};
-use gpui_component::input::{CompletionProvider, InputState, Rope, RopeExt};
+use gpui::{App, AppContext as _, Task, Window};
+use gpui_component::input::{CompletionProvider, Rope, RopeExt};
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
     Range, TextEdit,
@@ -826,7 +826,7 @@ impl CompletionProvider for SqlCompletionProvider {
         offset: usize,
         _trigger: CompletionContext,
         window: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut App,
     ) -> Task<Result<CompletionResponse>> {
         let rope_clone = rope.clone();
         let provider = self.clone();
@@ -834,7 +834,7 @@ impl CompletionProvider for SqlCompletionProvider {
 
         // Spawn on the foreground thread so the debounce timer is cancelled when
         // a new completion request replaces this task (via _context_menu_task).
-        cx.spawn_in(window, async move |_handle, cx| {
+        window.spawn(cx, async move |cx| {
             cx.background_spawn(async move {
                 let context = statement_parser::extract_completion_context(
                     &rope_clone,
@@ -1000,12 +1000,7 @@ impl CompletionProvider for SqlCompletionProvider {
         })
     }
 
-    fn is_completion_trigger(
-        &self,
-        _offset: usize,
-        new_text: &str,
-        _cx: &mut Context<InputState>,
-    ) -> bool {
+    fn is_completion_trigger(&self, _offset: usize, new_text: &str, _cx: &mut App) -> bool {
         matches!(new_text, " " | "." | "," | "(")
             || new_text.chars().all(|c| c.is_alphanumeric() || c == '_')
     }

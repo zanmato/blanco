@@ -788,7 +788,7 @@ impl Render for ImportModal {
         let preview_text = SharedString::from(preview);
         let preview_range = 0..preview_text.len();
         let preview_highlights =
-            preview_highlighter.styles(&preview_range, &cx.theme().highlight_theme);
+            preview_highlighter.styles(&preview_range, cx.theme().highlight_theme.as_ref());
 
         v_flex()
             .gap_4()

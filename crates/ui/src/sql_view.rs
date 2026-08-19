@@ -119,7 +119,7 @@ impl SqlView {
         let rope = ropey::Rope::from(&new_text[..]);
         highlighter.update(None, &rope, None);
         let highlights = highlighter
-            .styles(&(0..new_text.len()), &self.theme)
+            .styles(&(0..new_text.len()), self.theme.as_ref())
             .into_boxed_slice();
 
         let entry = LogEntry {

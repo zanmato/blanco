@@ -10,7 +10,7 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     dialog::{DialogAction, DialogClose, DialogFooter},
     h_flex,
-    input::Input,
+    input::Editor,
     popover::{Popover, PopoverState},
     resizable::{h_resizable, resizable_panel, v_resizable},
     v_flex,
@@ -549,14 +549,13 @@ impl EditorPanel {
                                     .min_w_0()
                                     .child(
                                         div().flex_1().min_h_0().w_full().relative().child(
-                                            Input::new(&query_tab.editor)
+                                            Editor::new(&query_tab.editor)
                                                 .bordered(false)
                                                 .h_full()
                                                 .w_full()
                                                 .rounded_none()
                                                 .font_family(cx.theme().mono_font_family.clone())
-                                                .text_size(px(14.))
-                                                .focus_bordered(false),
+                                                .text_size(px(14.)),
                                         ),
                                     ),
                             ),
@@ -753,14 +752,13 @@ impl EditorPanel {
                                     .min_w_0()
                                     .child(
                                         div().flex_1().min_h_0().w_full().relative().child(
-                                            Input::new(&script_tab.editor)
+                                            Editor::new(&script_tab.editor)
                                                 .bordered(false)
                                                 .h_full()
                                                 .w_full()
                                                 .rounded_none()
                                                 .font_family(cx.theme().mono_font_family.clone())
-                                                .text_size(px(14.))
-                                                .focus_bordered(false),
+                                                .text_size(px(14.)),
                                         ),
                                     ),
                             ),
@@ -935,6 +933,9 @@ impl Render for EditorPanel {
         let current_tab = self.tabs.get(self.active_tab_ix);
 
         div()
+            // The action handlers below live on this node, so the focus handle
+            // has to be tracked here, or the dispatch path can miss them.
+            .track_focus(&self.focus_handle)
             .flex()
             .flex_col()
             .flex_1()

@@ -505,7 +505,11 @@ impl SettingsView {
                                     if let Some(theme_config) =
                                         ThemeRegistry::global(cx).themes().get(&val).cloned()
                                     {
+                                        let mode = theme_config.mode;
                                         Theme::global_mut(cx).apply_config(&theme_config);
+                                        // Pushes the config into the base layer
+                                        // (scrollbars, resize handles, input frame).
+                                        Theme::change(mode, None, cx);
                                         crate::settings::apply_font_settings(cx);
                                     }
 
@@ -533,7 +537,7 @@ impl SettingsView {
                                 let theme_font = cx.theme().font_family.to_string();
                                 if let Some(state) = &ui_font_select {
                                     Select::new(state)
-                                        .with_size(options.size)
+                                        .with_size(options.size())
                                         .placeholder(format!("{theme_font} (theme default)"))
                                         .search_placeholder("Search fonts...")
                                         .cleanable(true)
@@ -555,7 +559,7 @@ impl SettingsView {
                                 let theme_font = cx.theme().mono_font_family.to_string();
                                 if let Some(state) = &mono_font_select {
                                     Select::new(state)
-                                        .with_size(options.size)
+                                        .with_size(options.size())
                                         .placeholder(format!("{theme_font} (theme default)"))
                                         .search_placeholder("Search fonts...")
                                         .cleanable(true)

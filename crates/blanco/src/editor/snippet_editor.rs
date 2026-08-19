@@ -7,7 +7,7 @@ use gpui_component::{
     ActiveTheme, Sizable,
     button::{Button, ButtonVariants as _},
     h_flex,
-    input::{Input, InputState, TabSize},
+    input::{Editor, EditorState, Input, InputState, TabSize},
     v_flex,
 };
 use std::rc::Rc;
@@ -24,7 +24,7 @@ pub struct SnippetEditor {
     pub name: String,
     pub kind: EditorKind,
     pub name_input: Entity<InputState>,
-    pub editor: Entity<InputState>,
+    pub editor: Entity<EditorState>,
 }
 
 impl SnippetEditor {
@@ -41,20 +41,20 @@ impl SnippetEditor {
         }
     }
 
-    /// The highlighter language is fixed when an `InputState` is built, so
+    /// The highlighter language is fixed when an `EditorState` is built, so
     /// switching a snippet between SQL and JavaScript means building a new one.
     fn build_editor(
         kind: EditorKind,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Entity<InputState> {
+    ) -> Entity<EditorState> {
         cx.new(|cx| {
             let editor_settings = &AppSettings::global(cx).settings.editor;
             let folding = editor_settings.folding;
             let tab_size = editor_settings.tab_size;
             let hard_tabs = editor_settings.hard_tabs;
-            let mut editor = InputState::new(window, cx)
-                .code_editor(kind.standalone_language().to_string())
+            let mut editor = EditorState::new(window, cx)
+                .language(kind.standalone_language().to_string())
                 .line_number(true)
                 .folding(folding)
                 .tab_size(TabSize {
@@ -68,7 +68,7 @@ impl SnippetEditor {
                 // describe the `db` API in its general form.
                 let completion_provider: Rc<dyn gpui_component::input::CompletionProvider> =
                     Rc::new(ScriptCompletionProvider::for_snippet());
-                editor.lsp.completion_provider = Some(completion_provider);
+                editor.lsp_mut().completion_provider = Some(completion_provider);
             }
 
             editor
@@ -101,7 +101,7 @@ impl SnippetEditor {
 
         // Update name input
         self.name_input.update(cx, |input, cx| {
-            input.replace(&snippet.name, window, cx);
+            input.replace_all(&snippet.name, window, cx);
         });
 
         // Update editor content
@@ -113,7 +113,7 @@ impl SnippetEditor {
     }
 
     pub fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let name = self.name_input.read(cx).text().to_string();
+        let name = self.name_input.read(cx).value().to_string();
         let content = self.editor.read(cx).text().to_string();
 
         if name.trim().is_empty() {
@@ -209,11 +209,10 @@ impl Render for SnippetEditor {
             .size_full()
             .child(
                 // Main code editor area
-                Input::new(&self.editor)
+                Editor::new(&self.editor)
                     .bordered(false)
                     .rounded_none()
                     .font_family(cx.theme().mono_font_family.clone())
-                    .focus_bordered(false)
                     .size_full(),
             )
             .child(

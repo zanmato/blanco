@@ -1,17 +1,19 @@
 use std::ops::Range;
 
+use gpui::AppContext as _;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, Context, Entity, FontWeight, InteractiveElement, IntoElement, MouseButton, ParentElement,
-    StatefulInteractiveElement, Styled, Window, div, px,
+    App, Context, CursorStyle, DragMoveEvent, Entity, FontWeight, Hsla, InteractiveElement,
+    IntoElement, MouseButton, ParentElement, PathBuilder, Render, StatefulInteractiveElement,
+    Styled, Window, canvas, div, point, px,
 };
 use gpui_component::popover::{Popover, PopoverState};
 use gpui_component::{
-    ActiveTheme, Icon, Sizable,
+    ActiveTheme, Icon, Sizable, Size,
     button::{Button, ButtonVariants},
     clipboard::Clipboard,
     h_flex,
-    input::{Input, InputState},
+    input::{Editor, EditorState, Input, InputState},
     menu::PopupMenu,
     table::{Column, ColumnSort, TableDelegate, TableState},
     tooltip::Tooltip,
@@ -26,21 +28,65 @@ use crate::app::{
     DuplicateRow, ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV,
     SetCellNull,
 };
-use crate::results_panel::cell_edit_state::{compare_numeric, format_value_for_display};
+use crate::results_panel::cell_edit_state::{CellInput, compare_numeric, format_value_for_display};
 use crate::results_panel::foreign_key_popover::ForeignKeyPopover;
 use blanco_ui::IconName;
+
+/// Drag payload for the expanded cell editor's resize grip.
+#[derive(Clone)]
+struct ResizeExpandedCell;
+
+impl Render for ResizeExpandedCell {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        gpui::Empty
+    }
+}
+
+/// Two diagonal strokes hugging the bottom-left corner, mirroring the browser's
+/// textarea resize affordance so the drag target is discoverable. The strokes
+/// run perpendicular to the drag axis, so they mirror the familiar bottom-right
+/// grip rather than repeating it.
+fn render_resize_grip(color: Hsla) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let inset = px(2.5);
+            let extent = bounds.size.width.min(bounds.size.height) - inset * 2.;
+            if extent <= px(0.) {
+                return;
+            }
+            let left = bounds.origin.x + inset;
+            let bottom = bounds.origin.y + bounds.size.height - inset;
+
+            for length in [extent * 0.45, extent * 0.95] {
+                let mut builder = PathBuilder::stroke(px(1.));
+                builder.move_to(point(left, bottom - length));
+                builder.line_to(point(left + length, bottom));
+                match builder.build() {
+                    Ok(path) => window.paint_path(path, color),
+                    Err(error) => tracing::warn!("failed to build resize grip path: {error}"),
+                }
+            }
+        },
+    )
+    .size_full()
+}
 
 impl ResultsTableDelegate {
     /// Expanded inline editor: an absolutely-positioned, larger input overlay
     /// with a minimize affordance.
     fn render_expanded_cell(
         &self,
-        input: Entity<InputState>,
+        input: Entity<EditorState>,
         row_ix: usize,
         col_ix: usize,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
         let is_json = self.column_types.get(col_ix).copied() == Some(ColumnType::Json);
+        let overlay_size = self.edit_state.expanded_size.size();
+        // The affordances sit over the editor's own text padding, so they line
+        // up with the first line rather than crowding the border.
+        let editor_size = Size::default();
         div()
             .bg(cx.theme().background)
             .border_2()
@@ -53,8 +99,8 @@ impl ResultsTableDelegate {
                         .absolute()
                         .right(px(0.))
                         .top(px(0.))
-                        .w(px(600.))
-                        .h(px(200.))
+                        .w(overlay_size.width)
+                        .h(overlay_size.height)
                         .bg(cx.theme().background)
                         .shadow_lg()
                         .on_action(cx.listener(
@@ -62,29 +108,75 @@ impl ResultsTableDelegate {
                                 Self::handle_minimize(table, (col_ix, row_ix), is_json, window, cx);
                             },
                         ))
+                        // The editor brings its own context menu. Without this
+                        // the right click also reaches the table underneath,
+                        // which opens the row menu on top of it.
+                        .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
                         .child(
-                            Input::new(&input)
+                            Editor::new(&input)
                                 .disabled(!self.is_editable())
                                 .size_full()
                                 .font_family(cx.theme().mono_font_family.clone())
-                                .text_size(px(12.))
-                                .suffix(
-                                    div()
-                                        .cursor_pointer()
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(move |table, _event, window, cx| {
-                                                Self::handle_minimize(
-                                                    table,
-                                                    (col_ix, row_ix),
-                                                    is_json,
-                                                    window,
-                                                    cx,
-                                                );
-                                            }),
-                                        )
-                                        .child(Icon::new(IconName::Minimize).text_xs()),
-                                ),
+                                .text_size(px(12.)),
+                        )
+                        // The editor takes no suffix, so the minimize
+                        // affordance sits over its top-right corner.
+                        .child(
+                            div()
+                                .absolute()
+                                .right(editor_size.input_px())
+                                .top(editor_size.input_py())
+                                .cursor_pointer()
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |table, _event, window, cx| {
+                                        Self::handle_minimize(
+                                            table,
+                                            (col_ix, row_ix),
+                                            is_json,
+                                            window,
+                                            cx,
+                                        );
+                                    }),
+                                )
+                                .child(Icon::new(IconName::Minimize).text_xs()),
+                        )
+                        // The overlay floats over the table rather than sharing
+                        // a container with a sibling, so a resizable panel has
+                        // nothing to resize against: this grip drags its size.
+                        .child(
+                            div()
+                                .id(("expanded-cell-resize", row_ix * 1000 + col_ix))
+                                .absolute()
+                                .left(px(0.))
+                                .bottom(px(0.))
+                                .size(px(14.))
+                                .cursor(CursorStyle::ResizeUpRightDownLeft)
+                                .child(render_resize_grip(cx.theme().muted_foreground))
+                                .on_drag(ResizeExpandedCell, {
+                                    let table_state = cx.entity();
+                                    move |_, _, _, cx| {
+                                        table_state.update(cx, |table, _| {
+                                            table
+                                                .delegate_mut()
+                                                .edit_state
+                                                .expanded_size
+                                                .start_drag()
+                                        });
+                                        cx.new(|_| ResizeExpandedCell)
+                                    }
+                                })
+                                .on_drag_move(cx.listener(
+                                    |table, event: &DragMoveEvent<ResizeExpandedCell>, _, cx| {
+                                        let position = event.event.position;
+                                        table
+                                            .delegate_mut()
+                                            .edit_state
+                                            .expanded_size
+                                            .drag_to(position);
+                                        cx.notify();
+                                    },
+                                )),
                         ),
                 )
                 .with_priority(99),
@@ -127,9 +219,11 @@ impl ResultsTableDelegate {
             .child(
                 Input::new(&input)
                     .disabled(!self.is_editable())
+                    // The cell is the frame here: an input border and the
+                    // focus ring outside it would sit on top of the grid.
+                    .bordered(false)
                     .flex_1()
                     .text_size(px(12.))
-                    .border_0()
                     .pl_0()
                     .suffix(
                         div()
@@ -433,13 +527,14 @@ impl TableDelegate for ResultsTableDelegate {
         if is_editing {
             // Embed Input directly in the cell
             match self.edit_state.get_editing_input() {
-                Some(input) if self.edit_state.is_expanded(row_ix, col_ix) => self
-                    .render_expanded_cell(input, row_ix, col_ix, cx)
-                    .into_any_element(),
-                Some(input) => self
+                Some(CellInput::Expanded(input)) if self.edit_state.is_expanded(row_ix, col_ix) => {
+                    self.render_expanded_cell(input, row_ix, col_ix, cx)
+                        .into_any_element()
+                }
+                Some(CellInput::Inline(input)) => self
                     .render_inline_cell(input, row_ix, col_ix, cx)
                     .into_any_element(),
-                None => div().child("").into_any_element(),
+                _ => div().child("").into_any_element(),
             }
         } else {
             self.render_static_cell(row_ix, col_ix, cx)

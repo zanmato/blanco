@@ -7,7 +7,7 @@ use gpui_component::{
     ActiveTheme, Disableable, Icon, Sizable, StyledExt as _,
     button::{Button, ButtonVariants},
     h_flex,
-    input::{Input, InputEvent, InputState},
+    input::{InputEvent, Textarea, TextareaState},
     scroll::Scrollbar,
     select::{Select, SelectDelegate, SelectEvent, SelectItem, SelectState},
     spinner::Spinner,
@@ -30,7 +30,7 @@ pub struct ChatPanel {
     pub focus_handle: FocusHandle,
     pub scroll_handle: ScrollHandle,
     pub session: Entity<ChatSession>,
-    pub input_state: Entity<InputState>,
+    pub input_state: Entity<TextareaState>,
     pub messages: Vec<Entity<ChatMessageState>>,
     pub _subscriptions: Vec<Subscription>,
     pub loading_state: LoadingState,
@@ -51,8 +51,7 @@ impl ChatPanel {
             cx.new(|_cx| ChatSession::new(llm, provider_name, model_name, session_context));
 
         let input_state = cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(true)
+            TextareaState::new(window, cx)
                 .rows(3)
                 .auto_grow(2, 6)
                 .placeholder("Ask me anything about your query...")
@@ -415,7 +414,7 @@ impl Render for ChatPanel {
                     .border_color(cx.theme().border)
                     .text_size(px(13.0))
                     .child(
-                        Input::new(&self.input_state)
+                        Textarea::new(&self.input_state)
                             .disabled(self.loading_state.is_loading())
                             .bordered(false)
                             .p_3()

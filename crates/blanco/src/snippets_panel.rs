@@ -231,7 +231,7 @@ impl SnippetsPanel {
 
     pub fn create_new_group(&mut self, cx: &mut Context<Self>) {
         let name = if let Some(input) = &self.group_name_input {
-            input.read(cx).text().to_string()
+            input.read(cx).value().to_string()
         } else {
             String::new()
         };

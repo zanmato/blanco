@@ -370,9 +370,9 @@ fn syntax_errors(source: &str) -> Vec<SyntaxError> {
 /// Replace the editor's diagnostics with the engine-reported error, if any.
 /// Called on every run so a fixed script clears its previous squiggle.
 fn set_engine_diagnostic(
-    state: &mut gpui_component::input::InputState,
+    state: &mut gpui_component::input::EditorState,
     diagnostic: Option<(u32, String)>,
-    cx: &mut Context<gpui_component::input::InputState>,
+    cx: &mut Context<gpui_component::input::EditorState>,
 ) {
     use gpui_component::highlighter::Diagnostic;
 

@@ -1,6 +1,5 @@
 use anyhow::Result;
-use gpui::{AppContext, Context, Task, Window};
-use gpui_component::input::InputState;
+use gpui::{App, AppContext, Task, Window};
 use lsp_types::{Position, Range, SelectionRange};
 use ropey::Rope;
 
@@ -30,7 +29,7 @@ impl SelectionRangeProvider for SqlSelectionRangeProvider {
         text: &Rope,
         position: Position,
         _window: &mut Window,
-        cx: &mut Context<InputState>,
+        cx: &mut App,
     ) -> Task<Result<Option<SelectionRange>>> {
         // Clone the rope to move it into the async task
         let text = text.clone();

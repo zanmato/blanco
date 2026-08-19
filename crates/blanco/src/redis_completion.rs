@@ -8,8 +8,8 @@
 //! and completion agree on the command set.
 
 use anyhow::Result;
-use gpui::{Context, Task, Window};
-use gpui_component::input::{CompletionProvider, InputState, Rope, RopeExt};
+use gpui::{App, Task, Window};
+use gpui_component::input::{CompletionProvider, Rope, RopeExt};
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
     Range, TextEdit,
@@ -143,7 +143,7 @@ impl CompletionProvider for RedisCompletionProvider {
         offset: usize,
         _trigger: CompletionContext,
         _window: &mut Window,
-        _cx: &mut Context<InputState>,
+        _cx: &mut App,
     ) -> Task<Result<CompletionResponse>> {
         let text = rope.slice(0..rope.len()).to_string();
         let (candidates, current_word, start) = analyze(&text, offset);
@@ -155,12 +155,7 @@ impl CompletionProvider for RedisCompletionProvider {
         Task::ready(Ok(CompletionResponse::Array(items)))
     }
 
-    fn is_completion_trigger(
-        &self,
-        _offset: usize,
-        new_text: &str,
-        _cx: &mut Context<InputState>,
-    ) -> bool {
+    fn is_completion_trigger(&self, _offset: usize, new_text: &str, _cx: &mut App) -> bool {
         // A space advances to the next token (command -> subcommand); otherwise
         // trigger as the user types a command/subcommand name. Module commands
         // contain `.` (e.g. `BF.ADD`), so allow it through too.

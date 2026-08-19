@@ -5,7 +5,7 @@
 
 use async_trait::async_trait;
 use gpui::{AsyncWindowContext, WeakEntity};
-use gpui_component::input::InputState;
+use gpui_component::input::EditorState;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -46,7 +46,7 @@ pub struct ToolContext {
     pub db_service: Arc<dyn DatabaseService>,
     pub connection_id: Option<i64>,
     pub database_name: Option<String>,
-    pub input_state: Option<WeakEntity<InputState>>,
+    pub input_state: Option<WeakEntity<EditorState>>,
 }
 
 /// Async tool handler for agent-level tools

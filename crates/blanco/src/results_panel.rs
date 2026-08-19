@@ -37,7 +37,7 @@ mod row_ops;
 mod table_operations;
 
 // Re-exports
-pub use cell_edit_state::{ChangeType, TableChange};
+pub use cell_edit_state::{CellInput, ChangeType, TableChange};
 pub use chart_view::{ChartView, ResultViewMode};
 pub use results_table_delegate::ResultsTableDelegate;
 
@@ -414,7 +414,9 @@ impl ResultsPanel {
         self.table_state.update(cx, |state, cx| {
             let delegate = state.delegate_mut();
             delegate.start_editing_cell(row, col);
-            delegate.edit_state.start_editing(row, col, input.clone());
+            delegate
+                .edit_state
+                .start_editing(row, col, CellInput::Inline(input.clone()));
 
             // Store the original value for existing rows
             if !is_new_row {
@@ -432,19 +434,30 @@ impl ResultsPanel {
         input.focus_handle(cx).focus(window, cx);
     }
 
-    /// Subscribe to input events (blur/change) for a given cell
-    fn subscribe_to_input_events(
+    /// Subscribe to input events (blur/change) for a given cell.
+    ///
+    /// Generic over the state type because a cell edits in a single-line input
+    /// inline and in a multi-line editor when expanded, and those are separate
+    /// types. The edited text is read back from the delegate's `editing_input`,
+    /// which is the handle those two share.
+    fn subscribe_to_input_events<S: gpui::EventEmitter<InputEvent> + 'static>(
         _state: &mut TableState<ResultsTableDelegate>,
-        input: &Entity<InputState>,
+        input: &Entity<S>,
         row: usize,
         col: usize,
         cx: &mut Context<TableState<ResultsTableDelegate>>,
     ) {
         let row_clone = row;
         let col_clone = col;
-        cx.subscribe(input, move |table, input, event, cx| {
+        cx.subscribe(input, move |table, _input, event, cx| {
             if let InputEvent::Change = event {
-                let new_text = input.read(cx).text().to_string();
+                let new_text = table
+                    .delegate()
+                    .edit_state
+                    .editing_input
+                    .as_ref()
+                    .map(|input| input.text(cx))
+                    .unwrap_or_default();
                 table
                     .delegate_mut()
                     .edit_state
@@ -660,7 +673,7 @@ impl ResultsPanel {
             {
                 return;
             }
-            let current_value = input.read(cx).text().to_string();
+            let current_value = input.text(cx);
             self.update_editing_cell_value(row, col, current_value.clone(), cx);
             self.commit_cell_edit(row, col, current_value, cx);
         } else {
@@ -1084,6 +1097,11 @@ impl Render for ResultsPanel {
             .and_then(|t| t.key_value.clone());
 
         v_flex()
+            // The action handlers below live on this node, so the focus handle
+            // has to be tracked here. An untracked handle is absent from the
+            // dispatch tree, and GPUI then dispatches from the tree root along
+            // a path that misses this node.
+            .track_focus(&self.focus_handle)
             .size_full()
             .border_t_1()
             .border_color(border_color)

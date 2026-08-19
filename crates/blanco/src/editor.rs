@@ -28,7 +28,7 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme, WindowExt as _,
-    input::{InputEvent, InputState, TabSize},
+    input::{EditorState, InputEvent, TabSize},
     resizable::ResizableState,
 };
 use std::{collections::HashMap, rc::Rc, sync::Arc};
@@ -149,7 +149,7 @@ impl EditorPanel {
 
     /// The code editors of every connection-backed tab (query and script), the
     /// ones that follow the global editor settings.
-    fn connection_backed_editors(&self) -> Vec<Entity<InputState>> {
+    fn connection_backed_editors(&self) -> Vec<Entity<EditorState>> {
         self.tabs
             .iter()
             .filter_map(|tab| match tab {
@@ -644,8 +644,8 @@ impl EditorPanel {
                 let hard_tabs = editor_settings.hard_tabs;
                 let tab_size = editor_settings.tab_size;
 
-                let mut editor = InputState::new(window, cx)
-                    .code_editor(params.db_type.editor_language().to_string())
+                let mut editor = EditorState::new(window, cx)
+                    .language(params.db_type.editor_language().to_string())
                     .line_number(true)
                     .folding(folding)
                     .tab_size(TabSize {
@@ -658,20 +658,20 @@ impl EditorPanel {
                 if supports_sql {
                     let completion_provider: Rc<dyn gpui_component::input::CompletionProvider> =
                         Rc::new(sql_completion_provider);
-                    editor.lsp.completion_provider = Some(completion_provider);
+                    editor.lsp_mut().completion_provider = Some(completion_provider);
 
                     // Set up selection range provider for SQL statement highlighting
                     let provider = SqlSelectionRangeProvider::new();
                     let selection_range_provider: Rc<
                         dyn gpui_component::input::SelectionRangeProvider,
                     > = Rc::new(provider);
-                    editor.lsp.selection_range_provider = Some(selection_range_provider);
+                    editor.lsp_mut().selection_range_provider = Some(selection_range_provider);
                 } else if params.db_type == database::DatabaseType::Redis {
                     // Redis gets command/subcommand completion instead of the
                     // SQL schema-aware completion.
                     let completion_provider: Rc<dyn gpui_component::input::CompletionProvider> =
                         Rc::new(crate::redis_completion::RedisCompletionProvider::new());
-                    editor.lsp.completion_provider = Some(completion_provider);
+                    editor.lsp_mut().completion_provider = Some(completion_provider);
                 }
 
                 editor
@@ -787,8 +787,8 @@ impl EditorPanel {
         let editor_settings = AppSettings::global(cx).settings.editor.clone();
         let db_type = params.db_type;
         let editor = cx.new(|cx| {
-            let mut editor = InputState::new(window, cx)
-                .code_editor(SCRIPT_EDITOR_LANGUAGE.to_string())
+            let mut editor = EditorState::new(window, cx)
+                .language(SCRIPT_EDITOR_LANGUAGE.to_string())
                 .line_number(true)
                 .folding(editor_settings.folding)
                 .tab_size(TabSize {
@@ -802,7 +802,7 @@ impl EditorPanel {
             // editor can't infer, so that is what gets completed.
             let completion_provider: Rc<dyn gpui_component::input::CompletionProvider> =
                 Rc::new(ScriptCompletionProvider::new(db_type));
-            editor.lsp.completion_provider = Some(completion_provider);
+            editor.lsp_mut().completion_provider = Some(completion_provider);
             editor
         });
 

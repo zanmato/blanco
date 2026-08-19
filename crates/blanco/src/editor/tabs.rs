@@ -6,7 +6,7 @@ use std::sync::Arc;
 use blanco_core::RoutineKind;
 use blanco_ui::SqlView;
 use gpui::Entity;
-use gpui_component::input::InputState;
+use gpui_component::input::EditorState;
 
 use crate::agent::ChatPanel;
 use crate::app_database::EnvironmentType;
@@ -36,7 +36,7 @@ pub struct QueryTab {
     pub database_name: String,
     pub schema_name: Option<String>,
     pub environment_type: Option<EnvironmentType>,
-    pub editor: Entity<InputState>,
+    pub editor: Entity<EditorState>,
     pub db_id: Option<i64>,
     pub results_panel: Entity<ResultsPanel>,
     pub sql_view: Entity<SqlView>,
@@ -66,7 +66,7 @@ pub struct ScriptTab {
     pub database_name: String,
     pub schema_name: Option<String>,
     pub environment_type: Option<EnvironmentType>,
-    pub editor: Entity<InputState>,
+    pub editor: Entity<EditorState>,
     pub db_id: Option<i64>,
     pub results_panel: Entity<ResultsPanel>,
     pub log_view: Entity<SqlView>,

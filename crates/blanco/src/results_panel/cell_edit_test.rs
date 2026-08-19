@@ -1,6 +1,6 @@
 use gpui::{TestAppContext, VisualTestContext};
 
-use crate::results_panel::ResultsTableDelegate;
+use crate::results_panel::{CellInput, ResultsTableDelegate};
 use crate::test_harness::{TestHarness, run_query, set_editor_text, wait_for_query};
 
 async fn setup_editable_table(
@@ -48,11 +48,15 @@ async fn test_inline_edit_commits_via_finalize(cx: &mut TestAppContext) {
     cx.run_until_parked();
 
     let input = table_state.read_with(&cx, |state, _| {
-        state
+        match state
             .delegate()
             .edit_state
             .get_editing_input()
             .expect("editing input should exist")
+        {
+            CellInput::Inline(input) => input,
+            CellInput::Expanded(_) => panic!("a fresh cell edit is inline"),
+        }
     });
     // `replace_all` emits `InputEvent::Change` just like keyboard input
     // (`set_value` suppresses events).
@@ -104,11 +108,15 @@ async fn test_expanded_edit_survives_minimize(cx: &mut TestAppContext) {
     cx.run_until_parked();
 
     let expanded_input = table_state.read_with(&cx, |state, _| {
-        state
+        match state
             .delegate()
             .edit_state
             .get_editing_input()
             .expect("expanded editing input should exist")
+        {
+            CellInput::Expanded(editor) => editor,
+            CellInput::Inline(_) => panic!("maximize switches the cell to the expanded editor"),
+        }
     });
     expanded_input.update_in(&mut cx, |input, window, cx| {
         input.replace_all("edited-value", window, cx);
@@ -138,7 +146,7 @@ async fn test_expanded_edit_survives_minimize(cx: &mut TestAppContext) {
             .get_editing_input()
             .expect("collapsed editing input should exist")
     });
-    let inline_text = inline_input.read_with(&cx, |input, _| input.text().to_string());
+    let inline_text = cx.read(|cx| inline_input.text(cx));
     assert_eq!(
         inline_text, "edited-value",
         "collapsed input should keep the text entered while expanded"

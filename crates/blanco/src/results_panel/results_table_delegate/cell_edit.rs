@@ -1,11 +1,11 @@
 use gpui::{AppContext, Context, Focusable, Window};
-use gpui_component::input::InputState;
+use gpui_component::input::{EditorState, InputState};
 use gpui_component::table::TableState;
 use serde_json::Value;
 
 use super::ResultsTableDelegate;
 use crate::results_panel::ResultsPanel;
-use crate::results_panel::cell_edit_state::{ChangeType, TableChange};
+use crate::results_panel::cell_edit_state::{CellInput, ChangeType, TableChange};
 
 impl ResultsTableDelegate {
     pub fn start_editing_cell(&mut self, row: usize, col: usize) {
@@ -132,7 +132,7 @@ impl ResultsTableDelegate {
             .edit_state
             .editing_input
             .as_ref()
-            .map(|input| input.read(cx).text().to_string())
+            .map(|input| input.text(cx))
             .unwrap_or_default();
 
         // Re-compact prettified JSON back to its single-line form. The
@@ -144,9 +144,9 @@ impl ResultsTableDelegate {
             }
         }
 
-        // Recreate InputState with single-line mode and subscribe to events
+        // Recreate the state in single-line mode and subscribe to events
         let new_input = cx.new(|cx| InputState::new(window, cx).default_value(current_text));
-        state.delegate_mut().edit_state.editing_input = Some(new_input.clone());
+        state.delegate_mut().edit_state.editing_input = Some(CellInput::Inline(new_input.clone()));
 
         // Re-subscribe to input events (blur/change)
         ResultsPanel::subscribe_to_input_events(state, &new_input, cell.1, cell.0, cx);
@@ -180,7 +180,7 @@ impl ResultsTableDelegate {
             .edit_state
             .editing_input
             .as_ref()
-            .map(|input| input.read(cx).text().to_string())
+            .map(|input| input.text(cx))
             .unwrap_or_default();
 
         // Toggle expanded state
@@ -189,9 +189,12 @@ impl ResultsTableDelegate {
             .edit_state
             .toggle_expanded(row_ix, col_ix);
 
-        // Recreate InputState with multi-line mode
+        // Recreate the state as a multi-line editor
         let new_input = cx.new(|cx| {
-            let editor = InputState::new(window, cx).multi_line(true).soft_wrap(true);
+            // Line numbers fill the gutter the code editor reserves anyway.
+            let editor = EditorState::new(window, cx)
+                .line_number(true)
+                .soft_wrap(true);
 
             if is_json {
                 // Prettify JSON if valid
@@ -201,12 +204,13 @@ impl ResultsTableDelegate {
                     } else {
                         current_text
                     };
-                editor.code_editor("json").default_value(prettified_text)
+                editor.language("json").default_value(prettified_text)
             } else {
                 editor.default_value(current_text)
             }
         });
-        state.delegate_mut().edit_state.editing_input = Some(new_input.clone());
+        state.delegate_mut().edit_state.editing_input =
+            Some(CellInput::Expanded(new_input.clone()));
 
         // Re-subscribe to input events (blur/change)
         ResultsPanel::subscribe_to_input_events(state, &new_input, row_ix, col_ix, cx);
