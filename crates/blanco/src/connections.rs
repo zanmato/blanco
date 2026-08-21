@@ -24,6 +24,7 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     dialog::{DialogAction, DialogClose, DialogFooter},
     input::{Input, InputEvent, InputState},
+    notification::NotificationType,
 };
 
 #[derive(Clone, Debug)]
@@ -569,6 +570,173 @@ impl ConnectionsPanel {
     }
 
     /// Refresh a connection by clearing cached metadata and reloading from the server
+    /// Ask for confirmation (and a new name for renames), then run a DDL
+    /// operation on a table or view and refresh the connection's tree. The
+    /// read-only flag is enforced by the connection itself; this dialog is the
+    /// confirmation step, so PROD connections get it like everyone else.
+    pub fn confirm_table_operation(
+        &mut self,
+        metadata: TreeItemMetadata,
+        operation: blanco_core::ddl::TableOperation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use blanco_core::ddl::TableOperation;
+
+        let Some(table_name) = metadata.table_name.clone() else {
+            return;
+        };
+        let entity = match metadata.kind {
+            TreeItemKind::View => blanco_core::EntityType::View,
+            TreeItemKind::MaterializedView => blanco_core::EntityType::MaterializedView,
+            _ => blanco_core::EntityType::Table,
+        };
+        let is_rename = matches!(operation, TableOperation::Rename { .. });
+        let new_name_input = is_rename.then(|| {
+            cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("New name")
+                    .default_value(&table_name)
+            })
+        });
+        let is_prod = metadata.environment_type == Some(EnvironmentType::Prod);
+        let prod_note = if is_prod { " on a PROD connection" } else { "" };
+        let title = format!(
+            "{} {}?",
+            operation.label(),
+            entity.display_name().to_lowercase()
+        );
+        let description = match &operation {
+            TableOperation::Drop => format!(
+                "\"{table_name}\" and all of its data will be permanently deleted{prod_note}."
+            ),
+            TableOperation::Truncate => {
+                format!("All rows in \"{table_name}\" will be permanently deleted{prod_note}.")
+            }
+            TableOperation::Rename { .. } => {
+                format!("Enter the new name for \"{table_name}\"{prod_note}.")
+            }
+        };
+        let confirm_label = operation.label();
+        let this_handle = cx.entity().downgrade();
+
+        window.open_dialog(cx, move |dialog, _, _| {
+            let metadata = metadata.clone();
+            let operation = operation.clone();
+            let new_name_input = new_name_input.clone();
+            let this_handle = this_handle.clone();
+            let mut dialog = dialog.title(title.clone()).child(description.clone());
+            if let Some(input) = &new_name_input {
+                dialog = dialog.child(Input::new(input));
+            }
+            dialog.footer(
+                DialogFooter::new()
+                    .child(
+                        DialogClose::new()
+                            .child(Button::new("table-op-cancel").label("Cancel").outline()),
+                    )
+                    .child(
+                        DialogAction::new().child(
+                            Button::new("table-op-confirm")
+                                .danger()
+                                .label(confirm_label)
+                                .on_click(move |_, window, cx| {
+                                    let operation = match (&operation, &new_name_input) {
+                                        (TableOperation::Rename { .. }, Some(input)) => {
+                                            TableOperation::Rename {
+                                                new_name: input.read(cx).value().to_string(),
+                                            }
+                                        }
+                                        _ => operation.clone(),
+                                    };
+                                    this_handle
+                                        .update(cx, |this, cx| {
+                                            this.run_table_operation(
+                                                metadata.clone(),
+                                                entity,
+                                                operation,
+                                                window,
+                                                cx,
+                                            );
+                                        })
+                                        .log_err();
+                                }),
+                        ),
+                    ),
+            )
+        });
+    }
+
+    fn run_table_operation(
+        &mut self,
+        metadata: TreeItemMetadata,
+        entity: blanco_core::EntityType,
+        operation: blanco_core::ddl::TableOperation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(table_name) = metadata.table_name.clone() else {
+            return;
+        };
+        let Some(sql) = blanco_core::ddl::table_operation_sql(
+            metadata.db_type,
+            entity,
+            metadata.schema_name.as_deref(),
+            &table_name,
+            &operation,
+        ) else {
+            window.push_notification(
+                (
+                    NotificationType::Error,
+                    format!("{} is not supported for this object", operation.label()),
+                ),
+                cx,
+            );
+            return;
+        };
+
+        let db_service = DatabaseService::global(cx).clone();
+        let connection_id = metadata.connection_id;
+        let database_name = metadata.database_name.clone();
+        let label = operation.label();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = gpui_tokio::Tokio::spawn_result(cx, async move {
+                let connection = db_service
+                    .get_or_create_connection(connection_id, database_name.as_deref())
+                    .await?;
+                connection
+                    .execute_write(&sql, database_name.as_deref(), &[])
+                    .await?;
+                Ok(())
+            })
+            .await;
+            this.update_in(cx, |this, window, cx| match result {
+                Ok(()) => {
+                    window.push_notification(
+                        (
+                            NotificationType::Success,
+                            format!("{label} {table_name} succeeded"),
+                        ),
+                        cx,
+                    );
+                    this.refresh_connection(connection_id, cx);
+                }
+                Err(error) => {
+                    tracing::error!("{label} {table_name} failed: {error:#}");
+                    window.push_notification(
+                        (
+                            NotificationType::Error,
+                            format!("{label} {table_name} failed: {error:#}"),
+                        ),
+                        cx,
+                    );
+                }
+            })
+            .log_err();
+        })
+        .detach();
+    }
+
     pub fn refresh_connection(&mut self, connection_id: i64, cx: &mut Context<Self>) {
         tracing::info!("Refreshing connection {}", connection_id);
 

@@ -512,6 +512,46 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                                 ));
                     }
 
+                    if supports_table_ops
+                        && matches!(
+                            metadata.kind,
+                            TreeItemKind::Table
+                                | TreeItemKind::View
+                                | TreeItemKind::MaterializedView
+                        )
+                    {
+                        use blanco_core::ddl::TableOperation;
+                        let operations: Vec<(&str, TableOperation)> = match metadata.kind {
+                            TreeItemKind::Table => vec![
+                                (
+                                    "Rename...",
+                                    TableOperation::Rename {
+                                        new_name: String::new(),
+                                    },
+                                ),
+                                ("Truncate...", TableOperation::Truncate),
+                                ("Drop...", TableOperation::Drop),
+                            ],
+                            _ => vec![("Drop...", TableOperation::Drop)],
+                        };
+                        menu = menu.separator();
+                        for (label, operation) in operations {
+                            let metadata = metadata.clone();
+                            menu =
+                                menu.item(PopupMenuItem::new(label).on_click(window.listener_for(
+                                    &self.parent,
+                                    move |this, _event, window, cx| {
+                                        this.confirm_table_operation(
+                                            metadata.clone(),
+                                            operation.clone(),
+                                            window,
+                                            cx,
+                                        );
+                                    },
+                                )));
+                        }
+                    }
+
                     if matches!(metadata.kind, TreeItemKind::Schema) {
                         let connection_name_for_graph = metadata.connection_name.clone();
                         let database_name_for_graph =
