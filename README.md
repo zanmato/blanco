@@ -13,10 +13,17 @@ and Redis.
   completion and highlighting for Redis.
 - Statement at cursor and selection execution, bind parameter prompts, query
   history and snippets.
-- Editable results grid with atomic commits, copy as CSV/TSV/JSON/SQL/Markdown,
-  export, charts and foreign key peeking.
-- Sidebar schema tree, table structure view, object DDL and an ER diagram.
-- CSV import with column mapping and conflict strategies.
+- Editable results grid with atomic commits, row filter, copy as
+  CSV/TSV/JSON/SQL/Markdown, export to CSV/TSV/JSON/SQL/Markdown, charts and
+  foreign key peeking.
+- EXPLAIN results rendered as a plan tree (PostgreSQL, MySQL, SQLite) with
+  time bars for hot nodes.
+- Sidebar schema tree with filter, rename/truncate/drop from the tree, table
+  structure view, object DDL and an ER diagram.
+- CSV and JSON (array or NDJSON) import with column mapping and conflict
+  strategies, applied as one transaction.
+- Read-only connections, and a confirmation before writes on connections
+  tagged PROD.
 - JavaScript scripting (`db.query`, `db.execute`, `db.transaction`,
   `db.display`) running in a sandboxed QuickJS runtime.
 - SSH tunnels with `known_hosts` verification, TLS, credentials in the OS
@@ -39,6 +46,21 @@ is the pin; bump deliberately with `cargo update -p gpui` and friends.
 
 A machine local `.cargo/config.toml` (for example to use `mold` as the linker)
 is gitignored, so contributor builds work without it.
+
+## Layout
+
+- `crates/blanco`: the GPUI application.
+- `crates/blanco-core`: the `Connection` trait, `DatabaseType`, shared value
+  types, the read/write statement classifier, DDL builders and plan parsing.
+- `crates/database`: `DatabaseService`, connection configs, SSH tunnels and the
+  tokio bridge every connection is wrapped in.
+- `crates/{postgres,mysql,sqlite,mssql,clickhouse,redis}`: drivers.
+- `crates/app-database`: the SQLite app store (connections, tabs, history,
+  snippets, settings) with versioned migrations.
+- `crates/sql-parser`: tree-sitter statement parsing and EXPLAIN wrapping.
+- `crates/transformers`: CSV/TSV/JSON/SQL/VALUES/Markdown formatters.
+- `crates/scripting`: the QuickJS script host.
+- `crates/ui`: generic GPUI widgets (tree, tabs, graph view).
 
 ## Testing
 
