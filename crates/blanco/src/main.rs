@@ -120,15 +120,17 @@ fn main() {
 
         // Load connections from app database and add them to the database service
         let app_database = AppDatabase::global(cx).clone();
-        let mut connections = runtime_handle
+        let connections = runtime_handle
             .block_on(async move { app_database.load_connections().await })
             .unwrap_or_default();
-        if let Err(error) = smol::block_on(connection_credentials::hydrate_connections(
-            &mut connections,
-            cx,
-        )) {
-            tracing::error!("Failed to load connection credentials: {error}");
-        }
+        let connections =
+            match smol::block_on(connection_credentials::hydrate_connections(connections, cx)) {
+                Ok(connections) => connections,
+                Err(error) => {
+                    tracing::error!("Failed to load connection credentials: {error}");
+                    Vec::new()
+                }
+            };
 
         for connection in connections {
             if let Some(config) = connection.to_connection_config() {

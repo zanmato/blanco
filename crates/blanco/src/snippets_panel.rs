@@ -2,13 +2,15 @@ mod delegate;
 
 pub use delegate::{SnippetItemMetadata, SnippetsTreeDelegate};
 
+use std::future::Future;
+
 use crate::app::{NewSnippet, OpenSnippetEditor};
 use crate::app_database::{AppDatabase, EditorKind, SnippetData};
 use crate::result_ext::ResultExt;
 use blanco_ui::draggable_tree::{DraggableTree, DraggableTreeState, TreeItem};
 use gpui::{
     AppContext, ClipboardItem, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
-    KeyDownEvent, ParentElement, Render, SharedString, Styled, Window, actions,
+    KeyDownEvent, ParentElement, Render, SharedString, Styled, Task, Window, actions,
     prelude::FluentBuilder,
 };
 use gpui_component::input::Input;
@@ -40,57 +42,63 @@ pub struct SnippetsPanel {
     tree_state: Entity<DraggableTreeState<SnippetsTreeDelegate>>,
     creating_group: bool,
     group_name_input: Option<Entity<InputState>>,
+    /// In-flight snippet load. Replaced on every refresh so overlapping
+    /// refreshes cannot apply a stale snapshot over a newer one.
+    load_task: Option<Task<()>>,
 }
 
 impl SnippetsPanel {
     pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let app_database = AppDatabase::global(cx);
-        let snippets = gpui_tokio::Tokio::handle(cx).block_on(async {
-            match app_database.load_snippets().await {
-                Ok(snippets) => snippets,
-                Err(e) => {
-                    tracing::error!("Failed to load snippets: {}", e);
-                    vec![]
-                }
-            }
-        });
-
         let panel_entity = cx.entity();
         let delegate = SnippetsTreeDelegate::new(&panel_entity);
         let tree_state = cx.new(|cx| DraggableTreeState::new(delegate, cx));
 
         let mut panel = Self {
-            snippets,
+            snippets: Vec::new(),
             tree_state,
             creating_group: false,
             group_name_input: None,
+            load_task: None,
         };
 
-        panel.refresh_tree(cx);
+        panel.refresh_snippets(cx);
         panel
     }
 
     pub fn refresh_snippets(&mut self, cx: &mut Context<Self>) {
-        tracing::info!(
-            "Refreshing snippets panel, currently have {} snippets",
-            self.snippets.len()
-        );
-        let app_database = AppDatabase::global(cx);
-        self.snippets = gpui_tokio::Tokio::handle(cx).block_on(async {
-            match app_database.load_snippets().await {
-                Ok(snippets) => {
-                    tracing::info!("Loaded {} snippets from database", snippets.len());
-                    snippets
-                }
-                Err(e) => {
-                    tracing::error!("Failed to load snippets: {}", e);
-                    vec![]
-                }
-            }
+        let app_database = AppDatabase::global(cx).clone();
+        let load = gpui_tokio::Tokio::spawn_result(cx, async move {
+            app_database
+                .load_snippets()
+                .await
+                .map_err(anyhow::Error::from)
         });
+        self.load_task = Some(cx.spawn(async move |this, cx| {
+            let Some(snippets) = load.await.log_err() else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                this.snippets = snippets;
+                this.refresh_tree(cx);
+                cx.notify();
+            })
+            .log_err();
+        }));
+    }
 
-        self.refresh_tree(cx);
-        cx.notify();
+    /// Run a snippet mutation on tokio, then reload the panel once it finishes.
+    fn mutate_then_refresh(
+        &mut self,
+        mutation: impl Future<Output = anyhow::Result<()>> + Send + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let task = gpui_tokio::Tokio::spawn_result(cx, mutation);
+        cx.spawn(async move |this, cx| {
+            task.await.log_err();
+            this.update(cx, |this, cx| this.refresh_snippets(cx))
+                .log_err();
+        })
+        .detach();
     }
 
     fn refresh_tree(&mut self, cx: &mut Context<Self>) {
@@ -176,20 +184,17 @@ impl SnippetsPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let app_database = AppDatabase::global(cx);
-
-        gpui_tokio::Tokio::handle(cx).block_on(async {
-            match app_database.delete_snippet(snippet_id).await {
-                Ok(_) => {
-                    tracing::info!("Deleted snippet: {}", snippet_id);
-                }
-                Err(e) => {
-                    tracing::error!("Failed to delete snippet: {}", e);
-                }
-            }
-        });
-
-        self.refresh_snippets(cx);
+        let app_database = AppDatabase::global(cx).clone();
+        self.mutate_then_refresh(
+            async move {
+                app_database
+                    .delete_snippet(snippet_id)
+                    .await
+                    .map(|()| tracing::info!("Deleted snippet: {}", snippet_id))
+                    .map_err(anyhow::Error::from)
+            },
+            cx,
+        );
         cx.emit(SnippetsPanelEvent::SnippetDeleted);
     }
 
@@ -243,7 +248,7 @@ impl SnippetsPanel {
             return;
         }
 
-        let app_database = AppDatabase::global(cx);
+        let app_database = AppDatabase::global(cx).clone();
         let new_group = SnippetData {
             id: None,
             name: name.clone(),
@@ -254,20 +259,17 @@ impl SnippetsPanel {
             position: 0,
         };
 
-        gpui_tokio::Tokio::handle(cx).block_on(async {
-            match app_database.save_snippet(&new_group).await {
-                Ok(id) => {
-                    tracing::info!("Created new group '{}' with id {}", name, id);
-                }
-                Err(e) => {
-                    tracing::error!("Failed to create group: {}", e);
-                }
-            }
-        });
-
         self.creating_group = false;
         self.group_name_input = None;
-        self.refresh_snippets(cx);
+        self.mutate_then_refresh(
+            async move {
+                let id = app_database.save_snippet(&new_group).await?;
+                tracing::info!("Created new group '{}' with id {}", name, id);
+                Ok(())
+            },
+            cx,
+        );
+        cx.notify();
     }
 
     pub fn start_creating_group(&mut self, window: &mut Window, cx: &mut Context<Self>) {

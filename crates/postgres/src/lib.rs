@@ -289,6 +289,11 @@ mod tests {
         if let Err(e) = conn.connect(&connection_string).await {
             return handle_unreachable("test_postgres_extended_type_coverage", &e);
         }
+        // `connect` builds the pool lazily, so reachability only surfaces on
+        // the first round-trip.
+        if let Err(e) = conn.ping().await {
+            return handle_unreachable("test_postgres_extended_type_coverage", &e);
+        }
         let database = Some("blanco");
 
         let query = "SELECT

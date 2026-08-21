@@ -911,6 +911,66 @@ mod tests {
         assert!(result.is_err(), "unknown config id must error, not panic");
     }
 
+    /// Regression test: every connection handed out by the service is wrapped
+    /// in `TokioConnection`, which must forward
+    /// `execute_operations_transactional` to the driver. When the wrapper
+    /// fell back to the trait default, batches ran sequentially and a
+    /// mid-batch failure left earlier writes applied.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_transactional_batch_rolls_back_through_service() {
+        let service = DatabaseService::new(tokio::runtime::Handle::current());
+        let dir = tempfile::tempdir().expect("temp dir");
+        service
+            .add_connection_config(sqlite_config(1, &dir.path().join("atomic.db")))
+            .await;
+        let connection = service
+            .get_or_create_connection(1, None)
+            .await
+            .expect("connection");
+
+        connection
+            .execute_write(
+                "CREATE TABLE account (id INTEGER PRIMARY KEY, balance INTEGER NOT NULL CHECK (balance >= 0))",
+                None,
+                &[],
+            )
+            .await
+            .expect("create table");
+        connection
+            .execute_write(
+                "INSERT INTO account (id, balance) VALUES (1, 100)",
+                None,
+                &[],
+            )
+            .await
+            .expect("seed row");
+
+        let operations = vec![
+            "UPDATE account SET balance = 50 WHERE id = 1".to_string(),
+            "UPDATE account SET balance = -10 WHERE id = 1".to_string(),
+        ];
+        let failure = service
+            .execute_operations_transactional(1, None, &operations)
+            .await
+            .expect_err("second UPDATE violates the CHECK constraint");
+        assert_eq!(
+            failure.applied, 0,
+            "batch must be atomic through the service"
+        );
+
+        let result = connection
+            .execute_query("SELECT balance FROM account WHERE id = 1", None, None)
+            .await
+            .expect("select balance");
+        let balance = result
+            .rows
+            .first()
+            .and_then(|row| row.first())
+            .and_then(|cell| cell.as_deref())
+            .expect("balance cell");
+        assert_eq!(balance, "100", "first UPDATE must have been rolled back");
+    }
+
     #[test]
     fn test_connection_lost_marker_drives_eviction_decision() {
         // A driver-tagged error (typed `ConnectionLost` in its chain, regardless

@@ -316,30 +316,36 @@ impl EditorPanel {
     ) {
         // Load the snippet first so the editor can be built with the right
         // language rather than built as SQL and immediately rebuilt.
-        let app_database = AppDatabase::global(cx);
-        let snippet_data = gpui_tokio::Tokio::handle(cx)
-            .block_on(async { app_database.get_snippet_by_id(snippet_id).await })
-            .map_err(anyhow::Error::from)
-            .log_err()
-            .flatten();
+        let app_database = AppDatabase::global(cx).clone();
+        let load = gpui_tokio::Tokio::spawn_result(cx, async move {
+            app_database
+                .get_snippet_by_id(snippet_id)
+                .await
+                .map_err(anyhow::Error::from)
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let snippet_data = load.await.log_err().flatten();
+            this.update_in(cx, |this, window, cx| {
+                let kind = snippet_data
+                    .as_ref()
+                    .map(|snippet| snippet.kind)
+                    .unwrap_or_default();
+                let snippet_editor = cx.new(|cx| SnippetEditor::new(kind, window, cx));
 
-        let kind = snippet_data
-            .as_ref()
-            .map(|snippet| snippet.kind)
-            .unwrap_or_default();
-        let snippet_editor = cx.new(|cx| SnippetEditor::new(kind, window, cx));
+                if let Some(snippet_data) = snippet_data {
+                    snippet_editor.update(cx, |editor, cx| {
+                        editor.load_snippet(snippet_data, window, cx);
+                    });
+                }
 
-        if let Some(snippet_data) = snippet_data {
-            snippet_editor.update(cx, |editor, cx| {
-                editor.load_snippet(snippet_data, window, cx);
-            });
-        }
-
-        self.tabs.push(TabType::Snippet(snippet_editor));
-        self.active_tab_ix = self.tabs.len() - 1;
-        self.scroll_tabbar_to_the_end(window, cx);
-
-        cx.notify();
+                this.tabs.push(TabType::Snippet(snippet_editor));
+                this.active_tab_ix = this.tabs.len() - 1;
+                this.scroll_tabbar_to_the_end(window, cx);
+                cx.notify();
+            })
+            .log_err();
+        })
+        .detach();
     }
 
     pub fn create_table_structure_tab(

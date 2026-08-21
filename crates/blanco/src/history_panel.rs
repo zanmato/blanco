@@ -1,10 +1,11 @@
+use std::future::Future;
 use std::rc::Rc;
 
 use blanco_ui::IconName;
 use gpui::{
-    AppContext, ClipboardItem, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
-    ParentElement, Pixels, Render, Size, Styled, Subscription, Window, div, prelude::FluentBuilder,
-    px, size,
+    App, AppContext, ClipboardItem, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
+    ParentElement, Pixels, Render, Size, Styled, Subscription, Task, Window, div,
+    prelude::FluentBuilder, px, size,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, InteractiveElementExt as _, Sizable as _,
@@ -42,6 +43,9 @@ pub struct HistoryPanel {
     item_sizes: Rc<Vec<Size<Pixels>>>,
     search_input: Entity<InputState>,
     scroll_handle: VirtualListScrollHandle,
+    /// In-flight history load. Replaced on every reload so a newer search
+    /// cancels the previous query and stale results never land after fresh ones.
+    load_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -57,16 +61,16 @@ impl HistoryPanel {
                 }
             });
 
-        let entries = load_history(cx, None);
-        let item_sizes = row_sizes(entries.len());
-
-        Self {
-            entries,
-            item_sizes,
+        let mut this = Self {
+            entries: Vec::new(),
+            item_sizes: row_sizes(0),
             search_input,
             scroll_handle: VirtualListScrollHandle::new(),
+            load_task: None,
             _subscriptions: vec![search_subscription],
-        }
+        };
+        this.reload(cx);
+        this
     }
 
     pub fn reload(&mut self, cx: &mut Context<Self>) {
@@ -76,9 +80,32 @@ impl HistoryPanel {
         } else {
             Some(search)
         };
-        self.entries = load_history(cx, search);
-        self.item_sizes = row_sizes(self.entries.len());
-        cx.notify();
+        let load = load_history(cx, search);
+        self.load_task = Some(cx.spawn(async move |this, cx| {
+            let Some(entries) = load.await.log_err() else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                this.item_sizes = row_sizes(entries.len());
+                this.entries = entries;
+                cx.notify();
+            })
+            .log_err();
+        }));
+    }
+
+    /// Run a history mutation on tokio, then reload the list once it finishes.
+    fn mutate_then_reload(
+        &mut self,
+        mutation: impl Future<Output = anyhow::Result<()>> + Send + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let task = gpui_tokio::Tokio::spawn_result(cx, mutation);
+        cx.spawn(async move |this, cx| {
+            task.await.log_err();
+            this.update(cx, |this, cx| this.reload(cx)).log_err();
+        })
+        .detach();
     }
 
     fn copy_entry(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -92,26 +119,28 @@ impl HistoryPanel {
             return;
         };
         let app_database = AppDatabase::global(cx).clone();
-        gpui_tokio::Tokio::handle(cx).block_on(async {
-            app_database
-                .delete_query_history_entry(id)
-                .await
-                .map_err(anyhow::Error::from)
-                .log_err();
-        });
-        self.reload(cx);
+        self.mutate_then_reload(
+            async move {
+                app_database
+                    .delete_query_history_entry(id)
+                    .await
+                    .map_err(anyhow::Error::from)
+            },
+            cx,
+        );
     }
 
     fn clear_all(&mut self, cx: &mut Context<Self>) {
         let app_database = AppDatabase::global(cx).clone();
-        gpui_tokio::Tokio::handle(cx).block_on(async {
-            app_database
-                .clear_query_history()
-                .await
-                .map_err(anyhow::Error::from)
-                .log_err();
-        });
-        self.reload(cx);
+        self.mutate_then_reload(
+            async move {
+                app_database
+                    .clear_query_history()
+                    .await
+                    .map_err(anyhow::Error::from)
+            },
+            cx,
+        );
     }
 
     fn render_entry(&self, index: usize, cx: &Context<Self>) -> impl IntoElement {
@@ -233,16 +262,13 @@ fn row_sizes(count: usize) -> Rc<Vec<Size<Pixels>>> {
     Rc::new(vec![size(px(0.), ROW_HEIGHT); count])
 }
 
-fn load_history(cx: &mut gpui::App, search: Option<String>) -> Vec<QueryHistoryData> {
-    let app_database = AppDatabase::global(cx);
-    gpui_tokio::Tokio::handle(cx).block_on(async {
-        match app_database.load_query_history(HISTORY_LIMIT, search).await {
-            Ok(entries) => entries,
-            Err(e) => {
-                tracing::error!("Failed to load query history: {e}");
-                vec![]
-            }
-        }
+fn load_history(cx: &App, search: Option<String>) -> Task<anyhow::Result<Vec<QueryHistoryData>>> {
+    let app_database = AppDatabase::global(cx).clone();
+    gpui_tokio::Tokio::spawn_result(cx, async move {
+        app_database
+            .load_query_history(HISTORY_LIMIT, search)
+            .await
+            .map_err(anyhow::Error::from)
     })
 }
 

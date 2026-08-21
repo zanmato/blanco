@@ -25,22 +25,31 @@ impl AppSettings {
         cx.spawn(async move |cx| {
             // Await all credential loading tasks
             for task in tasks {
-                if let Ok(Some((key, value))) = task.await {
-                    // Convert bytes to string and update the appropriate setting
-                    if let Ok(value_str) = String::from_utf8(value) {
-                        match key.as_str() {
-                            "chat.api_key" => {
-                                loaded_settings.chat.api_key = value_str;
-                            }
-                            _ => {
-                                tracing::warn!("Unknown secret setting key: {}", key);
-                            }
-                        }
+                let (key, value) = match task.await {
+                    Ok(Some(credential)) => credential,
+                    Ok(None) => continue,
+                    Err(error) => {
+                        tracing::error!("Failed to read secret setting from keychain: {error}");
+                        continue;
+                    }
+                };
+                let value_str = match String::from_utf8(value) {
+                    Ok(value_str) => value_str,
+                    Err(error) => {
+                        tracing::error!("Secret setting '{key}' is not valid UTF-8: {error}");
+                        continue;
+                    }
+                };
+                match key.as_str() {
+                    "chat.api_key" => {
+                        loaded_settings.chat.api_key = value_str;
+                    }
+                    _ => {
+                        tracing::warn!("Unknown secret setting key: {}", key);
                     }
                 }
             }
 
-            // Update loaded settings
             cx.update(|cx| {
                 Self::global_mut(cx).settings = loaded_settings;
             });

@@ -48,9 +48,6 @@ impl Settings {
 
         for (key, value) in values {
             match key.as_str() {
-                "general.check_for_updates" => {
-                    settings.general.check_for_updates = value.parse().unwrap_or_default();
-                }
                 "editor.font_family" => {
                     // Legacy: migrate to appearance.mono_font_family
                     if settings.appearance.mono_font_family.is_empty() {
@@ -78,12 +75,6 @@ impl Settings {
                 }
                 "database.query_timeout_seconds" => {
                     settings.database.query_timeout_seconds = value.parse().unwrap_or_default();
-                }
-                "database.max_rows" => {
-                    settings.database.max_rows = value.parse().unwrap_or_default();
-                }
-                "database.auto_limit_results" => {
-                    settings.database.auto_limit_results = value.parse().unwrap_or_default();
                 }
                 "database.show_connection_notifications" => {
                     settings.database.show_connection_notifications =
@@ -210,10 +201,8 @@ impl Settings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GeneralSettings {
-    pub check_for_updates: bool,
-}
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct GeneralSettings {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EditorSettings {
@@ -228,8 +217,6 @@ pub struct EditorSettings {
 pub struct DatabaseSettings {
     pub default_connection_timeout_seconds: u32,
     pub query_timeout_seconds: u32,
-    pub max_rows: u32,
-    pub auto_limit_results: bool,
     pub show_connection_notifications: bool,
     /// Maximum number of query-history entries to retain. Older entries beyond
     /// this count are pruned after each execution.
@@ -268,14 +255,6 @@ pub struct ChatSettings {
     pub show_thinking_process: bool,
 }
 
-impl Default for GeneralSettings {
-    fn default() -> Self {
-        Self {
-            check_for_updates: true,
-        }
-    }
-}
-
 impl Default for EditorSettings {
     fn default() -> Self {
         Self {
@@ -293,8 +272,6 @@ impl Default for DatabaseSettings {
         Self {
             default_connection_timeout_seconds: 30,
             query_timeout_seconds: 60,
-            max_rows: 1000,
-            auto_limit_results: true,
             show_connection_notifications: true,
             max_history_items: 1000,
         }

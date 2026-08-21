@@ -264,7 +264,12 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 pub fn app_db_path() -> PathBuf {
     let mut path = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
     path.push("blanco");
-    std::fs::create_dir_all(&path).ok();
+    if let Err(error) = std::fs::create_dir_all(&path) {
+        tracing::error!(
+            "Failed to create app data directory {}: {error}",
+            path.display()
+        );
+    }
     path.push("blanco.db");
     path
 }

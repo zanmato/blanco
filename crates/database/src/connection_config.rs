@@ -602,12 +602,15 @@ impl ConnectionConfig {
                 let raw = format!("{}{}/?{}", scheme_prefix, host_and_port, params.join("&"));
                 match url::Url::parse(&raw) {
                     Ok(mut url) => {
-                        if !self.username.is_empty() {
-                            let _ = url.set_username(&self.username);
+                        if !self.username.is_empty() && url.set_username(&self.username).is_err() {
+                            tracing::warn!(
+                                "ClickHouse URL cannot carry a username, connecting without one"
+                            );
                         }
-                        if let Some(password) = &self.password {
-                            if !password.is_empty() {
-                                let _ = url.set_password(Some(password));
+                        let password = self.password.as_deref().filter(|p| !p.is_empty());
+                        if let Some(password) = password {
+                            if url.set_password(Some(password)).is_err() {
+                                tracing::warn!("ClickHouse URL cannot carry a password, connecting without one");
                             }
                         }
                         url.to_string()

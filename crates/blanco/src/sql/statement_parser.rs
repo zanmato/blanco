@@ -38,17 +38,23 @@ static SQL_LANGUAGE: Lazy<Language> = Lazy::new(|| tree_sitter_sequel::LANGUAGE.
 // Thread-local parser instance for reuse.
 // Each thread gets its own parser, avoiding contention and ensuring thread safety.
 thread_local! {
-    static TLS_PARSER: RefCell<SqlStatementParser> = {
-        match SqlStatementParser::new() {
-            Ok(parser) => RefCell::new(parser),
-            Err(e) => {
-                tracing::error!("Failed to create thread-local SQL parser: {}", e);
-                // Panic in the unlikely case the parser cannot be created.
-                // This is acceptable because a parser failure is a fatal error.
-                panic!("Failed to initialize thread-local SQL parser: {}", e);
-            }
+    // `set_language` only fails on a tree-sitter ABI mismatch, which is a build
+    // defect rather than a runtime condition. Keep the error instead of
+    // panicking so a broken grammar degrades to "no statement detected" on the
+    // editor keystroke path rather than tearing down the thread.
+    static TLS_PARSER: RefCell<Result<SqlStatementParser, String>> = {
+        let parser = SqlStatementParser::new();
+        if let Err(error) = &parser {
+            tracing::error!("Failed to create thread-local SQL parser: {error}");
         }
+        RefCell::new(parser)
     };
+}
+
+/// Run `f` against the thread-local parser, returning `None` when the parser
+/// failed to initialize.
+fn with_parser<T>(f: impl FnOnce(&mut SqlStatementParser) -> Option<T>) -> Option<T> {
+    TLS_PARSER.with_borrow_mut(|parser| f(parser.as_mut().ok()?))
 }
 
 impl SqlStatementParser {
@@ -354,8 +360,32 @@ pub fn extract_statement_info_with_styles(
     cursor_pos: usize,
     styles: ParamStyles,
 ) -> Option<StatementInfo> {
-    TLS_PARSER
-        .with_borrow_mut(|parser| parser.extract_statement_at_cursor(text, cursor_pos, styles))
+    with_parser(|parser| parser.extract_statement_at_cursor(text, cursor_pos, styles))
+}
+
+/// Report whether the parse tree of `sql` contains a node of any of the given
+/// tree-sitter kinds (e.g. `"keyword_drop"`). Keywords inside string literals
+/// and comments are not nodes, so they never match. Returns `None` when the
+/// text could not be parsed cleanly (parser unavailable or syntax errors), so
+/// callers can fall back to a conservative textual check instead of trusting a
+/// partial tree.
+pub fn contains_node_kind(sql: &str, kinds: &[&str]) -> Option<bool> {
+    fn walk(node: Node, kinds: &[&str]) -> bool {
+        if kinds.contains(&node.kind()) {
+            return true;
+        }
+        let mut cursor = node.walk();
+        node.children(&mut cursor).any(|child| walk(child, kinds))
+    }
+
+    with_parser(|parser| {
+        let tree = parser.parser.parse(sql, None)?;
+        let root_node = tree.root_node();
+        if root_node.has_error() {
+            return None;
+        }
+        Some(walk(root_node, kinds))
+    })
 }
 
 /// Extract the single line-oriented command at the cursor for non-SQL backends
@@ -432,7 +462,7 @@ pub fn extract_completion_context(
     text: &Rope,
     cursor_byte_pos: usize,
 ) -> Option<CompletionContext> {
-    TLS_PARSER.with_borrow_mut(|parser| {
+    with_parser(|parser| {
         let text_str: String = text.chunks().collect();
         let tree = parser.parser.parse(&text_str, None)?;
         let root_node = tree.root_node();

@@ -152,24 +152,6 @@ impl CreateNewQueryTabParams for TreeItemMetadata {
 
 impl ConnectionsPanel {
     pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
-        // Load initial connections
-        let app_database = AppDatabase::global(cx);
-        let mut connections = gpui_tokio::Tokio::handle(cx).block_on(async {
-            match app_database.load_connections().await {
-                Ok(connections) => connections,
-                Err(e) => {
-                    tracing::error!("Failed to load connections: {}", e);
-                    vec![]
-                }
-            }
-        });
-        if let Err(error) = smol::block_on(connection_credentials::hydrate_connections(
-            &mut connections,
-            cx,
-        )) {
-            tracing::error!("Failed to load connection credentials: {error}");
-        }
-
         let database_metadata = std::collections::HashMap::new();
         let loaded_connections = std::collections::HashSet::new();
         let expanded_connections = std::collections::HashSet::new();
@@ -182,8 +164,8 @@ impl ConnectionsPanel {
 
         let tree_state = cx.new(|cx| TreeState::new(delegate, cx));
 
-        let panel = Self {
-            connections,
+        let mut panel = Self {
+            connections: Vec::new(),
             _selected_connection_id: None,
             database_metadata,
             tree_state,
@@ -193,38 +175,36 @@ impl ConnectionsPanel {
             connected_databases,
         };
 
-        cx.spawn(async |this_handle, cx| {
-            this_handle
-                .update(cx, |this, cx| {
-                    this.update_tree_items(cx);
-                    cx.notify();
-                })
-                .log_err();
-        })
-        .detach();
-
+        panel.reload_connections(cx);
         panel
     }
 
     pub fn reload_connections(&mut self, cx: &mut Context<Self>) {
         let app_database = AppDatabase::global(cx).clone();
+        let load = gpui_tokio::Tokio::spawn_result(cx, async move {
+            app_database
+                .load_connections()
+                .await
+                .map_err(anyhow::Error::from)
+        });
         cx.spawn(async move |this_handle, cx| {
-            let connections = app_database.load_connections().await;
+            let Some(connections) = load.await.log_err() else {
+                return;
+            };
+            let hydrate =
+                cx.update(|cx| connection_credentials::hydrate_connections(connections, cx));
+            let connections = match hydrate.await {
+                Ok(connections) => connections,
+                Err(error) => {
+                    tracing::error!("Failed to load connection credentials: {error}");
+                    return;
+                }
+            };
             this_handle
-                .update(cx, |this, cx| match connections {
-                    Ok(mut connections) => {
-                        if let Err(error) = smol::block_on(
-                            connection_credentials::hydrate_connections(&mut connections, cx),
-                        ) {
-                            tracing::error!("Failed to reload connection credentials: {error}");
-                        }
-                        this.connections = connections;
-                        this.update_tree_items(cx);
-                        cx.notify();
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to reload connections: {}", e);
-                    }
+                .update(cx, |this, cx| {
+                    this.connections = connections;
+                    this.update_tree_items(cx);
+                    cx.notify();
                 })
                 .log_err();
         })

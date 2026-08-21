@@ -1,3 +1,5 @@
+use std::future::Future;
+
 use anyhow::{Context as _, Result};
 use gpui::{App, Task};
 
@@ -123,25 +125,35 @@ fn start_reading(connections: &[ConnectionData], cx: &App) -> Vec<CredentialRead
         .collect()
 }
 
-pub async fn hydrate_connections(connections: &mut [ConnectionData], cx: &App) -> Result<()> {
-    let reads = start_reading(connections, cx);
-    for read in reads {
-        let Some((_, bytes)) = read.task.await? else {
-            continue;
-        };
-        let value = String::from_utf8(bytes).context("connection credential is not valid UTF-8")?;
-        let Some(connection) = connections.get_mut(read.connection_index) else {
-            continue;
-        };
-        match read.kind {
-            CredentialKind::Password => connection.password = Some(value),
-            CredentialKind::SshPassword => connection.ssh_password = Some(value),
-            CredentialKind::SshPrivateKeyPassword => {
-                connection.ssh_private_key_password = Some(value);
+/// Start keychain reads for every connection and return a future that fills
+/// the secrets in once they land. The reads are kicked off synchronously (they
+/// need `cx`), but the returned future owns everything it touches so callers
+/// can await it from a spawned task instead of blocking the foreground thread.
+pub fn hydrate_connections(
+    mut connections: Vec<ConnectionData>,
+    cx: &App,
+) -> impl Future<Output = Result<Vec<ConnectionData>>> + use<> {
+    let reads = start_reading(&connections, cx);
+    async move {
+        for read in reads {
+            let Some((_, bytes)) = read.task.await? else {
+                continue;
+            };
+            let value =
+                String::from_utf8(bytes).context("connection credential is not valid UTF-8")?;
+            let Some(connection) = connections.get_mut(read.connection_index) else {
+                continue;
+            };
+            match read.kind {
+                CredentialKind::Password => connection.password = Some(value),
+                CredentialKind::SshPassword => connection.ssh_password = Some(value),
+                CredentialKind::SshPrivateKeyPassword => {
+                    connection.ssh_private_key_password = Some(value);
+                }
             }
         }
+        Ok(connections)
     }
-    Ok(())
 }
 
 pub fn start_deleting_connection(connection_id: i64, cx: &App) -> Vec<Task<Result<()>>> {

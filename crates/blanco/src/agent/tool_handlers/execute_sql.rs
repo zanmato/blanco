@@ -12,8 +12,20 @@ use super::{AgentToolHandler, ToolContext};
 const EXECUTE_SQL_MAX_ROWS: usize = 100;
 const EXECUTE_SQL_AUTO_LIMIT: usize = 100;
 
+/// Uses the SQL grammar so a `DROP` inside a string literal or comment does not
+/// trip the guard, while `DROP\tTABLE` / `DROP\nTABLE` still do. When the text
+/// does not parse cleanly the tree cannot be trusted, so fall back to a
+/// word-boundary scan and err on the side of blocking.
 fn contains_drop_statement(sql: &str) -> bool {
-    sql.to_uppercase().contains("DROP ")
+    match crate::sql::statement_parser::contains_node_kind(sql, &["keyword_drop"]) {
+        Some(found) => found,
+        None => {
+            let upper = sql.to_uppercase();
+            upper
+                .split(|c: char| !c.is_alphanumeric() && c != '_')
+                .any(|word| word == "DROP")
+        }
+    }
 }
 
 fn needs_auto_limit(sql: &str) -> bool {
@@ -188,5 +200,27 @@ impl AgentToolHandler for ExecuteSqlHandler {
 
     fn call_summary(&self, _arguments: &serde_json::Value, _result: &ToolCall) -> String {
         "Execute SQL".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::contains_drop_statement;
+
+    #[test]
+    fn drop_guard_matches_any_whitespace() {
+        assert!(contains_drop_statement("DROP TABLE users"));
+        assert!(contains_drop_statement("drop\ttable users"));
+        assert!(contains_drop_statement("DROP\nTABLE users;"));
+        assert!(contains_drop_statement("SELECT 1; DROP TABLE users"));
+    }
+
+    #[test]
+    fn drop_guard_ignores_literals_and_identifiers() {
+        assert!(!contains_drop_statement(
+            "SELECT 'please DROP this' AS note"
+        ));
+        assert!(!contains_drop_statement("SELECT drop_count FROM stats"));
+        assert!(!contains_drop_statement("SELECT * FROM users"));
     }
 }

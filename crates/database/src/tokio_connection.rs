@@ -15,7 +15,7 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use blanco_core::{
     connection_trait::{ColumnType, DatabaseSchemaResult, IndexInfo, QueryableEntity, RoutineKind},
-    ColumnInfo, Connection, KeyValueResult, QueryResult,
+    BatchFailure, BatchOutcome, ColumnInfo, Connection, KeyValueResult, QueryResult,
 };
 use futures::Stream;
 use std::future::Future;
@@ -133,6 +133,31 @@ impl Connection for TokioConnection {
                 .await
         })
         .await
+    }
+
+    async fn execute_operations_transactional(
+        &self,
+        operations: &[String],
+        database_name: Option<&str>,
+    ) -> std::result::Result<BatchOutcome, BatchFailure> {
+        let inner = Arc::clone(&self.inner);
+        let operations = operations.to_vec();
+        let database_name = database_name.map(str::to_string);
+        let task = self.runtime.spawn(async move {
+            inner
+                .execute_operations_transactional(&operations, database_name.as_deref())
+                .await
+        });
+        let mut abort_on_drop = AbortOnDrop(Some(task.abort_handle()));
+        // A join failure means the task panicked or was aborted before
+        // returning, so no outcome was observed. Report it as atomic: the
+        // caller cannot know how much was applied, and the backends that
+        // implement real transactions will have rolled back.
+        let result = task
+            .await
+            .map_err(|e| BatchFailure::atomic(anyhow!("tokio task join failed: {e}")))?;
+        abort_on_drop.disarm();
+        result
     }
 
     async fn execute_query_stream_rows(
