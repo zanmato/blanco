@@ -581,8 +581,7 @@ impl TableDelegate for ResultsTableDelegate {
             .unwrap_or(ColumnType::Unknown);
         let is_numeric = col_type.is_numeric();
 
-        // Sort rows by the specified column
-        self.rows.sort_by(|a, b| {
+        let compare = |a: &Vec<Option<String>>, b: &Vec<Option<String>>| {
             let a_val = a.get(col_ix).and_then(|s| s.as_deref()).unwrap_or("");
             let b_val = b.get(col_ix).and_then(|s| s.as_deref()).unwrap_or("");
 
@@ -596,7 +595,14 @@ impl TableDelegate for ResultsTableDelegate {
                 ColumnSort::Descending => ordering.reverse(),
                 _ => ordering,
             }
-        });
+        };
+
+        self.rows.sort_by(compare);
+        // Keep the hidden rows in the same order so clearing the filter does
+        // not silently undo the sort.
+        if let Some(unfiltered_rows) = self.unfiltered_rows.as_mut() {
+            unfiltered_rows.sort_by(compare);
+        }
     }
 
     fn visible_rows_changed(

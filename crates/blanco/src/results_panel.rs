@@ -11,7 +11,7 @@ use gpui_component::{
     ActiveTheme, Icon, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
-    input::{InputEvent, InputState},
+    input::{Input, InputEvent, InputState},
     scroll::Scrollbar,
     table::{DataTable, TableEvent, TableState},
     tooltip::Tooltip,
@@ -88,6 +88,8 @@ pub struct ResultTab {
     /// Set when this tab shows a non-tabular Redis key/value payload. When
     /// present, the panel renders the key inspector instead of the table/chart.
     pub key_value: Option<KeyValueResult>,
+    /// Client-side text filter over the loaded rows of this tab.
+    pub filter_input: Entity<InputState>,
     pub _subscriptions: Vec<Subscription>,
 }
 
@@ -187,6 +189,18 @@ impl ResultsPanel {
 
         let chart_view = cx.new(|cx| ChartView::new(table_state.clone(), window, cx));
 
+        let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder("Filter rows..."));
+        let filter_subscription = cx.subscribe_in(
+            &filter_input,
+            window,
+            move |panel, filter_input, event: &InputEvent, window, cx| {
+                if let InputEvent::Change = event {
+                    let needle = filter_input.read(cx).value().to_string();
+                    panel.apply_row_filter(filter_input, &needle, window, cx);
+                }
+            },
+        );
+
         ResultTab {
             title,
             pinned: false,
@@ -194,7 +208,41 @@ impl ResultsPanel {
             view_mode: ResultViewMode::default(),
             chart_view,
             key_value: None,
-            _subscriptions: vec![subscription],
+            filter_input,
+            _subscriptions: vec![subscription, filter_subscription],
+        }
+    }
+
+    /// Apply the text filter of whichever tab owns `filter_input`. The tab is
+    /// looked up by its input so a filter typed into a background (pinned) tab
+    /// never lands on the active one.
+    fn apply_row_filter(
+        &mut self,
+        filter_input: &Entity<InputState>,
+        needle: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self
+            .result_tabs
+            .iter()
+            .find(|tab| tab.filter_input.entity_id() == filter_input.entity_id())
+        else {
+            return;
+        };
+        let table_state = tab.table_state.clone();
+        let chart_view = tab.chart_view.clone();
+        let applied = table_state.update(cx, |state, cx| {
+            let applied = state.delegate_mut().apply_filter(needle);
+            if applied {
+                state.clear_selection(cx);
+                state.refresh(cx);
+            }
+            applied
+        });
+        if applied {
+            chart_view.update(cx, |view, cx| view.rebuild_column_selects(window, cx));
+            cx.notify();
         }
     }
 
@@ -1025,6 +1073,17 @@ impl ResultsPanel {
             .get(active)
             .is_some_and(|t| t.key_value.is_some());
         let is_table = matches!(active_view_mode, ResultViewMode::Table);
+        let filter = self.result_tabs.get(active).map(|tab| {
+            let delegate_state = tab.table_state.read(cx);
+            let delegate = delegate_state.delegate();
+            (
+                tab.filter_input.clone(),
+                delegate.has_pending_changes(),
+                delegate.is_filtered(),
+                delegate.rows.len(),
+                delegate.unfiltered_row_count(),
+            )
+        });
 
         h_flex()
             .id("result-tabs-strip")
@@ -1034,6 +1093,44 @@ impl ResultsPanel {
             .border_color(border_color)
             .bg(strip_bg)
             .child(tabs)
+            .when_some(
+                filter.filter(|_| !is_key_value && is_table),
+                |strip, filter| {
+                    let (filter_input, edits_pending, is_filtered, shown, total) = filter;
+                    strip.child(
+                        h_flex()
+                            .flex_shrink_0()
+                            .items_center()
+                            .gap_1()
+                            .px_2()
+                            .when(is_filtered, |this| {
+                                this.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(muted_fg)
+                                        .whitespace_nowrap()
+                                        .child(format!("{shown} of {total}")),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .id("result-filter")
+                                    .w(px(180.))
+                                    .child(
+                                        Input::new(&filter_input).xsmall().disabled(edits_pending),
+                                    )
+                                    .when(edits_pending, |this| {
+                                        this.tooltip(|window, cx| {
+                                            Tooltip::new(
+                                                "Commit or discard pending edits to filter",
+                                            )
+                                            .build(window, cx)
+                                        })
+                                    }),
+                            ),
+                    )
+                },
+            )
             // View-mode toggle stays anchored right, outside the scroll region.
             .when(!is_key_value, |strip| {
                 strip.child(

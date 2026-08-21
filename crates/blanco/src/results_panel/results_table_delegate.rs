@@ -22,9 +22,66 @@ pub struct ResultsTableDelegate {
     pub original_query: Option<String>,
     /// Column metadata for tooltips and rendering
     table_columns: Vec<blanco_core::ColumnInfo>,
+    /// The full result while a text filter is active. `rows` then holds only
+    /// the matching subset, which keeps every row-index based code path
+    /// (selection, editing, sorting) unaware of filtering. `None` when no
+    /// filter is applied.
+    unfiltered_rows: Option<Vec<Vec<Option<String>>>>,
 }
 
 impl ResultsTableDelegate {
+    /// Whether the grid currently shows a filtered subset of the result.
+    pub fn is_filtered(&self) -> bool {
+        self.unfiltered_rows.is_some()
+    }
+
+    /// Number of rows in the full result, ignoring any active filter.
+    pub fn unfiltered_row_count(&self) -> usize {
+        self.unfiltered_rows
+            .as_ref()
+            .map_or(self.rows.len(), Vec::len)
+    }
+
+    /// Whether there are uncommitted edits. Filtering and sorting rearrange
+    /// `rows`, and the edit state is keyed by row index, so both are blocked
+    /// while this is true.
+    pub fn has_pending_changes(&self) -> bool {
+        !self.edit_state.changes.is_empty()
+            || !self.edit_state.pending_new_rows.is_empty()
+            || !self.edit_state.pending_deleted_rows.is_empty()
+    }
+
+    /// Restrict `rows` to those with any cell containing `needle`
+    /// (case-insensitive). An empty needle restores the full result. Returns
+    /// `false` without touching anything when edits are pending.
+    pub fn apply_filter(&mut self, needle: &str) -> bool {
+        if self.has_pending_changes() {
+            return false;
+        }
+        let needle = needle.trim().to_lowercase();
+        let all_rows = match self.unfiltered_rows.take() {
+            Some(all_rows) => all_rows,
+            None => std::mem::take(&mut self.rows),
+        };
+        if needle.is_empty() {
+            self.rows = all_rows;
+        } else {
+            self.rows = all_rows
+                .iter()
+                .filter(|row| {
+                    row.iter().any(|cell| {
+                        cell.as_deref()
+                            .is_some_and(|value| value.to_lowercase().contains(&needle))
+                    })
+                })
+                .cloned()
+                .collect();
+            self.unfiltered_rows = Some(all_rows);
+        }
+        self.clear_selection();
+        true
+    }
+
     /// Remove a row at the specified index
     pub fn remove_row(&mut self, row_index: usize) {
         if row_index < self.rows.len() {
@@ -99,6 +156,7 @@ impl ResultsTableDelegate {
         self.clear_selection();
         self.rows.clear();
         self.rows.shrink_to_fit();
+        self.unfiltered_rows = None;
 
         // Store column types (move instead of clone to avoid memory leak)
         self.column_types = result.column_types;
@@ -318,6 +376,62 @@ mod tests {
         assert!(!delegate.primary_key_is_complete());
         assert!(delegate.columns.is_empty());
         assert!(delegate.rows.is_empty());
+    }
+
+    fn rows(values: &[&str]) -> Vec<Vec<Option<String>>> {
+        values
+            .iter()
+            .map(|value| vec![Some(value.to_string()), None])
+            .collect()
+    }
+
+    #[test]
+    fn apply_filter_narrows_and_restores_rows() {
+        let mut delegate = ResultsTableDelegate {
+            rows: rows(&["Alice", "Bob", "alina"]),
+            ..Default::default()
+        };
+
+        assert!(delegate.apply_filter("ali"));
+        assert!(delegate.is_filtered());
+        assert_eq!(delegate.rows.len(), 2);
+        assert_eq!(delegate.unfiltered_row_count(), 3);
+
+        assert!(delegate.apply_filter("bob"));
+        assert_eq!(
+            delegate.rows.len(),
+            1,
+            "refining replaces the previous filter"
+        );
+
+        assert!(delegate.apply_filter("  "));
+        assert!(!delegate.is_filtered());
+        assert_eq!(delegate.rows, rows(&["Alice", "Bob", "alina"]));
+    }
+
+    #[test]
+    fn apply_filter_is_blocked_while_edits_are_pending() {
+        let mut delegate = ResultsTableDelegate {
+            rows: rows(&["Alice", "Bob"]),
+            ..Default::default()
+        };
+        delegate.edit_state.pending_new_rows.push(1);
+
+        assert!(!delegate.apply_filter("ali"));
+        assert!(!delegate.is_filtered());
+        assert_eq!(delegate.rows.len(), 2);
+    }
+
+    #[test]
+    fn new_result_clears_filter_state() {
+        let mut delegate = ResultsTableDelegate {
+            rows: rows(&["Alice", "Bob"]),
+            ..Default::default()
+        };
+        assert!(delegate.apply_filter("ali"));
+        delegate.rows.clear();
+        delegate.unfiltered_rows = None;
+        assert!(!delegate.is_filtered());
     }
 
     #[test]

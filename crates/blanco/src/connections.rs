@@ -17,12 +17,13 @@ use blanco_ui::tree::{Tree, TreeItem, TreeState};
 use database::DatabaseService;
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, IntoElement, ParentElement, Render, Styled,
-    Window, div, px,
+    Subscription, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme as _, WindowExt,
+    ActiveTheme as _, Sizable as _, WindowExt,
     button::{Button, ButtonVariants as _},
     dialog::{DialogAction, DialogClose, DialogFooter},
+    input::{Input, InputEvent, InputState},
 };
 
 #[derive(Clone, Debug)]
@@ -54,6 +55,10 @@ pub struct ConnectionsPanel {
     _selected_connection_id: Option<i64>,
     database_metadata: std::collections::HashMap<i64, DatabaseMetadata>, // Store metadata per connection
     tree_state: Entity<TreeState<ConnectionsTreeDelegate>>,
+    /// Free-text filter over the tree. Only already loaded children are
+    /// searched, so a connection has to be expanded before its tables show up.
+    filter_input: Entity<InputState>,
+    _subscriptions: Vec<Subscription>,
     pub loaded_connections: std::collections::HashSet<i64>,
     expanded_connections: std::collections::HashSet<i64>, // Track which connections are expanded
     // Track which object-type category folders (Tables, Views, ...) are
@@ -151,7 +156,15 @@ impl CreateNewQueryTabParams for TreeItemMetadata {
 }
 
 impl ConnectionsPanel {
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder("Filter..."));
+        let filter_subscription =
+            cx.subscribe(&filter_input, |this, _input, event: &InputEvent, cx| {
+                if let InputEvent::Change = event {
+                    this.rebuild_tree(cx);
+                    cx.notify();
+                }
+            });
         let database_metadata = std::collections::HashMap::new();
         let loaded_connections = std::collections::HashSet::new();
         let expanded_connections = std::collections::HashSet::new();
@@ -169,6 +182,8 @@ impl ConnectionsPanel {
             _selected_connection_id: None,
             database_metadata,
             tree_state,
+            filter_input,
+            _subscriptions: vec![filter_subscription],
             loaded_connections,
             expanded_connections,
             expanded_categories,
@@ -268,6 +283,13 @@ impl ConnectionsPanel {
                 )
             })
             .collect();
+
+        let filter = self.filter_input.read(cx).value().trim().to_lowercase();
+        let tree_items = if filter.is_empty() {
+            tree_items
+        } else {
+            filter_tree_items(&tree_items, &filter)
+        };
 
         self.tree_state.update(cx, |state, cx| {
             state.set_items(tree_items, cx);
@@ -665,6 +687,15 @@ impl ConnectionsPanel {
         Tree::new(&self.tree_state)
     }
 
+    fn render_filter(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_1()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .child(Input::new(&self.filter_input).small())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn export_table_data(
         &mut self,
@@ -866,9 +897,47 @@ impl Render for ConnectionsPanel {
             .flex()
             .flex_col()
             .size_full()
-            .gap_2()
-            .child(self.render_connections_tree(cx))
+            .child(self.render_filter(cx))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.render_connections_tree(cx)),
+            )
     }
+}
+
+/// Keep items whose label matches `needle` (lowercased) or that have a matching
+/// descendant. Ancestors of a match are expanded so the match is visible. The user's expansion sets are untouched, so clearing
+/// the filter restores the previous layout.
+fn filter_tree_items(
+    items: &[TreeItem<TreeItemMetadata>],
+    needle: &str,
+) -> Vec<TreeItem<TreeItemMetadata>> {
+    items
+        .iter()
+        .filter_map(|item| {
+            let matching_children = filter_tree_items(&item.children, needle);
+            let label_matches = item.label.to_lowercase().contains(needle);
+            if !label_matches && matching_children.is_empty() {
+                return None;
+            }
+            // A matching item keeps its full subtree so the user can still
+            // browse into it; otherwise only the matching branch survives and
+            // is expanded so the match is visible.
+            let (children, expanded) = if matching_children.is_empty() {
+                (item.children.as_ref().clone(), item.is_expanded())
+            } else {
+                (matching_children, true)
+            };
+            let filtered =
+                TreeItem::new(item.id.clone(), item.label.clone(), item.metadata.clone())
+                    .disabled(item.is_disabled())
+                    .expanded(expanded)
+                    .children(children);
+            Some(filtered)
+        })
+        .collect()
 }
 
 impl EventEmitter<ConnectionsPanelEvent> for ConnectionsPanel {}
@@ -892,5 +961,75 @@ fn connection_type_icon(db_type: database::DatabaseType) -> IconName {
 impl ConnectionData {
     pub fn display_name(&self) -> String {
         self.name.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn metadata() -> TreeItemMetadata {
+        TreeItemMetadata {
+            connection_id: 1,
+            connection_name: "test".to_string(),
+            kind: TreeItemKind::Table,
+            db_type: database::DatabaseType::SQLite,
+            database_name: None,
+            schema_name: None,
+            table_name: None,
+            icon: TreeItemIcon {
+                icon: IconName::Database,
+                color: gpui::rgba(0),
+            },
+            environment_type: None,
+            loading: false,
+            size_bytes: None,
+            relative_size: None,
+        }
+    }
+
+    fn item(id: &str, children: Vec<TreeItem<TreeItemMetadata>>) -> TreeItem<TreeItemMetadata> {
+        TreeItem::new(id.to_string(), id.to_string(), metadata()).children(children)
+    }
+
+    #[test]
+    fn filter_keeps_matching_descendants_and_expands_their_ancestors() {
+        let tree = vec![
+            item(
+                "local",
+                vec![item(
+                    "public",
+                    vec![item("orders", vec![]), item("users", vec![])],
+                )],
+            ),
+            item(
+                "staging",
+                vec![item("public", vec![item("invoices", vec![])])],
+            ),
+        ];
+
+        let filtered = filter_tree_items(&tree, "user");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id.as_ref(), "local");
+        assert!(filtered[0].is_expanded());
+        let schema = &filtered[0].children[0];
+        assert!(schema.is_expanded());
+        assert_eq!(schema.children.len(), 1);
+        assert_eq!(schema.children[0].id.as_ref(), "users");
+    }
+
+    #[test]
+    fn filter_keeps_a_matching_parent_with_all_its_children() {
+        let tree = vec![item(
+            "staging",
+            vec![item("public", vec![item("invoices", vec![])])],
+        )];
+        let filtered = filter_tree_items(&tree, "stag");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].children.len(), 1);
+        assert!(
+            !filtered[0].is_expanded(),
+            "a match without matching children keeps its own state"
+        );
     }
 }
