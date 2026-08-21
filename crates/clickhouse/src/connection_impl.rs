@@ -14,8 +14,8 @@ use super::ClickhouseConnection;
 
 #[async_trait]
 impl Connection for ClickhouseConnection {
-    fn get_connection_type(&self) -> &'static str {
-        "ClickHouse"
+    fn database_type(&self) -> blanco_core::DatabaseType {
+        blanco_core::DatabaseType::ClickHouse
     }
 
     fn get_display_name(&self) -> String {

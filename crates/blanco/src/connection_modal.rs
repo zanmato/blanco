@@ -1,16 +1,12 @@
-mod clickhouse;
 mod mssql;
-mod mysql;
-mod postgres;
 mod redis;
+mod server_form;
 mod shared;
 mod sqlite;
 mod types;
 
-use clickhouse::ClickhouseForm;
 use mssql::MssqlForm;
-use mysql::MysqlForm;
-use postgres::PostgresForm;
+use server_form::{CLICKHOUSE_SPEC, MYSQL_SPEC, POSTGRES_SPEC, ServerForm};
 use sqlite::SqliteForm;
 use types::ConnectorType;
 
@@ -36,9 +32,9 @@ pub struct NewConnectionModal {
     environment_type_select: Entity<SelectState<Vec<String>>>,
     read_only: bool,
     sqlite_form: SqliteForm,
-    postgres_form: PostgresForm,
-    mysql_form: MysqlForm,
-    clickhouse_form: ClickhouseForm,
+    postgres_form: ServerForm,
+    mysql_form: ServerForm,
+    clickhouse_form: ServerForm,
     mssql_form: MssqlForm,
     redis_form: redis::RedisForm,
     is_testing: bool,
@@ -115,9 +111,9 @@ impl NewConnectionModal {
         let conn_ref = connection_data.as_ref();
         let read_only = conn_ref.is_some_and(|connection| connection.read_only);
         let sqlite_form = SqliteForm::new(window, cx, conn_ref);
-        let postgres_form = PostgresForm::new(window, cx, conn_ref);
-        let mysql_form = MysqlForm::new(window, cx, conn_ref);
-        let clickhouse_form = ClickhouseForm::new(window, cx, conn_ref);
+        let postgres_form = ServerForm::new(&POSTGRES_SPEC, window, cx, conn_ref);
+        let mysql_form = ServerForm::new(&MYSQL_SPEC, window, cx, conn_ref);
+        let clickhouse_form = ServerForm::new(&CLICKHOUSE_SPEC, window, cx, conn_ref);
         let mssql_form = MssqlForm::new(window, cx, conn_ref);
         let redis_form = redis::RedisForm::new(window, cx, conn_ref);
 
@@ -544,9 +540,19 @@ impl Render for NewConnectionModal {
                 )
                 .child(match connector_type {
                     ConnectorType::SQLite => sqlite::render(self, cx),
-                    ConnectorType::PostgreSQL => postgres::render(self, cx),
-                    ConnectorType::MySQL => mysql::render(self, cx),
-                    ConnectorType::ClickHouse => clickhouse::render(self, cx),
+                    ConnectorType::PostgreSQL => server_form::render(
+                        |modal| &mut modal.postgres_form,
+                        &self.postgres_form,
+                        cx,
+                    ),
+                    ConnectorType::MySQL => {
+                        server_form::render(|modal| &mut modal.mysql_form, &self.mysql_form, cx)
+                    }
+                    ConnectorType::ClickHouse => server_form::render(
+                        |modal| &mut modal.clickhouse_form,
+                        &self.clickhouse_form,
+                        cx,
+                    ),
                     ConnectorType::MsSql => mssql::render(self, cx),
                     ConnectorType::Redis => redis::render(self, cx),
                 })

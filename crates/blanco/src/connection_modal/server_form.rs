@@ -1,3 +1,8 @@
+//! One form for every host/port/user/password backend with SSL and SSH
+//! options (PostgreSQL, MySQL, ClickHouse). The backends differ only in
+//! defaults and the SSL mode list, which live in [`ServerFormSpec`], so adding
+//! a similar backend is a new spec rather than a new 400 line file.
+
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, IntoElement, ParentElement, Styled, Window, div,
     prelude::FluentBuilder,
@@ -18,7 +23,80 @@ use super::NewConnectionModal;
 use super::shared::{make_input, render_ssh_section, render_ssl_advanced_fields};
 use super::types::host_contains_explicit_port;
 
-pub(super) struct ClickhouseForm {
+pub(super) struct ServerFormSpec {
+    pub db_type: database::DatabaseType,
+    /// Stable prefix for element ids so the forms do not collide in one modal.
+    pub id_prefix: &'static str,
+    pub host_label: &'static str,
+    pub default_port: i32,
+    /// Used when the port field is left empty and the host carries no port.
+    /// ClickHouse picks 8443 for `https://` hosts.
+    pub port_for_host: fn(&str) -> i32,
+    /// Whether the host may carry its own port (`host:port`, URLs), which
+    /// makes the port field optional.
+    pub port_optional_when_in_host: bool,
+    pub database_placeholder: &'static str,
+    pub username_placeholder: &'static str,
+    pub ssl_modes: &'static [&'static str],
+}
+
+pub(super) const POSTGRES_SPEC: ServerFormSpec = ServerFormSpec {
+    db_type: database::DatabaseType::PostgreSQL,
+    id_prefix: "postgres",
+    host_label: "Host",
+    default_port: 5432,
+    port_for_host: |_| 5432,
+    port_optional_when_in_host: false,
+    database_placeholder: "Database Name",
+    username_placeholder: "postgres",
+    ssl_modes: &[
+        "preferred",
+        "required",
+        "disabled",
+        "allow",
+        "verify-ca",
+        "verify-full",
+    ],
+};
+
+pub(super) const MYSQL_SPEC: ServerFormSpec = ServerFormSpec {
+    db_type: database::DatabaseType::MySQL,
+    id_prefix: "mysql",
+    host_label: "Host",
+    default_port: 3306,
+    port_for_host: |_| 3306,
+    port_optional_when_in_host: false,
+    database_placeholder: "Database Name",
+    username_placeholder: "root",
+    ssl_modes: &[
+        "preferred",
+        "required",
+        "disabled",
+        "verify-ca",
+        "verify-full",
+    ],
+};
+
+pub(super) const CLICKHOUSE_SPEC: ServerFormSpec = ServerFormSpec {
+    db_type: database::DatabaseType::ClickHouse,
+    id_prefix: "clickhouse",
+    host_label: "Host (http:// or https://)",
+    default_port: 8123,
+    port_for_host: |host| {
+        if host.starts_with("https://") {
+            8443
+        } else {
+            8123
+        }
+    },
+    port_optional_when_in_host: true,
+    database_placeholder: "default",
+    username_placeholder: "default",
+    ssl_modes: &["disabled", "required", "preferred"],
+};
+
+pub(super) struct ServerForm {
+    spec: &'static ServerFormSpec,
     pub host_input: Entity<InputState>,
     pub port_input: Entity<InputState>,
     pub database_input: Entity<InputState>,
@@ -38,19 +116,19 @@ pub(super) struct ClickhouseForm {
     pub ssl_advanced_expanded: bool,
 }
 
-impl ClickhouseForm {
+impl ServerForm {
     pub fn new(
+        spec: &'static ServerFormSpec,
         window: &mut Window,
         cx: &mut Context<NewConnectionModal>,
         connection_data: Option<&ConnectionData>,
     ) -> Self {
-        let is_clickhouse = connection_data
-            .map(|c| c.db_type == database::DatabaseType::ClickHouse)
-            .unwrap_or(false);
-        let conn = if is_clickhouse { connection_data } else { None };
-
+        // Only prefill from a connection of the same backend, so editing a
+        // MySQL connection does not leak its host into the PostgreSQL form.
+        let conn = connection_data.filter(|c| c.db_type == spec.db_type);
         let port_initial = conn.and_then(|c| c.port).map(|p| p.to_string());
         let ssh_port_initial = conn.and_then(|c| c.ssh_port).map(|p| p.to_string());
+        let default_port = spec.default_port.to_string();
 
         let host_input = make_input(
             window,
@@ -59,18 +137,18 @@ impl ClickhouseForm {
             false,
             conn.and_then(|c| c.host.as_deref()),
         );
-        let port_input = make_input(window, cx, "8123", false, port_initial.as_deref());
+        let port_input = make_input(window, cx, &default_port, false, port_initial.as_deref());
         let database_input = make_input(
             window,
             cx,
-            "default",
+            spec.database_placeholder,
             false,
             conn.and_then(|c| c.database_name.as_deref()),
         );
         let username_input = make_input(
             window,
             cx,
-            "default",
+            spec.username_placeholder,
             false,
             conn.and_then(|c| c.username.as_deref()),
         );
@@ -119,12 +197,8 @@ impl ClickhouseForm {
             conn.and_then(|c| c.ssh_private_key_password.as_deref()),
         );
 
-        let ssl_modes = vec![
-            "disabled".to_string(),
-            "required".to_string(),
-            "preferred".to_string(),
-        ];
-        let initial_ssl_index = connection_data
+        let ssl_modes: Vec<String> = spec.ssl_modes.iter().map(|m| m.to_string()).collect();
+        let initial_ssl_index = conn
             .and_then(|c| c.ssl_mode.as_ref())
             .and_then(|mode| ssl_modes.iter().position(|m| m == mode));
         let ssl_mode_select = cx.new(|cx| {
@@ -135,30 +209,33 @@ impl ClickhouseForm {
             cx,
             "SSL Key Path (optional)",
             false,
-            connection_data.and_then(|c| c.ssl_key_path.as_deref()),
+            conn.and_then(|c| c.ssl_key_path.as_deref()),
         );
         let ssl_cert_input = make_input(
             window,
             cx,
             "SSL Cert Path (optional)",
             false,
-            connection_data.and_then(|c| c.ssl_cert_path.as_deref()),
+            conn.and_then(|c| c.ssl_cert_path.as_deref()),
         );
         let ssl_ca_cert_input = make_input(
             window,
             cx,
             "SSL CA Cert Path (optional)",
             false,
-            connection_data.and_then(|c| c.ssl_ca_cert_path.as_deref()),
+            conn.and_then(|c| c.ssl_ca_cert_path.as_deref()),
         );
 
+        let ssh_enabled = conn.map(|c| c.uses_ssh_tunnel()).unwrap_or(false);
+
         Self {
+            spec,
             host_input,
             port_input,
             database_input,
             username_input,
             password_input,
-            ssh_enabled: false,
+            ssh_enabled,
             ssh_host_input,
             ssh_port_input,
             ssh_user_input,
@@ -181,6 +258,10 @@ impl ClickhouseForm {
         self.ssl_advanced_expanded = !self.ssl_advanced_expanded;
     }
 
+    fn port_is_optional(&self, host: &str) -> bool {
+        self.spec.port_optional_when_in_host && host_contains_explicit_port(host)
+    }
+
     pub fn validate(&self, cx: &App) -> Option<String> {
         let host = self.host_input.read(cx).value();
         let port_str = self.port_input.read(cx).value();
@@ -190,8 +271,7 @@ impl ClickhouseForm {
         if host.is_empty() {
             return Some("Host is required".to_string());
         }
-        let host_has_port = host_contains_explicit_port(&host);
-        if port_str.is_empty() && !host_has_port {
+        if port_str.is_empty() && !self.port_is_optional(&host) {
             return Some("Port is required".to_string());
         }
         if !port_str.is_empty() && port_str.parse::<u16>().is_err() {
@@ -223,16 +303,25 @@ impl ClickhouseForm {
         }
 
         let port = if port_str.is_empty() {
-            if host.starts_with("https://") {
-                8443
-            } else {
-                8123
+            if !self.port_is_optional(&host) {
+                return None;
             }
+            (self.spec.port_for_host)(&host)
         } else {
             port_str.parse::<i32>().ok()?
         };
 
-        let mut connection = if self.ssh_enabled {
+        let mut connection = ConnectionData::new_server(
+            self.spec.db_type,
+            name,
+            host,
+            port,
+            database,
+            username,
+            password,
+        );
+
+        if self.ssh_enabled {
             let ssh_host = self.ssh_host_input.read(cx).value();
             let ssh_port_str = self.ssh_port_input.read(cx).value();
             let ssh_user = self.ssh_user_input.read(cx).value();
@@ -245,37 +334,26 @@ impl ClickhouseForm {
             } else {
                 ssh_port_str.parse::<i32>().ok()?
             };
-            let ssh_password = optional_path(&self.ssh_password_input, cx);
-            let ssh_private_key_path = optional_path(&self.ssh_private_key_input, cx);
-            let ssh_private_key_password = optional_path(&self.ssh_private_key_password_input, cx);
-
-            ConnectionData::new_clickhouse_with_ssh(
-                name,
-                host,
-                port,
-                database,
-                username,
-                password,
+            connection = connection.with_ssh(
                 ssh_host.to_string(),
                 ssh_port,
                 ssh_user.to_string(),
-                ssh_password,
-                ssh_private_key_path,
-                ssh_private_key_password,
-            )
-        } else {
-            ConnectionData::new_clickhouse(name, host, port, database, username, password)
-        };
+                optional_value(&self.ssh_password_input, cx),
+                optional_value(&self.ssh_private_key_input, cx),
+                optional_value(&self.ssh_private_key_password_input, cx),
+            );
+        }
+
         connection.environment_type = environment_type;
         connection.ssl_mode = self.ssl_mode_select.read(cx).selected_value().cloned();
-        connection.ssl_key_path = optional_path(&self.ssl_key_input, cx);
-        connection.ssl_cert_path = optional_path(&self.ssl_cert_input, cx);
-        connection.ssl_ca_cert_path = optional_path(&self.ssl_ca_cert_input, cx);
+        connection.ssl_key_path = optional_value(&self.ssl_key_input, cx);
+        connection.ssl_cert_path = optional_value(&self.ssl_cert_input, cx);
+        connection.ssl_ca_cert_path = optional_value(&self.ssl_ca_cert_input, cx);
         Some(connection)
     }
 }
 
-fn optional_path(input: &Entity<InputState>, cx: &App) -> Option<String> {
+fn optional_value(input: &Entity<InputState>, cx: &App) -> Option<String> {
     let value = input.read(cx).value();
     if value.is_empty() {
         None
@@ -284,7 +362,7 @@ fn optional_path(input: &Entity<InputState>, cx: &App) -> Option<String> {
     }
 }
 
-fn render_base_fields(form: &ClickhouseForm) -> AnyElement {
+fn render_base_fields(form: &ServerForm) -> AnyElement {
     v_flex()
         .gap_3()
         .child(
@@ -294,7 +372,7 @@ fn render_base_fields(form: &ClickhouseForm) -> AnyElement {
                     v_flex()
                         .flex_1()
                         .gap_2()
-                        .child(div().text_sm().child("Host (http:// or https://)"))
+                        .child(div().text_sm().child(form.spec.host_label))
                         .child(Input::new(&form.host_input)),
                 )
                 .child(
@@ -332,11 +410,14 @@ fn render_base_fields(form: &ClickhouseForm) -> AnyElement {
         .into_any_element()
 }
 
+/// Render the form for `spec`'s backend. `select` picks the matching
+/// `ServerForm` out of the modal so the click listeners can mutate it.
 pub(super) fn render(
-    modal: &NewConnectionModal,
+    select: fn(&mut NewConnectionModal) -> &mut ServerForm,
+    form: &ServerForm,
     cx: &mut Context<NewConnectionModal>,
 ) -> AnyElement {
-    let form = &modal.clickhouse_form;
+    let prefix = form.spec.id_prefix;
     let ssl_advanced_expanded = form.ssl_advanced_expanded;
     let ssh_enabled = form.ssh_enabled;
 
@@ -351,7 +432,7 @@ pub(super) fn render(
                 .child(Select::new(&form.ssl_mode_select)),
         )
         .child(
-            Button::new("clickhouse-ssl-advanced-toggle")
+            Button::new(format!("{prefix}-ssl-advanced-toggle"))
                 .ghost()
                 .xsmall()
                 .child(if ssl_advanced_expanded {
@@ -364,14 +445,14 @@ pub(super) fn render(
                 } else {
                     IconName::ChevronDown
                 })
-                .on_click(cx.listener(|modal, _event, _window, cx| {
-                    modal.clickhouse_form.toggle_ssl_advanced();
+                .on_click(cx.listener(move |modal, _event, _window, cx| {
+                    select(modal).toggle_ssl_advanced();
                     cx.notify();
                 })),
         )
         .when(ssl_advanced_expanded, |this| {
             this.child(render_ssl_advanced_fields(
-                "clickhouse",
+                prefix,
                 &form.ssl_key_input,
                 &form.ssl_cert_input,
                 &form.ssl_ca_cert_input,
@@ -381,11 +462,11 @@ pub(super) fn render(
         .child(
             div().child(
                 h_flex().gap_2().items_center().child(
-                    Switch::new("clickhouse-ssh-enabled-switch")
+                    Switch::new(format!("{prefix}-ssh-enabled-switch"))
                         .checked(ssh_enabled)
                         .label("SSH")
-                        .on_click(cx.listener(|modal, _checked, _window, cx| {
-                            modal.clickhouse_form.toggle_ssh();
+                        .on_click(cx.listener(move |modal, _checked, _window, cx| {
+                            select(modal).toggle_ssh();
                             cx.notify();
                         })),
                 ),
@@ -393,7 +474,7 @@ pub(super) fn render(
         )
         .when(ssh_enabled, |this| {
             this.child(render_ssh_section(
-                "clickhouse",
+                prefix,
                 &form.ssh_host_input,
                 &form.ssh_port_input,
                 &form.ssh_user_input,

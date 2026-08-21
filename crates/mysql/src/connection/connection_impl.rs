@@ -11,8 +11,8 @@ use super::{MysqlConnection, MysqlConnectionKey};
 
 #[async_trait]
 impl Connection for MysqlConnection {
-    fn get_connection_type(&self) -> &'static str {
-        "MySQL"
+    fn database_type(&self) -> blanco_core::DatabaseType {
+        blanco_core::DatabaseType::MySQL
     }
 
     fn get_display_name(&self) -> String {

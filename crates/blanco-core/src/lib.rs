@@ -6,18 +6,20 @@
 
 pub mod connection_trait;
 pub mod database_service;
+pub mod database_type;
 pub mod table_extractor;
 pub mod write_guard;
 
 // Re-export main types for convenience
 pub use connection_trait::{
     BatchFailure, BatchOutcome, ColumnInfo, ColumnType, Connection, ConnectionFactory,
-    DatabaseSchemaResult, DriverType, EntityType, ForeignKeyInfo, InboundForeignKey, IndexInfo,
-    KeyValueResult, PaginationInfo, QueryResult, QueryableEntity, RedisType, RedisValue,
-    ResultPayload, RoutineKind, TableMetadata, TableSchemaInfo,
+    DatabaseSchemaResult, EntityType, ForeignKeyInfo, InboundForeignKey, IndexInfo, KeyValueResult,
+    PaginationInfo, QueryResult, QueryableEntity, RedisType, RedisValue, ResultPayload,
+    RoutineKind, TableMetadata, TableSchemaInfo,
 };
 
 pub use database_service::{ConnectionStatus, DatabaseService};
+pub use database_type::{DatabaseType, ParamStyles};
 pub use table_extractor::TableExtractor;
 pub use write_guard::StatementAccess;
 

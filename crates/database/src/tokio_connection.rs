@@ -15,7 +15,7 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use blanco_core::{
     connection_trait::{ColumnType, DatabaseSchemaResult, IndexInfo, QueryableEntity, RoutineKind},
-    write_guard, BatchFailure, BatchOutcome, ColumnInfo, Connection, DriverType, KeyValueResult,
+    write_guard, BatchFailure, BatchOutcome, ColumnInfo, Connection, DatabaseType, KeyValueResult,
     QueryResult, StatementAccess,
 };
 use futures::Stream;
@@ -58,12 +58,10 @@ impl TokioConnection {
         }
     }
 
-    fn driver(&self) -> DriverType {
-        DriverType::from_string(self.inner.get_connection_type()).unwrap_or(DriverType::PostgreSQL)
-    }
-
     fn guard_read_only(&self, text: &str) -> Result<()> {
-        if self.read_only && write_guard::classify(self.driver(), text) == StatementAccess::Write {
+        if self.read_only
+            && write_guard::classify(self.inner.database_type(), text) == StatementAccess::Write
+        {
             anyhow::bail!(
                 "This connection is read-only. Only statements recognised as reads are allowed; \
                  edit the connection to allow writes."
@@ -89,6 +87,10 @@ impl TokioConnection {
 
 #[async_trait]
 impl Connection for TokioConnection {
+    fn database_type(&self) -> DatabaseType {
+        self.inner.database_type()
+    }
+
     fn get_connection_type(&self) -> &'static str {
         self.inner.get_connection_type()
     }

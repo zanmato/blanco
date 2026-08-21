@@ -419,8 +419,8 @@ impl MssqlConnection {
 
 #[async_trait]
 impl Connection for MssqlConnection {
-    fn get_connection_type(&self) -> &'static str {
-        "SQL Server"
+    fn database_type(&self) -> blanco_core::DatabaseType {
+        blanco_core::DatabaseType::MsSql
     }
 
     fn get_display_name(&self) -> String {

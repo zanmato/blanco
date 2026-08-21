@@ -268,13 +268,15 @@ mod tests {
             .await
             .expect("Failed to create in-memory database");
 
-        let mut connection = ConnectionData::new_postgres_with_ssh(
+        let mut connection = ConnectionData::new_postgres(
             "Test PG SSH".to_string(),
             "db.example.com".to_string(),
             5432,
             "mydb".to_string(),
             "admin".to_string(),
             "secret123".to_string(),
+        )
+        .with_ssh(
             "bastion.example.com".to_string(),
             22,
             "ssh_user".to_string(),
@@ -433,13 +435,15 @@ mod tests {
 
     #[test]
     fn connection_debug_output_redacts_credentials() {
-        let connection = ConnectionData::new_postgres_with_ssh(
+        let connection = ConnectionData::new_postgres(
             "Postgres".to_string(),
             "localhost".to_string(),
             5432,
             "postgres".to_string(),
             "user".to_string(),
             "database-secret".to_string(),
+        )
+        .with_ssh(
             "bastion".to_string(),
             22,
             "ssh-user".to_string(),

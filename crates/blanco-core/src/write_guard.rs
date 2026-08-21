@@ -4,7 +4,7 @@
 //! not positively recognise as a read is treated as a write, so an unknown
 //! statement is blocked on a read-only connection rather than let through.
 
-use crate::DriverType;
+use crate::DatabaseType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatementAccess {
@@ -166,9 +166,9 @@ const REDIS_WRITE_SUBCOMMANDS: &[(&str, &str)] = &[
     ("XINFO", "CONSUMERS"),
 ];
 
-pub fn classify(driver: DriverType, text: &str) -> StatementAccess {
+pub fn classify(driver: DatabaseType, text: &str) -> StatementAccess {
     match driver {
-        DriverType::Redis => classify_redis(text),
+        DatabaseType::Redis => classify_redis(text),
         _ => classify_sql(text),
     }
 }
@@ -408,11 +408,11 @@ mod tests {
     #[test]
     fn driver_dispatch() {
         assert_eq!(
-            classify(DriverType::Redis, "SET a b"),
+            classify(DatabaseType::Redis, "SET a b"),
             StatementAccess::Write
         );
         assert_eq!(
-            classify(DriverType::PostgreSQL, "SET search_path TO app"),
+            classify(DatabaseType::PostgreSQL, "SET search_path TO app"),
             StatementAccess::Read
         );
     }

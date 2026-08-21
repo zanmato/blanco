@@ -11,8 +11,8 @@ use super::{PgConnectionKey, PostgresConnection, QueryParam};
 
 #[async_trait]
 impl Connection for PostgresConnection {
-    fn get_connection_type(&self) -> &'static str {
-        "PostgreSQL"
+    fn database_type(&self) -> blanco_core::DatabaseType {
+        blanco_core::DatabaseType::PostgreSQL
     }
 
     fn get_display_name(&self) -> String {

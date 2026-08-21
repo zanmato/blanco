@@ -2,9 +2,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use blanco_core::{
-    Connection, ConnectionFactory, DatabaseService as DatabaseServiceTrait, DriverType,
-};
+use blanco_core::{Connection, ConnectionFactory, DatabaseService as DatabaseServiceTrait};
 use gpui::Global;
 use smol::channel;
 use smol::lock::RwLock;
@@ -52,7 +50,7 @@ pub struct DatabaseService {
     active_connections: Arc<RwLock<HashMap<ConnectionId, Arc<dyn Connection>>>>,
 
     // Connection factories
-    connection_factories: Arc<HashMap<String, Arc<dyn ConnectionFactory>>>,
+    connection_factories: Arc<HashMap<DatabaseType, Arc<dyn ConnectionFactory>>>,
 
     // Internal SSH management (private)
     ssh_tunnels: Arc<RwLock<HashMap<DatabaseConfigId, Arc<StdMutex<SshTunnel>>>>>,
@@ -67,32 +65,23 @@ pub struct DatabaseService {
 
 impl DatabaseService {
     pub fn new(runtime_handle: tokio::runtime::Handle) -> Self {
-        // Initialize connection factories
-        let mut factories: HashMap<String, Arc<dyn ConnectionFactory>> = HashMap::new();
-        factories.insert(
-            DatabaseType::SQLite.to_string(),
-            Arc::new(SqliteConnectionFactory),
-        );
-        factories.insert(
-            DatabaseType::PostgreSQL.to_string(),
-            Arc::new(PostgresConnectionFactory::new()),
-        );
-        factories.insert(
-            DatabaseType::MySQL.to_string(),
-            Arc::new(MysqlConnectionFactory::new()),
-        );
-        factories.insert(
-            DatabaseType::ClickHouse.to_string(),
-            Arc::new(ClickhouseConnectionFactory::new()),
-        );
-        factories.insert(
-            DatabaseType::MsSql.to_string(),
-            Arc::new(MssqlConnectionFactory::new()),
-        );
-        factories.insert(
-            DatabaseType::Redis.to_string(),
-            Arc::new(RedisConnectionFactory::new()),
-        );
+        let factories: HashMap<DatabaseType, Arc<dyn ConnectionFactory>> = HashMap::from([
+            (
+                DatabaseType::SQLite,
+                Arc::new(SqliteConnectionFactory) as Arc<dyn ConnectionFactory>,
+            ),
+            (
+                DatabaseType::PostgreSQL,
+                Arc::new(PostgresConnectionFactory::new()),
+            ),
+            (DatabaseType::MySQL, Arc::new(MysqlConnectionFactory::new())),
+            (
+                DatabaseType::ClickHouse,
+                Arc::new(ClickhouseConnectionFactory::new()),
+            ),
+            (DatabaseType::MsSql, Arc::new(MssqlConnectionFactory::new())),
+            (DatabaseType::Redis, Arc::new(RedisConnectionFactory::new())),
+        ]);
 
         Self {
             connection_configs: Arc::new(RwLock::new(HashMap::new())),
@@ -229,7 +218,7 @@ impl DatabaseService {
         // Create connection via factory
         let factory = self
             .connection_factories
-            .get(&config.db_type.to_string())
+            .get(&config.db_type)
             .ok_or_else(|| {
                 anyhow::anyhow!("No factory found for connection type: {}", config.db_type)
             })?
@@ -590,7 +579,7 @@ impl DatabaseService {
 
         let factory = self
             .connection_factories
-            .get(&config.db_type.to_string())
+            .get(&config.db_type)
             .ok_or_else(|| {
                 anyhow::anyhow!("No factory found for connection type: {}", config.db_type)
             })?
@@ -744,7 +733,7 @@ impl DatabaseServiceTrait for DatabaseService {
             let configs = self.connection_configs.read().await;
             configs
                 .get(&connection_id)
-                .map(|config| DriverType::from(config.db_type).to_string())
+                .map(|config| config.db_type.to_string())
                 .unwrap_or_else(|| "Unknown".to_string())
         };
 

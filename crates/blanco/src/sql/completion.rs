@@ -2,7 +2,7 @@ mod cache;
 mod context;
 mod fetch;
 
-use blanco_core::{ColumnInfo, DriverType, QueryableEntity};
+use blanco_core::{ColumnInfo, DatabaseType, QueryableEntity};
 pub use cache::{CacheEntry, MetadataCache};
 pub use context::{generate_table_abbreviation, resolve_table_alias};
 pub use fetch::{fetch_columns, fetch_queryable_entities, fetch_schemas};
@@ -30,13 +30,14 @@ const CACHE_TTL_SECONDS: u64 = 300; // 5 minutes cache TTL
 /// PostgreSQL uses `public`, SQL Server uses `dbo`, and the schema-less backends
 /// (MySQL, SQLite, ClickHouse) fall back to the database name since their
 /// "schema" is effectively the database.
-fn default_schema_for(driver: DriverType, database_name: &str) -> String {
+fn default_schema_for(driver: DatabaseType, database_name: &str) -> String {
     match driver {
-        DriverType::PostgreSQL => "public".to_string(),
-        DriverType::MsSql => "dbo".to_string(),
-        DriverType::MySQL | DriverType::SQLite | DriverType::ClickHouse | DriverType::Redis => {
-            database_name.to_string()
-        }
+        DatabaseType::PostgreSQL => "public".to_string(),
+        DatabaseType::MsSql => "dbo".to_string(),
+        DatabaseType::MySQL
+        | DatabaseType::SQLite
+        | DatabaseType::ClickHouse
+        | DatabaseType::Redis => database_name.to_string(),
     }
 }
 
@@ -110,7 +111,7 @@ impl SqlCompletionProvider {
         connection_id: i64,
         database_name: String,
         schema_name: Option<String>,
-        driver: DriverType,
+        driver: DatabaseType,
         db_service: Arc<dyn DatabaseServiceTrait>,
     ) -> Self {
         let current_schema = schema_name

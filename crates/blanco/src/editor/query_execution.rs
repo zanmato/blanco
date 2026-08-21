@@ -176,7 +176,7 @@ impl EditorPanel {
             return;
         };
         let is_prod = query_tab.environment_type == Some(EnvironmentType::Prod);
-        let is_write = blanco_core::write_guard::classify(query_tab._db_type.into(), &query)
+        let is_write = blanco_core::write_guard::classify(query_tab._db_type, &query)
             == StatementAccess::Write;
         if !(is_prod && is_write) {
             self.execute_query_unchecked(query, connection_id, database_name, window, cx);

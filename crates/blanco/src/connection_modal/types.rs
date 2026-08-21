@@ -1,4 +1,4 @@
-use blanco_core::DriverType;
+use blanco_core::DatabaseType;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum ConnectorType {
@@ -23,28 +23,28 @@ impl ConnectorType {
     }
 }
 
-impl From<DriverType> for ConnectorType {
-    fn from(driver_type: DriverType) -> Self {
+impl From<DatabaseType> for ConnectorType {
+    fn from(driver_type: DatabaseType) -> Self {
         match driver_type {
-            DriverType::SQLite => ConnectorType::SQLite,
-            DriverType::PostgreSQL => ConnectorType::PostgreSQL,
-            DriverType::MySQL => ConnectorType::MySQL,
-            DriverType::ClickHouse => ConnectorType::ClickHouse,
-            DriverType::MsSql => ConnectorType::MsSql,
-            DriverType::Redis => ConnectorType::Redis,
+            DatabaseType::SQLite => ConnectorType::SQLite,
+            DatabaseType::PostgreSQL => ConnectorType::PostgreSQL,
+            DatabaseType::MySQL => ConnectorType::MySQL,
+            DatabaseType::ClickHouse => ConnectorType::ClickHouse,
+            DatabaseType::MsSql => ConnectorType::MsSql,
+            DatabaseType::Redis => ConnectorType::Redis,
         }
     }
 }
 
-impl From<ConnectorType> for DriverType {
+impl From<ConnectorType> for DatabaseType {
     fn from(connector_type: ConnectorType) -> Self {
         match connector_type {
-            ConnectorType::SQLite => DriverType::SQLite,
-            ConnectorType::PostgreSQL => DriverType::PostgreSQL,
-            ConnectorType::MySQL => DriverType::MySQL,
-            ConnectorType::ClickHouse => DriverType::ClickHouse,
-            ConnectorType::MsSql => DriverType::MsSql,
-            ConnectorType::Redis => DriverType::Redis,
+            ConnectorType::SQLite => DatabaseType::SQLite,
+            ConnectorType::PostgreSQL => DatabaseType::PostgreSQL,
+            ConnectorType::MySQL => DatabaseType::MySQL,
+            ConnectorType::ClickHouse => DatabaseType::ClickHouse,
+            ConnectorType::MsSql => DatabaseType::MsSql,
+            ConnectorType::Redis => DatabaseType::Redis,
         }
     }
 }

@@ -228,8 +228,8 @@ fn parse_stream_entries(value: Value) -> Vec<(String, Vec<(String, String)>)> {
 
 #[async_trait]
 impl Connection for RedisConnection {
-    fn get_connection_type(&self) -> &'static str {
-        "Redis"
+    fn database_type(&self) -> blanco_core::DatabaseType {
+        blanco_core::DatabaseType::Redis
     }
 
     fn get_display_name(&self) -> String {

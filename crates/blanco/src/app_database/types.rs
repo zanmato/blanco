@@ -241,7 +241,10 @@ impl ConnectionData {
         }
     }
 
-    pub fn new_postgres(
+    /// A host/port/user/password connection of any server backend. The
+    /// backend specific constructors below delegate here.
+    pub fn new_server(
+        db_type: DatabaseType,
         name: String,
         host: String,
         port: i32,
@@ -252,7 +255,7 @@ impl ConnectionData {
         Self {
             id: None,
             name,
-            db_type: DatabaseType::PostgreSQL,
+            db_type,
             host: Some(host),
             port: Some(port),
             database_name: Some(database),
@@ -277,14 +280,8 @@ impl ConnectionData {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn new_postgres_with_ssh(
-        name: String,
-        host: String,
-        port: i32,
-        database: String,
-        username: String,
-        password: String,
+    pub fn with_ssh(
+        mut self,
         ssh_host: String,
         ssh_port: i32,
         ssh_user: String,
@@ -292,156 +289,13 @@ impl ConnectionData {
         ssh_private_key_path: Option<String>,
         ssh_private_key_password: Option<String>,
     ) -> Self {
-        Self {
-            id: None,
-            name,
-            db_type: DatabaseType::PostgreSQL,
-            host: Some(host),
-            port: Some(port),
-            database_name: Some(database),
-            username: Some(username),
-            password: Some(password),
-            database_path: None,
-            is_active: Some(true),
-            environment_type: EnvironmentType::default(),
-            last_used_at: None,
-            ssh_host: Some(ssh_host),
-            ssh_port: Some(ssh_port),
-            ssh_user: Some(ssh_user),
-            ssh_password,
-            ssh_private_key_path,
-            ssh_private_key_password,
-            ssl_mode: None,
-            ssl_key_path: None,
-            ssl_cert_path: None,
-            ssl_ca_cert_path: None,
-            trust_server_certificate: false,
-            read_only: false,
-        }
-    }
-
-    pub fn new_mysql(
-        name: String,
-        host: String,
-        port: i32,
-        database: String,
-        username: String,
-        password: String,
-    ) -> Self {
-        Self {
-            id: None,
-            name,
-            db_type: DatabaseType::MySQL,
-            host: Some(host),
-            port: Some(port),
-            database_name: Some(database),
-            username: Some(username),
-            password: Some(password),
-            database_path: None,
-            is_active: Some(true),
-            environment_type: EnvironmentType::default(),
-            last_used_at: None,
-            ssh_host: None,
-            ssh_port: None,
-            ssh_user: None,
-            ssh_password: None,
-            ssh_private_key_path: None,
-            ssh_private_key_password: None,
-            ssl_mode: None,
-            ssl_key_path: None,
-            ssl_cert_path: None,
-            ssl_ca_cert_path: None,
-            trust_server_certificate: false,
-            read_only: false,
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn new_mysql_with_ssh(
-        name: String,
-        host: String,
-        port: i32,
-        database: String,
-        username: String,
-        password: String,
-        ssh_host: String,
-        ssh_port: i32,
-        ssh_user: String,
-        ssh_password: Option<String>,
-        ssh_private_key_path: Option<String>,
-        ssh_private_key_password: Option<String>,
-    ) -> Self {
-        Self {
-            ssh_host: Some(ssh_host),
-            ssh_port: Some(ssh_port),
-            ssh_user: Some(ssh_user),
-            ssh_password,
-            ssh_private_key_path,
-            ssh_private_key_password,
-            ..Self::new_mysql(name, host, port, database, username, password)
-        }
-    }
-
-    pub fn new_clickhouse(
-        name: String,
-        host: String,
-        port: i32,
-        database: String,
-        username: String,
-        password: String,
-    ) -> Self {
-        Self {
-            id: None,
-            name,
-            db_type: DatabaseType::ClickHouse,
-            host: Some(host),
-            port: Some(port),
-            database_name: Some(database),
-            username: Some(username),
-            password: Some(password),
-            database_path: None,
-            is_active: Some(true),
-            environment_type: EnvironmentType::default(),
-            last_used_at: None,
-            ssh_host: None,
-            ssh_port: None,
-            ssh_user: None,
-            ssh_password: None,
-            ssh_private_key_path: None,
-            ssh_private_key_password: None,
-            ssl_mode: None,
-            ssl_key_path: None,
-            ssl_cert_path: None,
-            ssl_ca_cert_path: None,
-            trust_server_certificate: false,
-            read_only: false,
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn new_clickhouse_with_ssh(
-        name: String,
-        host: String,
-        port: i32,
-        database: String,
-        username: String,
-        password: String,
-        ssh_host: String,
-        ssh_port: i32,
-        ssh_user: String,
-        ssh_password: Option<String>,
-        ssh_private_key_path: Option<String>,
-        ssh_private_key_password: Option<String>,
-    ) -> Self {
-        Self {
-            ssh_host: Some(ssh_host),
-            ssh_port: Some(ssh_port),
-            ssh_user: Some(ssh_user),
-            ssh_password,
-            ssh_private_key_path,
-            ssh_private_key_password,
-            ..Self::new_clickhouse(name, host, port, database, username, password)
-        }
+        self.ssh_host = Some(ssh_host);
+        self.ssh_port = Some(ssh_port);
+        self.ssh_user = Some(ssh_user);
+        self.ssh_password = ssh_password;
+        self.ssh_private_key_path = ssh_private_key_path;
+        self.ssh_private_key_password = ssh_private_key_password;
+        self
     }
 
     pub fn new_mssql(
@@ -452,58 +306,15 @@ impl ConnectionData {
         username: String,
         password: String,
     ) -> Self {
-        Self {
-            id: None,
+        Self::new_server(
+            DatabaseType::MsSql,
             name,
-            db_type: DatabaseType::MsSql,
-            host: Some(host),
-            port: Some(port),
-            database_name: Some(database),
-            username: Some(username),
-            password: Some(password),
-            database_path: None,
-            is_active: Some(true),
-            environment_type: EnvironmentType::default(),
-            last_used_at: None,
-            ssh_host: None,
-            ssh_port: None,
-            ssh_user: None,
-            ssh_password: None,
-            ssh_private_key_path: None,
-            ssh_private_key_password: None,
-            ssl_mode: None,
-            ssl_key_path: None,
-            ssl_cert_path: None,
-            ssl_ca_cert_path: None,
-            trust_server_certificate: false,
-            read_only: false,
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn new_mssql_with_ssh(
-        name: String,
-        host: String,
-        port: i32,
-        database: String,
-        username: String,
-        password: String,
-        ssh_host: String,
-        ssh_port: i32,
-        ssh_user: String,
-        ssh_password: Option<String>,
-        ssh_private_key_path: Option<String>,
-        ssh_private_key_password: Option<String>,
-    ) -> Self {
-        Self {
-            ssh_host: Some(ssh_host),
-            ssh_port: Some(ssh_port),
-            ssh_user: Some(ssh_user),
-            ssh_password,
-            ssh_private_key_path,
-            ssh_private_key_password,
-            ..Self::new_mssql(name, host, port, database, username, password)
-        }
+            host,
+            port,
+            database,
+            username,
+            password,
+        )
     }
 
     pub fn new_redis(
@@ -514,66 +325,35 @@ impl ConnectionData {
         username: String,
         password: String,
     ) -> Self {
-        Self {
-            id: None,
+        Self::new_server(
+            DatabaseType::Redis,
             name,
-            db_type: DatabaseType::Redis,
-            host: Some(host),
-            port: Some(port),
-            database_name: Some(database),
-            username: if username.is_empty() {
-                None
-            } else {
-                Some(username)
-            },
-            password: if password.is_empty() {
-                None
-            } else {
-                Some(password)
-            },
-            database_path: None,
-            is_active: Some(true),
-            environment_type: EnvironmentType::default(),
-            last_used_at: None,
-            ssh_host: None,
-            ssh_port: None,
-            ssh_user: None,
-            ssh_password: None,
-            ssh_private_key_path: None,
-            ssh_private_key_password: None,
-            ssl_mode: None,
-            ssl_key_path: None,
-            ssl_cert_path: None,
-            ssl_ca_cert_path: None,
-            trust_server_certificate: false,
-            read_only: false,
-        }
+            host,
+            port,
+            database,
+            username,
+            password,
+        )
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn new_redis_with_ssh(
+    #[cfg(test)]
+    pub fn new_postgres(
         name: String,
         host: String,
         port: i32,
         database: String,
         username: String,
         password: String,
-        ssh_host: String,
-        ssh_port: i32,
-        ssh_user: String,
-        ssh_password: Option<String>,
-        ssh_private_key_path: Option<String>,
-        ssh_private_key_password: Option<String>,
     ) -> Self {
-        Self {
-            ssh_host: Some(ssh_host),
-            ssh_port: Some(ssh_port),
-            ssh_user: Some(ssh_user),
-            ssh_password,
-            ssh_private_key_path,
-            ssh_private_key_password,
-            ..Self::new_redis(name, host, port, database, username, password)
-        }
+        Self::new_server(
+            DatabaseType::PostgreSQL,
+            name,
+            host,
+            port,
+            database,
+            username,
+            password,
+        )
     }
 
     /// Check if this connection uses SSH tunnel

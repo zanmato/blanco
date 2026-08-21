@@ -12,8 +12,8 @@ use super::{SqliteConnection, SqliteConnectionKey, convert_sqlite_row_value_to_s
 
 #[async_trait]
 impl Connection for SqliteConnection {
-    fn get_connection_type(&self) -> &'static str {
-        "SQLite"
+    fn database_type(&self) -> blanco_core::DatabaseType {
+        blanco_core::DatabaseType::SQLite
     }
 
     fn get_display_name(&self) -> String {

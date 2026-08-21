@@ -1,3 +1,4 @@
+use crate::DatabaseType;
 use async_trait::async_trait;
 use futures::Stream;
 
@@ -80,49 +81,6 @@ impl ColumnType {
     }
 }
 
-/// Database driver types supported by the application
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum DriverType {
-    SQLite,
-    PostgreSQL,
-    MySQL,
-    ClickHouse,
-    MsSql,
-    Redis,
-}
-
-impl DriverType {
-    /// Convert from string representation to DriverType
-    pub fn from_string(s: &str) -> Option<Self> {
-        match s {
-            "SQLite" => Some(Self::SQLite),
-            "PostgreSQL" => Some(Self::PostgreSQL),
-            "MySQL" => Some(Self::MySQL),
-            "ClickHouse" => Some(Self::ClickHouse),
-            "SQL Server" => Some(Self::MsSql),
-            "Redis" => Some(Self::Redis),
-            _ => None,
-        }
-    }
-
-    /// Convert to string representation
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::SQLite => "SQLite",
-            Self::PostgreSQL => "PostgreSQL",
-            Self::MySQL => "MySQL",
-            Self::ClickHouse => "ClickHouse",
-            Self::MsSql => "SQL Server",
-            Self::Redis => "Redis",
-        }
-    }
-}
-
-impl std::fmt::Display for DriverType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
 /// Result of a database query
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct QueryResult {
@@ -380,8 +338,13 @@ impl QueryResult {
 /// This trait provides a unified interface for SQLite, PostgreSQL, and future database types
 #[async_trait]
 pub trait Connection: Send + Sync {
-    /// Get the connection type identifier (e.g., "SQLite", "PostgreSQL")
-    fn get_connection_type(&self) -> &'static str;
+    /// The backend this connection talks to.
+    fn database_type(&self) -> DatabaseType;
+
+    /// Display name of the backend (e.g. "SQLite", "PostgreSQL").
+    fn get_connection_type(&self) -> &'static str {
+        self.database_type().as_str()
+    }
 
     /// Get a human-readable display name for this connection
     fn get_display_name(&self) -> String;
@@ -619,9 +582,7 @@ pub trait Connection: Send + Sync {
         query: &str,
         alias: bool,
     ) -> Result<Option<String>, anyhow::Error> {
-        let driver =
-            DriverType::from_string(self.get_connection_type()).unwrap_or(DriverType::PostgreSQL);
-        let extractor = crate::TableExtractor::for_driver(driver);
+        let extractor = crate::TableExtractor::for_driver(self.database_type());
         match extractor.extract_table(query, alias) {
             Ok(table_name) => Ok(Some(table_name)),
             Err(_) => Ok(None),

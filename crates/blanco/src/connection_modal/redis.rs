@@ -194,13 +194,7 @@ impl RedisForm {
             let ssh_private_key_path = optional_path(&self.ssh_private_key_input, cx);
             let ssh_private_key_password = optional_path(&self.ssh_private_key_password_input, cx);
 
-            ConnectionData::new_redis_with_ssh(
-                name,
-                host,
-                port,
-                database,
-                username,
-                password,
+            ConnectionData::new_redis(name, host, port, database, username, password).with_ssh(
                 ssh_host.to_string(),
                 ssh_port,
                 ssh_user.to_string(),

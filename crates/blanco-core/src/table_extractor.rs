@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::DriverType;
+use crate::DatabaseType;
 use anyhow::{Result, anyhow};
 use sqlparser::{
     ast::{
@@ -22,16 +22,16 @@ pub struct TableExtractor {
 }
 
 impl TableExtractor {
-    pub fn for_driver(driver: DriverType) -> Self {
+    pub fn for_driver(driver: DatabaseType) -> Self {
         let dialect: Box<dyn Dialect> = match driver {
-            DriverType::SQLite => Box::new(GenericDialect {}),
-            DriverType::PostgreSQL => Box::new(PostgreSqlDialect {}),
-            DriverType::MySQL => Box::new(MySqlDialect {}),
-            DriverType::ClickHouse => Box::new(GenericDialect {}),
-            DriverType::MsSql => Box::new(MsSqlDialect {}),
+            DatabaseType::SQLite => Box::new(GenericDialect {}),
+            DatabaseType::PostgreSQL => Box::new(PostgreSqlDialect {}),
+            DatabaseType::MySQL => Box::new(MySqlDialect {}),
+            DatabaseType::ClickHouse => Box::new(GenericDialect {}),
+            DatabaseType::MsSql => Box::new(MsSqlDialect {}),
             // Redis is not SQL; TableExtractor is never used for it (gated by
             // supports_sql), but the match must remain exhaustive.
-            DriverType::Redis => Box::new(GenericDialect {}),
+            DatabaseType::Redis => Box::new(GenericDialect {}),
         };
         Self { dialect }
     }
@@ -197,7 +197,7 @@ mod tests {
 
     #[test]
     fn test_sqlite_table_extraction() {
-        let extractor = TableExtractor::for_driver(DriverType::SQLite);
+        let extractor = TableExtractor::for_driver(DatabaseType::SQLite);
 
         assert_eq!(
             extractor
@@ -230,7 +230,7 @@ mod tests {
 
     #[test]
     fn test_postgres_table_extraction() {
-        let extractor = TableExtractor::for_driver(DriverType::PostgreSQL);
+        let extractor = TableExtractor::for_driver(DatabaseType::PostgreSQL);
 
         assert_eq!(
             extractor
@@ -249,7 +249,7 @@ mod tests {
 
     #[test]
     fn test_mysql_table_extraction() {
-        let extractor = TableExtractor::for_driver(DriverType::MySQL);
+        let extractor = TableExtractor::for_driver(DatabaseType::MySQL);
 
         assert_eq!(
             extractor
@@ -268,7 +268,7 @@ mod tests {
 
     #[test]
     fn test_insert_table_extraction() {
-        let extractor = TableExtractor::for_driver(DriverType::PostgreSQL);
+        let extractor = TableExtractor::for_driver(DatabaseType::PostgreSQL);
 
         assert_eq!(
             extractor
@@ -280,7 +280,7 @@ mod tests {
 
     #[test]
     fn test_update_table_extraction() {
-        let extractor = TableExtractor::for_driver(DriverType::PostgreSQL);
+        let extractor = TableExtractor::for_driver(DatabaseType::PostgreSQL);
 
         assert_eq!(
             extractor
@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn test_delete_table_extraction() {
-        let extractor = TableExtractor::for_driver(DriverType::PostgreSQL);
+        let extractor = TableExtractor::for_driver(DatabaseType::PostgreSQL);
 
         assert_eq!(
             extractor
@@ -304,7 +304,7 @@ mod tests {
 
     #[test]
     fn test_join_qualified_wildcard_resolves_correct_table() {
-        let extractor = TableExtractor::for_driver(DriverType::PostgreSQL);
+        let extractor = TableExtractor::for_driver(DatabaseType::PostgreSQL);
 
         assert_eq!(
             extractor
@@ -329,7 +329,7 @@ mod tests {
 
     #[test]
     fn test_join_qualified_columns_resolves_correct_table() {
-        let extractor = TableExtractor::for_driver(DriverType::PostgreSQL);
+        let extractor = TableExtractor::for_driver(DatabaseType::PostgreSQL);
 
         assert_eq!(
             extractor
@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn test_join_mixed_aliases_returns_none() {
-        let extractor = TableExtractor::for_driver(DriverType::PostgreSQL);
+        let extractor = TableExtractor::for_driver(DatabaseType::PostgreSQL);
 
         assert!(
             extractor
@@ -358,7 +358,7 @@ mod tests {
 
     #[test]
     fn test_join_unqualified_wildcard_falls_back_to_first_table() {
-        let extractor = TableExtractor::for_driver(DriverType::PostgreSQL);
+        let extractor = TableExtractor::for_driver(DatabaseType::PostgreSQL);
 
         assert_eq!(
             extractor
@@ -373,7 +373,7 @@ mod tests {
 
     #[test]
     fn test_join_unqualified_columns_falls_back_to_first_table() {
-        let extractor = TableExtractor::for_driver(DriverType::PostgreSQL);
+        let extractor = TableExtractor::for_driver(DatabaseType::PostgreSQL);
 
         assert_eq!(
             extractor
