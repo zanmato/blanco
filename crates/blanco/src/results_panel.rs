@@ -19,7 +19,11 @@ use gpui_component::{
 };
 
 use blanco_core::QueryResult;
-use blanco_core::{KeyValueResult, RedisValue, ResultPayload};
+use blanco_core::{
+    KeyValueResult, RedisValue, ResultPayload,
+    explain_plan::{self, PlanNode, PlanTree},
+};
+use std::sync::Arc;
 
 use crate::copy_handler::CopyHandler;
 pub use transformers::{SelectedCell, SelectedRow, SelectedTableData};
@@ -65,6 +69,10 @@ pub struct ResultTab {
     /// Set when this tab shows a non-tabular Redis key/value payload. When
     /// present, the panel renders the key inspector instead of the table/chart.
     pub key_value: Option<KeyValueResult>,
+    /// Parsed EXPLAIN output. Present when the tab's query was an EXPLAIN the
+    /// backend returns in a structured form; the panel then defaults to the
+    /// plan view with the raw table one toggle away.
+    pub plan: Option<Arc<PlanTree>>,
     /// Client-side text filter over the loaded rows of this tab.
     pub filter_input: Entity<InputState>,
     pub _subscriptions: Vec<Subscription>,
@@ -88,6 +96,7 @@ pub struct ResultsPanel {
     copy_handler: CopyHandler,
     /// Scroll position for the key/value inspector body (Redis key view).
     key_value_scroll_handle: ScrollHandle,
+    plan_scroll_handle: ScrollHandle,
     /// Horizontal scroll position for the result tab strip.
     tab_strip_scroll_handle: ScrollHandle,
     _subscriptions: Vec<Subscription>, // Store subscriptions to prevent them from being dropped
@@ -123,6 +132,7 @@ impl ResultsPanel {
             commit_in_progress: false,
             copy_handler: CopyHandler::new(),
             key_value_scroll_handle: ScrollHandle::new(),
+            plan_scroll_handle: ScrollHandle::new(),
             tab_strip_scroll_handle: ScrollHandle::new(),
             _subscriptions: vec![],
         }
@@ -185,6 +195,7 @@ impl ResultsPanel {
             view_mode: ResultViewMode::default(),
             chart_view,
             key_value: None,
+            plan: None,
             filter_input,
             _subscriptions: vec![subscription, filter_subscription],
         }
@@ -316,6 +327,15 @@ impl ResultsPanel {
             match payload {
                 ResultPayload::Tabular(result) => {
                     let query_text = result.query_text.clone();
+                    if query_text
+                        .as_deref()
+                        .is_some_and(|text| is_explain_statement(text))
+                    {
+                        if let Some(plan) = explain_plan::parse_plan(self.db_type, &result) {
+                            tab.plan = Some(Arc::new(plan));
+                            tab.view_mode = ResultViewMode::Plan;
+                        }
+                    }
                     tab.table_state.update(cx, |state, cx| {
                         if let Some(ref q) = query_text {
                             state.delegate_mut().set_original_query(q.clone());
@@ -384,6 +404,21 @@ impl ResultsPanel {
             self.table_state = self.result_tabs[self.active_tab].table_state.clone();
         }
         cx.notify();
+    }
+
+    #[cfg(test)]
+    pub fn active_plan(&self) -> Option<Arc<PlanTree>> {
+        self.result_tabs
+            .get(self.active_tab)
+            .and_then(|tab| tab.plan.clone())
+    }
+
+    #[cfg(test)]
+    pub fn active_view_mode(&self) -> ResultViewMode {
+        self.result_tabs
+            .get(self.active_tab)
+            .map(|tab| tab.view_mode)
+            .unwrap_or_default()
     }
 
     #[cfg(test)]
@@ -1050,6 +1085,11 @@ impl ResultsPanel {
             .get(active)
             .is_some_and(|t| t.key_value.is_some());
         let is_table = matches!(active_view_mode, ResultViewMode::Table);
+        let is_plan = matches!(active_view_mode, ResultViewMode::Plan);
+        let has_plan = self
+            .result_tabs
+            .get(active)
+            .is_some_and(|tab| tab.plan.is_some());
         let filter = self.result_tabs.get(active).map(|tab| {
             let delegate_state = tab.table_state.read(cx);
             let delegate = delegate_state.delegate();
@@ -1115,6 +1155,19 @@ impl ResultsPanel {
                         .flex_shrink_0()
                         .gap_1()
                         .px_2()
+                        .when(has_plan, |this| {
+                            this.child(
+                                Button::new("view-mode-plan")
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(IconName::ListTree)
+                                    .selected(is_plan)
+                                    .tooltip("Query plan")
+                                    .on_click(cx.listener(|this, _ev, _window, cx| {
+                                        this.set_view_mode(ResultViewMode::Plan, cx);
+                                    })),
+                            )
+                        })
                         .child(
                             Button::new("view-mode-table")
                                 .ghost()
@@ -1131,7 +1184,7 @@ impl ResultsPanel {
                                 .ghost()
                                 .xsmall()
                                 .icon(IconName::ChartBar)
-                                .selected(!is_table)
+                                .selected(!is_table && !is_plan)
                                 .tooltip("Chart view")
                                 .on_click(cx.listener(|this, _ev, _window, cx| {
                                     this.set_view_mode(ResultViewMode::Chart, cx);
@@ -1139,6 +1192,190 @@ impl ResultsPanel {
                         ),
                 )
             })
+    }
+
+    /// Render a parsed EXPLAIN as an indented tree. Each node shows its
+    /// label, row estimate vs actual, and (when the backend reports timings) a
+    /// bar scaled to the slowest node so hot spots stand out. Self time
+    /// (inclusive minus children) drives the bar color.
+    fn render_plan_view(&self, plan: &PlanTree, cx: &Context<Self>) -> impl IntoElement {
+        let muted = cx.theme().muted_foreground;
+        let border_color = cx.theme().border;
+        let mono = cx.theme().mono_font_family.clone();
+        let max_time = plan.max_time_ms().unwrap_or(0.0);
+        let bar_cold = cx.theme().green;
+        let bar_warm = cx.theme().yellow;
+        let bar_hot = cx.theme().red;
+
+        let header = h_flex()
+            .gap_4()
+            .items_center()
+            .px_3()
+            .py(px(6.))
+            .border_b_1()
+            .border_color(border_color)
+            .font_family(mono.clone())
+            .text_size(px(12.))
+            .when_some(plan.planning_time_ms, |this, time| {
+                this.child(
+                    h_flex()
+                        .gap_1()
+                        .child(div().text_color(muted).child("planning:"))
+                        .child(format!("{time:.2} ms")),
+                )
+            })
+            .when_some(plan.execution_time_ms, |this, time| {
+                this.child(
+                    h_flex()
+                        .gap_1()
+                        .child(div().text_color(muted).child("execution:"))
+                        .child(format!("{time:.2} ms")),
+                )
+            })
+            .when(!plan.has_timings(), |this| {
+                this.child(
+                    div()
+                        .text_color(muted)
+                        .child("estimated plan (no timings for this statement)"),
+                )
+            });
+
+        fn rows(
+            node: &PlanNode,
+            depth: usize,
+            max_time: f64,
+            colors: (gpui::Hsla, gpui::Hsla, gpui::Hsla),
+            muted: gpui::Hsla,
+            border_color: gpui::Hsla,
+            out: &mut Vec<gpui::AnyElement>,
+        ) {
+            let (cold, warm, hot) = colors;
+            let share = node
+                .actual_time_ms
+                .filter(|_| max_time > 0.0)
+                .map(|time| (time / max_time).clamp(0.0, 1.0));
+            let self_share = node
+                .self_time_ms()
+                .filter(|_| max_time > 0.0)
+                .map(|time| (time / max_time).clamp(0.0, 1.0))
+                .unwrap_or(0.0);
+            let bar_color = if self_share > 0.5 {
+                hot
+            } else if self_share > 0.15 {
+                warm
+            } else {
+                cold
+            };
+
+            let mut stats: Vec<String> = Vec::new();
+            match (node.estimated_rows, node.actual_rows) {
+                (Some(estimated), Some(actual)) => {
+                    stats.push(format!("rows {actual:.0} (est {estimated:.0})"));
+                }
+                (Some(estimated), None) => stats.push(format!("est rows {estimated:.0}")),
+                (None, Some(actual)) => stats.push(format!("rows {actual:.0}")),
+                (None, None) => {}
+            }
+            if let Some(time) = node.actual_time_ms {
+                stats.push(format!("{time:.2} ms"));
+            }
+            if let Some(cost) = node.total_cost {
+                stats.push(format!("cost {cost:.1}"));
+            }
+
+            let details = node.details.clone();
+            out.push(
+                v_flex()
+                    .px_3()
+                    .py_1()
+                    .border_b_1()
+                    .border_color(border_color)
+                    .child(
+                        h_flex()
+                            .gap_3()
+                            .items_center()
+                            .child(div().w(px(16.0 * depth as f32)).flex_shrink_0())
+                            .when(depth > 0, |this| {
+                                this.child(div().text_color(muted).child("└"))
+                            })
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .child(node.label.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_color(muted)
+                                    .text_size(px(11.))
+                                    .whitespace_nowrap()
+                                    .child(stats.join("  ·  ")),
+                            )
+                            .when_some(share, |this, share| {
+                                this.child(
+                                    div().w(px(120.)).h(px(6.)).flex_shrink_0().child(
+                                        div()
+                                            .h_full()
+                                            .w(px(120.0 * share as f32))
+                                            .rounded(px(3.))
+                                            .bg(bar_color),
+                                    ),
+                                )
+                            }),
+                    )
+                    .children(details.into_iter().map(|(key, value)| {
+                        h_flex()
+                            .gap_2()
+                            .text_size(px(11.))
+                            .text_color(muted)
+                            .child(div().w(px(16.0 * depth as f32 + 24.0)).flex_shrink_0())
+                            .child(format!("{key}: {value}"))
+                    }))
+                    .into_any_element(),
+            );
+            for child in &node.children {
+                rows(child, depth + 1, max_time, colors, muted, border_color, out);
+            }
+        }
+
+        let mut elements = Vec::new();
+        for root in &plan.roots {
+            rows(
+                root,
+                0,
+                max_time,
+                (bar_cold, bar_warm, bar_hot),
+                muted,
+                border_color,
+                &mut elements,
+            );
+        }
+
+        v_flex().size_full().child(header).child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .child(
+                    div()
+                        .id("plan-body")
+                        .size_full()
+                        .overflow_scroll()
+                        .track_scroll(&self.plan_scroll_handle)
+                        .font_family(mono)
+                        .text_size(px(12.))
+                        .child(v_flex().children(elements)),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .child(Scrollbar::vertical(&self.plan_scroll_handle)),
+                ),
+        )
     }
 
     /// Render the key inspector: a compact metadata header followed by a
@@ -1308,6 +1545,7 @@ impl Render for ResultsPanel {
             .result_tabs
             .get(active)
             .and_then(|t| t.key_value.clone());
+        let active_plan = self.result_tabs.get(active).and_then(|t| t.plan.clone());
 
         v_flex()
             // The action handlers below live on this node, so the focus handle
@@ -1354,6 +1592,12 @@ impl Render for ResultsPanel {
                             (Some(kv), _, _) => {
                                 self.render_key_value_inspector(&kv, cx).into_any_element()
                             }
+                            (None, ResultViewMode::Plan, _) => match active_plan {
+                                Some(plan) => self.render_plan_view(&plan, cx).into_any_element(),
+                                None => DataTable::new(&self.table_state)
+                                    .bordered(false)
+                                    .into_any_element(),
+                            },
                             (None, ResultViewMode::Chart, Some(chart)) => chart.into_any_element(),
                             _ => DataTable::new(&self.table_state)
                                 .bordered(false)
@@ -1362,4 +1606,13 @@ impl Render for ResultsPanel {
                     ),
             )
     }
+}
+
+/// Whether a statement text is an EXPLAIN (including SQLite's
+/// `EXPLAIN QUERY PLAN`), so its result can be offered as a plan tree.
+fn is_explain_statement(text: &str) -> bool {
+    text.trim_start()
+        .split_whitespace()
+        .next()
+        .is_some_and(|first| first.eq_ignore_ascii_case("EXPLAIN"))
 }

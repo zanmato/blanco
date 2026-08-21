@@ -24,9 +24,9 @@ pub fn wrap_explain(db_type: DatabaseType, sql: &str) -> String {
     match db_type {
         DatabaseType::PostgreSQL => {
             if is_select(trimmed) {
-                format!("EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) {}", trimmed)
+                format!("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {}", trimmed)
             } else {
-                format!("EXPLAIN {}", trimmed)
+                format!("EXPLAIN (FORMAT JSON) {}", trimmed)
             }
         }
         DatabaseType::MySQL => format!("EXPLAIN FORMAT=TREE {}", trimmed),

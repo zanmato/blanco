@@ -8,6 +8,7 @@ pub mod connection_trait;
 pub mod database_service;
 pub mod database_type;
 pub mod ddl;
+pub mod explain_plan;
 pub mod table_extractor;
 pub mod write_guard;
 

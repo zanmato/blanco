@@ -99,6 +99,7 @@ pub enum ResultViewMode {
     #[default]
     Table,
     Chart,
+    Plan,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]

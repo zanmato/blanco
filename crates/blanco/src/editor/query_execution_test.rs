@@ -538,3 +538,46 @@ async fn test_prod_write_requires_confirmation(cx: &mut TestAppContext) {
     wait_for_query(&harness, &mut cx).await;
     assert_eq!(result_row_count(&harness, &cx), Some(0));
 }
+
+/// An EXPLAIN whose output the backend returns in structured form lands as a
+/// plan tree and the tab opens in plan view, with the raw rows still loaded
+/// for the table toggle.
+#[gpui::test]
+async fn test_explain_produces_plan_tree(cx: &mut TestAppContext) {
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    set_editor_text(
+        &harness,
+        "CREATE TABLE plans (id INTEGER PRIMARY KEY)",
+        &mut cx,
+    );
+    run_query(&harness, &mut cx);
+    wait_for_query(&harness, &mut cx).await;
+
+    set_editor_text(&harness, "SELECT * FROM plans WHERE id = 1", &mut cx);
+    harness
+        .editor_panel
+        .update_in(&mut cx, |panel, window, cx| {
+            panel.on_explain_query(window, cx);
+        });
+    wait_for_query(&harness, &mut cx).await;
+
+    let (plan, view_mode) = harness.editor_panel.read_with(&cx, |panel, cx| {
+        let tab = panel.active_query_tab().expect("query tab");
+        tab.results_panel.read_with(cx, |results, _| {
+            (results.active_plan(), results.active_view_mode())
+        })
+    });
+    let plan = plan.expect("EXPLAIN QUERY PLAN should parse into a tree");
+    assert_eq!(view_mode, crate::results_panel::ResultViewMode::Plan);
+    assert!(
+        plan.roots[0].label.contains("plans"),
+        "root node should name the table: {}",
+        plan.roots[0].label
+    );
+    assert!(
+        result_row_count(&harness, &cx).unwrap_or(0) > 0,
+        "raw rows stay available"
+    );
+}
