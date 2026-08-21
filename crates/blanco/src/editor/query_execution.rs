@@ -8,13 +8,14 @@ use gpui_component::{
 use ropey::Rope;
 use tracing::{debug, error};
 
-use crate::app_database::{AppDatabase, QueryHistoryData, QueryTabData};
+use crate::app_database::{AppDatabase, EnvironmentType, QueryHistoryData, QueryTabData};
 use crate::app_settings::AppSettings;
 use crate::result_ext::ResultExt;
 use crate::sql::statement_parser::QueryParameter;
 use crate::sql::{extract_statement_info, extract_statement_info_with_styles};
 use crate::status_bar::{ActivityReporter, ActivityResult};
 use crate::time_format;
+use blanco_core::StatementAccess;
 use database::{DatabaseService, DatabaseServiceTrait};
 
 use super::parameter_form::ParameterForm;
@@ -27,7 +28,26 @@ impl EditorPanel {
         // Extract the values we need before any mutable borrows
         let tab_index = self.active_tab_ix;
 
-        if matches!(self.tabs.get(tab_index), Some(TabType::Script(_))) {
+        if let Some(TabType::Script(script_tab)) = self.tabs.get(tab_index) {
+            // A script can issue any statement through `db`, so the whole run
+            // is confirmed rather than individual statements.
+            if script_tab.environment_type == Some(EnvironmentType::Prod) {
+                let connection_name = script_tab
+                    .connection_name
+                    .clone()
+                    .unwrap_or_else(|| "This connection".to_string());
+                self.confirm_prod_write(
+                    "Run script on PROD?",
+                    format!(
+                        "\"{connection_name}\" is tagged as a production connection. Scripts can modify data through `db.execute` and `db.transaction`."
+                    ),
+                    "Run on PROD",
+                    |panel, window, cx| panel.execute_script_tab(window, cx),
+                    window,
+                    cx,
+                );
+                return;
+            }
             self.execute_script_tab(window, cx);
             return;
         }
@@ -140,7 +160,74 @@ impl EditorPanel {
     }
 
     /// Execute a query with the given parameters
+    /// Run `query` on the active tab, first asking for confirmation when the
+    /// tab's connection is tagged PROD and the statement modifies data. The
+    /// classifier is conservative (unknown statements count as writes), so a
+    /// production connection never runs a write without a click.
     pub(super) fn execute_query(
+        &mut self,
+        query: String,
+        connection_id: i64,
+        database_name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(TabType::Query(query_tab)) = self.tabs.get(self.active_tab_ix) else {
+            return;
+        };
+        let is_prod = query_tab.environment_type == Some(EnvironmentType::Prod);
+        let is_write = blanco_core::write_guard::classify(query_tab._db_type.into(), &query)
+            == StatementAccess::Write;
+        if !(is_prod && is_write) {
+            self.execute_query_unchecked(query, connection_id, database_name, window, cx);
+            return;
+        }
+
+        let connection_name = query_tab
+            .connection_name
+            .clone()
+            .unwrap_or_else(|| "This connection".to_string());
+        let database_name = database_name.to_string();
+        let weak_editor_panel = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let query = query.clone();
+            let database_name = database_name.clone();
+            let weak_editor_panel = weak_editor_panel.clone();
+            dialog
+                .title("Run write statement on PROD?")
+                .child(format!(
+                    "\"{connection_name}\" is tagged as a production connection and this statement modifies data."
+                ))
+                .footer(
+                    DialogFooter::new()
+                        .child(
+                            DialogClose::new()
+                                .child(Button::new("prod-write-cancel").label("Cancel").outline()),
+                        )
+                        .child(DialogAction::new().child(
+                            Button::new("prod-write-run").danger().label("Run on PROD").on_click(
+                                move |_, window, cx| {
+                                    let query = query.clone();
+                                    let database_name = database_name.clone();
+                                    weak_editor_panel
+                                        .update(cx, |editor_panel, cx| {
+                                            editor_panel.execute_query_unchecked(
+                                                query,
+                                                connection_id,
+                                                &database_name,
+                                                window,
+                                                cx,
+                                            );
+                                        })
+                                        .log_err();
+                                },
+                            ),
+                        )),
+                )
+        });
+    }
+
+    fn execute_query_unchecked(
         &mut self,
         query: String,
         _connection_id: i64,

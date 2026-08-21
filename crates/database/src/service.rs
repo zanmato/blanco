@@ -260,8 +260,11 @@ impl DatabaseService {
             .await
             .map_err(|e| anyhow::anyhow!("tokio task join failed: {}", e))??;
         let inner_arc: Arc<dyn Connection> = Arc::from(inner_conn);
-        let conn_arc: Arc<dyn Connection> =
-            Arc::new(TokioConnection::new(inner_arc, runtime_handle));
+        let conn_arc: Arc<dyn Connection> = Arc::new(TokioConnection::new(
+            inner_arc,
+            runtime_handle,
+            config.read_only,
+        ));
 
         // Store in active_connections
         {

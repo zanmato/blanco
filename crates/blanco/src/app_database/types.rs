@@ -168,6 +168,9 @@ pub struct ConnectionData {
     pub ssl_cert_path: Option<String>,
     pub ssl_ca_cert_path: Option<String>,
     pub trust_server_certificate: bool,
+    /// When set, every statement the classifier does not recognise as a read
+    /// is rejected before it reaches the server.
+    pub read_only: bool,
 }
 
 impl std::fmt::Debug for ConnectionData {
@@ -203,6 +206,7 @@ impl std::fmt::Debug for ConnectionData {
             .field("ssl_cert_path", &self.ssl_cert_path)
             .field("ssl_ca_cert_path", &self.ssl_ca_cert_path)
             .field("trust_server_certificate", &self.trust_server_certificate)
+            .field("read_only", &self.read_only)
             .finish()
     }
 }
@@ -233,6 +237,7 @@ impl ConnectionData {
             ssl_cert_path: None,
             ssl_ca_cert_path: None,
             trust_server_certificate: false,
+            read_only: false,
         }
     }
 
@@ -268,6 +273,7 @@ impl ConnectionData {
             ssl_cert_path: None,
             ssl_ca_cert_path: None,
             trust_server_certificate: false,
+            read_only: false,
         }
     }
 
@@ -310,6 +316,7 @@ impl ConnectionData {
             ssl_cert_path: None,
             ssl_ca_cert_path: None,
             trust_server_certificate: false,
+            read_only: false,
         }
     }
 
@@ -345,6 +352,7 @@ impl ConnectionData {
             ssl_cert_path: None,
             ssl_ca_cert_path: None,
             trust_server_certificate: false,
+            read_only: false,
         }
     }
 
@@ -406,6 +414,7 @@ impl ConnectionData {
             ssl_cert_path: None,
             ssl_ca_cert_path: None,
             trust_server_certificate: false,
+            read_only: false,
         }
     }
 
@@ -467,6 +476,7 @@ impl ConnectionData {
             ssl_cert_path: None,
             ssl_ca_cert_path: None,
             trust_server_certificate: false,
+            read_only: false,
         }
     }
 
@@ -536,6 +546,7 @@ impl ConnectionData {
             ssl_cert_path: None,
             ssl_ca_cert_path: None,
             trust_server_certificate: false,
+            read_only: false,
         }
     }
 
@@ -627,6 +638,6 @@ impl ConnectionData {
             }
         };
 
-        Some(config)
+        Some(config.with_read_only(self.read_only))
     }
 }

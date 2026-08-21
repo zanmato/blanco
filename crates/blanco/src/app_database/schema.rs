@@ -212,6 +212,11 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "ALTER TABLE connections ADD COLUMN trust_server_certificate INTEGER NOT NULL DEFAULT 0",
     )
     .await?;
+    add_column_if_missing(
+        pool,
+        "ALTER TABLE connections ADD COLUMN read_only INTEGER NOT NULL DEFAULT 0",
+    )
+    .await?;
 
     // Note: database_path NOT NULL constraint has been manually fixed
     // The database schema now allows NULL database_path for PostgreSQL connections

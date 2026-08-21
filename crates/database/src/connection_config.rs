@@ -290,6 +290,8 @@ pub struct ConnectionConfig {
     pub ssl_cert_path: Option<String>,
     pub ssl_ca_cert_path: Option<String>,
     pub trust_server_certificate: bool,
+    /// Reject statements not recognised as reads before they reach the server.
+    pub read_only: bool,
 }
 
 impl std::fmt::Debug for ConnectionConfig {
@@ -323,6 +325,7 @@ impl std::fmt::Debug for ConnectionConfig {
             .field("ssl_cert_path", &self.ssl_cert_path)
             .field("ssl_ca_cert_path", &self.ssl_ca_cert_path)
             .field("trust_server_certificate", &self.trust_server_certificate)
+            .field("read_only", &self.read_only)
             .finish()
     }
 }
@@ -362,6 +365,7 @@ impl ConnectionConfig {
             ssl_cert_path: None,
             ssl_ca_cert_path: None,
             trust_server_certificate: false,
+            read_only: false,
         }
     }
 
@@ -389,6 +393,7 @@ impl ConnectionConfig {
             ssl_cert_path: None,
             ssl_ca_cert_path: None,
             trust_server_certificate: false,
+            read_only: false,
         }
     }
 
@@ -428,6 +433,11 @@ impl ConnectionConfig {
 
     pub fn with_trust_server_certificate(mut self, trust: bool) -> Self {
         self.trust_server_certificate = trust;
+        self
+    }
+
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
         self
     }
 

@@ -15,7 +15,8 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use blanco_core::{
     connection_trait::{ColumnType, DatabaseSchemaResult, IndexInfo, QueryableEntity, RoutineKind},
-    BatchFailure, BatchOutcome, ColumnInfo, Connection, KeyValueResult, QueryResult,
+    write_guard, BatchFailure, BatchOutcome, ColumnInfo, Connection, DriverType, KeyValueResult,
+    QueryResult, StatementAccess,
 };
 use futures::Stream;
 use std::future::Future;
@@ -41,11 +42,34 @@ impl Drop for AbortOnDrop {
 pub struct TokioConnection {
     inner: Arc<dyn Connection>,
     runtime: Handle,
+    /// Reject anything the classifier does not recognise as a read. Enforced
+    /// here, rather than in the service, because callers can also obtain the
+    /// wrapped connection directly (import, scripts) and every such handle
+    /// goes through this type.
+    read_only: bool,
 }
 
 impl TokioConnection {
-    pub fn new(inner: Arc<dyn Connection>, runtime: Handle) -> Self {
-        Self { inner, runtime }
+    pub fn new(inner: Arc<dyn Connection>, runtime: Handle, read_only: bool) -> Self {
+        Self {
+            inner,
+            runtime,
+            read_only,
+        }
+    }
+
+    fn driver(&self) -> DriverType {
+        DriverType::from_string(self.inner.get_connection_type()).unwrap_or(DriverType::PostgreSQL)
+    }
+
+    fn guard_read_only(&self, text: &str) -> Result<()> {
+        if self.read_only && write_guard::classify(self.driver(), text) == StatementAccess::Write {
+            anyhow::bail!(
+                "This connection is read-only. Only statements recognised as reads are allowed; \
+                 edit the connection to allow writes."
+            );
+        }
+        Ok(())
     }
 
     async fn run<F, T>(&self, fut: F) -> Result<T>
@@ -93,6 +117,7 @@ impl Connection for TokioConnection {
         database_name: Option<&str>,
         parameters: Option<&[String]>,
     ) -> Result<QueryResult> {
+        self.guard_read_only(query)?;
         let inner = Arc::clone(&self.inner);
         let query = query.to_string();
         let database_name = database_name.map(str::to_string);
@@ -110,6 +135,7 @@ impl Connection for TokioConnection {
         query: &str,
         database_name: Option<&str>,
     ) -> Result<Vec<QueryResult>> {
+        self.guard_read_only(query)?;
         let inner = Arc::clone(&self.inner);
         let query = query.to_string();
         let database_name = database_name.map(str::to_string);
@@ -123,6 +149,7 @@ impl Connection for TokioConnection {
         database_name: Option<&str>,
         parameters: &[Option<String>],
     ) -> Result<u64> {
+        self.guard_read_only(query)?;
         let inner = Arc::clone(&self.inner);
         let query = query.to_string();
         let database_name = database_name.map(str::to_string);
@@ -140,6 +167,10 @@ impl Connection for TokioConnection {
         operations: &[String],
         database_name: Option<&str>,
     ) -> std::result::Result<BatchOutcome, BatchFailure> {
+        for operation in operations {
+            self.guard_read_only(operation)
+                .map_err(BatchFailure::atomic)?;
+        }
         let inner = Arc::clone(&self.inner);
         let operations = operations.to_vec();
         let database_name = database_name.map(str::to_string);
@@ -169,6 +200,7 @@ impl Connection for TokioConnection {
         Vec<ColumnType>,
         Box<dyn Stream<Item = Result<Vec<Option<String>>>> + Send + Unpin>,
     )> {
+        self.guard_read_only(query)?;
         // Existing backends (sqlite, postgres, clickhouse) eagerly collect
         // rows inside `execute_query_stream_rows` and return a
         // `futures::stream::iter` whose items do no further driver IO, so
@@ -370,10 +402,8 @@ impl Connection for TokioConnection {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    };
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use super::AbortOnDrop;
 
@@ -383,6 +413,33 @@ mod tests {
         fn drop(&mut self) {
             self.0.store(true, Ordering::SeqCst);
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn read_only_wrapper_rejects_writes_before_the_driver() {
+        let temp = tempfile::NamedTempFile::new().expect("temp file");
+        let connection_string = format!("sqlite:{}", temp.path().display());
+        let mut inner = sqlite::SqliteConnection::new(connection_string.clone()).expect("sqlite");
+        inner.connect(&connection_string).await.expect("connect");
+        let inner: Arc<dyn Connection> = Arc::new(inner);
+        let wrapper = TokioConnection::new(inner, Handle::current(), true);
+
+        let error = wrapper
+            .execute_write("CREATE TABLE t (id INTEGER)", None, &[])
+            .await
+            .expect_err("DDL must be rejected");
+        assert!(error.to_string().contains("read-only"), "{error}");
+
+        let failure = wrapper
+            .execute_operations_transactional(&["DELETE FROM t".to_string()], None)
+            .await
+            .expect_err("batch must be rejected");
+        assert_eq!(failure.applied, 0);
+
+        wrapper
+            .execute_query("SELECT 1", None, None)
+            .await
+            .expect("reads still work");
     }
 
     #[tokio::test]

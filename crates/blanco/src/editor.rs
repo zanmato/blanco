@@ -23,11 +23,13 @@ pub use tabs::{
 
 use blanco_core::{ColumnInfo, IndexInfo};
 use gpui::{
-    AppContext, Context, Entity, FocusHandle, KeybindingKeystroke, Keystroke, Task, WeakEntity,
-    Window,
+    AppContext, Context, Entity, FocusHandle, KeybindingKeystroke, Keystroke, ParentElement as _,
+    Task, WeakEntity, Window,
 };
 use gpui_component::{
     ActiveTheme, WindowExt as _,
+    button::{Button, ButtonVariants as _},
+    dialog::{DialogAction, DialogClose, DialogFooter},
     input::{EditorState, InputEvent, TabSize},
     resizable::ResizableState,
 };
@@ -38,8 +40,8 @@ use self::object_ddl::ObjectDdlTab;
 use self::snippet_editor::SnippetEditor;
 use self::table_structure::TableStructureTab;
 use crate::agent::{ChatPanel, ChatProviderResolver, ChatSessionContext, TabLanguage};
-use crate::app_database::AppDatabase;
 use crate::app_database::QueryTabData;
+use crate::app_database::{AppDatabase, EnvironmentType};
 use crate::app_settings::AppSettings;
 use crate::result_ext::ResultExt;
 use crate::results_panel::ResultsPanel;
@@ -904,6 +906,69 @@ impl EditorPanel {
 
     /// Commit current changes in the active tab's results panel
     pub fn commit_current_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(TabType::Query(query_tab)) = self.tabs.get(self.active_tab_ix) else {
+            return;
+        };
+        if query_tab.environment_type == Some(EnvironmentType::Prod) {
+            let connection_name = query_tab
+                .connection_name
+                .clone()
+                .unwrap_or_else(|| "This connection".to_string());
+            self.confirm_prod_write(
+                "Commit edits to PROD?",
+                format!(
+                    "\"{connection_name}\" is tagged as a production connection. The pending grid edits will be written to it."
+                ),
+                "Commit to PROD",
+                |panel, window, cx| panel.commit_current_changes_unchecked(window, cx),
+                window,
+                cx,
+            );
+            return;
+        }
+        self.commit_current_changes_unchecked(window, cx);
+    }
+
+    /// Open a confirmation dialog for a write against a PROD connection and
+    /// run `on_confirm` on this panel when the user accepts.
+    pub(crate) fn confirm_prod_write(
+        &mut self,
+        title: &'static str,
+        message: String,
+        confirm_label: &'static str,
+        on_confirm: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let weak_panel = cx.entity().downgrade();
+        let on_confirm = Rc::new(on_confirm);
+        window.open_dialog(cx, move |dialog, _, _| {
+            let weak_panel = weak_panel.clone();
+            let on_confirm = on_confirm.clone();
+            dialog.title(title).child(message.clone()).footer(
+                DialogFooter::new()
+                    .child(
+                        DialogClose::new()
+                            .child(Button::new("prod-write-cancel").label("Cancel").outline()),
+                    )
+                    .child(
+                        DialogAction::new().child(
+                            Button::new("prod-write-confirm")
+                                .danger()
+                                .label(confirm_label)
+                                .on_click(move |_, window, cx| {
+                                    let on_confirm = on_confirm.clone();
+                                    weak_panel
+                                        .update(cx, |panel, cx| on_confirm(panel, window, cx))
+                                        .log_err();
+                                }),
+                        ),
+                    ),
+            )
+        });
+    }
+
+    fn commit_current_changes_unchecked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(TabType::Query(query_tab)) = self.tabs.get_mut(self.active_tab_ix) {
             let changes = query_tab
                 .results_panel

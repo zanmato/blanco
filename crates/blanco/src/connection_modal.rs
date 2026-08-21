@@ -23,6 +23,7 @@ use gpui_component::{
     input::{Input, InputState},
     notification::NotificationType,
     select::{Select, SelectState},
+    switch::Switch,
     v_flex,
 };
 
@@ -33,6 +34,7 @@ pub struct NewConnectionModal {
     name_input: Entity<InputState>,
     db_type_select: Entity<SelectState<Vec<String>>>,
     environment_type_select: Entity<SelectState<Vec<String>>>,
+    read_only: bool,
     sqlite_form: SqliteForm,
     postgres_form: PostgresForm,
     mysql_form: MysqlForm,
@@ -111,6 +113,7 @@ impl NewConnectionModal {
         });
 
         let conn_ref = connection_data.as_ref();
+        let read_only = conn_ref.is_some_and(|connection| connection.read_only);
         let sqlite_form = SqliteForm::new(window, cx, conn_ref);
         let postgres_form = PostgresForm::new(window, cx, conn_ref);
         let mysql_form = MysqlForm::new(window, cx, conn_ref);
@@ -123,6 +126,7 @@ impl NewConnectionModal {
             name_input,
             db_type_select,
             environment_type_select,
+            read_only,
             sqlite_form,
             postgres_form,
             mysql_form,
@@ -179,7 +183,7 @@ impl NewConnectionModal {
         environment_type: EnvironmentType,
         cx: &App,
     ) -> Option<ConnectionData> {
-        match connector_type {
+        let mut connection = match connector_type {
             ConnectorType::SQLite => {
                 self.sqlite_form
                     .get_connection_data(name, environment_type, cx)
@@ -201,7 +205,9 @@ impl NewConnectionModal {
             ConnectorType::Redis => self
                 .redis_form
                 .get_connection_data(name, environment_type, cx),
-        }
+        }?;
+        connection.read_only = self.read_only;
+        Some(connection)
     }
 
     pub fn test_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -526,6 +532,15 @@ impl Render for NewConnectionModal {
                                 .child(div().text_sm().child("Environment"))
                                 .child(Select::new(&self.environment_type_select)),
                         ),
+                )
+                .child(
+                    Switch::new("connection-read-only-switch")
+                        .checked(self.read_only)
+                        .label("Read-only (reject statements that modify data)")
+                        .on_click(cx.listener(|modal, checked, _window, cx| {
+                            modal.read_only = *checked;
+                            cx.notify();
+                        })),
                 )
                 .child(match connector_type {
                     ConnectorType::SQLite => sqlite::render(self, cx),

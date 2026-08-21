@@ -512,3 +512,29 @@ async fn test_history_search_filters_entries(cx: &mut TestAppContext) {
     assert_eq!(matches.len(), 1, "only the banana query should match");
     assert!(matches[0].query_text.contains("banana"));
 }
+
+/// Writes on a PROD-tagged tab must wait for confirmation: running one opens a
+/// dialog instead of executing, so the statement never reaches the database.
+#[gpui::test]
+async fn test_prod_write_requires_confirmation(cx: &mut TestAppContext) {
+    let harness = TestHarness::new_with_environment(cx, crate::app_database::EnvironmentType::Prod);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    set_editor_text(&harness, "CREATE TABLE guarded (id INTEGER)", &mut cx);
+    run_query(&harness, &mut cx);
+    cx.run_until_parked();
+    assert!(
+        !crate::test_harness::is_loading(&harness, &cx),
+        "a guarded write must not start executing"
+    );
+
+    // Reads are unaffected and prove the table was never created.
+    set_editor_text(
+        &harness,
+        "SELECT name FROM sqlite_master WHERE name = 'guarded'",
+        &mut cx,
+    );
+    run_query(&harness, &mut cx);
+    wait_for_query(&harness, &mut cx).await;
+    assert_eq!(result_row_count(&harness, &cx), Some(0));
+}

@@ -39,6 +39,23 @@ impl TestHarness {
     /// drift). The connection itself is always an in-memory SQLite file, so this
     /// is only meaningful for render/highlighting tests, not query execution.
     pub fn new_with_db_type(cx: &mut TestAppContext, db_type: database::DatabaseType) -> Self {
+        Self::new_with(cx, db_type, None)
+    }
+
+    /// Open a SQLite-backed harness whose query tab carries `environment_type`,
+    /// for exercising the PROD write confirmation.
+    pub fn new_with_environment(
+        cx: &mut TestAppContext,
+        environment_type: crate::app_database::EnvironmentType,
+    ) -> Self {
+        Self::new_with(cx, database::DatabaseType::SQLite, Some(environment_type))
+    }
+
+    fn new_with(
+        cx: &mut TestAppContext,
+        db_type: database::DatabaseType,
+        environment_type: Option<crate::app_database::EnvironmentType>,
+    ) -> Self {
         cx.executor().allow_parking();
 
         crate::sql::register_languages();
@@ -108,7 +125,7 @@ impl TestHarness {
                     connection_name: Some("test".into()),
                     database_name: "main".into(),
                     schema_name: None,
-                    environment_type: None,
+                    environment_type,
                 };
                 panel.update(cx, |panel: &mut EditorPanel, cx| {
                     panel.create_and_add_tab_with_connection(window, params, cx);

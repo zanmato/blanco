@@ -29,7 +29,7 @@ impl AppDatabase {
                         ssh_host = ?, ssh_port = ?, ssh_user = ?,
                         ssh_private_key_path = ?,
                         ssl_mode = ?, ssl_key_path = ?, ssl_cert_path = ?, ssl_ca_cert_path = ?,
-                        trust_server_certificate = ?
+                        trust_server_certificate = ?, read_only = ?
                     WHERE id = ?
                     "#,
                 )
@@ -52,6 +52,7 @@ impl AppDatabase {
                 .bind(&conn.ssl_cert_path)
                 .bind(&conn.ssl_ca_cert_path)
                 .bind(if conn.trust_server_certificate { 1 } else { 0 })
+                .bind(if conn.read_only { 1 } else { 0 })
                 .bind(id)
                 .execute(&pool)
                 .await?;
@@ -60,8 +61,8 @@ impl AppDatabase {
                 // Insert new connection
                 let result = sqlx::query(
                     r#"
-                    INSERT INTO connections (name, db_type, host, port, database_name, username, database_path, last_used_at, created_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO connections (name, db_type, host, port, database_name, username, database_path, last_used_at, created_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate, read_only)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     "#,
                 )
                 .bind(&conn.name)
@@ -84,6 +85,7 @@ impl AppDatabase {
                 .bind(&conn.ssl_cert_path)
                 .bind(&conn.ssl_ca_cert_path)
                 .bind(if conn.trust_server_certificate { 1 } else { 0 })
+                .bind(if conn.read_only { 1 } else { 0 })
                 .execute(&pool)
                 .await?;
 
@@ -100,7 +102,7 @@ impl AppDatabase {
             .run(async move {
             let rows = sqlx::query(
                 r#"
-                SELECT id, name, db_type, host, port, database_name, username, database_path, last_used_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate
+                SELECT id, name, db_type, host, port, database_name, username, database_path, last_used_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate, read_only
                 FROM connections
                 ORDER BY name
                 "#,
@@ -143,6 +145,7 @@ impl AppDatabase {
                         trust_server_certificate: row
                             .get::<i64, _>("trust_server_certificate")
                             != 0,
+                        read_only: row.get::<i64, _>("read_only") != 0,
                     }
                 })
                 .collect();
