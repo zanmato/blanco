@@ -697,7 +697,7 @@ impl ConnectionsPanel {
 
         let db_service = DatabaseService::global(cx).clone();
         let connection_id = metadata.connection_id;
-        let database_name = metadata.database_name.clone();
+        let database_name = metadata.database_name;
         let label = operation.label();
         cx.spawn_in(window, async move |this, cx| {
             let result = gpui_tokio::Tokio::spawn_result(cx, async move {
