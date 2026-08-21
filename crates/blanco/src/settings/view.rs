@@ -558,7 +558,12 @@ impl SettingsView {
                     SettingItem::new(
                         "Provider",
                         SettingField::dropdown(
-                            vec![("openai".into(), "OpenAI Compatible".into())],
+                            vec![
+                                ("openai".into(), "OpenAI Compatible".into()),
+                                ("anthropic".into(), "Anthropic".into()),
+                                ("google".into(), "Google".into()),
+                                ("ollama".into(), "Ollama".into()),
+                            ],
                             move |cx: &App| {
                                 SharedString::from(
                                     AppSettings::global(cx).settings.chat.provider.clone(),

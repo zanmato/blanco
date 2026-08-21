@@ -119,6 +119,22 @@ console.log("rows:", tables.rows.length);
 db.display(tables);
 "#;
 
+/// The effective keystroke for an action, for tooltips. Falls back to the
+/// built-in default when the user's override does not parse, and to an empty
+/// keystroke when the action is unbound.
+fn keystroke_hint(action: &str, cx: &App) -> KeybindingKeystroke {
+    let settings = &AppSettings::global(cx).settings;
+    let keystrokes = crate::keybindings::effective_keystroke(settings, action);
+    let chord = keystrokes
+        .split_whitespace()
+        .next()
+        .unwrap_or(crate::keybindings::default_keystroke(action));
+    let keystroke = Keystroke::parse(chord)
+        .or_else(|_| Keystroke::parse(crate::keybindings::default_keystroke(action)))
+        .unwrap_or_default();
+    KeybindingKeystroke::from_keystroke(keystroke)
+}
+
 impl EditorPanel {
     /// The results panel of the currently active query tab, if any.
     pub fn active_results_panel(&self) -> Option<Entity<ResultsPanel>> {
@@ -525,12 +541,8 @@ impl EditorPanel {
             active_tab_ix: 0,
             tabbar_scroll_handle: gpui::ScrollHandle::default(),
             _subscriptions: Vec::new(),
-            run_query_keystroke: Keystroke::parse("secondary-enter")
-                .map(KeybindingKeystroke::from_keystroke)
-                .expect("valid keystroke literal"),
-            format_query_keystroke: Keystroke::parse("shift-alt-f")
-                .map(KeybindingKeystroke::from_keystroke)
-                .expect("valid keystroke literal"),
+            run_query_keystroke: keystroke_hint("RunQuery", cx),
+            format_query_keystroke: keystroke_hint("FormatQuery", cx),
             editor_chat_resize_state,
             script_editor_chat_resize_state,
             editor_results_resize_state,

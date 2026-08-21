@@ -22,12 +22,12 @@ pub const CUSTOMIZABLE_BINDINGS: &[BindingDef] = &[
     BindingDef {
         action: "RunQuery",
         label: "Run query",
-        default: "",
+        default: "secondary-enter",
     },
     BindingDef {
         action: "ExplainQuery",
         label: "Explain query",
-        default: "",
+        default: "secondary-e",
     },
     BindingDef {
         action: "FormatQuery",
@@ -133,9 +133,13 @@ mod tests {
     }
 
     #[test]
-    fn unbound_default_is_empty() {
+    fn run_query_is_bound_by_default() {
         let settings = Settings::default();
-        assert_eq!(effective_keystroke(&settings, "RunQuery"), "");
+        assert_eq!(
+            effective_keystroke(&settings, "RunQuery"),
+            "secondary-enter"
+        );
+        assert_eq!(effective_keystroke(&settings, "Unknown"), "");
     }
 
     #[test]
@@ -151,14 +155,16 @@ mod tests {
     #[test]
     fn empty_and_invalid_bindings_are_skipped() {
         let mut settings = Settings::default();
-        // RunQuery is unbound by default, so it should not produce a binding.
-        // Give ExplainQuery a malformed keystroke; it should be skipped too.
+        // Unbind RunQuery explicitly and give ExplainQuery a malformed
+        // keystroke; both must be skipped rather than panic.
+        settings
+            .keybindings
+            .insert("RunQuery".to_string(), String::new());
         settings
             .keybindings
             .insert("ExplainQuery".to_string(), "ctrl-a-b".to_string());
 
         let bindings = customizable_key_bindings(&settings);
-        // The five actions with valid defaults still bind.
-        assert_eq!(bindings.len(), 5);
+        assert_eq!(bindings.len(), CUSTOMIZABLE_BINDINGS.len() - 2);
     }
 }
