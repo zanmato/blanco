@@ -6,7 +6,7 @@ use gpui::{
 };
 use gpui_component::{ActiveTheme, v_flex};
 
-use crate::app_database::EnvironmentType;
+use app_database::EnvironmentType;
 
 pub struct ObjectDdlTab {
     pub title: String,

@@ -14,10 +14,10 @@ use std::rc::Rc;
 
 use crate::script_completion::ScriptCompletionProvider;
 
-use crate::app_database::{AppDatabase, EditorKind, SnippetData};
 use crate::app_settings::AppSettings;
 use crate::result_ext::ResultExt;
 use crate::snippets_panel::RefreshSnippets;
+use app_database::{AppDatabase, EditorKind, SnippetData};
 
 pub struct SnippetEditor {
     pub snippet_id: Option<i64>,

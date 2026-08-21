@@ -1,6 +1,6 @@
 use sqlx::Row;
 
-use crate::app_database::{AppDatabase, QueryHistoryData};
+use crate::{AppDatabase, QueryHistoryData};
 
 impl AppDatabase {
     /// Append a finished execution to the history log. The `id` field of the

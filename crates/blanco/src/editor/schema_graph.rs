@@ -4,7 +4,7 @@ use gpui::{
 };
 use gpui_component::v_flex;
 
-use crate::app_database::EnvironmentType;
+use app_database::EnvironmentType;
 use blanco_core::connection_trait::TableSchemaInfo;
 use blanco_ui::graph_view::{
     FieldBadge, GraphEdge, GraphModel, GraphNode, GraphNodeField, GraphView, compute_node_sizes,

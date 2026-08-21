@@ -1,5 +1,4 @@
 use database::{ConnectionConfig, DatabaseType};
-use gpui_component::ActiveTheme;
 
 /// Environment type for database connections
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -29,14 +28,6 @@ impl EnvironmentType {
             EnvironmentType::Dev => "DEV",
             EnvironmentType::Test => "TEST",
             EnvironmentType::Prod => "PROD",
-        }
-    }
-
-    pub fn get_color(self, cx: &gpui::App) -> gpui::Rgba {
-        match self {
-            EnvironmentType::Dev => cx.theme().blue.into(),
-            EnvironmentType::Test => cx.theme().green.into(),
-            EnvironmentType::Prod => cx.theme().red.into(),
         }
     }
 }
@@ -212,6 +203,10 @@ impl std::fmt::Debug for ConnectionData {
 }
 
 impl ConnectionData {
+    pub fn display_name(&self) -> String {
+        self.name.clone()
+    }
+
     pub fn new_sqlite(name: String, database_path: String) -> Self {
         Self {
             id: None,

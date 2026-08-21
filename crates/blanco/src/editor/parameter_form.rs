@@ -9,7 +9,7 @@ use gpui_component::{
 };
 use std::collections::HashMap;
 
-use crate::sql::statement_parser::{ParameterStyle, QueryParameter};
+use sql_parser::statement_parser::{ParameterStyle, QueryParameter};
 
 #[derive(Clone, Debug)]
 pub struct ParameterInput {

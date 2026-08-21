@@ -21,10 +21,10 @@ use crate::{
         OpenNewConnectionModal, OpenSettings, RollbackChanges, RunQuery, ToggleRenderWhitespace,
         ToggleSidebar, ToggleWordWrap,
     },
-    app_database::EnvironmentType,
     connections::ConnectionsPanel,
     result_ext::ResultExt as _,
 };
+use app_database::EnvironmentType;
 
 const COMMAND_PALETTE_CONTEXT: &str = "CommandPalette";
 
@@ -1286,9 +1286,9 @@ mod visual_tests {
     use gpui_component::Root;
 
     use crate::app::{BlancoApp, ToggleCommandPalette};
-    use crate::app_database::AppDatabase;
     use crate::app_settings::AppSettings;
     use crate::settings::Settings;
+    use app_database::AppDatabase;
 
     fn setup_app(cx: &mut TestAppContext) -> (gpui::Entity<BlancoApp>, gpui::WindowHandle<Root>) {
         cx.executor().allow_parking();

@@ -3,7 +3,7 @@ use std::future::Future;
 use anyhow::{Context as _, Result};
 use gpui::{App, Task};
 
-use crate::app_database::{ConnectionData, LegacyConnectionCredentials};
+use app_database::{ConnectionData, LegacyConnectionCredentials};
 
 #[derive(Clone, Copy)]
 enum CredentialKind {

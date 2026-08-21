@@ -1,7 +1,7 @@
 use gpui::{AnyElement, App, Context, Entity, IntoElement, ParentElement, Styled, Window};
 use gpui_component::{input::InputState, v_flex};
 
-use crate::app_database::{ConnectionData, EnvironmentType};
+use app_database::{ConnectionData, EnvironmentType};
 
 use super::NewConnectionModal;
 use super::shared::{file_picker_input, make_input};

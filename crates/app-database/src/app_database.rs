@@ -82,7 +82,7 @@ impl AppDatabase {
         Ok(Self { pool, runtime })
     }
 
-    #[cfg(test)]
+    /// In-memory database for tests in this and downstream crates.
     pub async fn new_in_memory(runtime: Handle) -> Result<Self, sqlx::Error> {
         let options =
             SqliteConnectOptions::from_str("sqlite::memory:")?.disable_statement_logging();

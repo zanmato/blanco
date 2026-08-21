@@ -1,4 +1,4 @@
-use database::ParamStyles;
+use blanco_core::ParamStyles;
 use once_cell::sync::Lazy;
 use ropey::Rope;
 use std::cell::RefCell;
@@ -1146,7 +1146,7 @@ fn determine_clause_from_keywords(source: &str, cursor_byte_pos: usize) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use database::DatabaseType;
+    use blanco_core::DatabaseType;
 
     fn create_test_parser() -> SqlStatementParser {
         SqlStatementParser::new().expect("Failed to create test parser")

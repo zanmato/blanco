@@ -1,6 +1,6 @@
 use sqlx::Row;
 
-use crate::app_database::{AppDatabase, EditorKind, SnippetData};
+use crate::{AppDatabase, EditorKind, SnippetData};
 
 impl AppDatabase {
     pub async fn save_snippet(&self, snippet: &SnippetData) -> Result<i64, sqlx::Error> {

@@ -13,6 +13,9 @@ members = [
     "crates/mssql",
     "crates/redis",
     "crates/tree-sitter-redis",
+    "crates/scripting",
+    "crates/app-database",
+    "crates/sql-parser",
 ]
 
 [workspace.package]

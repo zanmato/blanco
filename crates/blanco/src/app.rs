@@ -21,7 +21,6 @@ use smol::channel;
 use tracing::{debug, error, info};
 
 use crate::{
-    app_database::{AppDatabase, ConnectionData, EnvironmentType},
     app_settings::AppSettings,
     command_palette::CommandPalette,
     connection_credentials,
@@ -35,6 +34,7 @@ use crate::{
     snippets_panel::{RefreshSnippets, SnippetsPanel, SnippetsPanelEvent},
     status_bar::{ActivityMessage, ActivityReporter, ActivityResult, StatusBarState, StatusKind},
 };
+use app_database::{AppDatabase, ConnectionData, EnvironmentType};
 
 actions!(
     blanco_app,
@@ -424,7 +424,7 @@ impl BlancoApp {
     /// Synchronously load the persisted query tabs from the app database. Blocks
     /// on the tokio runtime because the app cannot render until it knows which
     /// tabs to restore. Load failures degrade to an empty tab set.
-    fn load_saved_tabs(cx: &mut Context<Self>) -> Vec<crate::app_database::QueryTabData> {
+    fn load_saved_tabs(cx: &mut Context<Self>) -> Vec<app_database::QueryTabData> {
         info!("Loading saved tabs from database");
         let app_database = AppDatabase::global(cx);
         gpui_tokio::Tokio::handle(cx).block_on(async {

@@ -1,6 +1,6 @@
 use sqlx::Row;
 
-use crate::app_database::{AppDatabase, ConnectionData, EnvironmentType};
+use crate::{AppDatabase, ConnectionData, EnvironmentType};
 use database::DatabaseType;
 
 #[derive(Debug)]

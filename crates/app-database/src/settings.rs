@@ -1,6 +1,6 @@
 use sqlx::Row;
 
-use crate::app_database::AppDatabase;
+use crate::AppDatabase;
 
 impl AppDatabase {
     pub async fn save_setting(

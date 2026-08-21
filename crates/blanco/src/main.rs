@@ -7,7 +7,6 @@ static GLOBAL: Jemalloc = Jemalloc;
 
 mod agent;
 mod app;
-mod app_database;
 mod app_settings;
 mod assets;
 mod command_palette;
@@ -27,7 +26,6 @@ mod redis_syntax;
 mod result_ext;
 mod results_panel;
 mod script_completion;
-mod scripting;
 mod settings;
 mod snippets_panel;
 mod sql;
@@ -44,7 +42,8 @@ use gpui_component::{Theme, ThemeRegistry};
 use gpui_platform::application;
 use std::path::PathBuf;
 
-use crate::{app_database::AppDatabase, app_settings::AppSettings, settings::Settings};
+use crate::{app_settings::AppSettings, settings::Settings};
+use app_database::AppDatabase;
 
 fn main() {
     // Honour `RUST_LOG` when set, otherwise default to a useful baseline so

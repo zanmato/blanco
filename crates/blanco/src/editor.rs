@@ -40,14 +40,14 @@ use self::object_ddl::ObjectDdlTab;
 use self::snippet_editor::SnippetEditor;
 use self::table_structure::TableStructureTab;
 use crate::agent::{ChatPanel, ChatProviderResolver, ChatSessionContext, TabLanguage};
-use crate::app_database::QueryTabData;
-use crate::app_database::{AppDatabase, EnvironmentType};
 use crate::app_settings::AppSettings;
 use crate::result_ext::ResultExt;
 use crate::results_panel::ResultsPanel;
 use crate::script_completion::ScriptCompletionProvider;
 use crate::settings::SettingsView;
 use crate::sql::{SqlCompletionProvider, SqlSelectionRangeProvider, SqruffService};
+use app_database::QueryTabData;
+use app_database::{AppDatabase, EnvironmentType};
 use blanco_ui::SqlView;
 use database::{DatabaseService, DatabaseServiceTrait};
 
@@ -301,7 +301,7 @@ impl EditorPanel {
     pub fn create_snippet_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // New snippets start as queries; the footer toggle switches them.
         let snippet_editor =
-            cx.new(|cx| SnippetEditor::new(crate::app_database::EditorKind::Query, window, cx));
+            cx.new(|cx| SnippetEditor::new(app_database::EditorKind::Query, window, cx));
 
         self.tabs.push(TabType::Snippet(snippet_editor));
         self.active_tab_ix = self.tabs.len() - 1;
@@ -603,7 +603,7 @@ impl EditorPanel {
                     schema_name: None, // Schema not yet persisted in query tabs
                     environment_type: tab_data.environment_type,
                 };
-                if tab_data.tab_kind == crate::app_database::EditorKind::Script {
+                if tab_data.tab_kind == app_database::EditorKind::Script {
                     self.create_and_add_script_tab(window, params, cx);
                 } else {
                     self.create_and_add_tab_with_connection(window, params, cx);

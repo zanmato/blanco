@@ -258,7 +258,7 @@ async fn test_empty_result_set(cx: &mut TestAppContext) {
 #[gpui::test]
 async fn test_parameter_form_substitutes_named_params(cx: &mut TestAppContext) {
     use crate::editor::parameter_form::ParameterForm;
-    use crate::sql::statement_parser::{ParameterStyle, QueryParameter};
+    use sql_parser::statement_parser::{ParameterStyle, QueryParameter};
 
     let harness = TestHarness::new(cx);
     let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
@@ -303,7 +303,7 @@ async fn test_parameter_form_substitutes_named_params(cx: &mut TestAppContext) {
 #[gpui::test]
 async fn test_parameter_form_substitutes_repeated_param(cx: &mut TestAppContext) {
     use crate::editor::parameter_form::ParameterForm;
-    use crate::sql::statement_parser::{ParameterStyle, QueryParameter};
+    use sql_parser::statement_parser::{ParameterStyle, QueryParameter};
 
     let harness = TestHarness::new(cx);
     let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
@@ -338,7 +338,7 @@ async fn test_parameter_form_substitutes_repeated_param(cx: &mut TestAppContext)
 #[gpui::test]
 async fn test_parameter_form_substitutes_positional_params(cx: &mut TestAppContext) {
     use crate::editor::parameter_form::ParameterForm;
-    use crate::sql::statement_parser::{ParameterStyle, QueryParameter};
+    use sql_parser::statement_parser::{ParameterStyle, QueryParameter};
 
     let harness = TestHarness::new(cx);
     let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
@@ -377,8 +377,8 @@ async fn test_parameter_form_substitutes_positional_params(cx: &mut TestAppConte
 async fn wait_for_history(
     cx: &mut VisualTestContext,
     expected_len: usize,
-) -> Vec<crate::app_database::QueryHistoryData> {
-    use crate::app_database::AppDatabase;
+) -> Vec<app_database::QueryHistoryData> {
+    use app_database::AppDatabase;
 
     for _ in 0..50 {
         let history = cx.update(|_window, cx| {
@@ -441,7 +441,7 @@ async fn test_failed_query_records_history(cx: &mut TestAppContext) {
 /// Pruning keeps only the newest N entries and treats 0 as unlimited.
 #[gpui::test]
 async fn test_prune_query_history_keeps_newest(cx: &mut TestAppContext) {
-    use crate::app_database::{AppDatabase, QueryHistoryData};
+    use app_database::{AppDatabase, QueryHistoryData};
 
     let harness = TestHarness::new(cx);
     let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
@@ -485,7 +485,7 @@ async fn test_prune_query_history_keeps_newest(cx: &mut TestAppContext) {
 /// History search filters by query text and is case-insensitive.
 #[gpui::test]
 async fn test_history_search_filters_entries(cx: &mut TestAppContext) {
-    use crate::app_database::AppDatabase;
+    use app_database::AppDatabase;
 
     let harness = TestHarness::new(cx);
     let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
@@ -517,7 +517,7 @@ async fn test_history_search_filters_entries(cx: &mut TestAppContext) {
 /// dialog instead of executing, so the statement never reaches the database.
 #[gpui::test]
 async fn test_prod_write_requires_confirmation(cx: &mut TestAppContext) {
-    let harness = TestHarness::new_with_environment(cx, crate::app_database::EnvironmentType::Prod);
+    let harness = TestHarness::new_with_environment(cx, app_database::EnvironmentType::Prod);
     let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
 
     set_editor_text(&harness, "CREATE TABLE guarded (id INTEGER)", &mut cx);

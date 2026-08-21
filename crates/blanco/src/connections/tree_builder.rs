@@ -10,7 +10,7 @@ use blanco_ui::tree::TreeItem;
 use gpui::Context;
 use gpui_component::ActiveTheme as _;
 
-use crate::app_database::ConnectionData;
+use app_database::ConnectionData;
 
 use super::data_loading::{DatabaseItemType, DatabaseTable};
 use super::{ConnectionsPanel, TreeItemIcon, TreeItemKind, TreeItemMetadata};

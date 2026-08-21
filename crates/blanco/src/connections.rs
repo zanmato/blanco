@@ -6,11 +6,11 @@ pub use data_loading::DatabaseMetadata;
 pub use delegate::ConnectionsTreeDelegate;
 
 use crate::app::{CreateNewQueryTab, CreateNewScriptTab};
-use crate::app_database::{AppDatabase, ConnectionData, EnvironmentType};
 use crate::connection_credentials;
 use crate::export::modal::ExportModal;
 use crate::import::modal::ImportModal;
 use crate::result_ext::ResultExt;
+use app_database::{AppDatabase, ConnectionData, EnvironmentType};
 use blanco_core::DatabaseService as DatabaseServiceTrait;
 use blanco_ui::IconName;
 use blanco_ui::tree::{Tree, TreeItem, TreeState};
@@ -957,10 +957,13 @@ fn connection_type_icon(db_type: database::DatabaseType) -> IconName {
     }
 }
 
-// Add display_name method to ConnectionData
-impl ConnectionData {
-    pub fn display_name(&self) -> String {
-        self.name.clone()
+/// Theme color for an environment chip. Lives here rather than on
+/// `EnvironmentType` so the app-database crate stays free of UI dependencies.
+pub fn environment_color(environment_type: EnvironmentType, cx: &App) -> gpui::Rgba {
+    match environment_type {
+        EnvironmentType::Dev => cx.theme().blue.into(),
+        EnvironmentType::Test => cx.theme().green.into(),
+        EnvironmentType::Prod => cx.theme().red.into(),
     }
 }
 

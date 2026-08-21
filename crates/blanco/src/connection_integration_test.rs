@@ -16,10 +16,10 @@ use std::env;
 use database::{DatabaseService, DatabaseType};
 use gpui::{AppContext, Entity, TestAppContext, VisualTestContext};
 
-use crate::app_database::AppDatabase;
 use crate::connection_modal::NewConnectionModal;
 use crate::editor::{EditorPanel, TabCreationParams};
 use crate::test_harness::FullAppHarness;
+use app_database::AppDatabase;
 
 fn strict() -> bool {
     env::var("BLANCO_RUN_DB_TESTS").as_deref() == Ok("1")

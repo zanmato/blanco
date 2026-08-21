@@ -1,8 +1,8 @@
-use crate::app_database::AppDatabase;
 use crate::app_settings::AppSettings;
 use crate::settings::Settings;
 use crate::settings::formatter_page::formatter_page;
 use crate::settings::keybindings_page::keybindings_page;
+use app_database::AppDatabase;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, Render, SharedString,
     Styled, Subscription, Task, Window, px, rems,

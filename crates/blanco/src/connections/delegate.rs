@@ -135,8 +135,8 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                         .py_0p5()
                         .rounded_md()
                         .border_1()
-                        .border_color(env_type.get_color(cx))
-                        .text_color(env_type.get_color(cx))
+                        .border_color(crate::connections::environment_color(env_type, cx))
+                        .text_color(crate::connections::environment_color(env_type, cx))
                         .child(env_type.display_name()),
                 )
             } else {

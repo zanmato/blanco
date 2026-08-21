@@ -97,8 +97,9 @@ const BASELINE: &[&str] = &[
 /// `n + 1`. Step 0 brings the unversioned, pre-`user_version` layout (which
 /// accumulated columns through `ADD COLUMN IF MISSING` calls) up to the
 /// baseline; its column list must stay in sync with [`BASELINE`].
-const MIGRATIONS: &[fn(&SqlitePool) -> futures::future::BoxFuture<'_, Result<(), sqlx::Error>>] =
-    &[|pool| Box::pin(migrate_unversioned_to_v1(pool))];
+type Migration = fn(&SqlitePool) -> futures::future::BoxFuture<'_, Result<(), sqlx::Error>>;
+
+const MIGRATIONS: &[Migration] = &[|pool| Box::pin(migrate_unversioned_to_v1(pool))];
 
 /// Columns that may be missing from an unversioned database, per table, in the
 /// form accepted by `ALTER TABLE ... ADD COLUMN`.

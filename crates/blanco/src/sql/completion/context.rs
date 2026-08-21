@@ -1,4 +1,4 @@
-use crate::sql::statement_parser::{TableAlias, ident_eq};
+use sql_parser::statement_parser::{TableAlias, ident_eq};
 
 /// Resolve table name from alias, returns None if not found. Matching is
 /// case-insensitive (and quote-insensitive) so `FROM Users u ... u.` resolves

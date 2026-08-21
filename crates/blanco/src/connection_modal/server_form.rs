@@ -17,7 +17,7 @@ use gpui_component::{
     v_flex,
 };
 
-use crate::app_database::{ConnectionData, EnvironmentType};
+use app_database::{ConnectionData, EnvironmentType};
 
 use super::NewConnectionModal;
 use super::shared::{make_input, render_ssh_section, render_ssl_advanced_fields};

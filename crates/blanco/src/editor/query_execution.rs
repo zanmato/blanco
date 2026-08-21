@@ -8,15 +8,15 @@ use gpui_component::{
 use ropey::Rope;
 use tracing::{debug, error};
 
-use crate::app_database::{AppDatabase, EnvironmentType, QueryHistoryData, QueryTabData};
 use crate::app_settings::AppSettings;
 use crate::result_ext::ResultExt;
-use crate::sql::statement_parser::QueryParameter;
 use crate::sql::{extract_statement_info, extract_statement_info_with_styles};
 use crate::status_bar::{ActivityReporter, ActivityResult};
 use crate::time_format;
+use app_database::{AppDatabase, EnvironmentType, QueryHistoryData, QueryTabData};
 use blanco_core::StatementAccess;
 use database::{DatabaseService, DatabaseServiceTrait};
+use sql_parser::statement_parser::QueryParameter;
 
 use super::parameter_form::ParameterForm;
 use super::{EditorPanel, SQL_QUERY_LOG_MAX_LENGTH, TabType};
@@ -155,7 +155,7 @@ impl EditorPanel {
             window.push_notification((NotificationType::Error, "No query to explain"), cx);
             return;
         }
-        let wrapped = crate::sql::explain::wrap_explain(db_type, &raw);
+        let wrapped = sql_parser::explain::wrap_explain(db_type, &raw);
         self.execute_query(wrapped, connection_id, &database_name, window, cx);
     }
 
@@ -262,7 +262,7 @@ impl EditorPanel {
                 database_name: Some(query_tab.database_name.clone()),
                 schema_name: query_tab.schema_name.clone(),
                 environment_type: query_tab.environment_type,
-                tab_kind: crate::app_database::EditorKind::Query,
+                tab_kind: app_database::EditorKind::Query,
                 last_run_at: Some(run_timestamp),
             };
 

@@ -5,8 +5,8 @@ pub use delegate::{SnippetItemMetadata, SnippetsTreeDelegate};
 use std::future::Future;
 
 use crate::app::{NewSnippet, OpenSnippetEditor};
-use crate::app_database::{AppDatabase, EditorKind, SnippetData};
 use crate::result_ext::ResultExt;
+use app_database::{AppDatabase, EditorKind, SnippetData};
 use blanco_ui::draggable_tree::{DraggableTree, DraggableTreeState, TreeItem};
 use gpui::{
     AppContext, ClipboardItem, Context, Entity, EventEmitter, InteractiveElement, IntoElement,

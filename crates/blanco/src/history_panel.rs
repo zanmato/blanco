@@ -17,9 +17,9 @@ use gpui_component::{
     v_flex, v_virtual_list,
 };
 
-use crate::app_database::{AppDatabase, QueryHistoryData};
 use crate::result_ext::ResultExt as _;
 use crate::time_format;
+use app_database::{AppDatabase, QueryHistoryData};
 
 /// Maximum number of history rows loaded into the panel at once.
 const HISTORY_LIMIT: i64 = 200;

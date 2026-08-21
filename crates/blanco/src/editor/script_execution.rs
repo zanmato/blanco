@@ -10,12 +10,12 @@ use gpui::{AppContext as _, Context, SharedString, Window};
 use gpui_component::{RopeExt, WindowExt as _, notification::NotificationType};
 use tracing::{debug, error};
 
-use crate::app_database::{AppDatabase, QueryTabData};
 use crate::result_ext::ResultExt;
-use crate::scripting::{self, ConsoleLevel, ScriptEvent};
 use crate::status_bar::{ActivityReporter, ActivityResult};
 use crate::time_format;
+use app_database::{AppDatabase, QueryTabData};
 use database::{DatabaseService, DatabaseServiceTrait};
+use scripting::{ConsoleLevel, ScriptEvent};
 
 use super::{EditorPanel, LINT_DEBOUNCE_MS, TabType};
 
@@ -73,7 +73,7 @@ impl EditorPanel {
             database_name: Some(database_name.clone()),
             schema_name: script_tab.schema_name.clone(),
             environment_type: script_tab.environment_type,
-            tab_kind: crate::app_database::EditorKind::Script,
+            tab_kind: app_database::EditorKind::Script,
             last_run_at: Some(run_timestamp),
         };
 

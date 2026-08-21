@@ -5,14 +5,13 @@
 //! deliberately avoid `EXPLAIN ANALYZE` for non-SELECT statements on Postgres
 //! since `ANALYZE` actually executes the statement and would mutate data.
 
-use database::DatabaseType;
+use blanco_core::DatabaseType;
 
 /// Whether the given SQL string is a plain `SELECT` (eligible for ANALYZE on
 /// Postgres) or some other statement (in which case we use a non-executing
 /// EXPLAIN form).
 fn is_select(sql: &str) -> bool {
-    sql.trim_start()
-        .split_whitespace()
+    sql.split_whitespace()
         .next()
         .map(|tok| tok.eq_ignore_ascii_case("SELECT") || tok.eq_ignore_ascii_case("WITH"))
         .unwrap_or(false)

@@ -2,11 +2,11 @@ use database::{ConnectionConfig, DatabaseService};
 use gpui::{AppContext, TestAppContext, VisualTestContext};
 use gpui_component::Root;
 
-use crate::app_database::AppDatabase;
 use crate::app_settings::AppSettings;
 use crate::editor::{EditorPanel, TabCreationParams};
 use crate::settings::Settings;
 use crate::status_bar::{ActivityMessage, ActivityReporter, StatusBarState, StatusLine};
+use app_database::AppDatabase;
 
 use gpui::Task;
 use smol::channel;
@@ -46,7 +46,7 @@ impl TestHarness {
     /// for exercising the PROD write confirmation.
     pub fn new_with_environment(
         cx: &mut TestAppContext,
-        environment_type: crate::app_database::EnvironmentType,
+        environment_type: app_database::EnvironmentType,
     ) -> Self {
         Self::new_with(cx, database::DatabaseType::SQLite, Some(environment_type))
     }
@@ -54,7 +54,7 @@ impl TestHarness {
     fn new_with(
         cx: &mut TestAppContext,
         db_type: database::DatabaseType,
-        environment_type: Option<crate::app_database::EnvironmentType>,
+        environment_type: Option<app_database::EnvironmentType>,
     ) -> Self {
         cx.executor().allow_parking();
 

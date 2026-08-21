@@ -6,7 +6,7 @@ use ropey::Rope;
 use gpui_component::RopeExt;
 use gpui_component::input::SelectionRangeProvider;
 
-use super::statement_parser::extract_statement_info;
+use sql_parser::statement_parser::extract_statement_info;
 
 /// SQL selection range provider that highlights the current SQL statement at cursor
 pub struct SqlSelectionRangeProvider;

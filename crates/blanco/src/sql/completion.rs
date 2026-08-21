@@ -9,7 +9,7 @@ pub use fetch::{fetch_columns, fetch_queryable_entities, fetch_schemas};
 
 use cache::columns_key;
 
-use crate::sql::statement_parser::{
+use sql_parser::statement_parser::{
     self, CompletionContext as TsCompletionContext, SqlClause, TableAlias, ident_eq,
 };
 
@@ -1010,7 +1010,7 @@ impl CompletionProvider for SqlCompletionProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sql::statement_parser::TableAlias;
+    use sql_parser::statement_parser::TableAlias;
 
     fn schemas(names: &[&str]) -> Vec<String> {
         names.iter().map(|s| s.to_string()).collect()

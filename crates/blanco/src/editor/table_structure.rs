@@ -11,8 +11,8 @@ use gpui_component::{
     v_flex,
 };
 
-use crate::app_database::EnvironmentType;
 use crate::result_ext::ResultExt as _;
+use app_database::EnvironmentType;
 use blanco_core::{ColumnInfo, IndexInfo};
 use blanco_ui::{SqlView, SqlViewMessage};
 

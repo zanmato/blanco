@@ -17,7 +17,7 @@ const EXECUTE_SQL_AUTO_LIMIT: usize = 100;
 /// does not parse cleanly the tree cannot be trusted, so fall back to a
 /// word-boundary scan and err on the side of blocking.
 fn contains_drop_statement(sql: &str) -> bool {
-    match crate::sql::statement_parser::contains_node_kind(sql, &["keyword_drop"]) {
+    match sql_parser::statement_parser::contains_node_kind(sql, &["keyword_drop"]) {
         Some(found) => found,
         None => {
             let upper = sql.to_uppercase();

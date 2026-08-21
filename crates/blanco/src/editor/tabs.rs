@@ -9,10 +9,10 @@ use gpui::Entity;
 use gpui_component::input::EditorState;
 
 use crate::agent::ChatPanel;
-use crate::app_database::EnvironmentType;
 use crate::results_panel::ResultsPanel;
 use crate::settings::SettingsView;
 use crate::sql::{SqlCompletionProvider, SqruffService};
+use app_database::EnvironmentType;
 
 use super::object_ddl::ObjectDdlTab;
 use super::snippet_editor::SnippetEditor;
