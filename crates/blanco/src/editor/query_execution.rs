@@ -21,6 +21,11 @@ use sql_parser::statement_parser::QueryParameter;
 use super::parameter_form::ParameterForm;
 use super::{EditorPanel, SQL_QUERY_LOG_MAX_LENGTH, TabType};
 
+/// Thresholds above which a loaded result gets a size warning.
+const LARGE_RESULT_ROWS: usize = 100_000;
+const LARGE_RESULT_CELLS: usize = 1_000_000;
+const LARGE_RESULT_BYTES: usize = 64 * 1024 * 1024;
+
 impl EditorPanel {
     /// Handler for Run Query button/keyboard
     /// Checks for parameters and shows modal if needed, otherwise executes directly
@@ -517,6 +522,24 @@ impl EditorPanel {
                             .into(),
                         ));
 
+                        let large_result = results
+                            .iter()
+                            .map(|result| {
+                                let cells = result.rows.len() * result.columns.len();
+                                let bytes: usize = result
+                                    .rows
+                                    .iter()
+                                    .flatten()
+                                    .map(|cell| cell.as_ref().map_or(0, String::len))
+                                    .sum();
+                                (result.rows.len(), cells, bytes)
+                            })
+                            .find(|(rows, cells, bytes)| {
+                                *rows >= LARGE_RESULT_ROWS
+                                    || *cells >= LARGE_RESULT_CELLS
+                                    || *bytes >= LARGE_RESULT_BYTES
+                            });
+
                         window
                             .update(move |window, cx| {
                                 // Update results panel
@@ -528,6 +551,22 @@ impl EditorPanel {
                                         cx,
                                     );
                                 });
+
+                                // Blanco loads whole results on purpose, so
+                                // a heads-up is the user's cue to narrow the
+                                // query rather than a limit imposed on them.
+                                if let Some((rows, _, bytes)) = large_result {
+                                    window.push_notification(
+                                        (
+                                            NotificationType::Warning,
+                                            format!(
+                                                "Large result loaded: {rows} rows, {:.1} MB of cell data",
+                                                bytes as f64 / (1024.0 * 1024.0)
+                                            ),
+                                        ),
+                                        cx,
+                                    );
+                                }
 
                                 // Log execution result to SQL log
                                 sql_view_clone.update(cx, |sql_view, cx| {
