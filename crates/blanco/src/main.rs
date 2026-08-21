@@ -21,6 +21,7 @@ mod export;
 mod history_panel;
 mod import;
 mod keybindings;
+mod logging;
 mod redis_completion;
 mod redis_syntax;
 mod result_ext;
@@ -51,7 +52,16 @@ fn main() {
     // dependency chatter.
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("blanco=info,warn"));
-    tracing_subscriber::fmt().with_env_filter(env_filter).init();
+    let log_file = logging::open_log_file();
+    let subscriber = tracing_subscriber::fmt().with_env_filter(env_filter);
+    match log_file {
+        Some(file) => subscriber
+            .with_writer(logging::StderrAndFile::new(file))
+            .with_ansi(false)
+            .init(),
+        None => subscriber.init(),
+    }
+    logging::install_panic_hook();
     let app = application()
         .with_quit_mode(gpui::QuitMode::LastWindowClosed)
         .with_assets(Assets);

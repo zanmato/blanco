@@ -21,7 +21,9 @@ version = "0.1.0"
 publish = false
 
 [workspace.dependencies]
-# Core GPUI dependencies
+# Core GPUI dependencies. These track zed main on purpose: gpui-component depends on
+# the same unpinned source, and pinning a `rev` here makes cargo resolve two copies of
+# gpui. Cargo.lock is the pin; bump it deliberately with `cargo update -p gpui`.
 gpui = { git = "https://github.com/zed-industries/zed" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = [
     "font-kit",
@@ -29,33 +31,21 @@ gpui_platform = { git = "https://github.com/zed-industries/zed", features = [
     "wayland",
     "runtime_shaders",
 ] }
-gpui_macros = { git = "https://github.com/zed-industries/zed" }
 gpui-component = { git = "https://github.com/zanmato/gpui-component", branch = "blanco", features = ["tree-sitter", "tree-sitter-javascript"] }
-gpui-component-macros = { git = "https://github.com/zanmato/gpui-component", branch = "blanco" }
-
-# Additional dependencies for gpui-component compatibility
-notify = "7.0.0"
-raw-window-handle = "0.6.2"
-rust-i18n = "3"
-schemars = "1"
-serde_repr = "0.1"
-smallvec = "1"
-sum-tree = { version = "0.2.0", package = "zed-sum-tree" }
 
 # LSP dependencies (needed by gpui-component)
 lsp-types = { version = "0.97.0", features = ["proposed"] }
+
+smallvec = "1"
 
 # Common dependencies
 anyhow = { version = "1", features = ["backtrace"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
-log = "0.4"
 uuid = { version = "1.0", features = ["v4"] }
 chrono = "0.4"
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
-thiserror = "1.0"
-regex = "1.10"
 async-trait = "0.1"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 hex = "0.4"
@@ -77,26 +67,20 @@ rust_decimal = "1.32"
 # SQL parsing
 sqlparser = "0.61"
 
-# HTTP client
-http = "1.0"
 tempfile = "3.8"
 dirs = "5"
 
 # Additional dependencies
 env_logger = "0.11"
 smol = "2"
-async-io = "1"
 rust-embed = { version = "8", features = ["interpolate-folder-path"] }
 url = "2.5"
-flate2 = "1.0"
-tar = "0.4"
 futures = "0.3"
 ropey = { version = "=2.0.0-beta.1", features = [
     "metric_lines_lf",
     "metric_utf16",
     "metric_chars",
 ] }
-async-stream = "0.3"
 tokio = { version = "1.0", features = ["full"] }
 tikv-jemallocator = { version = "0.6", features = [
     "unprefixed_malloc_on_supported_platforms",
