@@ -1558,6 +1558,7 @@ dependencies = [
  "serde_json",
  "smol",
  "sql-parser",
+ "sqlite",
  "sqlx",
  "sqruff-lib",
  "sqruff-lib-core",

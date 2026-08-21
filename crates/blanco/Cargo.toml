@@ -65,6 +65,7 @@ tokio = { version = "1", features = ["rt", "macros", "time"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time"] }
+sqlite = { path = "../sqlite" }
 gpui = { workspace = true, features = ["test-support"] }
 tempfile = { workspace = true }
 

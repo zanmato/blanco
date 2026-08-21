@@ -93,7 +93,7 @@ impl Connection for SqliteConnection {
 
     async fn execute_operations_transactional(
         &self,
-        operations: &[String],
+        operations: &[blanco_core::WriteOperation],
         _database_name: Option<&str>,
     ) -> Result<blanco_core::BatchOutcome, blanco_core::BatchFailure> {
         let pool = self.pool.as_ref().ok_or_else(|| {

@@ -274,9 +274,9 @@ mod tests {
 
         // First op is valid; second violates the CHECK constraint. The whole
         // batch must roll back, leaving the first op's write undone.
-        let operations = vec![
-            "UPDATE account SET balance = 50 WHERE id = 1".to_string(),
-            "UPDATE account SET balance = -10 WHERE id = 1".to_string(),
+        let operations: Vec<blanco_core::WriteOperation> = vec![
+            "UPDATE account SET balance = 50 WHERE id = 1".into(),
+            "UPDATE account SET balance = -10 WHERE id = 1".into(),
         ];
         let failure = connection
             .execute_operations_transactional(&operations, None)
@@ -302,9 +302,9 @@ mod tests {
         );
 
         // A fully valid batch commits and reports the operations applied.
-        let good = vec![
-            "UPDATE account SET balance = 70 WHERE id = 1".to_string(),
-            "INSERT INTO account (id, balance) VALUES (2, 5)".to_string(),
+        let good: Vec<blanco_core::WriteOperation> = vec![
+            "UPDATE account SET balance = 70 WHERE id = 1".into(),
+            "INSERT INTO account (id, balance) VALUES (2, 5)".into(),
         ];
         let outcome = connection
             .execute_operations_transactional(&good, None)

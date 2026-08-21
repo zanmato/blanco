@@ -158,7 +158,7 @@ impl Connection for PostgresConnection {
 
     async fn execute_operations_transactional(
         &self,
-        operations: &[String],
+        operations: &[blanco_core::WriteOperation],
         database_name: Option<&str>,
     ) -> Result<blanco_core::BatchOutcome, blanco_core::BatchFailure> {
         let database_name = database_name.ok_or_else(|| {

@@ -323,11 +323,13 @@ fn install_globals<'js>(ctx: &Ctx<'js>, host: &Rc<ScriptHost>) -> rquickjs::Resu
         Function::new(
             ctx.clone(),
             move |ctx: Ctx<'js>, statements: Vec<String>| -> rquickjs::Result<Object<'js>> {
+                let operations: Vec<blanco_core::WriteOperation> =
+                    statements.iter().map(|sql| sql.as_str().into()).collect();
                 let outcome = host
                     .block_on(host.db.execute_operations_transactional(
                         host.connection_id,
                         Some(host.database_name.as_str()),
-                        &statements,
+                        &operations,
                     ))
                     .map_err(|_| HostError::Cancelled.into_js(&ctx))?;
 

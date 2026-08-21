@@ -166,11 +166,11 @@ impl Connection for TokioConnection {
 
     async fn execute_operations_transactional(
         &self,
-        operations: &[String],
+        operations: &[blanco_core::WriteOperation],
         database_name: Option<&str>,
     ) -> std::result::Result<BatchOutcome, BatchFailure> {
         for operation in operations {
-            self.guard_read_only(operation)
+            self.guard_read_only(&operation.sql)
                 .map_err(BatchFailure::atomic)?;
         }
         let inner = Arc::clone(&self.inner);
@@ -433,7 +433,7 @@ mod tests {
         assert!(error.to_string().contains("read-only"), "{error}");
 
         let failure = wrapper
-            .execute_operations_transactional(&["DELETE FROM t".to_string()], None)
+            .execute_operations_transactional(&["DELETE FROM t".into()], None)
             .await
             .expect_err("batch must be rejected");
         assert_eq!(failure.applied, 0);

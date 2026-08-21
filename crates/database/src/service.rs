@@ -693,7 +693,7 @@ impl DatabaseServiceTrait for DatabaseService {
         &self,
         connection_id: i64,
         database: Option<&str>,
-        operations: &[String],
+        operations: &[blanco_core::WriteOperation],
     ) -> Result<blanco_core::BatchOutcome, blanco_core::BatchFailure> {
         let connection = self
             .get_or_create_connection(connection_id, database)
@@ -937,9 +937,9 @@ mod tests {
             .await
             .expect("seed row");
 
-        let operations = vec![
-            "UPDATE account SET balance = 50 WHERE id = 1".to_string(),
-            "UPDATE account SET balance = -10 WHERE id = 1".to_string(),
+        let operations: Vec<blanco_core::WriteOperation> = vec![
+            "UPDATE account SET balance = 50 WHERE id = 1".into(),
+            "UPDATE account SET balance = -10 WHERE id = 1".into(),
         ];
         let failure = service
             .execute_operations_transactional(1, None, &operations)

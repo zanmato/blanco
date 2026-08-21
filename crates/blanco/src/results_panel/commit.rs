@@ -76,12 +76,14 @@ impl ResultsPanel {
             // runs in one transaction on backends that support DML transactions,
             // so a mid-batch failure applies nothing and the kept edits can be
             // retried without double-applying.
+            let operations: Vec<blanco_core::WriteOperation> =
+                sql_queries.iter().map(|sql| sql.as_str().into()).collect();
             let result = match db_service
                 .get_or_create_connection(connection_id_for_pipeline, Some(&database_name))
                 .await
             {
                 Ok(connection) => match connection
-                    .execute_operations_transactional(&sql_queries, Some(&database_name))
+                    .execute_operations_transactional(&operations, Some(&database_name))
                     .await
                 {
                     Ok(outcome) => TableOperationResponse {

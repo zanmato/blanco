@@ -240,7 +240,7 @@ impl Connection for MysqlConnection {
 
     async fn execute_operations_transactional(
         &self,
-        operations: &[String],
+        operations: &[blanco_core::WriteOperation],
         database_name: Option<&str>,
     ) -> Result<blanco_core::BatchOutcome, blanco_core::BatchFailure> {
         let database = database_name

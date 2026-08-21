@@ -471,7 +471,16 @@ impl ImportModal {
                 }
             };
             let resolved_delim = delimiter.unwrap_or(b',');
-            detect::read_sample_with(&path, resolved_encoding, resolved_delim, self.has_header)
+            match detect::detect_file(&path) {
+                // Delimiter and header overrides only make sense for CSV.
+                Ok(detected) if detected.format == detect::ImportFormat::Json => Ok(detected),
+                _ => detect::read_sample_with(
+                    &path,
+                    resolved_encoding,
+                    resolved_delim,
+                    self.has_header,
+                ),
+            }
         };
 
         match detect_result {
@@ -481,7 +490,7 @@ impl ImportModal {
                 self.rebuild_mapping_widgets(window, cx);
             }
             Err(err) => {
-                self.error = Some(format!("Failed to read CSV: {}", err));
+                self.error = Some(format!("Failed to read file: {}", err));
             }
         }
         cx.notify();
@@ -572,6 +581,11 @@ impl ImportModal {
         let encoding = self.resolved_encoding(cx);
         let delimiter = self.resolved_delimiter(cx);
         let has_header = self.has_header;
+        let (format, source_headers) = self
+            .detected
+            .as_ref()
+            .map(|detected| (detected.format, detected.headers.clone()))
+            .unwrap_or((detect::ImportFormat::Csv, Vec::new()));
         let db_type = self.db_type;
         let connection_id = self.connection_id;
         let database_name = self.database_name.clone();
@@ -627,6 +641,8 @@ impl ImportModal {
                     mappings: &compiled,
                     conflict: &conflict,
                     file: path.as_path(),
+                    format,
+                    source_headers: &source_headers,
                     encoding,
                     delimiter,
                     has_header,
@@ -772,6 +788,9 @@ impl Render for ImportModal {
                 .into_any_element();
         }
         let detected = self.detected.clone();
+        let is_json = detected
+            .as_ref()
+            .is_some_and(|detected| detected.format == detect::ImportFormat::Json);
         let preview = self.render_preview(cx).unwrap_or_default();
         let conflict_idx = selected_row(&self.conflict_select, cx);
 
@@ -796,7 +815,7 @@ impl Render for ImportModal {
             .child(
                 v_flex()
                     .gap_2()
-                    .child(div().text_sm().child("CSV file"))
+                    .child(div().text_sm().child("CSV or JSON file"))
                     .child(
                         h_flex()
                             .gap_2()
@@ -819,25 +838,36 @@ impl Render for ImportModal {
                             .child(div().text_sm().child("Encoding"))
                             .child(Select::new(&self.encoding_select)),
                     )
-                    .child(
-                        v_flex()
-                            .gap_1()
-                            .flex_1()
-                            .child(div().text_sm().child("Delimiter"))
-                            .child(Select::new(&self.delimiter_select)),
-                    )
-                    .child(
-                        div().pb_1().child(
-                            Checkbox::new("import-has-header")
-                                .label("First row is header")
-                                .small()
-                                .checked(self.has_header)
-                                .on_click(cx.listener(|modal, checked: &bool, window, cx| {
-                                    modal.has_header = *checked;
-                                    modal.redetect(window, cx);
-                                })),
-                        ),
-                    ),
+                    .when(!is_json, |this| {
+                        this.child(
+                            v_flex()
+                                .gap_1()
+                                .flex_1()
+                                .child(div().text_sm().child("Delimiter"))
+                                .child(Select::new(&self.delimiter_select)),
+                        )
+                        .child(
+                            div().pb_1().child(
+                                Checkbox::new("import-has-header")
+                                    .label("First row is header")
+                                    .small()
+                                    .checked(self.has_header)
+                                    .on_click(cx.listener(|modal, checked: &bool, window, cx| {
+                                        modal.has_header = *checked;
+                                        modal.redetect(window, cx);
+                                    })),
+                            ),
+                        )
+                    })
+                    .when(is_json, |this| {
+                        this.child(
+                            div()
+                                .pb_1()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("JSON: object keys become columns"),
+                        )
+                    }),
             )
             .when_some(detected.as_ref(), |this, d| {
                 let headers = if d.headers.is_empty() {

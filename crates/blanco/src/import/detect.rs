@@ -8,8 +8,18 @@ const SAMPLE_BYTES: usize = 64 * 1024;
 const SAMPLE_ROWS: usize = 5;
 const CANDIDATE_DELIMITERS: &[u8] = b",;\t|";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportFormat {
+    /// Delimited text; `delimiter` and the header toggle apply.
+    Csv,
+    /// A JSON array of objects, or newline delimited JSON objects. Keys become
+    /// the columns, nested values are kept as JSON text.
+    Json,
+}
+
 #[derive(Debug, Clone)]
 pub struct DetectedFile {
+    pub format: ImportFormat,
     pub encoding: &'static Encoding,
     pub delimiter: u8,
     pub headers: Vec<String>,
@@ -20,6 +30,11 @@ pub fn detect_file(path: &Path) -> Result<DetectedFile> {
     let raw = read_sample_bytes(path)?;
     let encoding = detect_encoding(&raw);
     let decoded = decode_sample(&raw, encoding);
+    if looks_like_json(path, &decoded) {
+        let mut detected = read_json_sample(&decoded).context("failed to read JSON sample")?;
+        detected.encoding = encoding;
+        return Ok(detected);
+    }
     let delimiter = detect_delimiter(&decoded);
     read_sample(&decoded, delimiter, true)
         .map(|mut detected| {
@@ -28,6 +43,117 @@ pub fn detect_file(path: &Path) -> Result<DetectedFile> {
             detected
         })
         .context("failed to read CSV sample")
+}
+
+fn looks_like_json(path: &Path, decoded: &str) -> bool {
+    let by_extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            ext.eq_ignore_ascii_case("json")
+                || ext.eq_ignore_ascii_case("ndjson")
+                || ext.eq_ignore_ascii_case("jsonl")
+        });
+    by_extension || matches!(decoded.trim_start().chars().next(), Some('[') | Some('{'))
+}
+
+/// Column names are the union of object keys in order of first appearance, so
+/// sparse objects still map every field they use.
+pub fn json_headers(objects: &[serde_json::Map<String, serde_json::Value>]) -> Vec<String> {
+    let mut headers: Vec<String> = Vec::new();
+    for object in objects {
+        for key in object.keys() {
+            if !headers.iter().any(|existing| existing == key) {
+                headers.push(key.clone());
+            }
+        }
+    }
+    headers
+}
+
+/// Text form of a JSON value as an import cell. `null` is `None`, strings
+/// are unwrapped, everything else keeps its JSON serialisation.
+pub fn json_cell(value: Option<&serde_json::Value>) -> Option<String> {
+    match value {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(text)) => Some(text.clone()),
+        Some(other) => Some(other.to_string()),
+    }
+}
+
+/// Parse JSON objects from `text`: either one top level array or one object
+/// per line (NDJSON). A truncated sample is tolerated by stopping at the first
+/// object that does not parse.
+pub fn parse_json_objects(
+    text: &str,
+    limit: Option<usize>,
+) -> Result<Vec<serde_json::Map<String, serde_json::Value>>> {
+    let trimmed = text.trim_start();
+    let mut objects = Vec::new();
+    if let Some(array_body) = trimmed.strip_prefix('[') {
+        // Iterate the array elements without materialising the whole array,
+        // skipping the commas between them.
+        let mut rest = array_body;
+        loop {
+            rest = rest.trim_start_matches(|c: char| c.is_whitespace() || c == ',');
+            if rest.is_empty() || rest.starts_with(']') {
+                break;
+            }
+            let mut element =
+                serde_json::Deserializer::from_str(rest).into_iter::<serde_json::Value>();
+            match element.next() {
+                Some(Ok(serde_json::Value::Object(object))) => {
+                    objects.push(object);
+                    rest = &rest[element.byte_offset()..];
+                }
+                Some(Ok(_)) => anyhow::bail!("JSON array elements must be objects"),
+                Some(Err(_)) | None => break,
+            }
+            if limit.is_some_and(|limit| objects.len() >= limit) {
+                break;
+            }
+        }
+    } else {
+        for line in trimmed.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<serde_json::Value>(line) {
+                Ok(serde_json::Value::Object(object)) => objects.push(object),
+                Ok(_) => anyhow::bail!("each JSON line must be an object"),
+                Err(_) => break,
+            }
+            if limit.is_some_and(|limit| objects.len() >= limit) {
+                break;
+            }
+        }
+    }
+    Ok(objects)
+}
+
+fn read_json_sample(decoded: &str) -> Result<DetectedFile> {
+    let objects = parse_json_objects(decoded, Some(SAMPLE_ROWS))?;
+    if objects.is_empty() {
+        anyhow::bail!("no JSON objects found");
+    }
+    let headers = json_headers(&objects);
+    let sample_rows = objects
+        .iter()
+        .map(|object| {
+            headers
+                .iter()
+                .map(|header| json_cell(object.get(header)).unwrap_or_default())
+                .collect()
+        })
+        .collect();
+    Ok(DetectedFile {
+        format: ImportFormat::Json,
+        encoding: encoding_rs::UTF_8,
+        delimiter: b',',
+        headers,
+        sample_rows,
+    })
 }
 
 pub fn read_sample_with(
@@ -126,6 +252,7 @@ fn read_sample(decoded: &str, delimiter: u8, has_header: bool) -> Result<Detecte
     }
 
     Ok(DetectedFile {
+        format: ImportFormat::Csv,
         encoding: encoding_rs::UTF_8,
         delimiter,
         headers,
@@ -162,5 +289,39 @@ mod tests {
     fn detects_tab_delimited() {
         let text = "a\tb\tc\n1\t2\t3\n4\t5\t6\n";
         assert_eq!(detect_delimiter(text), b'\t');
+    }
+
+    #[test]
+    fn json_array_sample_uses_union_of_keys() {
+        let text = r#"[{"id": 1, "name": "Ada"}, {"id": 2, "email": "bob@example.com", "tags": ["x", "y"]}]"#;
+        let detected = read_json_sample(text).unwrap();
+        assert_eq!(detected.format, ImportFormat::Json);
+        assert_eq!(detected.headers, vec!["id", "name", "email", "tags"]);
+        assert_eq!(detected.sample_rows[0], vec!["1", "Ada", "", ""]);
+        assert_eq!(detected.sample_rows[1][3], "[\"x\",\"y\"]");
+    }
+
+    #[test]
+    fn ndjson_and_truncated_samples() {
+        let text = "{\"id\": 1}\n{\"id\": 2, \"ok\": true}\n{\"id\": 3, \"trunc";
+        let objects = parse_json_objects(text, None).unwrap();
+        assert_eq!(objects.len(), 2, "the truncated trailing object is skipped");
+        assert_eq!(json_cell(objects[1].get("ok")).as_deref(), Some("true"));
+        assert_eq!(json_cell(objects[0].get("missing")), None);
+
+        let truncated_array = r#"[{"id": 1}, {"id": 2}, {"id": 3, "x"#;
+        assert_eq!(parse_json_objects(truncated_array, None).unwrap().len(), 2);
+        assert_eq!(
+            parse_json_objects(truncated_array, Some(1)).unwrap().len(),
+            1
+        );
+    }
+
+    #[test]
+    fn json_is_detected_by_extension_or_content() {
+        assert!(looks_like_json(Path::new("data.JSON"), "garbage"));
+        assert!(looks_like_json(Path::new("data.txt"), "  [{\"a\": 1}]"));
+        assert!(!looks_like_json(Path::new("data.csv"), "a,b\n1,2"));
+        assert!(parse_json_objects("[1, 2]", None).is_err());
     }
 }

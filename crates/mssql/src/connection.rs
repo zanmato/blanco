@@ -643,7 +643,7 @@ impl Connection for MssqlConnection {
 
     async fn execute_operations_transactional(
         &self,
-        operations: &[String],
+        operations: &[blanco_core::WriteOperation],
         database_name: Option<&str>,
     ) -> Result<blanco_core::BatchOutcome, blanco_core::BatchFailure> {
         use blanco_core::{BatchFailure, BatchOutcome};
@@ -675,7 +675,13 @@ impl Connection for MssqlConnection {
         let mut outcome = BatchOutcome::default();
         let mut failed: Option<(anyhow::Error, bool)> = None;
         for operation in operations {
-            let query = Query::new(operation.as_str());
+            let mut query = Query::new(operation.sql.as_str());
+            for parameter in &operation.parameters {
+                match parameter {
+                    Some(value) => query.bind(value.as_str()),
+                    None => query.bind(Option::<&str>::None),
+                }
+            }
             match query.execute(client).await {
                 Ok(result) => {
                     outcome.rows_affected += result.total();

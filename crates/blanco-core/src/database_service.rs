@@ -84,7 +84,7 @@ pub trait DatabaseService: Send + Sync {
         &self,
         connection_id: i64,
         database: Option<&str>,
-        operations: &[String],
+        operations: &[crate::WriteOperation],
     ) -> Result<crate::BatchOutcome, crate::BatchFailure> {
         let connection = self
             .get_or_create_connection_by_id(connection_id, database)

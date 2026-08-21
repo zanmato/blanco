@@ -412,12 +412,15 @@ pub trait Connection: Send + Sync {
     /// honestly reports partial application rather than pretending atomicity.
     async fn execute_operations_transactional(
         &self,
-        operations: &[String],
+        operations: &[WriteOperation],
         database_name: Option<&str>,
     ) -> Result<BatchOutcome, BatchFailure> {
         let mut outcome = BatchOutcome::default();
         for operation in operations {
-            match self.execute_write(operation, database_name, &[]).await {
+            match self
+                .execute_write(&operation.sql, database_name, &operation.parameters)
+                .await
+            {
                 Ok(rows_affected) => {
                     outcome.rows_affected += rows_affected;
                     outcome.operations_executed += 1;
@@ -649,6 +652,35 @@ pub trait Connection: Send + Sync {
         Err(anyhow::anyhow!(
             "inspect_key is not supported by this connection type"
         ))
+    }
+}
+
+/// One statement of a transactional batch, with optional bind parameters
+/// (`None` binds SQL NULL, as in [`Connection::execute_write`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WriteOperation {
+    pub sql: String,
+    pub parameters: Vec<Option<String>>,
+}
+
+impl WriteOperation {
+    pub fn new(sql: impl Into<String>, parameters: Vec<Option<String>>) -> Self {
+        Self {
+            sql: sql.into(),
+            parameters,
+        }
+    }
+}
+
+impl From<String> for WriteOperation {
+    fn from(sql: String) -> Self {
+        Self::new(sql, Vec::new())
+    }
+}
+
+impl From<&str> for WriteOperation {
+    fn from(sql: &str) -> Self {
+        Self::new(sql, Vec::new())
     }
 }
 

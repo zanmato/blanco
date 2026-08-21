@@ -17,7 +17,7 @@ pub use connection_trait::{
     BatchFailure, BatchOutcome, ColumnInfo, ColumnType, Connection, ConnectionFactory,
     DatabaseSchemaResult, EntityType, ForeignKeyInfo, InboundForeignKey, IndexInfo, KeyValueResult,
     PaginationInfo, QueryResult, QueryableEntity, RedisType, RedisValue, ResultPayload,
-    RoutineKind, TableMetadata, TableSchemaInfo,
+    RoutineKind, TableMetadata, TableSchemaInfo, WriteOperation,
 };
 
 pub use database_service::{ConnectionStatus, DatabaseService};
@@ -145,13 +145,20 @@ mod sqlx_support {
 macro_rules! run_sqlx_transaction {
     ($pool:expr, $operations:expr) => {{
         let pool = $pool;
-        let operations: &[String] = $operations;
+        let operations: &[$crate::WriteOperation] = $operations;
         match pool.begin().await {
             Ok(mut transaction) => {
                 let mut outcome = $crate::BatchOutcome::default();
                 let mut failed: Option<sqlx::Error> = None;
                 for operation in operations {
-                    match sqlx::query(operation).execute(&mut *transaction).await {
+                    let mut query = sqlx::query(&operation.sql);
+                    for parameter in &operation.parameters {
+                        query = match parameter {
+                            Some(value) => query.bind(value.clone()),
+                            None => query.bind(Option::<String>::None),
+                        };
+                    }
+                    match query.execute(&mut *transaction).await {
                         Ok(result) => {
                             outcome.rows_affected += result.rows_affected();
                             outcome.operations_executed += 1;
