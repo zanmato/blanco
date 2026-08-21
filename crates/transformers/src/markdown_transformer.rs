@@ -123,14 +123,34 @@ impl DataTransformer for MarkdownTransformer {
         Ok(output)
     }
 
+    /// Streaming cannot know column widths up front, so rows are emitted
+    /// unpadded. That is still a valid Markdown table, just less pretty in
+    /// source form.
+    fn initialize_stream(
+        &self,
+        columns: &[String],
+        _column_types: &[ColumnType],
+    ) -> Result<String, TransformError> {
+        let mut output = String::from("|");
+        for column in columns {
+            output.push(' ');
+            output.push_str(&escape_markdown(column));
+            output.push_str(" |");
+        }
+        output.push_str("\n|");
+        for _ in columns {
+            output.push_str(" --- |");
+        }
+        output.push('\n');
+        Ok(output)
+    }
+
     fn transform_stream_row(
         &self,
         row_data: &[Option<String>],
         _columns: &[String],
         _column_types: &[ColumnType],
     ) -> Result<String, TransformError> {
-        // Markdown streaming is not well-supported due to column width calculation,
-        // but we provide a basic implementation for completeness
         let mut output = String::new();
         output.push('|');
         for value in row_data {
@@ -143,11 +163,6 @@ impl DataTransformer for MarkdownTransformer {
         }
         output.push('\n');
         Ok(output)
-    }
-
-    fn supports_streaming(&self) -> bool {
-        // Markdown doesn't support streaming due to column width calculation
-        false
     }
 }
 
@@ -183,6 +198,20 @@ fn format_cell_to(value: &str, width: usize, output: &mut String) {
 mod tests {
     use super::*;
     use crate::{SelectedCell, SelectedRow, SelectedTableData};
+
+    #[test]
+    fn streaming_emits_header_and_separator() {
+        let transformer = MarkdownTransformer;
+        let columns = vec!["id".to_string(), "name|alias".to_string()];
+        let header = transformer
+            .initialize_stream(&columns, &[ColumnType::Integer, ColumnType::Text])
+            .expect("header");
+        assert_eq!(header, "| id | `name|alias` |\n| --- | --- |\n");
+        let row = transformer
+            .transform_stream_row(&[Some("1".into()), None], &columns, &[])
+            .expect("row");
+        assert_eq!(row, "| 1 | NULL |\n");
+    }
 
     fn create_test_data() -> SelectedTableData {
         SelectedTableData {
@@ -275,8 +304,8 @@ mod tests {
     }
 
     #[test]
-    fn test_markdown_no_streaming() {
+    fn test_markdown_streams() {
         let transformer = MarkdownTransformer;
-        assert!(!transformer.supports_streaming());
+        assert!(transformer.supports_streaming());
     }
 }

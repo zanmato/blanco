@@ -15,21 +15,28 @@ use gpui_component::{
 };
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use transformers::{CsvTransformer, DataTransformer, JsonTransformer, SqlTransformer};
+use transformers::{
+    CsvTransformer, DataTransformer, JsonTransformer, MarkdownTransformer, SqlTransformer,
+    TsvTransformer,
+};
 
 /// Export format options
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExportFormat {
     Csv,
+    Tsv,
     Json,
     Sql,
+    Markdown,
 }
 
 impl ExportFormat {
     fn from_str(s: &str) -> Self {
         match s {
+            "TSV" => ExportFormat::Tsv,
             "JSON" => ExportFormat::Json,
             "SQL" => ExportFormat::Sql,
+            "Markdown" => ExportFormat::Markdown,
             _ => ExportFormat::Csv,
         }
     }
@@ -37,8 +44,10 @@ impl ExportFormat {
     pub fn file_extension(&self) -> &'static str {
         match self {
             ExportFormat::Csv => "csv",
+            ExportFormat::Tsv => "tsv",
             ExportFormat::Json => "json",
             ExportFormat::Sql => "sql",
+            ExportFormat::Markdown => "md",
         }
     }
 }
@@ -76,7 +85,10 @@ impl ExportModal {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let formats = vec!["CSV".to_string(), "JSON".to_string(), "SQL".to_string()];
+        let formats = ["CSV", "TSV", "JSON", "SQL", "Markdown"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
         let format_select =
             cx.new(|cx| SelectState::new(formats.clone(), Some(IndexPath::new(0)), window, cx));
 
@@ -235,6 +247,8 @@ impl ExportModal {
 
                             let transformer: Box<dyn DataTransformer> = match format {
                                 ExportFormat::Csv => Box::new(CsvTransformer),
+                                ExportFormat::Tsv => Box::new(TsvTransformer),
+                                ExportFormat::Markdown => Box::new(MarkdownTransformer),
                                 ExportFormat::Json => Box::new(JsonTransformer::new()),
                                 ExportFormat::Sql => {
                                     let table_name_for_sql = if let Some(schema) = &schema_name {
