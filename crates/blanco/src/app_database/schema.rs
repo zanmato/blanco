@@ -69,6 +69,11 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         "ALTER TABLE query_tabs ADD COLUMN tab_kind TEXT NOT NULL DEFAULT 'query'",
     )
     .await?;
+    add_column_if_missing(
+        pool,
+        "ALTER TABLE query_tabs ADD COLUMN last_run_at INTEGER",
+    )
+    .await?;
 
     // Query history table
     sqlx::query(

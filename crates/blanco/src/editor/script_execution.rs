@@ -24,6 +24,10 @@ impl EditorPanel {
     /// the whole buffer.
     pub(super) fn execute_script_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tab_index = self.active_tab_ix;
+        let run_timestamp = chrono::Utc::now().timestamp();
+        if let Some(TabType::Script(script_tab)) = self.tabs.get_mut(tab_index) {
+            script_tab.last_run_at = Some(run_timestamp);
+        }
         let Some(TabType::Script(script_tab)) = self.tabs.get(tab_index) else {
             return;
         };
@@ -70,6 +74,7 @@ impl EditorPanel {
             schema_name: script_tab.schema_name.clone(),
             environment_type: script_tab.environment_type,
             tab_kind: crate::app_database::EditorKind::Script,
+            last_run_at: Some(run_timestamp),
         };
 
         let app_database = AppDatabase::global(cx).clone();
@@ -84,6 +89,12 @@ impl EditorPanel {
                     return;
                 }
             };
+
+            app_database
+                .touch_query_tab_last_run(tab_db_id, run_timestamp)
+                .await
+                .map_err(anyhow::Error::from)
+                .log_err();
 
             entity_handle
                 .update(cx, |editor_panel: &mut EditorPanel, _| {

@@ -62,7 +62,7 @@ impl AppDatabase {
         self.run(async move {
             let rows = sqlx::query(
                 r#"
-                SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type, c.name, qt.database_name, qt.schema_name, c.environment_type, qt.tab_kind
+                SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type, c.name, qt.database_name, qt.schema_name, c.environment_type, qt.tab_kind, qt.last_run_at
                 FROM query_tabs qt
                 INNER JOIN connections c ON c.id = qt.connection_id
                 ORDER BY qt.position ASC
@@ -97,6 +97,7 @@ impl AppDatabase {
                             row.get::<i64, _>(9) as i32,
                         )),
                         tab_kind: EditorKind::from_stored(&row.get::<String, _>(10)),
+                        last_run_at: row.get(11),
                     }
                 })
                 .collect();
@@ -111,7 +112,7 @@ impl AppDatabase {
         self.run(async move {
             let row = sqlx::query(
                 r#"
-                SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type, c.name, qt.database_name, qt.schema_name, qt.tab_kind
+                SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type, c.name, qt.database_name, qt.schema_name, qt.tab_kind, qt.last_run_at
                 FROM query_tabs qt
                 INNER JOIN connections c ON c.id = qt.connection_id
                 WHERE qt.id = ?
@@ -143,10 +144,28 @@ impl AppDatabase {
                     schema_name: row.get(8),
                     environment_type: None,
                     tab_kind: EditorKind::from_stored(&row.get::<String, _>(9)),
+                    last_run_at: row.get(10),
                 }))
             } else {
                 Ok(None)
             }
+        })
+        .await
+    }
+
+    pub async fn touch_query_tab_last_run(
+        &self,
+        id: i64,
+        timestamp: i64,
+    ) -> Result<(), sqlx::Error> {
+        let pool = self.pool();
+        self.run(async move {
+            sqlx::query("UPDATE query_tabs SET last_run_at = ? WHERE id = ?")
+                .bind(timestamp)
+                .bind(id)
+                .execute(&pool)
+                .await?;
+            Ok(())
         })
         .await
     }

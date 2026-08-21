@@ -5,14 +5,197 @@ use gpui::{
     Window, div, prelude::FluentBuilder as _, px,
 };
 type GroupLabelFn = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement + 'static>;
+type CloseFn = Rc<dyn Fn(&usize, &ClickEvent, &mut Window, &mut App) + 'static>;
+
+/// The per-tab data the overflow menu needs, captured while the tabs are
+/// consumed into elements.
+#[derive(Clone)]
+struct MenuItemInfo {
+    label: Option<SharedString>,
+    disabled: bool,
+    group: Option<SharedString>,
+    group_label: Option<GroupLabelFn>,
+    menu_detail: Option<SharedString>,
+    on_close: Option<CloseFn>,
+}
 use smallvec::SmallVec;
 use std::rc::Rc;
 
 use super::{Tab, TabVariant};
 use gpui::SharedString;
+use gpui::WeakEntity;
+use gpui_component::Icon;
 use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::menu::PopupMenu;
 use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_component::{ActiveTheme, IconName, Selectable, Sizable, Size, StyledExt, h_flex};
+use std::cell::RefCell;
+
+type TabClickFn = Rc<dyn Fn(&usize, &ClickEvent, &mut Window, &mut App) + 'static>;
+
+/// Snapshot of the tabs shown by the overflow menu. Shared with the menu's
+/// close buttons so a closed tab can be dropped from the open menu without
+/// re-rendering the tab bar.
+struct OverflowMenuState {
+    items: Vec<MenuItemInfo>,
+    selected_index: Option<usize>,
+}
+
+impl OverflowMenuState {
+    /// Mirror what closing tab `ix` does to the tab list: later tabs shift
+    /// down one, and a selected tab that was removed hands selection to the
+    /// tab now at its index (or the last one).
+    fn remove(&mut self, ix: usize) {
+        if ix >= self.items.len() {
+            return;
+        }
+        self.items.remove(ix);
+        self.selected_index = self.selected_index.map(|selected| {
+            if selected > ix {
+                selected - 1
+            } else {
+                selected.min(self.items.len().saturating_sub(1))
+            }
+        });
+    }
+}
+
+fn build_overflow_menu(
+    mut menu: PopupMenu,
+    state: Rc<RefCell<OverflowMenuState>>,
+    on_click: Option<TabClickFn>,
+    menu_entity: WeakEntity<PopupMenu>,
+) -> PopupMenu {
+    menu = menu.scrollable(true).min_w(px(280.));
+
+    let (items, selected_index) = {
+        let state = state.borrow();
+        (state.items.clone(), state.selected_index)
+    };
+
+    let mut groups: Vec<(Option<SharedString>, Option<GroupLabelFn>, Vec<usize>)> = Vec::new();
+    for (ix, item) in items.iter().enumerate() {
+        let key = item.group.clone();
+        if let Some((_, header, indices)) = groups.iter_mut().find(|(k, _, _)| k == &key) {
+            indices.push(ix);
+            if header.is_none() {
+                *header = item.group_label.clone();
+            }
+        } else {
+            groups.push((key, item.group_label.clone(), vec![ix]));
+        }
+    }
+
+    let render_grouped = groups.len() > 1 || groups.iter().any(|(k, _, _)| k.is_some());
+
+    for (group_ix, (group_key, group_label, indices)) in groups.into_iter().enumerate() {
+        if render_grouped {
+            if group_ix > 0 {
+                menu = menu.separator();
+            }
+            if let Some(builder) = group_label {
+                menu = menu.item(
+                    PopupMenuItem::element(move |window, cx| builder(window, cx)).disabled(true),
+                );
+            } else {
+                let header = group_key.unwrap_or_else(|| "Other".into());
+                menu = menu.label(header);
+            }
+        }
+
+        for ix in indices {
+            let Some(item) = items.get(ix) else {
+                continue;
+            };
+            let label = item.label.clone().unwrap_or_default();
+            let menu_detail = item.menu_detail.clone();
+            let on_close = item.on_close.clone();
+            let state = state.clone();
+            let on_click_for_rebuild = on_click.clone();
+            let menu_entity = menu_entity.clone();
+            menu = menu.item(
+                PopupMenuItem::element(move |_, cx| {
+                    h_flex()
+                        .w_full()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex_1()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .child(label.clone()),
+                        )
+                        .when_some(menu_detail.clone(), |this, detail| {
+                            this.child(
+                                div()
+                                    .text_xs()
+                                    .whitespace_nowrap()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(detail),
+                            )
+                        })
+                        .when_some(on_close.clone(), |this, on_close| {
+                            let state = state.clone();
+                            let on_click = on_click_for_rebuild.clone();
+                            let menu_entity = menu_entity.clone();
+                            this.child(
+                                div()
+                                    .id(("close-menu-tab", ix))
+                                    .flex_shrink_0()
+                                    .p_0p5()
+                                    .rounded(cx.theme().radius)
+                                    .cursor_pointer()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .hover(|this| {
+                                        this.bg(cx.theme().secondary_hover)
+                                            .text_color(cx.theme().foreground)
+                                    })
+                                    .child(Icon::new(IconName::Close).xsmall())
+                                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                                        // The row activates its tab on mouse down as
+                                        // well as click, so swallow both here.
+                                        cx.stop_propagation();
+                                    })
+                                    .on_click(move |event, window, cx| {
+                                        cx.stop_propagation();
+                                        on_close(&ix, event, window, cx);
+                                        state.borrow_mut().remove(ix);
+                                        // Keep the menu open so several tabs can be
+                                        // closed in a row, but rebuild it so the
+                                        // remaining rows point at their new indices.
+                                        menu_entity
+                                            .update(cx, |menu, cx| {
+                                                let state = state.clone();
+                                                let on_click = on_click.clone();
+                                                let menu_entity = cx.entity().downgrade();
+                                                menu.rebuild(window, cx, move |menu, _, _| {
+                                                    build_overflow_menu(
+                                                        menu,
+                                                        state,
+                                                        on_click,
+                                                        menu_entity,
+                                                    )
+                                                });
+                                            })
+                                            .ok();
+                                    }),
+                            )
+                        })
+                })
+                .checked(selected_index == Some(ix))
+                .disabled(item.disabled)
+                .when_some(on_click.clone(), |this, on_click| {
+                    this.on_click(move |event: &ClickEvent, window, cx| {
+                        on_click(&ix, event, window, cx)
+                    })
+                }),
+            );
+        }
+    }
+
+    menu
+}
 
 /// A TabBar element that contains multiple [`Tab`] items.
 #[derive(IntoElement)]
@@ -200,12 +383,7 @@ impl RenderOnce for TabBar {
             }
         };
 
-        let mut item_labels: Vec<(
-            Option<SharedString>,
-            bool,
-            Option<SharedString>,
-            Option<GroupLabelFn>,
-        )> = Vec::new();
+        let mut item_labels: Vec<MenuItemInfo> = Vec::new();
         let selected_index = self.selected_index;
         let on_click = self.on_click.clone();
 
@@ -245,12 +423,14 @@ impl RenderOnce for TabBar {
                     })
                     .gap(gap)
                     .children(self.children.into_iter().enumerate().map(|(ix, child)| {
-                        item_labels.push((
-                            child.label.clone(),
-                            child.disabled,
-                            child.group.clone(),
-                            child.group_label.clone(),
-                        ));
+                        item_labels.push(MenuItemInfo {
+                            label: child.label.clone(),
+                            disabled: child.disabled,
+                            group: child.group.clone(),
+                            group_label: child.group_label.clone(),
+                            menu_detail: child.menu_detail.clone(),
+                            on_close: child.on_close.clone(),
+                        });
                         let tab_bar_prefix = child.tab_bar_prefix.unwrap_or(true);
                         child
                             .ix(ix)
@@ -276,69 +456,17 @@ impl RenderOnce for TabBar {
                         .xsmall()
                         .ghost()
                         .icon(IconName::ChevronDown)
-                        .dropdown_menu(move |mut this, _, _| {
-                            this = this.scrollable(true);
-
-                            let mut groups: Vec<(
-                                Option<SharedString>,
-                                Option<GroupLabelFn>,
-                                Vec<usize>,
-                            )> = Vec::new();
-                            for (ix, (_, _, group, group_label)) in item_labels.iter().enumerate() {
-                                let key = group.clone();
-                                if let Some((_, header, indices)) =
-                                    groups.iter_mut().find(|(k, _, _)| k == &key)
-                                {
-                                    indices.push(ix);
-                                    if header.is_none() {
-                                        *header = group_label.clone();
-                                    }
-                                } else {
-                                    groups.push((key, group_label.clone(), vec![ix]));
-                                }
-                            }
-
-                            let render_grouped =
-                                groups.len() > 1 || groups.iter().any(|(k, _, _)| k.is_some());
-
-                            for (group_ix, (group_key, group_label, indices)) in
-                                groups.into_iter().enumerate()
-                            {
-                                if render_grouped {
-                                    if group_ix > 0 {
-                                        this = this.separator();
-                                    }
-                                    if let Some(builder) = group_label {
-                                        this = this.item(
-                                            PopupMenuItem::element(move |window, cx| {
-                                                builder(window, cx)
-                                            })
-                                            .disabled(true),
-                                        );
-                                    } else {
-                                        let header = group_key.unwrap_or_else(|| "Other".into());
-                                        this = this.label(header);
-                                    }
-                                }
-
-                                for ix in indices {
-                                    let (label, disabled, _, _) = &item_labels[ix];
-                                    this = this.item(
-                                        PopupMenuItem::new(label.clone().unwrap_or_default())
-                                            .checked(selected_index == Some(ix))
-                                            .disabled(*disabled)
-                                            .when_some(on_click.clone(), |this, on_click| {
-                                                this.on_click(
-                                                    move |event: &ClickEvent, window, cx| {
-                                                        on_click(&ix, event, window, cx)
-                                                    },
-                                                )
-                                            }),
-                                    );
-                                }
-                            }
-
-                            this
+                        .dropdown_menu(move |menu, _, cx| {
+                            let state = Rc::new(RefCell::new(OverflowMenuState {
+                                items: item_labels.clone(),
+                                selected_index,
+                            }));
+                            build_overflow_menu(
+                                menu,
+                                state,
+                                on_click.clone(),
+                                cx.entity().downgrade(),
+                            )
                         })
                         .anchor(Anchor::TopRight),
                 )

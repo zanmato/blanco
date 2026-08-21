@@ -225,6 +225,8 @@ fn main() {
             kind: gpui::WindowKind::Normal,
             is_movable: true,
             app_owns_titlebar_drag: true,
+            // Matches gpui's own default: throttle to 30fps while inactive.
+            inactive_frame_interval: Some(std::time::Duration::from_micros(33_333)),
             is_minimizable: true,
             is_resizable: true,
             tabbing_identifier: None,

@@ -372,3 +372,103 @@ async fn test_expanded_edit_survives_minimize(cx: &mut TestAppContext) {
         statements
     );
 }
+
+/// Horizontal cursor-follow inside a table cell: a value wider than the
+/// column must scroll the inline input as the cursor walks right, and walking
+/// back to the start must land on a zero offset with no leftover shift.
+#[gpui::test]
+async fn test_inline_edit_scrolls_horizontally_with_cursor(cx: &mut TestAppContext) {
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    let results_panel = setup_editable_table(&harness, &mut cx).await;
+    let table_state = results_panel.read_with(&cx, |panel, _| panel.table_state().clone());
+
+    results_panel.update_in(&mut cx, |panel, window, cx| {
+        panel.start_cell_edit(0, 1, window, cx);
+    });
+    cx.run_until_parked();
+
+    let input = table_state.read_with(&cx, |state, _| {
+        match state
+            .delegate()
+            .edit_state
+            .get_editing_input()
+            .expect("editing input should exist")
+        {
+            CellInput::Inline(input) => input,
+            CellInput::Expanded(_) => panic!("a fresh cell edit is inline"),
+        }
+    });
+    let long_value = "x".repeat(400);
+    input.update_in(&mut cx, |input, window, cx| {
+        input.replace_all(&long_value, window, cx);
+        input.set_selected_range(0..0, window, cx);
+    });
+    cx.run_until_parked();
+    let start_offset = input.read_with(&cx, |input, _| input.scroll_offset().x);
+    assert_eq!(start_offset, gpui::px(0.));
+
+    for _ in 0..long_value.len() {
+        cx.simulate_keystrokes("right");
+    }
+    cx.run_until_parked();
+    let (cursor, end_offset) =
+        input.read_with(&cx, |input, _| (input.cursor(), input.scroll_offset().x));
+    assert_eq!(cursor, long_value.len(), "cursor should reach the end");
+    assert!(
+        end_offset < gpui::px(0.),
+        "input should scroll right to follow the cursor, offset {end_offset:?}"
+    );
+
+    for _ in 0..long_value.len() {
+        cx.simulate_keystrokes("left");
+    }
+    cx.run_until_parked();
+    let (cursor, offset) =
+        input.read_with(&cx, |input, _| (input.cursor(), input.scroll_offset().x));
+    assert_eq!(cursor, 0);
+    assert_eq!(
+        offset,
+        gpui::px(0.),
+        "scrolling back to the start should settle at 0"
+    );
+}
+
+/// Left/right at the text boundaries must stay inside the cell editor rather
+/// than moving the table's column selection underneath it.
+#[gpui::test]
+async fn test_inline_edit_arrows_do_not_reach_the_table(cx: &mut TestAppContext) {
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    let results_panel = setup_editable_table(&harness, &mut cx).await;
+    let table_state = results_panel.read_with(&cx, |panel, _| panel.table_state().clone());
+
+    results_panel.update_in(&mut cx, |panel, window, cx| {
+        panel.start_cell_edit(0, 1, window, cx);
+    });
+    cx.run_until_parked();
+
+    let before = table_state.read_with(&cx, |state, _| {
+        (state.selected_cell(), state.selected_col())
+    });
+
+    cx.simulate_keystrokes("left left right right right");
+    cx.run_until_parked();
+
+    let after = table_state.read_with(&cx, |state, _| {
+        (state.selected_cell(), state.selected_col())
+    });
+    let editing_cell =
+        table_state.read_with(&cx, |state, _| state.delegate().edit_state.editing_cell);
+    assert_eq!(
+        after, before,
+        "table selection should not move while editing"
+    );
+    assert_eq!(
+        editing_cell,
+        Some((0, 1)),
+        "the cell should still be in edit mode"
+    );
+}

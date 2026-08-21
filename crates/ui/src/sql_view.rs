@@ -143,6 +143,7 @@ impl SqlView {
     /// Clear all entries from the log
     pub fn clear(&mut self, cx: &mut Context<Self>) {
         self.entries.clear();
+        self.scroll_handle.set_offset(gpui::Point::default());
         cx.notify();
     }
 

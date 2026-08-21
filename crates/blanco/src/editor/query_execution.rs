@@ -151,6 +151,10 @@ impl EditorPanel {
         // Save the current tab before executing the query
         // Extract the tab data we need before starting async operations
         let tab_index = self.active_tab_ix;
+        let run_timestamp = chrono::Utc::now().timestamp();
+        if let Some(TabType::Query(query_tab)) = self.tabs.get_mut(tab_index) {
+            query_tab.last_run_at = Some(run_timestamp);
+        }
         let tab = self.tabs.get(self.active_tab_ix);
 
         if let Some(TabType::Query(query_tab)) = tab {
@@ -172,6 +176,7 @@ impl EditorPanel {
                 schema_name: query_tab.schema_name.clone(),
                 environment_type: query_tab.environment_type,
                 tab_kind: crate::app_database::EditorKind::Query,
+                last_run_at: Some(run_timestamp),
             };
 
             // Trigger the save operation in background
@@ -196,6 +201,12 @@ impl EditorPanel {
                         return;
                     }
                 };
+
+                app_database
+                    .touch_query_tab_last_run(tab_db_id, run_timestamp)
+                    .await
+                    .map_err(anyhow::Error::from)
+                    .log_err();
 
                 entity_handle
                     .update(cx, |editor_panel: &mut EditorPanel, _| {

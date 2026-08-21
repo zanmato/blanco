@@ -38,8 +38,14 @@ pub struct QueryTab {
     pub environment_type: Option<EnvironmentType>,
     pub editor: Entity<EditorState>,
     pub db_id: Option<i64>,
+    /// Unix seconds of the last run, shown in the tab overflow menu.
+    pub last_run_at: Option<i64>,
     pub results_panel: Entity<ResultsPanel>,
     pub sql_view: Entity<SqlView>,
+    /// Log shown in the "Apply edits" popover. Held here rather than created
+    /// in the popover's content closure, which re-runs every render and would
+    /// reset the view's scroll position.
+    pub commit_preview: Entity<SqlView>,
     pub chat_enabled: bool,
     pub chat_panel: Option<Entity<ChatPanel>>,
     pub sql_view_visible: bool,
@@ -68,6 +74,7 @@ pub struct ScriptTab {
     pub environment_type: Option<EnvironmentType>,
     pub editor: Entity<EditorState>,
     pub db_id: Option<i64>,
+    pub last_run_at: Option<i64>,
     pub results_panel: Entity<ResultsPanel>,
     pub log_view: Entity<SqlView>,
     pub log_visible: bool,
@@ -86,6 +93,7 @@ pub struct TabCreationParams {
     pub title: String,
     pub content: Option<String>,
     pub db_id: Option<i64>,
+    pub last_run_at: Option<i64>,
     pub connection_id: i64,
     pub db_type: database::DatabaseType,
     pub connection_name: Option<String>,

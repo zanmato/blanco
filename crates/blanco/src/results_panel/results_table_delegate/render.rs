@@ -13,7 +13,7 @@ use gpui_component::{
     button::{Button, ButtonVariants},
     clipboard::Clipboard,
     h_flex,
-    input::{Editor, EditorState, Input, InputState},
+    input::{Editor, EditorState, Input, InputState, MoveLeft, MoveRight},
     menu::PopupMenu,
     table::{Column, ColumnSort, TableDelegate, TableState},
     tooltip::Tooltip,
@@ -72,6 +72,16 @@ fn render_resize_grip(color: Hsla) -> impl IntoElement {
     .size_full()
 }
 
+/// The forked input propagates left/right at the text boundaries so a
+/// navigable command palette can react to them. Inside a table cell that
+/// would hand the keystroke on to the table's column selection, so the cell
+/// editor swallows them instead.
+fn swallow_boundary_movement<T: InteractiveElement>(element: T) -> T {
+    element
+        .on_action(|_: &MoveLeft, _, cx| cx.stop_propagation())
+        .on_action(|_: &MoveRight, _, cx| cx.stop_propagation())
+}
+
 impl ResultsTableDelegate {
     /// Expanded inline editor: an absolutely-positioned, larger input overlay
     /// with a minimize affordance.
@@ -112,6 +122,11 @@ impl ResultsTableDelegate {
                         // the right click also reaches the table underneath,
                         // which opens the row menu on top of it.
                         .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+                        .map(swallow_boundary_movement)
+                        // The editor only stops wheel events that moved its own
+                        // offset, so at its scroll limits they would fall
+                        // through and scroll the table underneath the overlay.
+                        .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
                         .child(
                             Editor::new(&input)
                                 .disabled(!self.is_editable())
@@ -198,6 +213,7 @@ impl ResultsTableDelegate {
             // Scopes the tab/shift-tab -> Edit{Next,Prev}Cell bindings to the
             // inline editor, so they outrank the table's own tab bindings.
             .key_context("CellEditor")
+            .map(swallow_boundary_movement)
             .font_family(cx.theme().mono_font_family.clone())
             .text_xs()
             .size_full()

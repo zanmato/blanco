@@ -1,9 +1,9 @@
 use blanco_core::RoutineKind;
-use blanco_ui::{IconName, SqlView, SqlViewMessage, Tab, TabBar};
+use blanco_ui::{IconName, SqlViewMessage, Tab, TabBar};
 use gpui::{
-    AnyElement, App, AppContext, ClickEvent, Context, FocusHandle, Focusable, FontWeight,
-    InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, WeakEntity,
-    Window, div, prelude::FluentBuilder, px, rems,
+    AnyElement, App, ClickEvent, Context, FocusHandle, Focusable, FontWeight, InteractiveElement,
+    IntoElement, ParentElement, Render, SharedString, Styled, WeakEntity, Window, div,
+    prelude::FluentBuilder, px, rems,
 };
 use gpui_component::{
     ActiveTheme, Disableable as _, Icon, Sizable, WindowExt as _,
@@ -129,6 +129,24 @@ impl EditorPanel {
     }
 
     fn render_tab_bar_item(&self, ix: usize, tab: &TabType, cx: &mut Context<Self>) -> Tab {
+        let last_run_at = match tab {
+            TabType::Query(query_tab) => query_tab.last_run_at,
+            TabType::Script(script_tab) => script_tab.last_run_at,
+            _ => None,
+        };
+        // Mirror the tab strip: the last remaining tab cannot be closed.
+        let closable = self.tabs.len() > 1;
+        self.render_tab_bar_item_inner(ix, tab, cx)
+            .when_some(last_run_at, |this, timestamp| {
+                this.menu_detail(crate::time_format::format_relative(timestamp))
+            })
+            .when(closable, |this| {
+                let close = cx.listener(|this, index: &usize, _, cx| this.close_tab(*index, cx));
+                this.on_close(move |index, _, window, cx| close(index, window, cx))
+            })
+    }
+
+    fn render_tab_bar_item_inner(&self, ix: usize, tab: &TabType, cx: &mut Context<Self>) -> Tab {
         match tab {
             TabType::Query(query_tab) => {
                 let show_close_button = self.tabs.len() > 1;
@@ -443,32 +461,41 @@ impl EditorPanel {
 
         let results_panel = query_tab.results_panel.clone();
         let sql_view = query_tab.sql_view.clone();
+        let preview_log = query_tab.commit_preview.clone();
 
         Popover::new("commit-changes-popover")
             .trigger(button)
+            .on_open_change({
+                let results_panel = results_panel.clone();
+                let preview_log = preview_log.clone();
+                move |open, _window, cx| {
+                    if !*open {
+                        return;
+                    }
+                    // A cell may still be in edit mode (its blur commit only
+                    // fires when focus moves into the table); fold it into the
+                    // tracked changes so the preview reflects it.
+                    results_panel.update(cx, |panel, cx| panel.finalize_active_cell_edit(cx));
+                    let statements = results_panel.read(cx).preview_pending_sql(cx);
+                    preview_log.update(cx, |log, cx| {
+                        log.clear(cx);
+                        if statements.is_empty() {
+                            log.append_text(
+                                &SqlViewMessage::Comment("no statements to apply".into()),
+                                cx,
+                            );
+                        } else {
+                            for statement in statements {
+                                log.append_text(&SqlViewMessage::SqlStatement(statement), cx);
+                            }
+                        }
+                    });
+                }
+            })
             .content(move |_state, _window, cx| {
                 let results_panel = results_panel.clone();
                 let sql_view = sql_view.clone();
-                // A cell may still be in edit mode (its blur commit only fires
-                // when focus moves into the table); fold it into the tracked
-                // changes so the preview reflects it.
-                results_panel.update(cx, |panel, cx| panel.finalize_active_cell_edit(cx));
-                let statements = results_panel.read(cx).preview_pending_sql(cx);
-                let preview_log = cx.new(|cx| {
-                    let mut log =
-                        SqlView::new(usize::MAX, cx.theme().highlight_theme.clone(), "sql");
-                    if statements.is_empty() {
-                        log.append_text(
-                            &SqlViewMessage::Comment("no statements to apply".into()),
-                            cx,
-                        );
-                    } else {
-                        for statement in statements {
-                            log.append_text(&SqlViewMessage::SqlStatement(statement), cx);
-                        }
-                    }
-                    log
-                });
+                let preview_log = preview_log.clone();
                 v_flex()
                     .p_2()
                     .gap_2()

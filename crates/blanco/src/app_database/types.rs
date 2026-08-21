@@ -105,6 +105,8 @@ pub struct QueryTabData {
     pub schema_name: Option<String>,
     pub environment_type: Option<EnvironmentType>,
     pub tab_kind: EditorKind,
+    /// Unix seconds of the last query/script run in this tab.
+    pub last_run_at: Option<i64>,
 }
 
 /// A single recorded query execution, stored in the `query_history` table.

@@ -194,8 +194,11 @@ impl EditorPanel {
             // Remove tab from UI
             self.tabs.remove(tab_index);
 
-            // Adjust active tab index
-            if self.active_tab_ix >= self.tabs.len() {
+            // Adjust active tab index so the same tab stays active when one
+            // before it is closed.
+            if tab_index < self.active_tab_ix {
+                self.active_tab_ix -= 1;
+            } else if self.active_tab_ix >= self.tabs.len() {
                 self.active_tab_ix = self.tabs.len().saturating_sub(1);
             }
 
@@ -581,6 +584,7 @@ impl EditorPanel {
                     title: tab_title,
                     content: Some(tab_content),
                     db_id: tab_db_id,
+                    last_run_at: tab_data.last_run_at,
                     connection_id: _connection_id,
                     db_type: tab_db_type,
                     connection_name: tab_data.connection_name.clone(),
@@ -749,6 +753,7 @@ impl EditorPanel {
             environment_type: params.environment_type,
             editor: editor.clone(),
             db_id: params.db_id,
+            last_run_at: params.last_run_at,
             results_panel,
             sql_view: cx.new(|cx| {
                 SqlView::new(
@@ -758,6 +763,8 @@ impl EditorPanel {
                 )
                 .show_copy_button(false)
             }),
+            commit_preview: cx
+                .new(|cx| SqlView::new(usize::MAX, cx.theme().highlight_theme.clone(), "sql")),
             sqruff_service,
             completion_provider: supports_sql.then_some(sql_completion_provider),
             // Chat functionality
@@ -847,6 +854,7 @@ impl EditorPanel {
             environment_type: params.environment_type,
             editor,
             db_id: params.db_id,
+            last_run_at: params.last_run_at,
             results_panel,
             log_view: cx.new(|cx| {
                 SqlView::new(

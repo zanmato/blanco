@@ -473,6 +473,8 @@ pub struct Tab {
     pub(super) selected: bool,
     pub(super) group: Option<SharedString>,
     pub(super) group_label: Option<Rc<dyn Fn(&mut Window, &mut App) -> AnyElement + 'static>>,
+    pub(super) menu_detail: Option<SharedString>,
+    pub(super) on_close: Option<Rc<dyn Fn(&usize, &ClickEvent, &mut Window, &mut App) + 'static>>,
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
 }
 
@@ -519,6 +521,8 @@ impl Default for Tab {
             selected: false,
             group: None,
             group_label: None,
+            menu_detail: None,
+            on_close: None,
             prefix: None,
             suffix: None,
             variant: TabVariant::default(),
@@ -608,6 +612,26 @@ impl Tab {
         self.group_label = Some(Rc::new(move |window, cx| {
             builder(window, cx).into_any_element()
         }));
+        self
+    }
+
+    /// Secondary text shown right-aligned on this tab's row in
+    /// [`super::TabBar`]'s overflow menu (e.g. "7h ago").
+    pub fn menu_detail(mut self, detail: impl Into<SharedString>) -> Self {
+        self.menu_detail = Some(detail.into());
+        self
+    }
+
+    /// Handler for the close button rendered on this tab's row in
+    /// [`super::TabBar`]'s overflow menu. The button is only shown when set.
+    /// The handler receives the tab's current index: the menu stays open after
+    /// a close and shifts the indices of the remaining tabs, so the index
+    /// captured when the tab was built may no longer be right.
+    pub fn on_close(
+        mut self,
+        on_close: impl Fn(&usize, &ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_close = Some(Rc::new(on_close));
         self
     }
 
