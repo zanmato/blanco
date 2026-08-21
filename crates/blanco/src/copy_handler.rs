@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::result_ext::ResultExt;
 use crate::results_panel::ResultsPanel;
-use crate::transformers::{SelectedTableData, TransformerRegistry};
+use transformers::{SelectedTableData, TransformerRegistry};
 
 /// Handles copying table data to the clipboard in various formats
 #[derive(Clone)]
@@ -75,8 +75,8 @@ impl Default for CopyHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::results_panel::{SelectedCell, SelectedRow, SelectedTableData};
     use blanco_core::ColumnType;
+    use transformers::{SelectedCell, SelectedRow, SelectedTableData};
 
     fn create_test_data() -> SelectedTableData {
         SelectedTableData {

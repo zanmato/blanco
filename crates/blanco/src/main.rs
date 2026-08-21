@@ -15,6 +15,7 @@ mod connection_credentials;
 mod connection_integration_test;
 mod connection_modal;
 mod connections;
+mod copy_handler;
 mod editor;
 mod export;
 mod history_panel;
@@ -33,7 +34,6 @@ mod status_bar;
 #[cfg(test)]
 mod test_harness;
 mod time_format;
-mod transformers;
 
 use assets::Assets;
 use database::DatabaseService;

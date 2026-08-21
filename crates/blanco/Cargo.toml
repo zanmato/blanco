@@ -24,6 +24,7 @@ gpui_tokio = { path = "../gpui_tokio" }
 scripting = { path = "../scripting" }
 app-database = { path = "../app-database" }
 sql-parser = { path = "../sql-parser" }
+transformers = { path = "../transformers" }
 blanco_ui = { path = "../ui", package = "blanco-ui" }
 blanco-core = { path = "../blanco-core" }
 database = { path = "../database" }

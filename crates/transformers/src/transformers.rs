@@ -1,9 +1,30 @@
-use blanco_core::ColumnType;
+use blanco_core::{ColumnType, DatabaseType};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use crate::results_panel::SelectedTableData;
+/// Selection data handed to transformers by the results grid.
+#[derive(Clone, Debug)]
+pub struct SelectedCell {
+    pub col: usize,
+    pub value: Option<String>,
+    pub column_name: Option<String>,
+    pub column_type: Option<ColumnType>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SelectedRow {
+    pub row: usize,
+    pub cells: Vec<SelectedCell>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SelectedTableData {
+    pub table_name: Option<String>,
+    pub db_type: Option<DatabaseType>,
+    pub columns: Vec<String>,
+    pub selected_rows: Vec<SelectedRow>,
+}
 
 #[derive(Debug, Clone)]
 pub enum TransformError {
@@ -108,7 +129,6 @@ impl TransformerRegistry {
 }
 
 // Re-export transformer modules and types
-pub mod copy_handler;
 pub mod csv_transformer;
 pub mod json_transformer;
 pub mod markdown_transformer;
@@ -117,7 +137,6 @@ pub mod tsv_transformer;
 pub mod values_transformer;
 
 // Export types for convenience
-pub use copy_handler::CopyHandler;
 pub use csv_transformer::CsvTransformer;
 pub use json_transformer::JsonTransformer;
 pub use markdown_transformer::MarkdownTransformer;
@@ -148,12 +167,12 @@ impl SelectedTableData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::results_panel::{SelectedCell, SelectedRow, SelectedTableData};
+    use crate::{SelectedCell, SelectedRow, SelectedTableData};
 
     fn create_test_data_with_nulls() -> SelectedTableData {
         SelectedTableData {
             table_name: Some("products".to_string()),
-            db_type: Some(database::DatabaseType::PostgreSQL),
+            db_type: Some(blanco_core::DatabaseType::PostgreSQL),
             columns: vec!["id".to_string(), "name".to_string(), "price".to_string()],
             selected_rows: vec![SelectedRow {
                 row: 0,
@@ -220,7 +239,7 @@ mod tests {
     #[test]
     fn test_sql_output_uses_correct_quoting_for_db_type() {
         let mut data = create_test_data_with_nulls();
-        data.db_type = Some(database::DatabaseType::MySQL);
+        data.db_type = Some(blanco_core::DatabaseType::MySQL);
 
         let registry = TransformerRegistry::default();
         let sql = registry.transform_data(&data, "sql").unwrap();

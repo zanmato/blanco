@@ -1,6 +1,6 @@
-use crate::transformers::{DataTransformer, SelectedTableData, TransformError};
+use crate::{DataTransformer, SelectedTableData, TransformError};
 use blanco_core::ColumnType;
-use database::DatabaseType;
+use blanco_core::DatabaseType;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(crate) fn should_quote_value(column_type: &ColumnType) -> bool {

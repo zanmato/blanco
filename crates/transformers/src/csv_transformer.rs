@@ -1,11 +1,11 @@
-use crate::transformers::{DataTransformer, SelectedTableData, TransformError};
+use crate::{DataTransformer, SelectedTableData, TransformError};
 use blanco_core::ColumnType;
 
-pub struct TsvTransformer;
+pub struct CsvTransformer;
 
-impl DataTransformer for TsvTransformer {
+impl DataTransformer for CsvTransformer {
     fn format_name(&self) -> &'static str {
-        "TSV"
+        "CSV"
     }
 
     fn transform_selected_data(&self, data: &SelectedTableData) -> Result<String, TransformError> {
@@ -13,6 +13,7 @@ impl DataTransformer for TsvTransformer {
             return Err(TransformError::EmptySelection);
         }
 
+        // Estimate capacity: ~50 bytes per cell on average
         let cell_count = data
             .selected_rows
             .iter()
@@ -21,17 +22,20 @@ impl DataTransformer for TsvTransformer {
         let estimated_capacity = (cell_count * 50) + (data.columns.len() * 20) + 100;
         let mut output = String::with_capacity(estimated_capacity);
 
+        // If we have selected rows, export complete rows
         if !data.selected_rows.is_empty() {
+            // Output header
             if !data.columns.is_empty() {
                 for (i, col) in data.columns.iter().enumerate() {
                     if i > 0 {
-                        output.push('\t');
+                        output.push(';');
                     }
-                    tsv_escape_to(col, &mut output);
+                    csv_escape_to(col, &mut output);
                 }
                 output.push('\n');
             }
 
+            // Output selected rows
             let mut row_indices: Vec<usize> = data.selected_rows.iter().map(|r| r.row).collect();
             row_indices.sort();
 
@@ -39,9 +43,9 @@ impl DataTransformer for TsvTransformer {
                 if let Some(row) = data.selected_rows.iter().find(|r| r.row == row_idx) {
                     for (i, cell) in row.cells.iter().enumerate() {
                         if i > 0 {
-                            output.push('\t');
+                            output.push(';');
                         }
-                        tsv_escape_to(cell.value.as_deref().unwrap_or(""), &mut output);
+                        csv_escape_to(cell.value.as_deref().unwrap_or(""), &mut output);
                     }
                     output.push('\n');
                 }
@@ -56,15 +60,17 @@ impl DataTransformer for TsvTransformer {
         columns: &[String],
         _column_types: &[ColumnType],
     ) -> Result<String, TransformError> {
+        // Estimate capacity for header
         let estimated_capacity = columns.len() * 20 + 10;
         let mut output = String::with_capacity(estimated_capacity);
 
+        // Output CSV header
         if !columns.is_empty() {
             for (i, col) in columns.iter().enumerate() {
                 if i > 0 {
-                    output.push('\t');
+                    output.push(';');
                 }
-                tsv_escape_to(col, &mut output);
+                csv_escape_to(col, &mut output);
             }
             output.push('\n');
         }
@@ -78,14 +84,15 @@ impl DataTransformer for TsvTransformer {
         _columns: &[String],
         _column_types: &[ColumnType],
     ) -> Result<String, TransformError> {
+        // Estimate capacity for row
         let estimated_capacity = row_data.len() * 50 + 10;
         let mut output = String::with_capacity(estimated_capacity);
 
         for (i, value) in row_data.iter().enumerate() {
             if i > 0 {
-                output.push('\t');
+                output.push(';');
             }
-            tsv_escape_to(value.as_deref().unwrap_or(""), &mut output);
+            csv_escape_to(value.as_deref().unwrap_or(""), &mut output);
         }
         output.push('\n');
 
@@ -93,17 +100,21 @@ impl DataTransformer for TsvTransformer {
     }
 
     fn finalize_stream(&self) -> Result<String, TransformError> {
+        // CSV doesn't need any special finalization
         Ok(String::new())
     }
 }
 
-fn tsv_escape_to(value: &str, output: &mut String) {
+/// Escape a value for CSV format. Writes directly to buffer.
+/// This avoids allocating a new String for each cell value
+fn csv_escape_to(value: &str, output: &mut String) {
     if value.is_empty() {
         return;
     }
 
+    // Check if we need to quote the value
     let needs_quoting =
-        value.contains('\t') || value.contains('"') || value.contains('\n') || value.contains('\r');
+        value.contains(';') || value.contains('"') || value.contains('\n') || value.contains('\r');
 
     if needs_quoting {
         output.push('"');
@@ -126,20 +137,16 @@ mod tests {
 
     fn escape(value: &str) -> String {
         let mut output = String::new();
-        tsv_escape_to(value, &mut output);
+        csv_escape_to(value, &mut output);
         output
     }
 
     #[test]
-    fn test_tsv_escape() {
+    fn test_csv_escape() {
         assert_eq!(escape("simple"), "simple");
-        assert_eq!(escape("contains\ttab"), "\"contains\ttab\"");
+        assert_eq!(escape("contains; semicolon"), "\"contains; semicolon\"");
         assert_eq!(escape("contains\"quote"), "\"contains\"\"quote\"");
         assert_eq!(escape("multi\nline"), "\"multi\nline\"");
         assert_eq!(escape(""), "");
-        assert_eq!(
-            escape("UPDATE users SET name = 'Bob';"),
-            "UPDATE users SET name = 'Bob';"
-        );
     }
 }

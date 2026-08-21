@@ -1567,6 +1567,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "transformers",
  "tree-sitter",
  "tree-sitter-javascript",
  "tree-sitter-redis",
@@ -10874,6 +10875,14 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
+]
+
+[[package]]
+name = "transformers"
+version = "0.1.0"
+dependencies = [
+ "blanco-core",
+ "serde_json",
 ]
 
 [[package]]

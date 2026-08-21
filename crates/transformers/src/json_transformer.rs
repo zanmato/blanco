@@ -1,4 +1,4 @@
-use crate::transformers::{DataTransformer, SelectedTableData, TransformError};
+use crate::{DataTransformer, SelectedTableData, TransformError};
 use blanco_core::ColumnType;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};

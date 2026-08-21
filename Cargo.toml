@@ -16,6 +16,7 @@ members = [
     "crates/scripting",
     "crates/app-database",
     "crates/sql-parser",
+    "crates/transformers",
 ]
 
 [workspace.package]

@@ -1,0 +1,15 @@
+[package]
+name = "transformers"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/transformers.rs"
+
+[dependencies]
+blanco-core = { path = "../blanco-core" }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

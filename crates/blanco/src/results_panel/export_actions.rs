@@ -8,7 +8,7 @@ use gpui_component::{WindowExt as _, notification::NotificationType};
 use crate::app::{ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV};
 use crate::export::service::{ExportResult, ExportService};
 use crate::result_ext::ResultExt;
-use crate::transformers::{
+use transformers::{
     CsvTransformer, DataTransformer, JsonTransformer, MarkdownTransformer, SqlTransformer,
 };
 

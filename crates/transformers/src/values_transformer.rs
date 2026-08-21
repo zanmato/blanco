@@ -1,9 +1,7 @@
-use crate::transformers::sql_transformer::{
-    should_quote_value, sql_escape_string_to, sql_identifier,
-};
-use crate::transformers::{DataTransformer, SelectedTableData, TransformError};
+use crate::sql_transformer::{should_quote_value, sql_escape_string_to, sql_identifier};
+use crate::{DataTransformer, SelectedTableData, TransformError};
 use blanco_core::ColumnType;
-use database::DatabaseType;
+use blanco_core::DatabaseType;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -27,7 +25,6 @@ impl ValuesTransformer {
         }
     }
 
-    #[expect(dead_code)]
     pub fn with_table_name(table_name: String, db_type: DatabaseType) -> Self {
         Self {
             table_name: Some(table_name),
@@ -253,7 +250,7 @@ impl DataTransformer for ValuesTransformer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::results_panel::{SelectedCell, SelectedRow, SelectedTableData};
+    use crate::{SelectedCell, SelectedRow, SelectedTableData};
     use blanco_core::ColumnType;
 
     fn make_data(db_type: DatabaseType, table_name: Option<&str>) -> SelectedTableData {

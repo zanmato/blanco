@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::modal::ExportOptions;
-use crate::{results_panel::SelectedTableData, transformers::DataTransformer};
 use blanco_core::ColumnType;
+use transformers::{DataTransformer, SelectedTableData};
 
 /// Progress information for export operations
 #[derive(Clone, Debug)]

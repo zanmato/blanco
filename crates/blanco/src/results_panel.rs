@@ -18,11 +18,11 @@ use gpui_component::{
     v_flex,
 };
 
-use blanco_core::ColumnType;
 use blanco_core::QueryResult;
 use blanco_core::{KeyValueResult, RedisValue, ResultPayload};
 
-use crate::transformers::CopyHandler;
+use crate::copy_handler::CopyHandler;
+pub use transformers::{SelectedCell, SelectedRow, SelectedTableData};
 
 mod cell_edit_state;
 #[cfg(test)]
@@ -51,29 +51,6 @@ pub struct TableOperationResponse {
     pub duration: Duration,
     pub sql_queries: Vec<String>,
     pub applied: usize,
-}
-
-// Data structures for copy functionality
-#[derive(Clone, Debug)]
-pub struct SelectedCell {
-    pub col: usize,
-    pub value: Option<String>,
-    pub column_name: Option<String>,
-    pub column_type: Option<ColumnType>,
-}
-
-#[derive(Clone, Debug)]
-pub struct SelectedRow {
-    pub row: usize,
-    pub cells: Vec<SelectedCell>,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct SelectedTableData {
-    pub table_name: Option<String>,
-    pub db_type: Option<database::DatabaseType>,
-    pub columns: Vec<String>,
-    pub selected_rows: Vec<SelectedRow>,
 }
 
 /// One materialized result-set rendered as a sub-tab inside `ResultsPanel`.

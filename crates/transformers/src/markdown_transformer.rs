@@ -1,4 +1,4 @@
-use crate::transformers::{DataTransformer, SelectedTableData, TransformError};
+use crate::{DataTransformer, SelectedTableData, TransformError};
 use blanco_core::ColumnType;
 
 pub struct MarkdownTransformer;
@@ -182,7 +182,7 @@ fn format_cell_to(value: &str, width: usize, output: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::results_panel::{SelectedCell, SelectedRow, SelectedTableData};
+    use crate::{SelectedCell, SelectedRow, SelectedTableData};
 
     fn create_test_data() -> SelectedTableData {
         SelectedTableData {
