@@ -64,6 +64,7 @@ actions!(
         RunQuery,
         ExplainQuery,
         ToggleCommandPalette,
+        CloseActiveTab,
         StartCellEdit,
         EditNextCell,
         EditPrevCell,
@@ -74,6 +75,20 @@ actions!(
 #[action(namespace = blanco_app, no_json)]
 pub struct ConnectToConnection {
     pub connection_id: i64,
+}
+
+/// Bring an editor tab to the front by its position in the tab strip.
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct ActivateEditorTab {
+    pub index: usize,
+}
+
+/// Switch to a theme registered in the `ThemeRegistry` by name.
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct SwitchTheme {
+    pub name: String,
 }
 
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
@@ -314,7 +329,9 @@ impl BlancoApp {
 
         let saved_tabs = Self::load_saved_tabs(cx);
         let editor_panel = cx.new(|cx| EditorPanel::new_with_saved_tabs(window, cx, saved_tabs));
-        let command_palette = cx.new(|cx| CommandPalette::new(sidebar.downgrade(), window, cx));
+        let command_palette = cx.new(|cx| {
+            CommandPalette::new(sidebar.downgrade(), editor_panel.downgrade(), window, cx)
+        });
         let app_menu_bar = AppMenuBar::new(cx);
 
         let subscriptions = Self::wire_subscriptions(
@@ -739,6 +756,38 @@ impl BlancoApp {
         self.editor_panel.update(cx, |panel, cx| {
             panel.add_settings_tab(window, cx);
         });
+    }
+
+    fn on_activate_editor_tab(
+        &mut self,
+        action: &ActivateEditorTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let index = action.index;
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.activate_tab(index, window, cx);
+        });
+    }
+
+    fn on_close_active_tab(
+        &mut self,
+        _: &CloseActiveTab,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.close_active_tab(cx);
+        });
+    }
+
+    fn on_switch_theme(
+        &mut self,
+        action: &SwitchTheme,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        crate::settings::apply_theme_by_name(&action.name, cx);
     }
 
     fn on_new_snippet(&mut self, _: &NewSnippet, window: &mut Window, cx: &mut Context<Self>) {
@@ -1622,6 +1671,9 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_database_disconnected))
             .on_action(cx.listener(Self::on_open_snippet_editor))
             .on_action(cx.listener(Self::on_refresh_snippets))
+            .on_action(cx.listener(Self::on_activate_editor_tab))
+            .on_action(cx.listener(Self::on_close_active_tab))
+            .on_action(cx.listener(Self::on_switch_theme))
             .on_action(cx.listener(Self::on_toggle_render_whitespace))
             .on_action(cx.listener(Self::on_toggle_word_wrap))
             .on_action(cx.listener(Self::on_run_query))

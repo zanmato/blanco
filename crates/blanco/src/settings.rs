@@ -10,6 +10,41 @@ use gpui_component::Theme;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
+/// Switch to the registered theme called `name`, persist the choice, and
+/// re-apply the user's font settings on top. Used by the settings page and the
+/// command palette.
+pub fn apply_theme_by_name(name: &str, cx: &mut App) {
+    let Some(theme_config) = gpui_component::ThemeRegistry::global(cx)
+        .themes()
+        .get(&SharedString::from(name.to_string()))
+        .cloned()
+    else {
+        tracing::warn!("Unknown theme: {name}");
+        return;
+    };
+    AppSettings::global_mut(cx).settings.appearance.theme = name.to_string();
+    let mode = theme_config.mode;
+    Theme::global_mut(cx).apply_config(&theme_config);
+    // Pushes the config into the base layer (scrollbars, resize handles,
+    // input frame).
+    Theme::change(mode, None, cx);
+    apply_font_settings(cx);
+
+    let db = app_database::AppDatabase::global(cx).clone();
+    let name = name.to_string();
+    let save = gpui_tokio::Tokio::spawn_result(cx, async move {
+        db.save_setting("appearance.theme", &name, false)
+            .await
+            .map_err(anyhow::Error::from)
+    });
+    cx.spawn(async move |_| {
+        if let Err(error) = save.await {
+            tracing::error!("Failed to persist theme choice: {error:#}");
+        }
+    })
+    .detach();
+}
+
 /// Apply user font settings on top of the current theme.
 /// Called after theme changes and on startup to ensure font preferences persist.
 pub fn apply_font_settings(cx: &mut App) {

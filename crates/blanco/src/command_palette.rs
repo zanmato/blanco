@@ -15,13 +15,14 @@ use database::{DatabaseService, DatabaseType};
 
 use crate::{
     app::{
-        CommitChanges, ConnectToConnection, CopyAsCSV, CopyAsJSON, CopyAsMarkdown, CopyAsSQL,
-        CopyAsTSV, CreateNewQueryTab, CreateNewScriptTab, ExplainQuery, ExportAsCSV, ExportAsJSON,
-        ExportAsMarkdown, ExportAsSQL, ExportAsTSV, FormatQuery, NewSnippet,
-        OpenNewConnectionModal, OpenSettings, RollbackChanges, RunQuery, ToggleRenderWhitespace,
-        ToggleSidebar, ToggleWordWrap,
+        ActivateEditorTab, CloseActiveTab, CommitChanges, ConnectToConnection, CopyAsCSV,
+        CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CreateNewQueryTab, CreateNewScriptTab,
+        ExplainQuery, ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV,
+        FormatQuery, NewSnippet, OpenNewConnectionModal, OpenSettings, RollbackChanges, RunQuery,
+        SwitchTheme, ToggleRenderWhitespace, ToggleSidebar, ToggleWordWrap,
     },
     connections::ConnectionsPanel,
+    editor::EditorPanel,
     result_ext::ResultExt as _,
 };
 use app_database::EnvironmentType;
@@ -112,6 +113,9 @@ pub enum CommandType {
     ExportAsMarkdown,
     ToggleRenderWhitespace,
     ToggleWordWrap,
+    CloseActiveTab,
+    ActivateEditorTab(usize),
+    SwitchTheme(String),
     NewQueryForDatabase(DatabaseRef),
     NewScriptForDatabase(DatabaseRef),
 }
@@ -150,13 +154,14 @@ impl Focusable for CommandPalette {
 impl CommandPalette {
     pub fn new(
         sidebar: WeakEntity<ConnectionsPanel>,
+        editor_panel: WeakEntity<EditorPanel>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let query_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Type a command or search..."));
 
-        let delegate = CommandPaletteDelegate::new(sidebar, cx);
+        let delegate = CommandPaletteDelegate::new(sidebar, editor_panel, cx);
         let list_state = cx.new(|cx| ListState::new(delegate, window, cx).searchable(false));
 
         let list_subscription = cx.subscribe_in(
@@ -752,6 +757,13 @@ fn execute_command(cmd: &CommandType, window: &mut Window, cx: &mut App) {
             window.dispatch_action(Box::new(ToggleRenderWhitespace), cx)
         }
         CommandType::ToggleWordWrap => window.dispatch_action(Box::new(ToggleWordWrap), cx),
+        CommandType::CloseActiveTab => window.dispatch_action(Box::new(CloseActiveTab), cx),
+        CommandType::ActivateEditorTab(index) => {
+            window.dispatch_action(Box::new(ActivateEditorTab { index: *index }), cx)
+        }
+        CommandType::SwitchTheme(name) => {
+            window.dispatch_action(Box::new(SwitchTheme { name: name.clone() }), cx)
+        }
         CommandType::NewQueryForDatabase(database) => window.dispatch_action(
             Box::new(CreateNewQueryTab {
                 connection_id: database.connection_id,
@@ -784,6 +796,7 @@ const ROOT_CRUMB: &str = "Commands";
 
 pub struct CommandPaletteDelegate {
     sidebar: WeakEntity<ConnectionsPanel>,
+    editor_panel: WeakEntity<EditorPanel>,
     /// The root level: base commands plus per-connection navigable items.
     root_commands: Vec<CommandItem>,
     /// Pushed navigation levels; empty == at the root.
@@ -796,9 +809,14 @@ pub struct CommandPaletteDelegate {
 }
 
 impl CommandPaletteDelegate {
-    fn new(sidebar: WeakEntity<ConnectionsPanel>, cx: &App) -> Self {
+    fn new(
+        sidebar: WeakEntity<ConnectionsPanel>,
+        editor_panel: WeakEntity<EditorPanel>,
+        cx: &App,
+    ) -> Self {
         let mut delegate = Self {
             sidebar,
+            editor_panel,
             root_commands: Vec::new(),
             stack: Vec::new(),
             filtered: Vec::new(),
@@ -820,7 +838,7 @@ impl CommandPaletteDelegate {
     }
 
     fn refresh_commands(&mut self, cx: &App) {
-        self.root_commands = build_commands(&self.sidebar, cx);
+        self.root_commands = build_commands(&self.sidebar, &self.editor_panel, cx);
         self.stack.clear();
         self.loading = false;
         self.error = None;
@@ -980,7 +998,7 @@ fn fuzzy_score(text: &str, query: &str) -> Option<i64> {
 }
 
 /// Build a leaf command item.
-fn leaf(label: &str, group: &str, command: CommandType) -> CommandItem {
+fn leaf(label: impl Into<String>, group: &str, command: CommandType) -> CommandItem {
     CommandItem {
         label: label.into(),
         group: group.into(),
@@ -1024,7 +1042,11 @@ fn database_item(connection: &ConnectionRef, name: String) -> CommandItem {
     }
 }
 
-fn build_commands(sidebar: &WeakEntity<ConnectionsPanel>, cx: &App) -> Vec<CommandItem> {
+fn build_commands(
+    sidebar: &WeakEntity<ConnectionsPanel>,
+    editor_panel: &WeakEntity<EditorPanel>,
+    cx: &App,
+) -> Vec<CommandItem> {
     let mut commands = vec![
         leaf("Run Query", "Query", CommandType::RunQuery),
         leaf("Explain Query", "Query", CommandType::ExplainQuery),
@@ -1059,11 +1081,47 @@ fn build_commands(sidebar: &WeakEntity<ConnectionsPanel>, cx: &App) -> Vec<Comma
             CommandType::ToggleRenderWhitespace,
         ),
         leaf("Word Wrap", "View", CommandType::ToggleWordWrap),
+        leaf("Close Tab", "Tab", CommandType::CloseActiveTab),
     ];
 
+    add_tab_commands(&mut commands, editor_panel, cx);
+    add_theme_commands(&mut commands, cx);
     add_connection_commands(&mut commands, sidebar, cx);
 
     commands
+}
+
+fn add_tab_commands(
+    commands: &mut Vec<CommandItem>,
+    editor_panel: &WeakEntity<EditorPanel>,
+    cx: &App,
+) {
+    let Some(editor_panel) = editor_panel.upgrade() else {
+        return;
+    };
+    for (index, title) in editor_panel.read(cx).tab_titles(cx).into_iter().enumerate() {
+        commands.push(leaf(
+            format!("Go to Tab: {title}"),
+            "Tab",
+            CommandType::ActivateEditorTab(index),
+        ));
+    }
+}
+
+fn add_theme_commands(commands: &mut Vec<CommandItem>, cx: &App) {
+    let mut names: Vec<String> = gpui_component::ThemeRegistry::global(cx)
+        .themes()
+        .keys()
+        .map(|name| name.to_string())
+        .collect();
+    names.sort();
+    for name in names {
+        commands.push(leaf(
+            format!("Theme: {name}"),
+            "View",
+            CommandType::SwitchTheme(name),
+        ));
+    }
 }
 
 fn add_connection_commands(

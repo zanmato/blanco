@@ -9,7 +9,7 @@ use gpui::{
 };
 use gpui_component::ThemeRegistry;
 use gpui_component::{
-    ActiveTheme, Sizable, Theme,
+    ActiveTheme, Sizable,
     group_box::GroupBoxVariant,
     select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
     setting::{
@@ -495,31 +495,8 @@ impl SettingsView {
                                     AppSettings::global(cx).settings.appearance.theme.clone(),
                                 )
                             },
-                            {
-                                let view_handle = view_handle.clone();
-                                move |val: SharedString, cx: &mut App| {
-                                    let theme_name = val.to_string();
-                                    AppSettings::global_mut(cx).settings.appearance.theme =
-                                        theme_name.clone();
-
-                                    if let Some(theme_config) =
-                                        ThemeRegistry::global(cx).themes().get(&val).cloned()
-                                    {
-                                        let mode = theme_config.mode;
-                                        Theme::global_mut(cx).apply_config(&theme_config);
-                                        // Pushes the config into the base layer
-                                        // (scrollbars, resize handles, input frame).
-                                        Theme::change(mode, None, cx);
-                                        crate::settings::apply_font_settings(cx);
-                                    }
-
-                                    let key = "appearance.theme".to_string();
-                                    if let Some(view) = view_handle.upgrade() {
-                                        view.update(cx, |view, cx| {
-                                            view.save_setting_debounced(key, theme_name, false, cx);
-                                        });
-                                    }
-                                }
+                            |val: SharedString, cx: &mut App| {
+                                crate::settings::apply_theme_by_name(&val, cx);
                             },
                         )
                         .default_value(SharedString::from(

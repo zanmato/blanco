@@ -23,8 +23,8 @@ pub use tabs::{
 
 use blanco_core::{ColumnInfo, IndexInfo};
 use gpui::{
-    AppContext, Context, Entity, FocusHandle, KeybindingKeystroke, Keystroke, ParentElement as _,
-    Task, WeakEntity, Window,
+    App, AppContext, Context, Entity, FocusHandle, KeybindingKeystroke, Keystroke,
+    ParentElement as _, Task, WeakEntity, Window,
 };
 use gpui_component::{
     ActiveTheme, WindowExt as _,
@@ -471,6 +471,30 @@ impl EditorPanel {
                 tab.set_error(error, window, cx);
             });
         }
+    }
+
+    /// Titles of the open tabs in display order, for the command palette.
+    pub fn tab_titles(&self, cx: &App) -> Vec<String> {
+        self.tabs
+            .iter()
+            .map(|tab| match tab {
+                TabType::Query(query_tab) => query_tab.title.clone(),
+                TabType::Script(script_tab) => script_tab.title.clone(),
+                TabType::Settings(settings_tab) => settings_tab.title.clone(),
+                TabType::Snippet(snippet_editor) => snippet_editor.read(cx).get_title(),
+                TabType::TableStructure(tab) => tab.read(cx).title.clone(),
+                TabType::ObjectDdl(tab) => tab.read(cx).title.clone(),
+                TabType::SchemaGraph(tab) => tab.read(cx).title.clone(),
+            })
+            .collect()
+    }
+
+    pub fn activate_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_active_tab(ix, window, cx);
+    }
+
+    pub fn close_active_tab(&mut self, cx: &mut Context<Self>) {
+        self.close_tab(self.active_tab_ix, cx);
     }
 
     fn set_active_tab(&mut self, ix: usize, _: &mut Window, cx: &mut Context<Self>) {
