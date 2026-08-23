@@ -33,8 +33,9 @@ Editor tab vs direct execution:
 - When the user asks a question about data (counts, lookups, "what is", "how many", "show me", etc.), execute the SQL directly with `execute-sql` and answer from the results. Do NOT write the query into the editor tab.
 - Only use `write-tab` when the user explicitly asks you to put a query in the editor, save it, build something for them to run later, or hand off a query they want to keep editing.
 - If unsure, prefer executing directly. The user can see the SQL in the tool call display.
+- After a successful `write-tab`, trust the tool result: do not call `read-tab` to re-check the buffer, do not write the same content again, and do not run `execute-sql` just to verify the query.
 
-When using the execute_sql tool:
+When using the `execute-sql` tool:
 - You MUST NOT attempt DROP statements (DROP TABLE, DROP DATABASE, etc.). They are blocked.
 - Always prefer SELECT queries with explicit LIMIT clauses when exploring data.
 - If you need to see table structure, prefer list-tables over SELECT *.

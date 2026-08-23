@@ -87,7 +87,13 @@ pub enum LoadingState {
 
 impl LoadingState {
     pub fn is_loading(&self) -> bool {
-        !matches!(self, LoadingState::Idle)
+        matches!(
+            self,
+            LoadingState::Connecting
+                | LoadingState::Streaming
+                | LoadingState::ProcessingTools
+                | LoadingState::AwaitingApproval
+        )
     }
 
     pub fn message(&self) -> String {
@@ -128,12 +134,13 @@ pub enum ChatEvent {
         tool_call_id: String,
         result_summary: String,
     },
-    /// Incremental update to a streaming assistant message. `content` and `reasoning` are the
-    /// full text accumulated so far (snapshots), keyed by the message id.
+    /// Incremental update to a streaming assistant message: only the newly received text,
+    /// keyed by the message id. Carrying deltas (not snapshots) lets the message view append
+    /// into its markdown state, which reparses only the tail.
     StreamDelta {
         message_id: String,
-        content: String,
-        reasoning: String,
+        content_delta: String,
+        reasoning_delta: String,
     },
     /// A streaming assistant message finished; carries final token usage for the turn.
     StreamCompleted {

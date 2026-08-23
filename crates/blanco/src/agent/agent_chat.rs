@@ -1,10 +1,10 @@
 use gpui::{
-    App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
-    ParentElement, Render, SharedString, StatefulInteractiveElement as _, Styled, Subscription,
-    Window, actions, div, prelude::FluentBuilder, px,
+    App, AppContext, Context, Entity, FocusHandle, Focusable, FollowMode, IntoElement,
+    ListAlignment, ParentElement, Render, SharedString, Styled, Subscription, Window, actions, div,
+    prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, Sizable, StyledExt as _,
+    ActiveTheme, Icon, Sizable, StyledExt as _,
     button::{Button, ButtonVariants},
     h_flex,
     input::{InputEvent, Textarea, TextareaState},
@@ -14,7 +14,6 @@ use gpui_component::{
     v_flex,
 };
 use std::sync::Arc;
-use std::time::Duration;
 
 use super::chat_message_view::{ApprovalEvent, ChatMessageState};
 use super::chat_session::{ChatSession, ChatSessionContext};
@@ -22,13 +21,14 @@ use super::chat_types::{ApprovalState, ChatEvent, LoadingState, MessageRole};
 use super::streaming::StreamingChatProvider;
 use super::tool_handlers::ToolMode;
 use blanco_ui::IconName;
-use gpui::ScrollHandle;
 
 actions!(agent_chat, [SendMessage, ClearChat]);
 
 pub struct ChatPanel {
     pub focus_handle: FocusHandle,
-    pub scroll_handle: ScrollHandle,
+    /// Virtualized message list: only visible items lay out, item heights are cached and
+    /// re-measured when a message's content changes.
+    pub list_state: gpui::ListState,
     pub session: Entity<ChatSession>,
     pub input_state: Entity<TextareaState>,
     pub messages: Vec<Entity<ChatMessageState>>,
@@ -118,13 +118,31 @@ impl ChatPanel {
                     ));
                 }
 
+                // One observer per message keeps the list's cached height fresh for any
+                // change (stream deltas, tool results, approval state, thinking toggle).
+                panel._subscriptions.push(cx.observe(
+                    &message_state,
+                    |panel, message_entity, cx| {
+                        if let Some(index) = panel
+                            .messages
+                            .iter()
+                            .position(|entity| *entity == message_entity)
+                        {
+                            panel.list_state.remeasure_items(index..index + 1);
+                        }
+                        cx.notify();
+                    },
+                ));
+
+                let index = panel.messages.len();
                 panel.messages.push(message_state);
-                panel.scroll_to_bottom(cx);
+                panel.list_state.splice(index..index, 1);
 
                 cx.notify();
             }
             ChatEvent::SessionCleared => {
                 panel.messages.clear();
+                panel.list_state.reset(0);
                 panel.loading_state = LoadingState::Idle;
                 cx.notify();
             }
@@ -159,8 +177,8 @@ impl ChatPanel {
             }
             ChatEvent::StreamDelta {
                 message_id,
-                content,
-                reasoning,
+                content_delta,
+                reasoning_delta,
             } => {
                 if let Some(entity) = panel
                     .messages
@@ -168,10 +186,8 @@ impl ChatPanel {
                     .find(|entity| entity.read(cx).message_id == *message_id)
                 {
                     entity.update(cx, |state, cx| {
-                        state.apply_stream_delta(content.clone(), reasoning.clone());
-                        cx.notify();
+                        state.append_stream_delta(content_delta, reasoning_delta, cx);
                     });
-                    panel.scroll_to_bottom(cx);
                 }
             }
             ChatEvent::StreamCompleted {
@@ -235,9 +251,12 @@ impl ChatPanel {
         );
         subscriptions.push(subscription);
 
+        let list_state = gpui::ListState::new(0, ListAlignment::Top, px(1024.));
+        list_state.set_follow_mode(FollowMode::Tail);
+
         Self {
             focus_handle: cx.focus_handle(),
-            scroll_handle: ScrollHandle::new(),
+            list_state,
             session,
             input_state,
             messages: Vec::new(),
@@ -259,7 +278,14 @@ impl ChatPanel {
             input.set_value("", window, cx);
         });
 
-        self.loading_state = LoadingState::Connecting;
+        // A send while a turn is running queues the message for steering; the panel's
+        // loading state already reflects that turn and must not be reset.
+        if !self.session.read(cx).is_generating() {
+            self.loading_state = LoadingState::Connecting;
+        }
+        // Sending snaps back to the newest messages and re-engages tail following.
+        self.list_state.set_follow_mode(FollowMode::Tail);
+        self.list_state.scroll_to_end();
         cx.notify();
 
         self.session.update(cx, |session, cx| {
@@ -280,18 +306,6 @@ impl ChatPanel {
             session.clear_messages();
             cx.emit(ChatEvent::SessionCleared);
         });
-    }
-
-    fn scroll_to_bottom(&mut self, cx: &mut Context<Self>) {
-        let scroll_handle = self.scroll_handle.clone();
-
-        cx.spawn(async move |_, cx| {
-            cx.background_executor()
-                .timer(Duration::from_millis(50))
-                .await;
-            scroll_handle.scroll_to_bottom();
-        })
-        .detach();
     }
 
     fn on_clear_chat(&mut self, _: &ClearChat, window: &mut Window, cx: &mut Context<Self>) {
@@ -358,43 +372,21 @@ impl Render for ChatPanel {
                     .flex_1()
                     .min_h_0()
                     .child(
-                        v_flex()
-                            .id("agent-messages")
-                            .p_3()
-                            .gap_4()
-                            .size_full()
-                            .track_scroll(&self.scroll_handle)
-                            .overflow_scroll()
-                            .children(self.messages.iter().cloned())
-                            .when(self.loading_state.is_loading(), |this| {
-                                this.child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .text_sm()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(self.loading_state.message())
-                                        .when(self.loading_state.show_spinner(), |this| {
-                                            this.child(
-                                                Spinner::new()
-                                                    .icon(IconName::LoaderCircle)
-                                                    .small()
-                                                    .color(cx.theme().muted_foreground),
-                                            )
-                                        })
-                                        .when(
-                                            matches!(self.loading_state, LoadingState::Error(_)),
-                                            |this| {
-                                                this.child(
-                                                    Icon::new(IconName::TriangleAlert)
-                                                        .size(px(14.))
-                                                        .text_color(gpui::red()),
-                                                )
-                                            },
-                                        ),
-                                )
+                        gpui::list(
+                            self.list_state.clone(),
+                            cx.processor(|this, index: usize, _window, _cx| {
+                                match this.messages.get(index) {
+                                    Some(message) => div()
+                                        .px_3()
+                                        .when(index == 0, |el| el.pt_3())
+                                        .pb_4()
+                                        .child(message.clone())
+                                        .into_any_element(),
+                                    None => div().into_any_element(),
+                                }
                             }),
+                        )
+                        .size_full(),
                     )
                     .child(
                         div()
@@ -403,8 +395,43 @@ impl Render for ChatPanel {
                             .left_0()
                             .right_0()
                             .bottom_0()
-                            .child(Scrollbar::vertical(&self.scroll_handle)),
+                            .child(Scrollbar::vertical(&self.list_state)),
                     ),
+            )
+            // The status strip lives outside the scroll area so the list's item count always
+            // matches `messages.len()`.
+            .when(
+                self.loading_state.is_loading()
+                    || matches!(self.loading_state, LoadingState::Error(_)),
+                |this| {
+                    this.child(
+                        h_flex()
+                            .px_3()
+                            .py_1()
+                            .gap_2()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(self.loading_state.message())
+                            .when(self.loading_state.show_spinner(), |this| {
+                                this.child(
+                                    Spinner::new()
+                                        .icon(IconName::LoaderCircle)
+                                        .small()
+                                        .color(cx.theme().muted_foreground),
+                                )
+                            })
+                            .when(
+                                matches!(self.loading_state, LoadingState::Error(_)),
+                                |this| {
+                                    this.child(
+                                        Icon::new(IconName::TriangleAlert)
+                                            .size(px(14.))
+                                            .text_color(gpui::red()),
+                                    )
+                                },
+                            ),
+                    )
+                },
             )
             .child(
                 div()
@@ -415,7 +442,6 @@ impl Render for ChatPanel {
                     .text_size(px(13.0))
                     .child(
                         Textarea::new(&self.input_state)
-                            .disabled(self.loading_state.is_loading())
                             .bordered(false)
                             .p_3()
                             .bg(self.editor_background_color(cx)),
@@ -469,18 +495,15 @@ impl Render for ChatPanel {
                                         })),
                                 )
                             })
-                            .when(!self.session.read(cx).is_generating(), |this| {
-                                this.child(
-                                    Button::new("send-message")
-                                        .icon(IconName::ArrowUp)
-                                        .primary()
-                                        .xsmall()
-                                        .disabled(self.loading_state.is_loading())
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.send_message(window, cx);
-                                        })),
-                                )
-                            }),
+                            .child(
+                                Button::new("send-message")
+                                    .icon(IconName::ArrowUp)
+                                    .primary()
+                                    .xsmall()
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.send_message(window, cx);
+                                    })),
+                            ),
                     ),
             )
     }

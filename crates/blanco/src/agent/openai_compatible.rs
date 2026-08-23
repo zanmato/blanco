@@ -19,8 +19,8 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use futures::channel::mpsc;
 use llm::{
-    FunctionCall, ToolCall, chat::ChatMessage as LlmChatMessage, chat::ChatRole, chat::Tool,
-    error::LLMError,
+    FunctionCall, ToolCall, chat::ChatMessage as LlmChatMessage, chat::ChatRole, chat::MessageType,
+    chat::Tool, error::LLMError,
 };
 use serde::{Deserialize, Serialize};
 
@@ -76,23 +76,57 @@ impl CompatibleProvider {
 
     fn build_body<'a>(
         &'a self,
+        system_prompt: &'a str,
         messages: &'a [LlmChatMessage],
         tools: Option<&'a [Tool]>,
     ) -> ChatRequest<'a> {
-        let messages = messages
-            .iter()
-            .map(|msg| RequestMessage {
-                role: match msg.role {
-                    ChatRole::User => "user",
-                    ChatRole::Assistant => "assistant",
-                },
-                content: &msg.content,
-            })
-            .collect();
+        let mut request_messages = Vec::with_capacity(messages.len() + 1);
+        request_messages.push(RequestMessage {
+            role: "system",
+            content: Some(system_prompt),
+            tool_calls: None,
+            tool_call_id: None,
+        });
+
+        for msg in messages {
+            match &msg.message_type {
+                MessageType::Text => request_messages.push(RequestMessage {
+                    role: match msg.role {
+                        ChatRole::User => "user",
+                        ChatRole::Assistant => "assistant",
+                    },
+                    content: Some(&msg.content),
+                    tool_calls: None,
+                    tool_call_id: None,
+                }),
+                MessageType::ToolUse(calls) => request_messages.push(RequestMessage {
+                    role: "assistant",
+                    content: (!msg.content.is_empty()).then_some(msg.content.as_str()),
+                    tool_calls: Some(calls),
+                    tool_call_id: None,
+                }),
+                // One `tool` message per result: the result payload travels in
+                // `function.arguments`, linked to the request by the call id.
+                MessageType::ToolResult(results) => {
+                    for result in results {
+                        request_messages.push(RequestMessage {
+                            role: "tool",
+                            content: Some(&result.function.arguments),
+                            tool_calls: None,
+                            tool_call_id: Some(&result.id),
+                        });
+                    }
+                }
+                MessageType::Image(_)
+                | MessageType::Pdf(_)
+                | MessageType::Audio(_)
+                | MessageType::ImageURL(_) => {}
+            }
+        }
 
         ChatRequest {
             model: &self.model,
-            messages,
+            messages: request_messages,
             max_tokens: self.max_tokens,
             temperature: self.temperature,
             stream: true,
@@ -164,10 +198,11 @@ async fn backoff(attempt: usize) {
 impl StreamingChatProvider for CompatibleProvider {
     async fn stream_chat(
         &self,
+        system_prompt: &str,
         messages: &[LlmChatMessage],
         tools: Option<&[Tool]>,
     ) -> Result<ChatEventStream, LLMError> {
-        let body = self.build_body(messages, tools);
+        let body = self.build_body(system_prompt, messages, tools);
         let response = self.send_with_retry(&body).await?;
 
         let (sender, receiver) = mpsc::unbounded::<Result<ChatStreamEvent, LLMError>>();
@@ -297,7 +332,12 @@ struct ChatRequest<'a> {
 #[derive(Serialize)]
 struct RequestMessage<'a> {
     role: &'a str,
-    content: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<&'a [ToolCall]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -347,4 +387,89 @@ struct UsageDelta {
     prompt_tokens: u32,
     #[serde(default)]
     completion_tokens: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tool_call(id: &str, name: &str, arguments: &str) -> ToolCall {
+        ToolCall {
+            id: id.to_string(),
+            call_type: "function".to_string(),
+            function: FunctionCall {
+                name: name.to_string(),
+                arguments: arguments.to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn request_body_carries_system_tool_calls_and_tool_results() {
+        let provider =
+            CompatibleProvider::new("key", None, Some("gpt-test".into()), None, None, None);
+
+        let messages = vec![
+            LlmChatMessage::user().content("count the users").build(),
+            LlmChatMessage::assistant()
+                .content("Counting now.")
+                .tool_use(vec![tool_call(
+                    "call_1",
+                    "execute-sql",
+                    r#"{"sql":"SELECT COUNT(*) FROM users"}"#,
+                )])
+                .build(),
+            LlmChatMessage::user()
+                .tool_result(vec![tool_call(
+                    "call_1",
+                    "execute-sql",
+                    r#"{"rows":[["42"]]}"#,
+                )])
+                .build(),
+            LlmChatMessage::assistant()
+                .content("There are 42 users.")
+                .build(),
+        ];
+
+        let body = provider.build_body("You are a SQL assistant.", &messages, None);
+        let value = serde_json::to_value(&body).expect("request body should serialize");
+        let wire_messages = value["messages"]
+            .as_array()
+            .expect("messages should be an array");
+
+        assert_eq!(wire_messages.len(), 5);
+        assert_eq!(wire_messages[0]["role"], "system");
+        assert_eq!(wire_messages[0]["content"], "You are a SQL assistant.");
+        assert_eq!(wire_messages[1]["role"], "user");
+        assert_eq!(wire_messages[2]["role"], "assistant");
+        assert_eq!(wire_messages[2]["content"], "Counting now.");
+        assert_eq!(wire_messages[2]["tool_calls"][0]["id"], "call_1");
+        assert_eq!(wire_messages[2]["tool_calls"][0]["type"], "function");
+        assert_eq!(
+            wire_messages[2]["tool_calls"][0]["function"]["name"],
+            "execute-sql"
+        );
+        assert_eq!(wire_messages[3]["role"], "tool");
+        assert_eq!(wire_messages[3]["tool_call_id"], "call_1");
+        assert_eq!(wire_messages[3]["content"], r#"{"rows":[["42"]]}"#);
+        assert!(wire_messages[3].get("tool_calls").is_none());
+        assert_eq!(wire_messages[4]["role"], "assistant");
+        assert!(wire_messages[4].get("tool_call_id").is_none());
+    }
+
+    #[test]
+    fn tool_use_without_text_omits_content() {
+        let provider = CompatibleProvider::new("key", None, None, None, None, None);
+        let messages = vec![
+            LlmChatMessage::assistant()
+                .tool_use(vec![tool_call("call_2", "read-tab", "{}")])
+                .build(),
+        ];
+
+        let body = provider.build_body("prompt", &messages, None);
+        let value = serde_json::to_value(&body).expect("request body should serialize");
+
+        assert!(value["messages"][1].get("content").is_none());
+        assert_eq!(value["messages"][1]["tool_calls"][0]["id"], "call_2");
+    }
 }

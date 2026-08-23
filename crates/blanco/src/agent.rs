@@ -1,4 +1,6 @@
 mod agent_chat;
+#[cfg(test)]
+mod agent_chat_test;
 mod chat_provider_resolver;
 // mod chat_message;
 mod chat_message_view;

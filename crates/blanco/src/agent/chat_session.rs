@@ -5,7 +5,9 @@ use smol::channel::Sender;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::chat_types::{ChatCommand, ChatEvent, ChatMessage, LoadingState, MessageRole};
+use super::chat_types::{
+    ChatCommand, ChatEvent, ChatMessage, LoadingState, MessageRole, ToolCallData,
+};
 use super::streaming::{ChatStreamEvent, StreamingChatProvider};
 use super::tool_handlers::ToolMode;
 use crate::result_ext::ResultExt;
@@ -145,6 +147,10 @@ pub struct ChatSession {
     pub tab_language: TabLanguage,
     pub current_message_task: Option<Task<Result<String>>>,
     pending_approvals: HashMap<String, smol::channel::Sender<bool>>,
+    /// User messages sent while a turn is running (steering). They are already in
+    /// `messages` for display; the running loop drains this queue before its next request,
+    /// and any leftovers start a fresh turn when the current one finishes.
+    queued_user_messages: Vec<String>,
 }
 
 impl ChatSession {
@@ -173,6 +179,7 @@ impl ChatSession {
             tab_language: context.tab_language,
             current_message_task: None,
             pending_approvals: HashMap::new(),
+            queued_user_messages: Vec::new(),
         }
     }
 
@@ -191,24 +198,14 @@ impl ChatSession {
         id
     }
 
-    /// Replace the streaming message's content/reasoning with the latest snapshots and notify
-    /// the panel to re-render that message in place.
-    fn update_streaming_message(
-        &mut self,
-        message_id: &str,
-        content: &str,
-        reasoning: &str,
-        cx: &mut Context<Self>,
-    ) {
+    /// Write the fully streamed text into the message's history entry. Stream deltas only
+    /// update the panel's views, so this runs once per turn (before tool execution or on
+    /// completion) to make the history authoritative for future request rebuilds.
+    fn finalize_streamed_text(&mut self, message_id: &str, content: &str, reasoning: &str) {
         if let Some(message) = self.messages.iter_mut().find(|m| m.id == message_id) {
             message.content = content.to_string().into();
             message.reasoning = (!reasoning.is_empty()).then(|| reasoning.to_string().into());
         }
-        cx.emit(ChatEvent::StreamDelta {
-            message_id: message_id.to_string(),
-            content: content.to_string(),
-            reasoning: reasoning.to_string(),
-        });
     }
 
     /// Attach final token usage to the streaming message once the turn completes.
@@ -246,6 +243,7 @@ impl ChatSession {
     pub fn clear_messages(&mut self) {
         self.messages.clear();
         self.streaming_message_id = None;
+        self.queued_user_messages.clear();
     }
 
     pub fn set_tool_mode(&mut self, mode: ToolMode, cx: &mut Context<Self>) {
@@ -286,6 +284,14 @@ impl ChatSession {
         let message = ChatMessage::user(user_message.clone());
         self.add_message(message, cx);
 
+        // Steering: while a turn is running the message is queued instead of starting a new
+        // request. The running loop injects it before its next model call. Slash commands
+        // are not parsed here since they would race the in-flight loop.
+        if self.is_generating() {
+            self.queued_user_messages.push(user_message);
+            return;
+        }
+
         // Check if this is a command
         if let Some(command) = ChatCommand::parse(&user_message) {
             let task = self.handle_command(command, cx);
@@ -295,7 +301,7 @@ impl ChatSession {
 
         // Handle regular message based on available LLM
         if let Some(llm) = &self.llm {
-            let task = self.send_llm_message(llm.clone(), &user_message, window, cx);
+            let task = self.send_llm_message(llm.clone(), window, cx);
             self.current_message_task = Some(task);
         }
     }
@@ -324,14 +330,12 @@ impl ChatSession {
     fn send_llm_message(
         &mut self,
         llm: Arc<dyn StreamingChatProvider>,
-        user_message: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<Result<String>> {
         let system_prompt = self.get_system_prompt();
         let messages = self.messages.clone();
         let model_name = self.model_name.clone();
-        let user_message = user_message.to_string();
         let llm_clone = llm.clone();
 
         cx.spawn_in(window, async move |chat_session_handle, async_cx| {
@@ -370,7 +374,6 @@ impl ChatSession {
                 system_prompt,
                 messages,
                 model_name.clone(),
-                user_message,
                 tx,
                 async_cx,
             )
@@ -383,9 +386,20 @@ impl ChatSession {
             };
 
             chat_session_handle
-                .update(async_cx, |session, cx| {
+                .update_in(async_cx, |session, window, cx| {
                     session.set_loading_state(final_state, cx);
                     session.current_message_task = None;
+
+                    // A steering message can arrive after the loop's last queue drain but
+                    // before this cleanup; it is already in history, so a fresh turn picks
+                    // it up from there.
+                    if !session.queued_user_messages.is_empty()
+                        && let Some(llm) = session.llm.clone()
+                    {
+                        session.queued_user_messages.clear();
+                        let task = session.send_llm_message(llm, window, cx);
+                        session.current_message_task = Some(task);
+                    }
                 })
                 .log_err();
 
@@ -401,13 +415,12 @@ impl ChatSession {
         system_prompt: String,
         initial_messages: Vec<ChatMessage>,
         model_name: String,
-        user_message: String,
         ui_sender: Sender<ChatMessage>,
         async_cx: &mut gpui::AsyncWindowContext,
     ) -> Result<String> {
-        // Build initial request messages with conversation history
-        let mut request_messages =
-            Self::build_request_messages(&system_prompt, &initial_messages, &user_message);
+        // Build initial request messages with conversation history (the latest user message
+        // is already in the history)
+        let mut request_messages = Self::build_request_messages(&initial_messages);
 
         let mut loop_count = 0;
         let mut accumulated_prompt_tokens: u32 = 0;
@@ -425,6 +438,18 @@ impl ChatSession {
             loop_count += 1;
 
             tracing::debug!("Starting message loop iteration {}", loop_count);
+
+            // Inject messages the user sent while this turn was running (steering). They are
+            // already in session history/UI; here they join the LLM-side conversation.
+            let queued_messages = chat_session_handle
+                .update(async_cx, |session, _cx| {
+                    std::mem::take(&mut session.queued_user_messages)
+                })
+                .ok()
+                .unwrap_or_default();
+            for queued_message in queued_messages {
+                request_messages.push(LlmChatMessage::user().content(queued_message).build());
+            }
 
             // Set loading state to streaming when making request
             chat_session_handle
@@ -455,10 +480,12 @@ impl ChatSession {
             // are then drained here on the GPUI foreground to update the UI incrementally.
             let mut stream = {
                 let llm = llm.clone();
+                let system_prompt = system_prompt.clone();
                 let messages = request_messages.clone();
                 let tools = tools.clone();
                 gpui_tokio::Tokio::spawn(async_cx, async move {
-                    llm.stream_chat(&messages, Some(tools.as_slice())).await
+                    llm.stream_chat(&system_prompt, &messages, Some(tools.as_slice()))
+                        .await
                 })
                 .await
                 .map_err(|e| anyhow::anyhow!("Tokio join error: {}", e))?
@@ -475,25 +502,25 @@ impl ChatSession {
                 match event {
                     Ok(ChatStreamEvent::Content(delta)) => {
                         content.push_str(&delta);
-                        Self::push_stream_snapshot(
+                        Self::push_stream_delta(
                             &chat_session_handle,
                             &streaming_id,
-                            &content,
-                            &reasoning,
+                            delta,
+                            String::new(),
                             async_cx,
                         );
                     }
                     Ok(ChatStreamEvent::Reasoning(delta)) => {
                         reasoning.push_str(&delta);
-                        Self::push_stream_snapshot(
+                        Self::push_stream_delta(
                             &chat_session_handle,
                             &streaming_id,
-                            &content,
-                            &reasoning,
+                            String::new(),
+                            delta,
                             async_cx,
                         );
                     }
-                    Ok(ChatStreamEvent::ToolCalls(calls)) => tool_calls = calls,
+                    Ok(ChatStreamEvent::ToolCalls(calls)) => tool_calls.extend(calls),
                     Ok(ChatStreamEvent::Usage {
                         prompt_tokens,
                         completion_tokens,
@@ -507,6 +534,17 @@ impl ChatSession {
 
             accumulated_prompt_tokens = accumulated_prompt_tokens.max(iteration_prompt_tokens);
             accumulated_completion_tokens += iteration_completion_tokens;
+
+            {
+                let streaming_id = streaming_id.clone();
+                let content = content.clone();
+                let reasoning = reasoning.clone();
+                chat_session_handle
+                    .update(async_cx, |session, _cx| {
+                        session.finalize_streamed_text(&streaming_id, &content, &reasoning);
+                    })
+                    .log_err();
+            }
 
             if tool_calls.is_empty() {
                 // Normal completion: attach the full turn's token usage and finish.
@@ -550,6 +588,7 @@ impl ChatSession {
                 &tool_calls,
                 request_messages,
                 &content,
+                &streaming_id,
                 &model_name,
                 &ui_sender,
                 async_cx,
@@ -571,17 +610,22 @@ impl ChatSession {
         }
     }
 
-    /// Push the latest streaming snapshot to the session entity from the async loop.
-    fn push_stream_snapshot(
+    /// Emit newly streamed text to the panel from the async loop.
+    fn push_stream_delta(
         chat_session_handle: &gpui::WeakEntity<ChatSession>,
         streaming_id: &str,
-        content: &str,
-        reasoning: &str,
+        content_delta: String,
+        reasoning_delta: String,
         async_cx: &mut gpui::AsyncWindowContext,
     ) {
+        let message_id = streaming_id.to_string();
         chat_session_handle
-            .update(async_cx, |session, cx| {
-                session.update_streaming_message(streaming_id, content, reasoning, cx);
+            .update(async_cx, |_session, cx| {
+                cx.emit(ChatEvent::StreamDelta {
+                    message_id,
+                    content_delta,
+                    reasoning_delta,
+                });
             })
             .log_err();
     }
@@ -591,11 +635,13 @@ impl ChatSession {
     /// The assistant message that requested the tools was already streamed into the UI, so
     /// this only adds it to the LLM-side history (`current_messages`) and renders the tool
     /// request/result messages.
+    #[allow(clippy::too_many_arguments)]
     async fn execute_tool_calls(
         chat_session_handle: &gpui::WeakEntity<ChatSession>,
         tool_calls: &[ToolCall],
         mut current_messages: Vec<LlmChatMessage>,
         assistant_content: &str,
+        assistant_message_id: &str,
         model_name: &str,
         ui_sender: &Sender<ChatMessage>,
         async_cx: &mut gpui::AsyncWindowContext,
@@ -607,10 +653,12 @@ impl ChatSession {
         let mut successful_tool_calls = 0;
         let mut failed_tool_calls = 0;
 
-        // Add the assistant's (already-streamed) message to the LLM-side conversation.
+        // Add the assistant's (already-streamed) message to the LLM-side conversation,
+        // including the tool calls it made so the model sees evidence it performed them.
         current_messages.push(
             LlmChatMessage::assistant()
                 .content(assistant_content)
+                .tool_use(tool_calls.to_vec())
                 .build(),
         );
 
@@ -650,8 +698,11 @@ impl ChatSession {
                             tracing::error!("Failed to send tool message to UI: {}", e);
                         }
 
-                        current_messages
-                            .push(LlmChatMessage::user().content(&error_content).build());
+                        current_messages.push(
+                            LlmChatMessage::user()
+                                .tool_result(vec![error_tool_result(&tool_call, &error_content)])
+                                .build(),
+                        );
 
                         failed_tool_calls += 1;
                         continue;
@@ -667,8 +718,11 @@ impl ChatSession {
                             tracing::error!("Failed to send tool message to UI: {}", e);
                         }
 
-                        current_messages
-                            .push(LlmChatMessage::user().content(&error_content).build());
+                        current_messages.push(
+                            LlmChatMessage::user()
+                                .tool_result(vec![error_tool_result(&tool_call, &error_content)])
+                                .build(),
+                        );
 
                         failed_tool_calls += 1;
                         continue;
@@ -813,12 +867,40 @@ impl ChatSession {
                 }
             }
 
-            // Add tool result as a message to conversation (using user role for tool results)
+            // Feed the result back with proper tool linkage (result payload in
+            // `function.arguments`, tied to the request by the call id).
             current_messages.push(
                 LlmChatMessage::user()
-                    .content(&result.function.arguments)
+                    .tool_result(vec![result.clone()])
                     .build(),
             );
+
+            // Record the call and its result on the assistant message in session history, so
+            // the next turn's request rebuild replays the same ToolUse/ToolResult pair.
+            {
+                let assistant_message_id = assistant_message_id.to_string();
+                let call_data = ToolCallData {
+                    id: result.id.clone(),
+                    tool_name: tool_call.function.name.clone(),
+                    arguments: tool_call.function.arguments.clone(),
+                    result: Some(result.function.arguments.clone()),
+                    summary: Some(summary.clone()),
+                };
+                chat_session_handle
+                    .update(async_cx, |session, _cx| {
+                        if let Some(message) = session
+                            .messages
+                            .iter_mut()
+                            .find(|m| m.id == assistant_message_id)
+                        {
+                            message
+                                .tool_calls
+                                .get_or_insert_with(Vec::new)
+                                .push(call_data);
+                        }
+                    })
+                    .log_err();
+            }
 
             successful_tool_calls += 1;
         }
@@ -851,38 +933,73 @@ impl ChatSession {
         Ok(current_messages)
     }
 
-    /// Build initial request messages from conversation history
-    fn build_request_messages(
-        system_prompt: &str,
-        messages: &[ChatMessage],
-        user_message: &str,
-    ) -> Vec<LlmChatMessage> {
-        let mut request_messages = vec![LlmChatMessage::user().content(system_prompt).build()];
+    /// Build the LLM-side conversation from chat history. The latest user message is already
+    /// part of `messages`, so nothing is appended here.
+    ///
+    /// Tool and ToolRequest rows are display-only: the authoritative tool history lives on
+    /// each assistant message's `tool_calls`, replayed as a ToolUse message followed
+    /// immediately by its ToolResult so providers see the calls they made and their results
+    /// with proper linkage (OpenAI requires that adjacency).
+    fn build_request_messages(messages: &[ChatMessage]) -> Vec<LlmChatMessage> {
+        let mut request_messages = Vec::with_capacity(messages.len());
 
-        // Add conversation history
         for message in messages {
-            let provider_message = match message.role {
-                MessageRole::User => LlmChatMessage::user()
-                    .content(message.content.to_string())
-                    .build(),
-                MessageRole::Assistant => LlmChatMessage::assistant()
-                    .content(message.content.to_string())
-                    .build(),
-                MessageRole::System => LlmChatMessage::user()
-                    .content(message.content.to_string())
-                    .build(),
-                MessageRole::Tool => LlmChatMessage::user()
-                    .content(message.content.to_string())
-                    .build(),
-                MessageRole::ToolRequest => LlmChatMessage::user()
-                    .content(message.content.to_string())
-                    .build(),
-            };
-            request_messages.push(provider_message);
-        }
+            match message.role {
+                MessageRole::User => request_messages.push(
+                    LlmChatMessage::user()
+                        .content(message.content.to_string())
+                        .build(),
+                ),
+                MessageRole::Assistant => {
+                    let tool_calls = message.tool_calls.as_deref().unwrap_or_default();
+                    if tool_calls.is_empty() {
+                        if !message.content.is_empty() {
+                            request_messages.push(
+                                LlmChatMessage::assistant()
+                                    .content(message.content.to_string())
+                                    .build(),
+                            );
+                        }
+                        continue;
+                    }
 
-        // Add the current user message
-        request_messages.push(LlmChatMessage::user().content(user_message).build());
+                    let requests: Vec<ToolCall> = tool_calls
+                        .iter()
+                        .map(|call| ToolCall {
+                            id: call.id.clone(),
+                            call_type: "function".to_string(),
+                            function: FunctionCall {
+                                name: call.tool_name.clone(),
+                                arguments: call.arguments.clone(),
+                            },
+                        })
+                        .collect();
+                    let results: Vec<ToolCall> = tool_calls
+                        .iter()
+                        .map(|call| ToolCall {
+                            id: call.id.clone(),
+                            call_type: "function".to_string(),
+                            function: FunctionCall {
+                                name: call.tool_name.clone(),
+                                arguments: call.result.clone().unwrap_or_else(|| {
+                                    serde_json::json!({"error": "Tool result unavailable"})
+                                        .to_string()
+                                }),
+                            },
+                        })
+                        .collect();
+
+                    request_messages.push(
+                        LlmChatMessage::assistant()
+                            .content(message.content.to_string())
+                            .tool_use(requests)
+                            .build(),
+                    );
+                    request_messages.push(LlmChatMessage::user().tool_result(results).build());
+                }
+                MessageRole::System | MessageRole::Tool | MessageRole::ToolRequest => {}
+            }
+        }
 
         request_messages
     }
@@ -895,7 +1012,21 @@ impl ChatSession {
         if let Some(task) = self.current_message_task.take() {
             drop(task);
         }
+        self.streaming_message_id = None;
         self.set_loading_state(LoadingState::Idle, cx);
+    }
+}
+
+/// A ToolResult entry for a call that failed before its handler could run. Every call in an
+/// assistant ToolUse message must get a result on the wire or providers reject the request.
+fn error_tool_result(tool_call: &ToolCall, error_message: &str) -> ToolCall {
+    ToolCall {
+        id: tool_call.id.clone(),
+        call_type: "function".to_string(),
+        function: FunctionCall {
+            name: tool_call.function.name.clone(),
+            arguments: serde_json::json!({ "error": error_message }).to_string(),
+        },
     }
 }
 
@@ -904,6 +1035,71 @@ impl EventEmitter<ChatEvent> for ChatSession {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use llm::chat::{ChatRole, MessageType};
+
+    #[test]
+    fn request_messages_contain_each_history_message_once() {
+        let history = vec![
+            ChatMessage::user("count the users".to_string()),
+            ChatMessage::assistant("There are 42 users.".to_string(), "test-model".to_string()),
+            ChatMessage::user("thanks".to_string()),
+        ];
+
+        let request = ChatSession::build_request_messages(&history);
+
+        assert_eq!(request.len(), 3);
+        assert_eq!(request[0].role, ChatRole::User);
+        assert_eq!(request[0].content, "count the users");
+        assert_eq!(request[1].role, ChatRole::Assistant);
+        assert_eq!(request[2].content, "thanks");
+    }
+
+    #[test]
+    fn assistant_tool_calls_replay_as_adjacent_tool_use_and_result() {
+        let mut assistant =
+            ChatMessage::assistant("Checking.".to_string(), "test-model".to_string());
+        assistant.tool_calls = Some(vec![ToolCallData {
+            id: "call_1".to_string(),
+            tool_name: "execute-sql".to_string(),
+            arguments: r#"{"sql":"SELECT 1"}"#.to_string(),
+            result: Some(r#"{"rows":[["1"]]}"#.to_string()),
+            summary: Some("Execute SQL".to_string()),
+        }]);
+        let history = vec![ChatMessage::user("run it".to_string()), assistant];
+
+        let request = ChatSession::build_request_messages(&history);
+
+        assert_eq!(request.len(), 3);
+        let MessageType::ToolUse(calls) = &request[1].message_type else {
+            panic!("expected ToolUse, got {:?}", request[1].message_type);
+        };
+        assert_eq!(calls[0].id, "call_1");
+        assert_eq!(calls[0].function.name, "execute-sql");
+        assert_eq!(request[1].content, "Checking.");
+        let MessageType::ToolResult(results) = &request[2].message_type else {
+            panic!("expected ToolResult, got {:?}", request[2].message_type);
+        };
+        assert_eq!(results[0].id, "call_1");
+        assert_eq!(results[0].function.arguments, r#"{"rows":[["1"]]}"#);
+    }
+
+    #[test]
+    fn display_only_rows_are_skipped() {
+        let history = vec![
+            ChatMessage::user("hello".to_string()),
+            ChatMessage::tool(
+                "tool output".to_string(),
+                "call_1".to_string(),
+                "test-model".to_string(),
+            ),
+            ChatMessage::assistant(String::new(), "test-model".to_string()),
+        ];
+
+        let request = ChatSession::build_request_messages(&history);
+
+        assert_eq!(request.len(), 1);
+        assert_eq!(request[0].content, "hello");
+    }
 
     #[test]
     fn script_tabs_get_a_javascript_prompt() {

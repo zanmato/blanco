@@ -1,7 +1,8 @@
 use blanco_ui::IconName;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    Context, ElementId, EventEmitter, IntoElement, ParentElement, Render, SharedString,
+    AppContext as _, Context, ElementId, Entity, EventEmitter, InteractiveElement as _,
+    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement as _,
     StyleRefinement, Styled, Subscription, Window, div, px, rems,
 };
 use gpui_component::{
@@ -9,7 +10,7 @@ use gpui_component::{
     button::{Button, ButtonVariants},
     clipboard::Clipboard,
     h_flex,
-    text::{TextView, TextViewStyle},
+    text::{TextView, TextViewState, TextViewStyle},
     v_flex,
 };
 
@@ -36,12 +37,25 @@ pub struct ChatMessageState {
     /// The originating `ChatMessage.id`, used to route streaming deltas to this view.
     pub message_id: String,
     pub message: SharedString,
-    pub reasoning: Option<SharedString>,
     pub role: MessageRole,
     pub metadata: Option<MessageMetadata>,
     pub approval_state: Option<ApprovalState>,
     pub tool_result: Option<SharedString>,
     pub hidden: bool,
+    /// The assistant body's persistent markdown state: stream deltas append into it
+    /// (`push_str` reparses only the tail) instead of recreating the document per token.
+    content_view: Option<Entity<TextViewState>>,
+    /// The assistant's thinking, created on the first reasoning delta.
+    reasoning_view: Option<Entity<TextViewState>>,
+    has_content: bool,
+    /// Whether the thinking body is shown. Auto-expands while reasoning streams and
+    /// collapses when answer text starts, unless the user toggled it themselves.
+    pub thinking_expanded: bool,
+    user_toggled_thinking: bool,
+    #[cfg(test)]
+    streamed_content: String,
+    #[cfg(test)]
+    streamed_reasoning: String,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -53,22 +67,40 @@ impl ChatMessageState {
         reasoning: Option<String>,
         role: MessageRole,
         metadata: Option<MessageMetadata>,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> Self {
         let approval_state = metadata
             .as_ref()
             .and_then(|m| m.approval.as_ref())
             .map(|a| a.state.clone());
+        let content_view = (role == MessageRole::Assistant)
+            .then(|| cx.new(|cx| TextViewState::markdown(&message, cx)));
+        let reasoning_view = (role == MessageRole::Assistant)
+            .then(|| {
+                reasoning
+                    .as_deref()
+                    .map(|reasoning| cx.new(|cx| TextViewState::markdown(reasoning, cx)))
+            })
+            .flatten();
+        let has_content = !message.is_empty();
         Self {
             id: ("chat-message-", id).into(),
             message_id,
             message: message.into(),
-            reasoning: reasoning.map(Into::into),
             role,
             metadata,
             approval_state,
             tool_result: None,
             hidden: false,
+            content_view,
+            reasoning_view,
+            has_content,
+            thinking_expanded: false,
+            user_toggled_thinking: false,
+            #[cfg(test)]
+            streamed_content: String::new(),
+            #[cfg(test)]
+            streamed_reasoning: String::new(),
             _subscriptions: Vec::new(),
         }
     }
@@ -77,10 +109,51 @@ impl ChatMessageState {
         self.tool_result = Some(result.into());
     }
 
-    /// Replace the message body and reasoning as a streaming turn progresses.
-    pub fn apply_stream_delta(&mut self, content: String, reasoning: String) {
-        self.message = content.into();
-        self.reasoning = (!reasoning.is_empty()).then(|| reasoning.into());
+    /// Append newly streamed text to the message body and reasoning views.
+    pub fn append_stream_delta(
+        &mut self,
+        content_delta: &str,
+        reasoning_delta: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if !reasoning_delta.is_empty() {
+            if self.reasoning_view.is_none() {
+                self.reasoning_view = Some(cx.new(|cx| TextViewState::markdown("", cx)));
+            }
+            if let Some(reasoning_view) = &self.reasoning_view {
+                reasoning_view.update(cx, |state, cx| state.push_str(reasoning_delta, cx));
+            }
+            if !self.user_toggled_thinking && !self.has_content {
+                self.thinking_expanded = true;
+            }
+            #[cfg(test)]
+            self.streamed_reasoning.push_str(reasoning_delta);
+        }
+
+        if !content_delta.is_empty() {
+            if !self.has_content {
+                self.has_content = true;
+                if !self.user_toggled_thinking {
+                    self.thinking_expanded = false;
+                }
+            }
+            if self.content_view.is_none() {
+                self.content_view = Some(cx.new(|cx| TextViewState::markdown("", cx)));
+            }
+            if let Some(content_view) = &self.content_view {
+                content_view.update(cx, |state, cx| state.push_str(content_delta, cx));
+            }
+            #[cfg(test)]
+            self.streamed_content.push_str(content_delta);
+        }
+
+        cx.notify();
+    }
+
+    pub fn toggle_thinking(&mut self, cx: &mut Context<Self>) {
+        self.user_toggled_thinking = true;
+        self.thinking_expanded = !self.thinking_expanded;
+        cx.notify();
     }
 
     /// Attach final token usage once a streaming turn finishes.
@@ -89,6 +162,21 @@ impl ChatMessageState {
         metadata.prompt_tokens = Some(prompt_tokens);
         metadata.completion_tokens = Some(completion_tokens);
         metadata.tokens_used = Some(prompt_tokens + completion_tokens);
+    }
+
+    #[cfg(test)]
+    pub fn streamed_content(&self) -> &str {
+        &self.streamed_content
+    }
+
+    #[cfg(test)]
+    pub fn streamed_reasoning(&self) -> &str {
+        &self.streamed_reasoning
+    }
+
+    #[cfg(test)]
+    pub fn user_toggled_thinking(&self) -> bool {
+        self.user_toggled_thinking
     }
 }
 
@@ -129,47 +217,74 @@ impl Render for ChatMessageState {
                             format_tokens(completion)
                         ))
                     });
-                    let reasoning = self.reasoning.clone();
+                    let reasoning_view = self.reasoning_view.clone();
+                    let content_view = self.content_view.clone();
+                    let thinking_expanded = self.thinking_expanded;
                     v_flex()
-                        .when_some(reasoning, |el, reasoning| {
+                        .when_some(reasoning_view, |el, reasoning_view| {
                             el.child(
                                 v_flex()
                                     .mb_1()
                                     .gap_0p5()
-                                    .border_l_2()
-                                    .border_color(cx.theme().border)
-                                    .pl_2()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(div().text_xs().font_medium().child("Thinking"))
                                     .child(
-                                        TextView::markdown(
-                                            (self.id.clone(), "reasoning"),
-                                            reasoning,
-                                        )
-                                        .text_sm()
-                                        .scrollable(false)
-                                        .selectable(true)
-                                        .style(text_view_style()),
-                                    ),
-                            )
-                        })
-                        .when(!self.message.is_empty(), |el| {
-                            el.child(
-                                TextView::markdown(self.id.clone(), self.message.clone())
-                                    .text_sm()
-                                    .scrollable(false)
-                                    .selectable(true)
-                                    .style(text_view_style())
-                                    .code_block_actions(move |code_block, _window, _cx| {
-                                        let code = code_block.code();
-                                        let id = id.clone();
-
                                         h_flex()
+                                            .id((self.id.clone(), "thinking-toggle"))
                                             .gap_1()
-                                            .child(Clipboard::new((id, "copy")).value(code))
+                                            .items_center()
+                                            .cursor_pointer()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(Icon::new(IconName::Brain).size(px(14.)))
+                                            .child(div().text_xs().font_medium().child("Thinking"))
+                                            .child(
+                                                Icon::new(if thinking_expanded {
+                                                    IconName::ChevronDown
+                                                } else {
+                                                    IconName::ChevronRight
+                                                })
+                                                .size(px(12.)),
+                                            )
+                                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                                this.toggle_thinking(cx);
+                                            })),
+                                    )
+                                    .when(thinking_expanded, |el| {
+                                        el.child(
+                                            v_flex()
+                                                .border_l_2()
+                                                .border_color(cx.theme().border)
+                                                .pl_2()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child(
+                                                    TextView::new(&reasoning_view)
+                                                        .text_sm()
+                                                        .scrollable(false)
+                                                        .selectable(true)
+                                                        .style(text_view_style()),
+                                                ),
+                                        )
                                     }),
                             )
                         })
+                        .when_some(
+                            content_view.filter(|_| self.has_content),
+                            |el, content_view| {
+                                el.child(
+                                    TextView::new(&content_view)
+                                        .text_sm()
+                                        .scrollable(false)
+                                        .selectable(true)
+                                        .style(text_view_style())
+                                        .code_block_actions(move |code_block, _window, _cx| {
+                                            let code = code_block.code();
+                                            let id = id.clone();
+
+                                            h_flex()
+                                                .gap_1()
+                                                .child(Clipboard::new((id, "copy")).value(code))
+                                        }),
+                                )
+                            },
+                        )
                         .when_some(token_info, |el, info| {
                             el.child(
                                 div()

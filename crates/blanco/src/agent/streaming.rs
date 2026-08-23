@@ -41,10 +41,14 @@ pub type ChatEventStream =
     Pin<Box<dyn Stream<Item = Result<ChatStreamEvent, LLMError>> + Send + 'static>>;
 
 /// A chat provider that yields its response incrementally.
+///
+/// The system prompt is passed per request (not at provider construction) because providers
+/// are cached across tabs whose prompts differ.
 #[async_trait]
 pub trait StreamingChatProvider: Send + Sync {
     async fn stream_chat(
         &self,
+        system_prompt: &str,
         messages: &[LlmChatMessage],
         tools: Option<&[Tool]>,
     ) -> Result<ChatEventStream, LLMError>;
@@ -68,10 +72,18 @@ impl NonStreamingAdapter {
 impl StreamingChatProvider for NonStreamingAdapter {
     async fn stream_chat(
         &self,
+        system_prompt: &str,
         messages: &[LlmChatMessage],
         tools: Option<&[Tool]>,
     ) -> Result<ChatEventStream, LLMError> {
-        let response = self.inner.chat_with_tools(messages, tools).await?;
+        // The llm crate has no per-request system slot (`LLMBuilder::system` is fixed at
+        // provider construction, and providers are cached across tabs with different
+        // prompts), so the system prompt leads the conversation as a user message.
+        let mut request_messages = Vec::with_capacity(messages.len() + 1);
+        request_messages.push(LlmChatMessage::user().content(system_prompt).build());
+        request_messages.extend_from_slice(messages);
+
+        let response = self.inner.chat_with_tools(&request_messages, tools).await?;
 
         let mut events: Vec<Result<ChatStreamEvent, LLMError>> = Vec::new();
         if let Some(text) = response.text().filter(|t| !t.is_empty()) {
