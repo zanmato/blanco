@@ -15,11 +15,12 @@ use database::{DatabaseService, DatabaseType};
 
 use crate::{
     app::{
-        ActivateEditorTab, CloseActiveTab, CommitChanges, ConnectToConnection, CopyAsCSV,
-        CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CreateNewQueryTab, CreateNewScriptTab,
-        ExplainQuery, ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV,
-        FormatQuery, NewSnippet, OpenNewConnectionModal, OpenSettings, RollbackChanges, RunQuery,
-        SwitchTheme, ToggleRenderWhitespace, ToggleSidebar, ToggleWordWrap,
+        ActivateEditorTab, ClearCompareSelection, CloseActiveTab, CommitChanges,
+        ConnectToConnection, CopyAsCSV, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV,
+        CreateNewQueryTab, CreateNewScriptTab, ExplainQuery, ExportAsCSV, ExportAsJSON,
+        ExportAsMarkdown, ExportAsSQL, ExportAsTSV, FormatQuery, NewSnippet,
+        OpenNewConnectionModal, OpenSettings, RollbackChanges, RunQuery, SwitchTheme,
+        ToggleRenderWhitespace, ToggleSidebar, ToggleWordWrap,
     },
     connections::ConnectionsPanel,
     editor::EditorPanel,
@@ -101,6 +102,7 @@ pub enum CommandType {
     ToggleSidebar,
     CommitChanges,
     RollbackChanges,
+    ClearCompareSelection,
     CopyAsCSV,
     CopyAsTSV,
     CopyAsJSON,
@@ -743,6 +745,9 @@ fn execute_command(cmd: &CommandType, window: &mut Window, cx: &mut App) {
         CommandType::ToggleSidebar => window.dispatch_action(Box::new(ToggleSidebar), cx),
         CommandType::CommitChanges => window.dispatch_action(Box::new(CommitChanges), cx),
         CommandType::RollbackChanges => window.dispatch_action(Box::new(RollbackChanges), cx),
+        CommandType::ClearCompareSelection => {
+            window.dispatch_action(Box::new(ClearCompareSelection), cx)
+        }
         CommandType::CopyAsCSV => window.dispatch_action(Box::new(CopyAsCSV), cx),
         CommandType::CopyAsTSV => window.dispatch_action(Box::new(CopyAsTSV), cx),
         CommandType::CopyAsJSON => window.dispatch_action(Box::new(CopyAsJSON), cx),
@@ -1061,6 +1066,11 @@ fn build_commands(
         leaf("Toggle Sidebar", "View", CommandType::ToggleSidebar),
         leaf("Commit Changes", "Edit", CommandType::CommitChanges),
         leaf("Rollback Changes", "Edit", CommandType::RollbackChanges),
+        leaf(
+            "Clear Comparison Selection",
+            "Results",
+            CommandType::ClearCompareSelection,
+        ),
         leaf("Copy as CSV", "Results", CommandType::CopyAsCSV),
         leaf("Copy as TSV", "Results", CommandType::CopyAsTSV),
         leaf("Copy as JSON", "Results", CommandType::CopyAsJSON),

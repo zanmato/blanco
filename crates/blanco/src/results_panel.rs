@@ -34,6 +34,7 @@ mod cell_edit_test;
 mod chart_view;
 mod clipboard;
 mod commit;
+mod compare;
 mod export_actions;
 mod foreign_key_popover;
 mod results_table_delegate;
@@ -99,6 +100,11 @@ pub struct ResultsPanel {
     plan_scroll_handle: ScrollHandle,
     /// Horizontal scroll position for the result tab strip.
     tab_strip_scroll_handle: ScrollHandle,
+    /// Pending first half of a cell/row comparison, panel wide so it survives
+    /// switching result tabs and re-running the query.
+    compare_selection: Option<compare::CompareSelection>,
+    /// The most recently opened diff, kept so tests can inspect it.
+    last_diff_view: Option<Entity<blanco_ui::DiffView>>,
     _subscriptions: Vec<Subscription>, // Store subscriptions to prevent them from being dropped
 }
 
@@ -134,6 +140,8 @@ impl ResultsPanel {
             key_value_scroll_handle: ScrollHandle::new(),
             plan_scroll_handle: ScrollHandle::new(),
             tab_strip_scroll_handle: ScrollHandle::new(),
+            compare_selection: None,
+            last_diff_view: None,
             _subscriptions: vec![],
         }
     }
@@ -358,6 +366,7 @@ impl ResultsPanel {
         self.active_tab = first_new_index;
         self.table_state = self.result_tabs[self.active_tab].table_state.clone();
         self.has_results = true;
+        self.sync_compare_selection_kind(cx);
         let _ = connection_id; // accepted for API parity with single-result path
         cx.notify();
     }
@@ -424,6 +433,11 @@ impl ResultsPanel {
     #[cfg(test)]
     pub fn table_state(&self) -> &Entity<TableState<ResultsTableDelegate>> {
         &self.table_state
+    }
+
+    #[cfg(test)]
+    pub fn last_diff_view(&self) -> Option<Entity<blanco_ui::DiffView>> {
+        self.last_diff_view.clone()
     }
 
     pub fn cancel_current_edit(&mut self, cx: &mut Context<Self>) {
@@ -1573,6 +1587,11 @@ impl Render for ResultsPanel {
             .on_action(cx.listener(Self::on_delete_row))
             .on_action(cx.listener(Self::on_set_cell_null))
             .on_action(cx.listener(Self::on_set_cell_default))
+            .on_action(cx.listener(Self::on_select_cell_for_compare))
+            .on_action(cx.listener(Self::on_compare_cell_with_selected))
+            .on_action(cx.listener(Self::on_select_row_for_compare))
+            .on_action(cx.listener(Self::on_compare_row_with_selected))
+            .on_action(cx.listener(Self::on_clear_compare_selection))
             .on_action(cx.listener(Self::on_start_cell_edit))
             .on_action(cx.listener(Self::on_edit_next_cell))
             .on_action(cx.listener(Self::on_edit_prev_cell))

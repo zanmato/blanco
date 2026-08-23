@@ -6,6 +6,7 @@ use serde_json::Value;
 use super::ResultsTableDelegate;
 use crate::results_panel::ResultsPanel;
 use crate::results_panel::cell_edit_state::{CellInput, ChangeType, TableChange};
+use crate::results_panel::compare::pretty_json_or_original;
 
 impl ResultsTableDelegate {
     pub fn start_editing_cell(&mut self, row: usize, col: usize) {
@@ -197,14 +198,9 @@ impl ResultsTableDelegate {
                 .soft_wrap(true);
 
             if is_json {
-                // Prettify JSON if valid
-                let prettified_text =
-                    if let Ok(value) = serde_json::from_str::<Value>(&current_text) {
-                        serde_json::to_string_pretty(&value).unwrap_or(current_text)
-                    } else {
-                        current_text
-                    };
-                editor.language("json").default_value(prettified_text)
+                editor
+                    .language("json")
+                    .default_value(pretty_json_or_original(current_text))
             } else {
                 editor.default_value(current_text)
             }

@@ -1,4 +1,5 @@
 pub(crate) mod actions;
+pub mod diff_view;
 pub mod draggable_tree;
 pub mod graph_view;
 pub mod icon;
@@ -7,6 +8,7 @@ pub mod sql_view;
 pub mod tab;
 pub mod tree;
 
+pub use diff_view::{DiffSource, DiffView};
 pub use graph_view::{GraphEdge, GraphModel, GraphNode, GraphNodeField, GraphView};
 pub use icon::IconName;
 pub use size_indicator::SizeIndicator;

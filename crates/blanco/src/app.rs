@@ -68,6 +68,7 @@ actions!(
         StartCellEdit,
         EditNextCell,
         EditPrevCell,
+        ClearCompareSelection,
     ]
 );
 
@@ -139,6 +140,32 @@ pub struct SetCellNull {
 pub struct SetCellDefault {
     pub row: usize,
     pub col: usize,
+}
+
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct SelectCellForCompare {
+    pub row: usize,
+    pub col: usize,
+}
+
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct CompareCellWithSelected {
+    pub row: usize,
+    pub col: usize,
+}
+
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct SelectRowForCompare {
+    pub row: usize,
+}
+
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct CompareRowWithSelected {
+    pub row: usize,
 }
 
 #[derive(Action, Clone, PartialEq, Eq)]

@@ -472,3 +472,77 @@ async fn test_inline_edit_arrows_do_not_reach_the_table(cx: &mut TestAppContext)
         "the cell should still be in edit mode"
     );
 }
+
+#[gpui::test]
+async fn compare_cells_opens_a_diff_dialog(cx: &mut TestAppContext) {
+    use crate::app::{CompareCellWithSelected, SelectCellForCompare};
+    use crate::results_panel::compare::CompareKind;
+    use blanco_ui::diff_view::DiffRowKind;
+    use gpui_component::WindowExt as _;
+
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+    cx.executor().allow_parking();
+
+    set_editor_text(
+        &harness,
+        "SELECT 'same' || char(10) || 'old' AS doc UNION ALL SELECT 'same' || char(10) || 'new'",
+        &mut cx,
+    );
+    run_query(&harness, &mut cx);
+    wait_for_query(&harness, &mut cx).await;
+
+    let results_panel = harness.editor_panel.read_with(&cx, |panel, _| {
+        panel
+            .active_query_tab()
+            .expect("query tab should exist")
+            .results_panel
+            .clone()
+    });
+
+    results_panel.update_in(&mut cx, |panel, window, cx| {
+        panel.on_select_cell_for_compare(&SelectCellForCompare { row: 0, col: 0 }, window, cx);
+    });
+    cx.run_until_parked();
+
+    let (kind, menu_kind) = results_panel.read_with(&cx, |panel, cx| {
+        (
+            panel.compare_selection_kind(),
+            panel
+                .table_state()
+                .read_with(cx, |state, _| state.delegate().compare_selection_kind),
+        )
+    });
+    assert_eq!(kind, Some(CompareKind::Cell));
+    assert_eq!(
+        menu_kind,
+        Some(CompareKind::Cell),
+        "the delegate mirrors the selection so the context menu can offer comparison"
+    );
+
+    results_panel.update_in(&mut cx, |panel, window, cx| {
+        panel.on_compare_cell_with_selected(
+            &CompareCellWithSelected { row: 1, col: 0 },
+            window,
+            cx,
+        );
+    });
+    cx.run_until_parked();
+
+    let has_dialog = cx.update(|window, cx| window.has_active_dialog(cx));
+    assert!(has_dialog, "comparing should open the diff dialog");
+
+    let diff_view = results_panel
+        .read_with(&cx, |panel, _| panel.last_diff_view())
+        .expect("diff view should be stored");
+    let kinds = diff_view.read_with(&cx, |view, _| view.row_kinds());
+    assert_eq!(
+        kinds
+            .iter()
+            .filter(|kind| **kind == DiffRowKind::Modified)
+            .count(),
+        1,
+        "only the second line differs between the two values: {kinds:?}"
+    );
+    assert_eq!(kinds.first(), Some(&DiffRowKind::Equal));
+}

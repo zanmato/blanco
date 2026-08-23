@@ -13,6 +13,7 @@ tracing = { workspace = true }
 
 # Text handling
 ropey = { workspace = true }
+similar = { workspace = true }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }

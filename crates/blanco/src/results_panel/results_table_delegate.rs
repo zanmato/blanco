@@ -4,6 +4,7 @@ use gpui_component::{ActiveTheme, table::Column};
 use blanco_core::{QueryResult, connection_trait::ColumnType};
 
 use super::cell_edit_state::CellEditState;
+use super::compare::CompareKind;
 
 mod cell_edit;
 mod change_ops;
@@ -20,6 +21,9 @@ pub struct ResultsTableDelegate {
     pub database_name: SharedString,
     pub db_type: Option<database::DatabaseType>,
     pub original_query: Option<String>,
+    /// Mirrors the panel wide pending comparison selection so the context
+    /// menu can offer "Compare with Selected" for the matching kind.
+    pub compare_selection_kind: Option<CompareKind>,
     /// Column metadata for tooltips and rendering
     table_columns: Vec<blanco_core::ColumnInfo>,
     /// The full result while a text filter is active. `rows` then holds only
@@ -209,12 +213,18 @@ impl ResultsTableDelegate {
                 // Check sample rows to determine content width (limit to first 5 rows for performance)
                 for row in sample_rows.iter() {
                     if let Some(Some(cell_value)) = row.get(i) {
-                        let shared_value: SharedString = cell_value.clone().into();
+                        // The grid shows one line per cell, and `shape_line`
+                        // rejects newlines, so measure the widest line only.
+                        let widest_line = cell_value
+                            .lines()
+                            .max_by_key(|line| line.len())
+                            .unwrap_or_default();
+                        let shared_value: SharedString = widest_line.to_string().into();
                         let shaped_line = window.text_system().shape_line(
                             shared_value,
                             text_size,
                             &[TextRun {
-                                len: cell_value.len(),
+                                len: widest_line.len(),
                                 font: font.clone(),
                                 color: gpui::black(),
                                 background_color: None,

@@ -24,11 +24,13 @@ use blanco_core::connection_trait::ColumnType;
 
 use super::ResultsTableDelegate;
 use crate::app::{
-    AddRow, CopyAsCSV, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CopyAsVALUES, DeleteRow,
-    DuplicateRow, ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV,
-    SetCellDefault, SetCellNull,
+    AddRow, ClearCompareSelection, CompareCellWithSelected, CompareRowWithSelected, CopyAsCSV,
+    CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CopyAsVALUES, DeleteRow, DuplicateRow,
+    ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV, SelectCellForCompare,
+    SelectRowForCompare, SetCellDefault, SetCellNull,
 };
 use crate::results_panel::cell_edit_state::{CellInput, compare_numeric, format_value_for_display};
+use crate::results_panel::compare::CompareKind;
 use crate::results_panel::foreign_key_popover::ForeignKeyPopover;
 use blanco_ui::IconName;
 
@@ -645,6 +647,7 @@ impl TableDelegate for ResultsTableDelegate {
             .is_some_and(|c| c.is_nullable);
         // "Set DEFAULT" only makes sense on a pending new row whose column has
         // a server default: it reverts the cell so the INSERT omits the column.
+        let compare_kind = self.compare_selection_kind;
         let can_set_default = self.edit_state.is_new_row(cell.0)
             && self
                 .table_column_info(cell.1)
@@ -738,6 +741,44 @@ impl TableDelegate for ResultsTableDelegate {
                     row: cell.0,
                     col: cell.1,
                 }),
+            )
+        })
+        .separator()
+        .menu_with_icon(
+            "Select Cell for Comparison",
+            Icon::new(IconName::GitCompare),
+            Box::new(SelectCellForCompare {
+                row: cell.0,
+                col: cell.1,
+            }),
+        )
+        .when(compare_kind == Some(CompareKind::Cell), |this| {
+            this.menu_with_icon(
+                "Compare Cell with Selected",
+                Icon::new(IconName::GitCompare),
+                Box::new(CompareCellWithSelected {
+                    row: cell.0,
+                    col: cell.1,
+                }),
+            )
+        })
+        .menu_with_icon(
+            "Select Row for Comparison",
+            Icon::new(IconName::GitCompare),
+            Box::new(SelectRowForCompare { row: cell.0 }),
+        )
+        .when(compare_kind == Some(CompareKind::Row), |this| {
+            this.menu_with_icon(
+                "Compare Row with Selected",
+                Icon::new(IconName::GitCompare),
+                Box::new(CompareRowWithSelected { row: cell.0 }),
+            )
+        })
+        .when(compare_kind.is_some(), |this| {
+            this.menu_with_icon(
+                "Clear Comparison Selection",
+                Icon::new(IconName::CircleX),
+                Box::new(ClearCompareSelection),
             )
         })
     }
