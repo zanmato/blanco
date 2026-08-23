@@ -32,6 +32,10 @@ pub enum ConnectionsPanelEvent {
     EditConnection {
         connection_data: Box<ConnectionData>,
     },
+    /// The initial async connection load finished. Connections load off the foreground
+    /// thread, so anything that depends on whether the user has connections (like the
+    /// first-run dialog) must wait for this instead of reading `connections` at startup.
+    FirstLoadCompleted,
 }
 
 /// Icon and color combination for tree items
@@ -71,6 +75,7 @@ pub struct ConnectionsPanel {
     // re-materializing children on expand/collapse) always produces the same
     // colors, instead of being patched onto the flattened entries afterwards.
     connected_databases: std::collections::HashMap<i64, std::collections::HashSet<String>>,
+    initial_load_completed: bool,
 }
 
 /// Type of tree item in the metadata context
@@ -189,6 +194,7 @@ impl ConnectionsPanel {
             expanded_connections,
             expanded_categories,
             connected_databases,
+            initial_load_completed: false,
         };
 
         panel.reload_connections(cx);
@@ -220,6 +226,10 @@ impl ConnectionsPanel {
                 .update(cx, |this, cx| {
                     this.connections = connections;
                     this.update_tree_items(cx);
+                    if !this.initial_load_completed {
+                        this.initial_load_completed = true;
+                        cx.emit(ConnectionsPanelEvent::FirstLoadCompleted);
+                    }
                     cx.notify();
                 })
                 .log_err();

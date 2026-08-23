@@ -347,15 +347,6 @@ impl BlancoApp {
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
 
-        // First-run experience: if there are no saved connections, greet the
-        // user with the new connection dialog instead of an empty window. The
-        // dialog is opened after construction completes via `defer_in`.
-        if sidebar.read(cx).connections.is_empty() {
-            cx.defer_in(window, |this, window, cx| {
-                this.on_new_connection_modal(&OpenNewConnectionModal, window, cx);
-            });
-        }
-
         Self {
             focus_handle,
             sidebar,
@@ -481,15 +472,22 @@ impl BlancoApp {
     ) -> Vec<Subscription> {
         let mut subscriptions = Vec::new();
 
-        // Sidebar: open the edit-connection modal.
+        // Sidebar: open the edit-connection modal, and the first-run dialog.
         subscriptions.push(cx.subscribe_in(
             sidebar,
             window,
-            move |app, _sidebar, event, window, cx| match event {
+            move |app, sidebar, event, window, cx| match event {
                 ConnectionsPanelEvent::EditConnection {
                     connection_data, ..
                 } => {
                     app.open_edit_connection_modal(*connection_data.clone(), window, cx);
+                }
+                // First-run experience: if the initial load found no saved connections,
+                // greet the user with the new connection dialog instead of an empty window.
+                ConnectionsPanelEvent::FirstLoadCompleted => {
+                    if sidebar.read(cx).connections.is_empty() {
+                        app.on_new_connection_modal(&OpenNewConnectionModal, window, cx);
+                    }
                 }
             },
         ));

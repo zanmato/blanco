@@ -1362,6 +1362,16 @@ mod visual_tests {
             let app_database = runtime_handle
                 .block_on(AppDatabase::new_in_memory(runtime_handle.clone()))
                 .expect("failed to create in-memory database");
+            // Seed one saved connection so the first-run "new connection" dialog stays
+            // closed; it would otherwise open mid-test and steal focus from the palette.
+            runtime_handle
+                .block_on(
+                    app_database.save_connection(&app_database::ConnectionData::new_sqlite(
+                        "test".to_string(),
+                        ":memory:".to_string(),
+                    )),
+                )
+                .expect("failed to seed connection");
             cx.set_global(app_database);
 
             let db_service = DatabaseService::new(runtime_handle);
