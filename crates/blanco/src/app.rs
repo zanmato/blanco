@@ -237,6 +237,14 @@ pub struct OpenSchemaGraph {
     pub context: ConnectionContext,
 }
 
+/// Reload one connection's subtree in the sidebar, e.g. after DDL ran from a
+/// structure tab.
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct RefreshConnectionTree {
+    pub connection_id: i64,
+}
+
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
 pub struct EditConnection {
@@ -1007,49 +1015,22 @@ impl BlancoApp {
                 cx,
             )
         });
-
-        let db_service = database::DatabaseService::global(cx).clone();
-        let connection_id = action.context.connection_id;
-        let database_name = action.context.database_name.clone();
-        let schema_name = action.context.schema_name.clone();
-        let table_name = action.table_name.clone();
-        let activity = ActivityReporter::global(cx).begin(format!(
-            "{}: loading structure",
-            action.context.connection_name
-        ));
-
-        cx.spawn_in(window, async move |_, window| {
-            let _activity = activity;
-            use database::DatabaseServiceTrait;
-            let columns_result = db_service
-                .get_or_create_connection_by_id(connection_id, Some(&database_name))
-                .await;
-
-            if let Ok(connection) = columns_result {
-                let columns = connection
-                    .get_columns_for_table(&table_name, schema_name.as_deref())
-                    .await
-                    .unwrap_or_default();
-                let indexes = connection
-                    .get_indexes_for_table(&table_name, schema_name.as_deref())
-                    .await
-                    .unwrap_or_default();
-
-                window
-                    .update(|window, cx| {
-                        if let Some(tab) = weak_tab.upgrade() {
-                            tab.update(cx, |tab, cx| {
-                                tab.set_columns(columns, window, cx);
-                                tab.set_indexes(indexes, window, cx);
-                            });
-                        }
-                    })
-                    .log_err();
-            }
-        })
-        .detach();
-
+        if let Some(tab) = weak_tab.upgrade() {
+            tab.update(cx, |tab, cx| tab.reload(window, cx));
+        }
         cx.notify();
+    }
+
+    fn on_refresh_connection_tree(
+        &mut self,
+        action: &RefreshConnectionTree,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let connection_id = action.connection_id;
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.refresh_connection(connection_id, cx);
+        });
     }
 
     fn on_open_object_ddl(
@@ -1637,6 +1618,7 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::on_settings))
             .on_action(cx.listener(Self::on_create_new_query_tab))
+            .on_action(cx.listener(Self::on_refresh_connection_tree))
             .on_action(cx.listener(Self::on_create_new_script_tab))
             .on_action(cx.listener(Self::on_open_table_structure))
             .on_action(cx.listener(Self::on_open_object_ddl))

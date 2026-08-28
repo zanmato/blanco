@@ -256,6 +256,9 @@ impl Connection for ClickhouseConnection {
             .rows
             .into_iter()
             .map(|mut row| {
+                // Partition-key membership is selected for parity with the
+                // schema query but not surfaced on ColumnInfo.
+                row.pop();
                 let is_in_pk = row.pop().flatten().map(|v| v == "1").unwrap_or(false);
                 let default_expr = row.pop().flatten().filter(|v| !v.is_empty());
                 let data_type = row.pop().flatten().unwrap_or_default();

@@ -731,3 +731,272 @@ async fn test_redis_inspect_key(cx: &mut TestAppContext) {
         blanco_core::RedisValue::Str("hello".to_string())
     );
 }
+
+/// The column/index DDL builders against every live backend: create a
+/// scratch table, add a column and an index, alter the column, drop both,
+/// and check the driver's metadata between steps.
+#[test]
+fn test_column_and_index_ddl_round_trip() {
+    use blanco_core::ddl::{
+        ColumnOperation, ColumnSpec, DdlError, IndexOperation, column_operation_sql,
+        index_operation_sql,
+    };
+    use blanco_core::{ColumnInfo, IndexInfo, WriteOperation};
+    use database::ConnectionConfig;
+
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let sqlite_path = temp_dir.path().join("ddl.db").to_string_lossy().to_string();
+
+    struct DdlCase {
+        label: &'static str,
+        config: ConnectionConfig,
+        database: String,
+        schema: Option<&'static str>,
+        create_table: &'static str,
+        alter_supported: bool,
+        /// SQL Server stores defaults as named constraints, which block a later
+        /// DROP COLUMN, so the added column gets no default there.
+        add_default: Option<&'static str>,
+    }
+
+    let server = |case: &DriverCase, id: i64| {
+        ConnectionConfig::new(
+            id,
+            case.name.to_string(),
+            case.db_type,
+            case.host.clone(),
+            case.port.parse().expect("port"),
+            case.database.clone(),
+            case.username.clone(),
+            Some(case.password.clone()),
+        )
+    };
+    let postgres = postgres_case();
+    let mysql = mysql_case();
+    let clickhouse = clickhouse_case();
+    let mssql = mssql_case();
+    let cases = vec![
+        DdlCase {
+            label: "SQLite",
+            config: ConnectionConfig::new_sqlite(9001, "ddl-sqlite".to_string(), sqlite_path),
+            database: "main".to_string(),
+            schema: None,
+            create_table: "CREATE TABLE blanco_ddl_test (id INTEGER PRIMARY KEY)",
+            alter_supported: false,
+            add_default: Some("0"),
+        },
+        DdlCase {
+            label: postgres.label,
+            config: server(&postgres, 9002),
+            database: postgres.database.clone(),
+            schema: Some("public"),
+            create_table: "CREATE TABLE blanco_ddl_test (id integer PRIMARY KEY)",
+            alter_supported: true,
+            add_default: Some("0"),
+        },
+        DdlCase {
+            label: mysql.label,
+            config: server(&mysql, 9003),
+            database: mysql.database.clone(),
+            schema: None,
+            create_table: "CREATE TABLE blanco_ddl_test (id integer PRIMARY KEY)",
+            alter_supported: true,
+            add_default: Some("0"),
+        },
+        DdlCase {
+            label: clickhouse.label,
+            config: server(&clickhouse, 9004),
+            database: clickhouse.database.clone(),
+            schema: None,
+            create_table: "CREATE TABLE blanco_ddl_test (id Int32) ENGINE = MergeTree ORDER BY id",
+            alter_supported: true,
+            add_default: Some("0"),
+        },
+        DdlCase {
+            label: mssql.label,
+            config: server(&mssql, 9005).with_trust_server_certificate(true),
+            database: mssql.database.clone(),
+            schema: Some("dbo"),
+            create_table: "CREATE TABLE blanco_ddl_test (id integer PRIMARY KEY)",
+            alter_supported: true,
+            add_default: None,
+        },
+    ];
+
+    let service = DatabaseService::new(runtime.handle().clone());
+
+    for case in cases {
+        let label = case.label;
+        let db_type = case.config.db_type;
+        let database = Some(case.database.as_str());
+        let connection = runtime.block_on(async {
+            service.add_connection_config(case.config.clone()).await;
+            service
+                .get_or_create_connection(case.config.id, database)
+                .await
+        });
+        let connection = match connection {
+            Ok(connection) => connection,
+            Err(error) if strict() => panic!("{label}: server unreachable: {error:#}"),
+            Err(error) => {
+                eprintln!(
+                    "skip {label}: server unreachable ({error:#}). Set BLANCO_RUN_DB_TESTS=1 to require."
+                );
+                continue;
+            }
+        };
+
+        let run = |statements: Vec<String>| {
+            let operations: Vec<WriteOperation> =
+                statements.iter().map(|sql| sql.as_str().into()).collect();
+            runtime
+                .block_on(connection.execute_operations_transactional(&operations, database))
+                .map_err(|failure| failure.error)
+        };
+        let columns = || -> Vec<ColumnInfo> {
+            runtime
+                .block_on(connection.get_columns_for_table("blanco_ddl_test", case.schema))
+                .unwrap_or_else(|error| panic!("{label}: columns: {error:#}"))
+        };
+        let indexes = || -> Vec<IndexInfo> {
+            runtime
+                .block_on(connection.get_indexes_for_table("blanco_ddl_test", case.schema))
+                .unwrap_or_else(|error| panic!("{label}: indexes: {error:#}"))
+        };
+        let build_column = |operation: &ColumnOperation| {
+            column_operation_sql(db_type, case.schema, "blanco_ddl_test", operation)
+        };
+        let build_index = |operation: &IndexOperation| {
+            index_operation_sql(db_type, case.schema, "blanco_ddl_test", operation)
+        };
+
+        runtime
+            .block_on(connection.execute_write(
+                "DROP TABLE IF EXISTS blanco_ddl_test",
+                database,
+                &[],
+            ))
+            .unwrap_or_else(|error| panic!("{label}: drop leftover: {error:#}"));
+        runtime
+            .block_on(connection.execute_write(case.create_table, database, &[]))
+            .unwrap_or_else(|error| panic!("{label}: create: {error:#}"));
+
+        // Add a column.
+        let add = ColumnOperation::Add(ColumnSpec {
+            name: "score".to_string(),
+            data_type: if db_type == DatabaseType::ClickHouse {
+                "Int32".to_string()
+            } else {
+                "integer".to_string()
+            },
+            nullable: false,
+            default: case.add_default.map(str::to_string),
+        });
+        run(build_column(&add).unwrap_or_else(|error| panic!("{label}: {error}")))
+            .unwrap_or_else(|error| panic!("{label}: add column: {error:#}"));
+        let added = columns()
+            .into_iter()
+            .find(|column| column.name == "score")
+            .unwrap_or_else(|| panic!("{label}: added column missing"));
+        assert!(!added.is_nullable, "{label}: NOT NULL should stick");
+        if case.add_default.is_some() {
+            assert!(
+                added.default_value.is_some(),
+                "{label}: default should be reported"
+            );
+        }
+
+        // Create an index on it.
+        let create_index = IndexOperation::Create {
+            name: "blanco_ddl_test_score_idx".to_string(),
+            columns: vec!["score".to_string()],
+            unique: false,
+        };
+        run(build_index(&create_index).unwrap_or_else(|error| panic!("{label}: {error}")))
+            .unwrap_or_else(|error| panic!("{label}: create index: {error:#}"));
+        assert!(
+            indexes()
+                .iter()
+                .any(|index| index.name == "blanco_ddl_test_score_idx"),
+            "{label}: created index missing from {:?}",
+            indexes()
+        );
+
+        // Alter: rename and widen.
+        let alter = ColumnOperation::Alter {
+            name: "score".to_string(),
+            spec: ColumnSpec {
+                name: "points".to_string(),
+                data_type: if db_type == DatabaseType::ClickHouse {
+                    "Int64".to_string()
+                } else {
+                    "bigint".to_string()
+                },
+                nullable: true,
+                default: None,
+            },
+        };
+        match build_column(&alter) {
+            Ok(statements) => {
+                assert!(
+                    case.alter_supported,
+                    "{label}: alter unexpectedly supported"
+                );
+                // An index on the column blocks the type change on some
+                // backends; drop it first as a user would.
+                run(build_index(&IndexOperation::Drop {
+                    name: "blanco_ddl_test_score_idx".to_string(),
+                })
+                .unwrap_or_else(|error| panic!("{label}: {error}")))
+                .unwrap_or_else(|error| panic!("{label}: drop index: {error:#}"));
+                run(statements).unwrap_or_else(|error| panic!("{label}: alter column: {error:#}"));
+                let altered = columns()
+                    .into_iter()
+                    .find(|column| column.name == "points")
+                    .unwrap_or_else(|| panic!("{label}: renamed column missing"));
+                assert!(altered.is_nullable, "{label}: DROP NOT NULL should stick");
+                assert!(
+                    altered.data_type.to_lowercase().contains("int"),
+                    "{label}: type after alter was {}",
+                    altered.data_type
+                );
+                run(build_column(&ColumnOperation::Drop {
+                    name: "points".to_string(),
+                })
+                .unwrap_or_else(|error| panic!("{label}: {error}")))
+                .unwrap_or_else(|error| panic!("{label}: drop column: {error:#}"));
+            }
+            Err(DdlError::Unsupported(_)) => {
+                assert!(!case.alter_supported, "{label}: alter should be supported");
+                run(build_index(&IndexOperation::Drop {
+                    name: "blanco_ddl_test_score_idx".to_string(),
+                })
+                .unwrap_or_else(|error| panic!("{label}: {error}")))
+                .unwrap_or_else(|error| panic!("{label}: drop index: {error:#}"));
+                run(build_column(&ColumnOperation::Drop {
+                    name: "score".to_string(),
+                })
+                .unwrap_or_else(|error| panic!("{label}: {error}")))
+                .unwrap_or_else(|error| panic!("{label}: drop column: {error:#}"));
+            }
+            Err(error) => panic!("{label}: {error}"),
+        }
+        assert!(
+            indexes()
+                .iter()
+                .all(|index| index.name != "blanco_ddl_test_score_idx"),
+            "{label}: index should be gone"
+        );
+        assert!(
+            columns()
+                .iter()
+                .all(|column| column.name != "score" && column.name != "points"),
+            "{label}: column should be gone"
+        );
+
+        runtime
+            .block_on(connection.execute_write("DROP TABLE blanco_ddl_test", database, &[]))
+            .unwrap_or_else(|error| panic!("{label}: drop: {error:#}"));
+    }
+}

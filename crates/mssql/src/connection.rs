@@ -29,6 +29,19 @@ const MAX_ROUTING_REDIRECTS: usize = 2;
 /// cached client should be dropped. `Server` errors are SQL-level (bad query,
 /// permission, ...) and leave the connection healthy; everything else
 /// (I/O, protocol, TLS) indicates a dead transport.
+/// Run a transaction control statement (`BEGIN`/`COMMIT`/`ROLLBACK
+/// TRANSACTION`) as a plain batch. `Query::execute` would wrap it in
+/// `sp_executesql`, and SQL Server refuses a transaction count that changes
+/// inside a procedure (error 266). Draining the stream with `into_results`
+/// ends the client borrow before the caller touches the slot again.
+async fn control_statement(
+    client: &mut MssqlClient,
+    sql: &str,
+) -> Result<(), tiberius::error::Error> {
+    client.simple_query(sql).await?.into_results().await?;
+    Ok(())
+}
+
 fn is_connection_lost(error: &tiberius::error::Error) -> bool {
     !matches!(error, tiberius::error::Error::Server(_))
 }
@@ -658,11 +671,7 @@ impl Connection for MssqlConnection {
         }
         let client = guard.as_mut().expect("client established above");
 
-        // Use `Query::execute` (which returns an owned `ExecuteResult`) for the
-        // control statements too, rather than `simple_query` whose borrowed
-        // stream would pin the `client` borrow across the whole block and clash
-        // with the `*guard = None` reconnect handling.
-        if let Err(error) = Query::new("BEGIN TRANSACTION").execute(client).await {
+        if let Err(error) = control_statement(client, "BEGIN TRANSACTION").await {
             let lost = is_connection_lost(&error);
             let failure = BatchFailure::atomic(anyhow::anyhow!("MSSQL begin error: {error}"));
             if lost {
@@ -700,8 +709,7 @@ impl Connection for MssqlConnection {
             // connection is gone (the rollback would fail too); dropping the
             // client discards the aborted transaction.
             if !lost
-                && let Err(rollback_error) =
-                    Query::new("ROLLBACK TRANSACTION").execute(client).await
+                && let Err(rollback_error) = control_statement(client, "ROLLBACK TRANSACTION").await
             {
                 tracing::warn!("MSSQL rollback failed: {rollback_error}");
             }
@@ -712,7 +720,7 @@ impl Connection for MssqlConnection {
         }
 
         let client = guard.as_mut().expect("client established above");
-        if let Err(error) = Query::new("COMMIT TRANSACTION").execute(client).await {
+        if let Err(error) = control_statement(client, "COMMIT TRANSACTION").await {
             let lost = is_connection_lost(&error);
             let failure = BatchFailure::atomic(anyhow::anyhow!("MSSQL commit error: {error}"));
             if lost {
