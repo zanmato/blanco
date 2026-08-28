@@ -1,10 +1,13 @@
 pub mod completion;
 pub mod formatting;
+pub mod functions;
 pub mod selection_range_provider;
+pub mod signature_help;
 
 pub use completion::SqlCompletionProvider;
 pub use formatting::SqruffService;
 pub use selection_range_provider::SqlSelectionRangeProvider;
+pub use signature_help::SqlSignatureHelpProvider;
 pub use sql_parser::{
     extract_command_at_cursor, extract_statement_info, extract_statement_info_with_styles,
 };

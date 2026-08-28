@@ -1,5 +1,5 @@
 use anyhow::Result;
-use blanco_core::{ColumnInfo, QueryableEntity};
+use blanco_core::{ColumnInfo, FunctionSignatureInfo, QueryableEntity};
 use database::DatabaseServiceTrait;
 
 /// True for postgres system schemas that should never be offered as completion
@@ -101,6 +101,39 @@ pub async fn fetch_columns(
         tracing::warn!(
             "Failed to get connection for fetching columns from table '{}', database '{}'",
             table_name,
+            database_name
+        );
+        Ok(Vec::new())
+    }
+}
+
+/// Fetch the user-defined function signatures of a schema using the DbService.
+pub async fn fetch_function_signatures(
+    db_service: &dyn DatabaseServiceTrait,
+    connection_id: i64,
+    database_name: &str,
+    schema: Option<&str>,
+) -> Result<Vec<FunctionSignatureInfo>> {
+    tracing::debug!(
+        "Fetching function signatures for database '{}', schema {:?}",
+        database_name,
+        schema
+    );
+    if let Ok(connection) = db_service
+        .get_or_create_connection_by_id(connection_id, Some(database_name))
+        .await
+    {
+        let functions = connection.list_function_signatures(schema).await?;
+        tracing::debug!(
+            "Found {} functions for database '{}', schema {:?}",
+            functions.len(),
+            database_name,
+            schema
+        );
+        Ok(functions)
+    } else {
+        tracing::warn!(
+            "Failed to get connection for fetching functions from database '{}'",
             database_name
         );
         Ok(Vec::new())

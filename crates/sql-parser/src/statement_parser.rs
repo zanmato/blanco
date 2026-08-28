@@ -452,6 +452,20 @@ pub struct CompletionContext {
     /// CTE name, or the relation alias). Ordered by appearance. Only populated
     /// when the projection is statically determinable (no `*`).
     pub cte_columns: Vec<(String, Vec<String>)>,
+    /// The innermost function call whose argument list contains the cursor,
+    /// for signature help.
+    pub enclosing_call: Option<EnclosingCall>,
+}
+
+/// A function invocation whose parentheses surround the cursor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnclosingCall {
+    /// The unqualified function name as written (quotes stripped).
+    pub name: String,
+    /// Zero-based index of the argument the cursor is in.
+    pub argument_index: usize,
+    /// Byte offset of the opening parenthesis.
+    pub open_paren: usize,
 }
 
 /// Extract completion context at cursor position using tree-sitter.
@@ -514,6 +528,12 @@ pub fn extract_completion_context(
 
         let cte_columns = extract_derived_columns(search_root, &text_str);
 
+        // While the user is typing the tree usually has ERROR nodes around the
+        // cursor, and an unclosed `f(` never produces an `invocation` node, so
+        // fall back to a textual scan when the AST cannot answer.
+        let enclosing_call = find_enclosing_call(search_root, &text_str, cursor_byte_pos)
+            .or_else(|| scan_enclosing_call(&text_str, statement_range.start, cursor_byte_pos));
+
         Some(CompletionContext {
             current_word,
             clause,
@@ -521,6 +541,7 @@ pub fn extract_completion_context(
             is_dot_notation,
             dot_table_name,
             cte_columns,
+            enclosing_call,
         })
     })
 }
@@ -1008,6 +1029,232 @@ fn find_clause_in_error_nodes(
     best_clause
 }
 
+/// Walk up from the node at the cursor to the innermost `invocation` whose
+/// parentheses contain the cursor, counting the commas before it.
+fn find_enclosing_call(root: Node, source: &str, cursor_byte_pos: usize) -> Option<EnclosingCall> {
+    let mut node = root.descendant_for_byte_range(cursor_byte_pos, cursor_byte_pos)?;
+    loop {
+        if node.kind() == "invocation"
+            && let Some(call) = call_from_invocation(node, source, cursor_byte_pos)
+        {
+            return Some(call);
+        }
+        node = node.parent()?;
+    }
+}
+
+fn call_from_invocation(node: Node, source: &str, cursor_byte_pos: usize) -> Option<EnclosingCall> {
+    let mut cursor = node.walk();
+    let mut open_paren = None;
+    let mut close_paren = None;
+    let mut name = None;
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "object_reference" if name.is_none() => {
+                name = last_identifier_text(child, source)
+                    .map(|text| strip_identifier_quotes(&text).to_string());
+            }
+            "(" if open_paren.is_none() => open_paren = Some(child.start_byte()),
+            ")" => close_paren = Some(child.start_byte()),
+            _ => {}
+        }
+    }
+    let open_paren = open_paren?;
+    if cursor_byte_pos <= open_paren {
+        return None;
+    }
+    if close_paren.is_some_and(|close| cursor_byte_pos > close) {
+        return None;
+    }
+    // Error recovery can drop a trailing `,` from the node when the last
+    // argument is still empty, so count the commas in the text instead.
+    let argument_index = call_tokens(source, open_paren + 1, cursor_byte_pos)
+        .into_iter()
+        .fold(
+            (0usize, 0usize),
+            |(depth, commas), (_, token)| match token {
+                CallToken::Open => (depth + 1, commas),
+                CallToken::Close => (depth.saturating_sub(1), commas),
+                CallToken::Comma if depth == 0 => (depth, commas + 1),
+                CallToken::Comma => (depth, commas),
+            },
+        )
+        .1;
+    Some(EnclosingCall {
+        name: name?,
+        argument_index,
+        open_paren,
+    })
+}
+
+#[derive(Clone, Copy)]
+enum CallToken {
+    Open,
+    Close,
+    Comma,
+}
+
+/// The parentheses and commas in `source[start..end]` that are not inside a
+/// string literal, quoted identifier or comment. Tokenised forwards because a
+/// backwards scan cannot tell an opening quote from a closing one.
+fn call_tokens(source: &str, start: usize, end: usize) -> Vec<(usize, CallToken)> {
+    let end = end.min(source.len());
+    let start = start.min(end);
+    let bytes = source.as_bytes();
+    let mut tokens = Vec::new();
+    let mut index = start;
+    while index < end {
+        let byte = bytes[index];
+        match byte {
+            b'\'' | b'"' | b'`' => {
+                index += 1;
+                while index < end && bytes[index] != byte {
+                    index += 1;
+                }
+                index += 1;
+            }
+            b'[' => {
+                while index < end && bytes[index] != b']' {
+                    index += 1;
+                }
+                index += 1;
+            }
+            b'-' if bytes.get(index + 1) == Some(&b'-') => {
+                while index < end && bytes[index] != b'\n' {
+                    index += 1;
+                }
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                index += 2;
+                while index + 1 < end && !(bytes[index] == b'*' && bytes[index + 1] == b'/') {
+                    index += 1;
+                }
+                index += 2;
+            }
+            b'(' => {
+                tokens.push((index, CallToken::Open));
+                index += 1;
+            }
+            b')' => {
+                tokens.push((index, CallToken::Close));
+                index += 1;
+            }
+            b',' => {
+                tokens.push((index, CallToken::Comma));
+                index += 1;
+            }
+            _ => index += 1,
+        }
+    }
+    tokens
+}
+
+/// Keywords that take a parenthesised list but are not function calls, so an
+/// unclosed `IN (` or `VALUES (` must not produce signature help.
+const NON_CALL_KEYWORDS: &[&str] = &[
+    "IN",
+    "VALUES",
+    "EXISTS",
+    "OVER",
+    "AS",
+    "FROM",
+    "SELECT",
+    "WHERE",
+    "AND",
+    "OR",
+    "NOT",
+    "ON",
+    "JOIN",
+    "BY",
+    "SET",
+    "INTO",
+    "UNION",
+    "ALL",
+    "ANY",
+    "SOME",
+    "THEN",
+    "ELSE",
+    "WHEN",
+    "CASE",
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "HAVING",
+    "LIMIT",
+    "OFFSET",
+    "RETURNING",
+    "WITH",
+    "USING",
+    "BETWEEN",
+    "LIKE",
+    "ILIKE",
+    "IS",
+    "DISTINCT",
+    "PARTITION",
+    "FILTER",
+    "WITHIN",
+    "GROUP",
+    "ORDER",
+    "TABLE",
+    "INDEX",
+    "VIEW",
+    "REFERENCES",
+    "CHECK",
+    "PRIMARY",
+    "KEY",
+    "UNIQUE",
+    "FOREIGN",
+    "CONSTRAINT",
+    "DEFAULT",
+    "LATERAL",
+];
+
+/// Textual fallback for [`find_enclosing_call`]: scan backwards from the cursor
+/// to the nearest unbalanced `(` preceded by an identifier, skipping string
+/// literals, quoted identifiers and comments. Counts the top-level commas
+/// between that paren and the cursor.
+fn scan_enclosing_call(
+    source: &str,
+    statement_start: usize,
+    cursor_byte_pos: usize,
+) -> Option<EnclosingCall> {
+    let tokens = call_tokens(source, statement_start, cursor_byte_pos);
+    let bytes = source.as_bytes();
+
+    let mut depth = 0usize;
+    let mut commas = 0usize;
+    for (offset, token) in tokens.iter().rev() {
+        match token {
+            CallToken::Close => depth += 1,
+            CallToken::Comma if depth == 0 => commas += 1,
+            CallToken::Comma => {}
+            CallToken::Open if depth > 0 => depth -= 1,
+            CallToken::Open => {
+                let name_end = source[..*offset].trim_end().len();
+                let name_start = identifier_start(bytes, name_end);
+                let name = strip_identifier_quotes(&source[name_start..name_end]);
+                if name.is_empty()
+                    || NON_CALL_KEYWORDS
+                        .iter()
+                        .any(|keyword| keyword.eq_ignore_ascii_case(name))
+                {
+                    // Not a call: a grouping or keyword paren. Keep looking
+                    // outward, resetting the argument count for that level.
+                    commas = 0;
+                    continue;
+                }
+                let name = name.rsplit('.').next().unwrap_or(name).to_string();
+                return Some(EnclosingCall {
+                    name,
+                    argument_index: commas,
+                    open_paren: *offset,
+                });
+            }
+        }
+    }
+    None
+}
+
 /// Find the deepest named node at or just before the cursor position.
 fn find_deepest_node_at(node: Node, cursor_byte_pos: usize) -> Node {
     let mut best = node;
@@ -1150,6 +1397,96 @@ mod tests {
 
     fn create_test_parser() -> SqlStatementParser {
         SqlStatementParser::new().expect("Failed to create test parser")
+    }
+
+    /// Enclosing call at the `|` marker in `sql`, as (name, argument index).
+    fn enclosing_call_at(sql: &str) -> Option<(String, usize)> {
+        let cursor = sql.find('|').expect("marker");
+        let text = Rope::from_str(&sql.replace('|', ""));
+        extract_completion_context(&text, cursor)
+            .expect("context")
+            .enclosing_call
+            .map(|call| (call.name, call.argument_index))
+    }
+
+    #[test]
+    fn enclosing_call_complete_invocation() {
+        assert_eq!(
+            enclosing_call_at("SELECT SPLIT_PART(a, ',', |) FROM t"),
+            Some(("SPLIT_PART".into(), 2))
+        );
+        assert_eq!(
+            enclosing_call_at("SELECT SPLIT_PART(|a, ',', 1) FROM t"),
+            Some(("SPLIT_PART".into(), 0))
+        );
+    }
+
+    #[test]
+    fn enclosing_call_incomplete_invocation() {
+        assert_eq!(
+            enclosing_call_at("SELECT SPLIT_PART(|"),
+            Some(("SPLIT_PART".into(), 0))
+        );
+        assert_eq!(
+            enclosing_call_at("SELECT SPLIT_PART(name, |"),
+            Some(("SPLIT_PART".into(), 1))
+        );
+        assert_eq!(
+            enclosing_call_at("SELECT * FROM users WHERE split_part(email, '@', | "),
+            Some(("split_part".into(), 2))
+        );
+    }
+
+    #[test]
+    fn enclosing_call_nested_and_string_commas() {
+        assert_eq!(
+            enclosing_call_at("SELECT COALESCE(NULLIF(a, |), b) FROM t"),
+            Some(("NULLIF".into(), 1))
+        );
+        assert_eq!(
+            enclosing_call_at("SELECT COALESCE(NULLIF(a, b), |) FROM t"),
+            Some(("COALESCE".into(), 1))
+        );
+        assert_eq!(
+            enclosing_call_at("SELECT f('a,b', |"),
+            Some(("f".into(), 1))
+        );
+        assert_eq!(
+            enclosing_call_at("SELECT f(\"x,y\", (1, 2), |"),
+            Some(("f".into(), 2))
+        );
+    }
+
+    #[test]
+    fn enclosing_call_outside_or_keyword_parens() {
+        assert_eq!(enclosing_call_at("SELECT f(a) |FROM t"), None);
+        assert_eq!(enclosing_call_at("SELECT |f(a) FROM t"), None);
+        assert_eq!(enclosing_call_at("SELECT * FROM t WHERE id IN (1, |"), None);
+        assert_eq!(enclosing_call_at("INSERT INTO t VALUES (1, |"), None);
+        assert_eq!(
+            enclosing_call_at("SELECT * FROM t WHERE (a = 1 AND |"),
+            None
+        );
+        assert_eq!(
+            enclosing_call_at("SELECT * FROM t WHERE id IN (SELECT lower(|"),
+            Some(("lower".into(), 0))
+        );
+    }
+
+    #[test]
+    fn enclosing_call_schema_qualified_and_quoted() {
+        assert_eq!(
+            enclosing_call_at("SELECT public.myfn(|"),
+            Some(("myfn".into(), 0))
+        );
+        assert_eq!(
+            enclosing_call_at("SELECT public.myfn(1, |) FROM t"),
+            Some(("myfn".into(), 1))
+        );
+        assert_eq!(
+            enclosing_call_at("SELECT \"MyFn\"(|"),
+            Some(("MyFn".into(), 0))
+        );
     }
 
     #[test]

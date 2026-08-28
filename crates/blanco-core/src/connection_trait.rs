@@ -30,6 +30,18 @@ pub enum RoutineKind {
     Trigger,
 }
 
+/// A user-defined function's signature as reported by the database catalog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FunctionSignatureInfo {
+    pub schema: Option<String>,
+    pub name: String,
+    /// One entry per parameter, as `name type` when the catalog names them and
+    /// just the type otherwise.
+    pub parameters: Vec<String>,
+    pub return_type: Option<String>,
+    pub comment: Option<String>,
+}
+
 impl RoutineKind {
     pub fn display_name(&self) -> &'static str {
         match self {
@@ -497,6 +509,16 @@ pub trait Connection: Send + Sync {
 
     /// List user-defined functions in a schema. Defaults to empty.
     async fn list_functions(&self, _schema: Option<&str>) -> Result<Vec<String>, anyhow::Error> {
+        Ok(Vec::new())
+    }
+
+    /// List user-defined functions in a schema with their parameters, for
+    /// completion and signature help. One entry per overload. Defaults to
+    /// empty for drivers without a routine catalog.
+    async fn list_function_signatures(
+        &self,
+        _schema: Option<&str>,
+    ) -> Result<Vec<FunctionSignatureInfo>, anyhow::Error> {
         Ok(Vec::new())
     }
 

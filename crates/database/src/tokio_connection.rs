@@ -15,8 +15,8 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use blanco_core::{
     connection_trait::{ColumnType, DatabaseSchemaResult, IndexInfo, QueryableEntity, RoutineKind},
-    write_guard, BatchFailure, BatchOutcome, ColumnInfo, Connection, DatabaseType, KeyValueResult,
-    QueryResult, StatementAccess,
+    write_guard, BatchFailure, BatchOutcome, ColumnInfo, Connection, DatabaseType,
+    FunctionSignatureInfo, KeyValueResult, QueryResult, StatementAccess,
 };
 use futures::Stream;
 use std::future::Future;
@@ -280,6 +280,16 @@ impl Connection for TokioConnection {
         let inner = Arc::clone(&self.inner);
         let schema = schema.map(str::to_string);
         self.run(async move { inner.list_functions(schema.as_deref()).await })
+            .await
+    }
+
+    async fn list_function_signatures(
+        &self,
+        schema: Option<&str>,
+    ) -> Result<Vec<FunctionSignatureInfo>> {
+        let inner = Arc::clone(&self.inner);
+        let schema = schema.map(str::to_string);
+        self.run(async move { inner.list_function_signatures(schema.as_deref()).await })
             .await
     }
 

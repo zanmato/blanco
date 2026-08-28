@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
-    ColumnInfo, Connection, QueryResult, connection_trait::ColumnType,
+    ColumnInfo, Connection, FunctionSignatureInfo, QueryResult, connection_trait::ColumnType,
     connection_trait::ForeignKeyInfo, connection_trait::IndexInfo, connection_trait::RoutineKind,
 };
 use futures::{Stream, StreamExt};
@@ -428,6 +428,64 @@ impl Connection for MysqlConnection {
         Ok(rows
             .iter()
             .filter_map(|r| r.try_get::<String, _>(0).ok())
+            .collect())
+    }
+
+    async fn list_function_signatures(
+        &self,
+        _schema: Option<&str>,
+    ) -> Result<Vec<FunctionSignatureInfo>, anyhow::Error> {
+        let database = self
+            .initial_database
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+        let pool = self.get_or_create_pool(database).await?;
+        let rows = sqlx::query(
+            "SELECT r.ROUTINE_NAME, r.DTD_IDENTIFIER, r.ROUTINE_COMMENT,
+                    GROUP_CONCAT(CONCAT(p.PARAMETER_NAME, ' ', p.DTD_IDENTIFIER)
+                                 ORDER BY p.ORDINAL_POSITION SEPARATOR '\u{1}')
+             FROM information_schema.routines r
+             LEFT JOIN information_schema.parameters p
+               ON p.SPECIFIC_SCHEMA = r.ROUTINE_SCHEMA
+              AND p.SPECIFIC_NAME = r.SPECIFIC_NAME
+              AND p.ORDINAL_POSITION > 0
+             WHERE r.ROUTINE_SCHEMA = ? AND r.ROUTINE_TYPE = 'FUNCTION'
+             GROUP BY r.ROUTINE_NAME, r.DTD_IDENTIFIER, r.ROUTINE_COMMENT
+             ORDER BY r.ROUTINE_NAME",
+        )
+        .bind(database)
+        .fetch_all(&pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .filter_map(|row| {
+                let name = row.try_get::<String, _>(0).ok()?;
+                let return_type = row.try_get::<Option<String>, _>(1).ok().flatten();
+                let comment = row
+                    .try_get::<Option<String>, _>(2)
+                    .ok()
+                    .flatten()
+                    .filter(|comment| !comment.is_empty());
+                let parameters = row
+                    .try_get::<Option<String>, _>(3)
+                    .ok()
+                    .flatten()
+                    .map(|joined| {
+                        joined
+                            .split('\u{1}')
+                            .filter(|part| !part.is_empty())
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Some(FunctionSignatureInfo {
+                    schema: Some(database.clone()),
+                    name,
+                    parameters,
+                    return_type,
+                    comment,
+                })
+            })
             .collect())
     }
 

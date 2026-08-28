@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use blanco_core::{
-    ColumnInfo, Connection, QueryResult,
+    ColumnInfo, Connection, FunctionSignatureInfo, QueryResult,
     connection_trait::{
         ColumnType, DatabaseSchemaResult, EntityType, ForeignKeyInfo, InboundForeignKey, IndexInfo,
         PaginationInfo, QueryableEntity, RoutineKind, TableSchemaInfo,
@@ -988,6 +988,68 @@ impl Connection for MssqlConnection {
             .into_iter()
             .filter_map(|r| r.into_iter().next().flatten())
             .collect())
+    }
+
+    async fn list_function_signatures(
+        &self,
+        schema: Option<&str>,
+    ) -> Result<Vec<FunctionSignatureInfo>> {
+        let schema_name = schema.unwrap_or("dbo");
+        let schema_filter = schema_name.replace('\'', "''");
+        // parameter_id 0 is the return value of a scalar function; table-valued
+        // functions have no such row.
+        let sql = format!(
+            "SELECT o.name, p.parameter_id, p.name, TYPE_NAME(p.user_type_id), o.type \
+             FROM sys.objects o \
+             JOIN sys.schemas s ON s.schema_id = o.schema_id \
+             LEFT JOIN sys.parameters p ON p.object_id = o.object_id \
+             WHERE o.type IN ('FN', 'IF', 'TF') AND s.name = '{schema_filter}' \
+             ORDER BY o.name, p.parameter_id"
+        );
+        let result = self
+            .execute_query(&sql, self.initial_database.as_deref(), None)
+            .await?;
+        let mut functions: Vec<FunctionSignatureInfo> = Vec::new();
+        for row in result.rows {
+            let mut cells = row.into_iter();
+            let Some(name) = cells.next().flatten() else {
+                continue;
+            };
+            let parameter_id = cells.next().flatten();
+            let parameter_name = cells.next().flatten();
+            let parameter_type = cells.next().flatten();
+            let object_type = cells.next().flatten();
+            if functions.last().is_none_or(|last| last.name != name) {
+                let return_type = match object_type.as_deref().map(str::trim) {
+                    Some("IF") | Some("TF") => Some("table".to_string()),
+                    _ => None,
+                };
+                functions.push(FunctionSignatureInfo {
+                    schema: Some(schema_name.to_string()),
+                    name: name.clone(),
+                    parameters: Vec::new(),
+                    return_type,
+                    comment: None,
+                });
+            }
+            let Some(function) = functions.last_mut() else {
+                continue;
+            };
+            match parameter_id.as_deref() {
+                Some("0") => function.return_type = parameter_type,
+                Some(_) => {
+                    let parameter = match (parameter_name, parameter_type) {
+                        (Some(name), Some(kind)) if !name.is_empty() => format!("{name} {kind}"),
+                        (Some(name), None) if !name.is_empty() => name,
+                        (_, Some(kind)) => kind,
+                        (_, None) => continue,
+                    };
+                    function.parameters.push(parameter);
+                }
+                None => {}
+            }
+        }
+        Ok(functions)
     }
 
     async fn list_triggers(&self, schema: Option<&str>) -> Result<Vec<String>> {

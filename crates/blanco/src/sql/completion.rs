@@ -2,10 +2,14 @@ mod cache;
 mod context;
 mod fetch;
 
-use blanco_core::{ColumnInfo, DatabaseType, QueryableEntity};
+use blanco_core::{ColumnInfo, DatabaseType, FunctionSignatureInfo, QueryableEntity};
 pub use cache::{CacheEntry, MetadataCache};
 pub use context::{generate_table_abbreviation, resolve_table_alias};
-pub use fetch::{fetch_columns, fetch_queryable_entities, fetch_schemas};
+pub use fetch::{
+    fetch_columns, fetch_function_signatures, fetch_queryable_entities, fetch_schemas,
+};
+
+use crate::sql::functions;
 
 use cache::columns_key;
 
@@ -19,7 +23,7 @@ use gpui::{App, AppContext as _, Task, Window};
 use gpui_component::input::{CompletionProvider, Rope, RopeExt};
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
-    Range, TextEdit,
+    InsertTextFormat, Range, TextEdit,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -102,6 +106,8 @@ pub struct SqlCompletionProvider {
     /// The schema the tab is connected to ("current schema"). Tables here are
     /// offered unqualified; other schemas appear as drill-in namespaces.
     pub current_schema: String,
+    /// The connection's backend, which selects the built-in function catalog.
+    pub driver: DatabaseType,
     db_service: Arc<dyn DatabaseServiceTrait>,
     cache: Arc<std::sync::Mutex<MetadataCache>>,
 }
@@ -121,6 +127,7 @@ impl SqlCompletionProvider {
             connection_id,
             database_name,
             current_schema,
+            driver,
             db_service,
             cache: Arc::new(std::sync::Mutex::new(MetadataCache::new())),
         }
@@ -240,6 +247,56 @@ impl SqlCompletionProvider {
             Arc::clone(&cache.columns.get(&key).expect("just inserted").data)
         } else {
             Arc::new(columns)
+        };
+
+        Ok(arc)
+    }
+
+    /// Return cached user-defined functions for a schema only if a fresh entry
+    /// exists. No IO.
+    pub fn try_get_cached_functions(
+        &self,
+        schema: &str,
+    ) -> Option<Arc<Vec<FunctionSignatureInfo>>> {
+        let cache = self.cache.lock().ok()?;
+        let cached = cache.functions_by_schema.get(schema)?;
+        if cached.is_expired(CACHE_TTL_SECONDS) {
+            return None;
+        }
+        Some(Arc::clone(&cached.data))
+    }
+
+    /// Get cached user-defined functions for a schema or fetch them if not
+    /// cached/expired
+    pub async fn get_cached_functions(
+        &self,
+        schema: &str,
+    ) -> Result<Arc<Vec<FunctionSignatureInfo>>> {
+        if let Some(cached) = self.try_get_cached_functions(schema) {
+            return Ok(cached);
+        }
+
+        let functions = fetch_function_signatures(
+            &*self.db_service,
+            self.connection_id,
+            &self.database_name,
+            Some(schema),
+        )
+        .await?;
+
+        let arc = if let Ok(mut cache) = self.cache.lock() {
+            cache
+                .functions_by_schema
+                .insert(schema.to_string(), CacheEntry::new(functions));
+            Arc::clone(
+                &cache
+                    .functions_by_schema
+                    .get(schema)
+                    .expect("just inserted")
+                    .data,
+            )
+        } else {
+            Arc::new(functions)
         };
 
         Ok(arc)
@@ -539,176 +596,104 @@ fn build_schema_items(schemas: &[String], current_word: &str, range: Range) -> V
         .collect()
 }
 
-/// A built-in SQL function offered in expression contexts, with a human-readable
-/// signature shown as the completion detail.
-struct SqlFunction {
-    name: &'static str,
-    signature: &'static str,
-}
+/// Completion items shown when nothing has been typed yet. The dialect catalogs
+/// hold up to a couple of thousand functions, far more than a menu can show.
+const UNFILTERED_FUNCTION_LIMIT: usize = 200;
 
-/// Common cross-dialect SQL functions. Not exhaustive or dialect-specific, but
-/// covers the functions users reach for most often so completion can offer them
-/// with a signature hint alongside columns.
-const SQL_FUNCTIONS: &[SqlFunction] = &[
-    // Aggregates
-    SqlFunction {
-        name: "COUNT",
-        signature: "COUNT(expr)",
-    },
-    SqlFunction {
-        name: "SUM",
-        signature: "SUM(expr)",
-    },
-    SqlFunction {
-        name: "AVG",
-        signature: "AVG(expr)",
-    },
-    SqlFunction {
-        name: "MIN",
-        signature: "MIN(expr)",
-    },
-    SqlFunction {
-        name: "MAX",
-        signature: "MAX(expr)",
-    },
-    SqlFunction {
-        name: "ARRAY_AGG",
-        signature: "ARRAY_AGG(expr)",
-    },
-    SqlFunction {
-        name: "STRING_AGG",
-        signature: "STRING_AGG(expr, delimiter)",
-    },
-    // Conditional / null handling
-    SqlFunction {
-        name: "COALESCE",
-        signature: "COALESCE(value [, ...])",
-    },
-    SqlFunction {
-        name: "NULLIF",
-        signature: "NULLIF(value1, value2)",
-    },
-    SqlFunction {
-        name: "GREATEST",
-        signature: "GREATEST(value [, ...])",
-    },
-    SqlFunction {
-        name: "LEAST",
-        signature: "LEAST(value [, ...])",
-    },
-    SqlFunction {
-        name: "CAST",
-        signature: "CAST(expr AS type)",
-    },
-    // String
-    SqlFunction {
-        name: "UPPER",
-        signature: "UPPER(string)",
-    },
-    SqlFunction {
-        name: "LOWER",
-        signature: "LOWER(string)",
-    },
-    SqlFunction {
-        name: "LENGTH",
-        signature: "LENGTH(string)",
-    },
-    SqlFunction {
-        name: "TRIM",
-        signature: "TRIM(string)",
-    },
-    SqlFunction {
-        name: "SUBSTRING",
-        signature: "SUBSTRING(string FROM start FOR count)",
-    },
-    SqlFunction {
-        name: "REPLACE",
-        signature: "REPLACE(string, from, to)",
-    },
-    SqlFunction {
-        name: "CONCAT",
-        signature: "CONCAT(value [, ...])",
-    },
-    // Math
-    SqlFunction {
-        name: "ROUND",
-        signature: "ROUND(numeric [, decimals])",
-    },
-    SqlFunction {
-        name: "ABS",
-        signature: "ABS(numeric)",
-    },
-    SqlFunction {
-        name: "CEIL",
-        signature: "CEIL(numeric)",
-    },
-    SqlFunction {
-        name: "FLOOR",
-        signature: "FLOOR(numeric)",
-    },
-    // Date / time
-    SqlFunction {
-        name: "NOW",
-        signature: "NOW()",
-    },
-    SqlFunction {
-        name: "CURRENT_DATE",
-        signature: "CURRENT_DATE",
-    },
-    SqlFunction {
-        name: "CURRENT_TIMESTAMP",
-        signature: "CURRENT_TIMESTAMP",
-    },
-    SqlFunction {
-        name: "DATE_TRUNC",
-        signature: "DATE_TRUNC(field, source)",
-    },
-    SqlFunction {
-        name: "EXTRACT",
-        signature: "EXTRACT(field FROM source)",
-    },
-    // Window
-    SqlFunction {
-        name: "ROW_NUMBER",
-        signature: "ROW_NUMBER() OVER (...)",
-    },
-    SqlFunction {
-        name: "RANK",
-        signature: "RANK() OVER (...)",
-    },
-    SqlFunction {
-        name: "DENSE_RANK",
-        signature: "DENSE_RANK() OVER (...)",
-    },
-];
-
-/// Build completion items for built-in SQL functions whose name starts with
-/// `current_word`. Inserts `NAME()` so the parentheses are balanced.
-fn build_function_items(current_word: &str, range: Range) -> Vec<CompletionItem> {
+/// Build completion items for the dialect's built-in functions and the
+/// schema's user-defined functions whose name starts with `current_word`.
+///
+/// Inserts `NAME($0)` as a snippet so the parentheses are balanced and the
+/// cursor lands between them, where signature help takes over. Overloads
+/// collapse into one item per name.
+fn build_function_items(
+    driver: DatabaseType,
+    user_functions: &[FunctionSignatureInfo],
+    current_word: &str,
+    range: Range,
+) -> Vec<CompletionItem> {
     let needle = current_word.to_lowercase();
-    let mut filtered: Vec<&SqlFunction> = SQL_FUNCTIONS
-        .iter()
-        .filter(|function| function.name.to_lowercase().starts_with(&needle))
-        .collect();
-    filtered.sort_by_key(|function| function.name.len());
+    let matches = |name: &str| name.to_lowercase().starts_with(&needle);
 
-    filtered
-        .into_iter()
-        .map(|function| {
-            let insert_text = format!("{}()", function.name);
-            CompletionItem {
-                label: function.name.to_string(),
-                kind: Some(CompletionItemKind::FUNCTION),
-                text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
-                    range,
-                    insert_text.clone(),
-                ))),
-                detail: Some(function.signature.to_string()),
-                insert_text: Some(insert_text),
-                ..Default::default()
-            }
-        })
-        .collect()
+    let make_item = |name: &str,
+                     detail: String,
+                     documentation: Option<lsp_types::Documentation>,
+                     sort_prefix: &str| {
+        let insert_text = format!("{name}($0)");
+        CompletionItem {
+            label: name.to_string(),
+            kind: Some(CompletionItemKind::FUNCTION),
+            text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
+                range,
+                insert_text.clone(),
+            ))),
+            detail: Some(detail),
+            documentation,
+            insert_text: Some(insert_text),
+            insert_text_format: Some(InsertTextFormat::SNIPPET),
+            sort_text: Some(format!("{sort_prefix}{}", name.to_lowercase())),
+            ..Default::default()
+        }
+    };
+
+    let mut items: Vec<CompletionItem> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // User-defined functions rank first: they are what this schema offers
+    // beyond the dialect, and they are usually what the user is looking for.
+    for function in user_functions {
+        if !matches(&function.name) || !seen.insert(function.name.to_lowercase()) {
+            continue;
+        }
+        let overloads = user_functions
+            .iter()
+            .filter(|other| other.name.eq_ignore_ascii_case(&function.name))
+            .count();
+        let mut detail = format!("{}({})", function.name, function.parameters.join(", "));
+        if let Some(return_type) = function.return_type.as_deref().filter(|t| !t.is_empty()) {
+            detail.push_str(" -> ");
+            detail.push_str(return_type);
+        }
+        if overloads > 1 {
+            detail.push_str(&format!(" (+{} overloads)", overloads - 1));
+        }
+        let documentation = function
+            .comment
+            .as_deref()
+            .filter(|c| !c.is_empty())
+            .map(|comment| {
+                lsp_types::Documentation::MarkupContent(lsp_types::MarkupContent {
+                    kind: lsp_types::MarkupKind::Markdown,
+                    value: comment.to_string(),
+                })
+            });
+        items.push(make_item(&function.name, detail, documentation, "0"));
+    }
+
+    let mut builtins: Vec<&functions::FunctionGroup> = functions::function_groups(driver)
+        .iter()
+        .filter(|group| matches(group.name) && !seen.contains(&group.name.to_lowercase()))
+        .collect();
+    if needle.is_empty() {
+        builtins.sort_by_key(|group| (group.name.len(), group.name));
+        builtins.truncate(UNFILTERED_FUNCTION_LIMIT);
+    }
+    for group in builtins {
+        let Some(first) = group.overloads.first() else {
+            continue;
+        };
+        let mut detail = first.label();
+        if group.overloads.len() > 1 {
+            detail.push_str(&format!(" (+{} overloads)", group.overloads.len() - 1));
+        }
+        items.push(make_item(
+            group.name,
+            detail,
+            first.lsp_documentation(),
+            "1",
+        ));
+    }
+    items
 }
 
 /// A real table participating in a join, with its alias and column metadata,
@@ -960,7 +945,19 @@ impl CompletionProvider for SqlCompletionProvider {
                         ));
                         // Expression clauses also accept function calls, so offer
                         // built-in functions after the columns.
-                        items.extend(build_function_items(&context.current_word, range));
+                        let user_functions = provider
+                            .get_cached_functions(&provider.current_schema)
+                            .await
+                            .unwrap_or_else(|error| {
+                                tracing::warn!("Failed to fetch function signatures: {error}");
+                                Arc::new(Vec::new())
+                            });
+                        items.extend(build_function_items(
+                            provider.driver,
+                            &user_functions,
+                            &context.current_word,
+                            range,
+                        ));
                         items
                     }
                     CompletionPlan::SchemaTables { schema } => {
@@ -1198,6 +1195,7 @@ mod tests {
             is_dot_notation: true,
             dot_table_name: Some("sales".to_string()),
             cte_columns: Vec::new(),
+            enclosing_call: None,
         };
         let plan = plan_completion(&context, "public", &schemas(&["public", "sales"]), true);
         assert_eq!(plan, columns_plan("public", "shipments"));
@@ -1244,6 +1242,7 @@ mod tests {
             is_dot_notation: false,
             dot_table_name: None,
             cte_columns: Vec::new(),
+            enclosing_call: None,
         };
         let plan = plan_completion(&context, "public", &schemas(&["public", "sales"]), true);
         assert_eq!(
@@ -1345,6 +1344,7 @@ mod tests {
             is_dot_notation: false,
             dot_table_name: None,
             cte_columns: Vec::new(),
+            enclosing_call: None,
         };
         assert_eq!(
             plan_completion(&context, "public", &[], false),
@@ -1427,45 +1427,89 @@ mod tests {
 
     #[test]
     fn test_build_function_items_filter_and_signature() {
-        let items = build_function_items("co", dummy_range());
-        // COALESCE, CONCAT, COUNT all start with "co".
-        assert!(items.iter().any(|i| i.label == "COALESCE"));
-        assert!(items.iter().any(|i| i.label == "COUNT"));
-        assert!(
-            items
-                .iter()
-                .all(|i| i.kind == Some(CompletionItemKind::FUNCTION))
-        );
-        let coalesce = items
+        let items = build_function_items(DatabaseType::PostgreSQL, &[], "split_", dummy_range());
+        let split_part = items
             .iter()
-            .find(|i| i.label == "COALESCE")
-            .expect("COALESCE present");
-        assert!(
-            coalesce
-                .detail
-                .as_deref()
-                .unwrap_or_default()
-                .contains("COALESCE(")
+            .find(|item| item.label == "split_part")
+            .expect("split_part offered for postgres");
+        assert_eq!(split_part.kind, Some(CompletionItemKind::FUNCTION));
+        assert_eq!(
+            split_part.detail.as_deref(),
+            Some("split_part(text, text, integer) -> text")
         );
-        assert_eq!(coalesce.insert_text.as_deref(), Some("COALESCE()"));
-    }
-
-    #[test]
-    fn test_build_function_items_empty_word_lists_all() {
-        let items = build_function_items("", dummy_range());
-        assert!(items.iter().any(|i| i.label == "NOW"));
-        assert!(items.iter().any(|i| i.label == "COUNT"));
-        assert!(items.iter().any(|i| i.label == "ROW_NUMBER"));
-    }
-
-    #[test]
-    fn test_build_function_items_filter_excludes_non_matching() {
-        let items = build_function_items("now", dummy_range());
-        assert!(items.iter().any(|i| i.label == "NOW"));
+        assert_eq!(split_part.insert_text.as_deref(), Some("split_part($0)"));
+        assert_eq!(
+            split_part.insert_text_format,
+            Some(InsertTextFormat::SNIPPET)
+        );
+        assert!(split_part.documentation.is_some());
+        assert!(items.iter().all(|item| item.label.starts_with("split_")));
         assert!(
             items
                 .iter()
-                .all(|i| i.label.to_lowercase().starts_with("now"))
+                .all(|item| item.label.to_lowercase().starts_with("split_"))
+        );
+    }
+
+    #[test]
+    fn test_build_function_items_are_dialect_specific() {
+        let mysql = build_function_items(DatabaseType::MySQL, &[], "substring", dummy_range());
+        assert!(mysql.iter().any(|item| item.label == "SUBSTRING_INDEX"));
+        assert!(mysql.iter().all(|item| item.label != "split_part"));
+        let sqlite = build_function_items(DatabaseType::SQLite, &[], "split", dummy_range());
+        assert!(sqlite.is_empty());
+        let mssql = build_function_items(DatabaseType::MsSql, &[], "date", dummy_range());
+        assert!(mssql.iter().any(|item| item.label == "DATEDIFF"));
+        let clickhouse =
+            build_function_items(DatabaseType::ClickHouse, &[], "splitBy", dummy_range());
+        assert!(clickhouse.iter().any(|item| item.label == "splitByChar"));
+    }
+
+    #[test]
+    fn test_build_function_items_empty_word_is_capped_and_groups_overloads() {
+        let items = build_function_items(DatabaseType::PostgreSQL, &[], "", dummy_range());
+        assert!(!items.is_empty());
+        assert!(items.len() <= UNFILTERED_FUNCTION_LIMIT);
+        let labels: std::collections::HashSet<&str> =
+            items.iter().map(|item| item.label.as_str()).collect();
+        assert_eq!(labels.len(), items.len(), "one item per function name");
+
+        let round = build_function_items(DatabaseType::PostgreSQL, &[], "round", dummy_range());
+        let round = round
+            .iter()
+            .find(|item| item.label == "round")
+            .expect("round");
+        assert!(round.detail.as_deref().unwrap_or("").contains("overloads"));
+    }
+
+    #[test]
+    fn test_build_function_items_user_functions_rank_first() {
+        let udf = FunctionSignatureInfo {
+            schema: Some("public".into()),
+            name: "split_words".into(),
+            parameters: vec!["text text".into()],
+            return_type: Some("text[]".into()),
+            comment: Some("Splits on whitespace".into()),
+        };
+        let items = build_function_items(
+            DatabaseType::PostgreSQL,
+            std::slice::from_ref(&udf),
+            "split",
+            dummy_range(),
+        );
+        assert_eq!(items[0].label, "split_words");
+        assert_eq!(
+            items[0].detail.as_deref(),
+            Some("split_words(text text) -> text[]")
+        );
+        assert!(items[0].sort_text.as_deref().unwrap_or("").starts_with('0'));
+        assert!(items.iter().any(|item| item.label == "split_part"));
+        assert!(
+            items.iter().skip(1).all(|item| item
+                .sort_text
+                .as_deref()
+                .unwrap_or("")
+                .starts_with('1'))
         );
     }
 

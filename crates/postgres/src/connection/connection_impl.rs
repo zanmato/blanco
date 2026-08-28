@@ -1,7 +1,8 @@
 use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use blanco_core::{
-    ColumnInfo, ColumnType, Connection, ForeignKeyInfo, IndexInfo, QueryResult, RoutineKind,
+    ColumnInfo, ColumnType, Connection, ForeignKeyInfo, FunctionSignatureInfo, IndexInfo,
+    QueryResult, RoutineKind,
 };
 use futures::{Stream, StreamExt};
 use sqlx::{Column, Row, TypeInfo};
@@ -300,6 +301,50 @@ impl Connection for PostgresConnection {
             .rows
             .into_iter()
             .filter_map(|r| r.into_iter().next().flatten())
+            .collect())
+    }
+
+    async fn list_function_signatures(
+        &self,
+        schema: Option<&str>,
+    ) -> Result<Vec<FunctionSignatureInfo>> {
+        let schema_filter = schema.unwrap_or("public");
+        // Aggregates and window functions are callable like plain functions,
+        // so they belong in completion too.
+        let query = "
+            SELECT p.proname,
+                   pg_get_function_arguments(p.oid),
+                   pg_get_function_result(p.oid),
+                   obj_description(p.oid, 'pg_proc')
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = $1 AND p.prokind IN ('f', 'a', 'w')
+            ORDER BY p.proname, p.pronargs
+        ";
+        let result = self
+            .execute_query(
+                query,
+                self.initial_database.as_deref(),
+                Some(&[schema_filter.to_string()]),
+            )
+            .await?;
+        Ok(result
+            .rows
+            .into_iter()
+            .filter_map(|row| {
+                let mut cells = row.into_iter();
+                let name = cells.next().flatten()?;
+                let arguments = cells.next().flatten().unwrap_or_default();
+                let return_type = cells.next().flatten();
+                let comment = cells.next().flatten();
+                Some(FunctionSignatureInfo {
+                    schema: Some(schema_filter.to_string()),
+                    name,
+                    parameters: split_function_arguments(&arguments),
+                    return_type,
+                    comment,
+                })
+            })
             .collect())
     }
 
@@ -995,5 +1040,51 @@ mod tests {
         assert!(!blanco_core::sqlx_connection_lost(&sqlx_err));
         let wrapped = blanco_core::tag_sqlx(sqlx_err).context("PostgreSQL query failed");
         assert!(!blanco_core::is_connection_lost(&wrapped));
+    }
+}
+
+/// Split the output of `pg_get_function_arguments` on top-level commas and
+/// drop `OUT` parameters, which are not passed by the caller.
+fn split_function_arguments(arguments: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut current = String::new();
+    let mut in_quotes = false;
+    for character in arguments.chars() {
+        match character {
+            '"' => in_quotes = !in_quotes,
+            '(' | '[' if !in_quotes => depth += 1,
+            ')' | ']' if !in_quotes => depth = depth.saturating_sub(1),
+            ',' if !in_quotes && depth == 0 => {
+                parts.push(std::mem::take(&mut current));
+                continue;
+            }
+            _ => {}
+        }
+        current.push(character);
+    }
+    parts.push(current);
+    parts
+        .into_iter()
+        .map(|part| part.trim().to_string())
+        .filter(|part| !part.is_empty() && !part.starts_with("OUT "))
+        .collect()
+}
+
+#[cfg(test)]
+mod function_argument_tests {
+    use super::split_function_arguments;
+
+    #[test]
+    fn splits_top_level_commas_and_drops_out_parameters() {
+        assert_eq!(
+            split_function_arguments("value text, delimiter text, OUT total integer"),
+            vec!["value text", "delimiter text"]
+        );
+        assert_eq!(
+            split_function_arguments("VARIADIC \"any\", x numeric(10,2) DEFAULT 1"),
+            vec!["VARIADIC \"any\"", "x numeric(10,2) DEFAULT 1"]
+        );
+        assert!(split_function_arguments("").is_empty());
     }
 }

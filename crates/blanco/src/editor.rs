@@ -45,7 +45,9 @@ use crate::result_ext::ResultExt;
 use crate::results_panel::ResultsPanel;
 use crate::script_completion::ScriptCompletionProvider;
 use crate::settings::SettingsView;
-use crate::sql::{SqlCompletionProvider, SqlSelectionRangeProvider, SqruffService};
+use crate::sql::{
+    SqlCompletionProvider, SqlSelectionRangeProvider, SqlSignatureHelpProvider, SqruffService,
+};
 use app_database::QueryTabData;
 use app_database::{AppDatabase, EnvironmentType};
 use blanco_ui::SqlView;
@@ -704,6 +706,13 @@ impl EditorPanel {
                     .show_whitespaces(show_whitespace);
 
                 if supports_sql {
+                    let signature_help_provider: Rc<
+                        dyn gpui_component::input::SignatureHelpProvider,
+                    > = Rc::new(SqlSignatureHelpProvider::new(
+                        sql_completion_provider.clone(),
+                    ));
+                    editor.lsp_mut().signature_help_provider = Some(signature_help_provider);
+
                     let completion_provider: Rc<dyn gpui_component::input::CompletionProvider> =
                         Rc::new(sql_completion_provider);
                     editor.lsp_mut().completion_provider = Some(completion_provider);
