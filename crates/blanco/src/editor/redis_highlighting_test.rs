@@ -22,8 +22,8 @@ async fn redis_tab_renders_with_highlighting(cx: &mut TestAppContext) {
 
     harness.editor_panel.read_with(&cx, |panel, cx| {
         let tab = panel.active_query_tab().expect("redis tab should exist");
-        assert_eq!(tab._db_type, DatabaseType::Redis);
-        assert_eq!(tab._db_type.editor_language(), "redis");
+        assert_eq!(tab.context.db_type, DatabaseType::Redis);
+        assert_eq!(tab.context.db_type.editor_language(), "redis");
         let text = tab.editor.read(cx).text().to_string();
         assert!(text.contains("CONFIG GET maxmemory"));
         // Redis tabs must not get the SQL completion provider.

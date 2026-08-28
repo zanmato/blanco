@@ -11,6 +11,7 @@
 //!   5. opens a tab bound to it and asserts `SELECT 1` returns the value `1`.
 #![allow(clippy::print_stderr)]
 
+use blanco_core::ConnectionContext;
 use std::env;
 
 use database::{DatabaseService, DatabaseType};
@@ -414,15 +415,21 @@ async fn run_driver_case(
     panel.update_in(cx, |panel, window, cx| {
         let params = TabCreationParams {
             title: case.name.into(),
+
             content: None,
+
             db_id: Some(connection_id),
+
             last_run_at: None,
-            connection_id,
-            db_type: case.db_type,
-            connection_name: Some(case.name.into()),
-            database_name: case.database.clone(),
-            schema_name: case.schema_name.map(|s| s.to_string()),
-            environment_type: None,
+
+            context: ConnectionContext {
+                connection_id,
+                db_type: case.db_type,
+                connection_name: case.name.into(),
+                database_name: case.database.clone(),
+                schema_name: case.schema_name.map(|s| s.to_string()),
+                environment_type: None,
+            },
         };
         panel.create_and_add_tab_with_connection(window, params, cx);
     });
@@ -511,15 +518,21 @@ async fn test_sqlite_connect_and_query(cx: &mut TestAppContext) {
     panel.update_in(&mut cx, |panel, window, cx| {
         let params = TabCreationParams {
             title: "it-sqlite".into(),
+
             content: None,
+
             db_id: Some(connection_id),
+
             last_run_at: None,
-            connection_id,
-            db_type: DatabaseType::SQLite,
-            connection_name: Some("it-sqlite".into()),
-            database_name: "main".into(),
-            schema_name: None,
-            environment_type: None,
+
+            context: ConnectionContext {
+                connection_id,
+                db_type: DatabaseType::SQLite,
+                connection_name: "it-sqlite".into(),
+                database_name: "main".into(),
+                schema_name: None,
+                environment_type: None,
+            },
         };
         panel.create_and_add_tab_with_connection(window, params, cx);
     });

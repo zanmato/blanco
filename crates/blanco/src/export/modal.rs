@@ -1,3 +1,4 @@
+use blanco_core::ConnectionContext;
 use chrono::Local;
 use database::DatabaseService;
 use gpui::{
@@ -57,11 +58,8 @@ pub struct ExportOptions {}
 
 pub struct ExportModal {
     focus_handle: FocusHandle,
-    connection_id: i64,
-    database_name: String,
-    schema_name: Option<String>,
+    context: ConnectionContext,
     table_name: String,
-    db_type: database::DatabaseType,
     format_select: Entity<SelectState<Vec<String>>>,
     directory_input: Entity<InputState>,
     filename_input: Entity<InputState>,
@@ -77,11 +75,8 @@ pub struct ExportModal {
 
 impl ExportModal {
     pub fn new(
-        connection_id: i64,
-        database_name: String,
-        schema_name: Option<String>,
+        context: ConnectionContext,
         table_name: String,
-        db_type: database::DatabaseType,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -118,11 +113,8 @@ impl ExportModal {
 
         Self {
             focus_handle: cx.focus_handle(),
-            connection_id,
-            database_name,
-            schema_name,
+            context,
             table_name,
-            db_type,
             format_select,
             directory_input,
             filename_input,
@@ -222,11 +214,11 @@ impl ExportModal {
                 self.exported_rows = 0;
                 cx.notify();
 
-                let connection_id = self.connection_id;
-                let database_name = self.database_name.clone();
-                let schema_name = self.schema_name.clone();
+                let connection_id = self.context.connection_id;
+                let database_name = self.context.database_name.clone();
+                let schema_name = self.context.schema_name.clone();
                 let table_name_param = self.table_name.clone();
-                let db_type = self.db_type;
+                let db_type = self.context.db_type;
 
                 let table_name_for_query = if let Some(schema) = &schema_name {
                     format!("{}.{}", schema, table_name_param)

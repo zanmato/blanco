@@ -1,3 +1,4 @@
+use blanco_core::ConnectionContext;
 use database::{ConnectionConfig, DatabaseService};
 use gpui::{AppContext, TestAppContext, VisualTestContext};
 use gpui_component::Root;
@@ -117,15 +118,21 @@ impl TestHarness {
 
                 let params = TabCreationParams {
                     title: "Test Query".into(),
+
                     content: None,
+
                     db_id: None,
+
                     last_run_at: None,
-                    connection_id,
-                    db_type,
-                    connection_name: Some("test".into()),
-                    database_name: "main".into(),
-                    schema_name: None,
-                    environment_type,
+
+                    context: ConnectionContext {
+                        connection_id,
+                        db_type,
+                        connection_name: "test".into(),
+                        database_name: "main".into(),
+                        schema_name: None,
+                        environment_type,
+                    },
                 };
                 panel.update(cx, |panel: &mut EditorPanel, cx| {
                     panel.create_and_add_tab_with_connection(window, params, cx);
@@ -152,15 +159,21 @@ impl TestHarness {
     pub fn add_script_tab(&self, content: Option<&str>, cx: &mut VisualTestContext) {
         let params = TabCreationParams {
             title: "Test Script".into(),
+
             content: content.map(str::to_string),
+
             db_id: None,
+
             last_run_at: None,
-            connection_id: self.connection_id,
-            db_type: self.db_type,
-            connection_name: Some("test".into()),
-            database_name: "main".into(),
-            schema_name: None,
-            environment_type: None,
+
+            context: ConnectionContext {
+                connection_id: self.connection_id,
+                db_type: self.db_type,
+                connection_name: "test".into(),
+                database_name: "main".into(),
+                schema_name: None,
+                environment_type: None,
+            },
         };
         self.editor_panel.update_in(cx, |panel, window, cx| {
             panel.create_and_add_script_tab(window, params, cx);
@@ -233,15 +246,21 @@ impl FullAppHarness {
 
                 let params = TabCreationParams {
                     title: "Test Query".into(),
+
                     content: None,
+
                     db_id: None,
+
                     last_run_at: None,
-                    connection_id,
-                    db_type: database::DatabaseType::SQLite,
-                    connection_name: Some("test".into()),
-                    database_name: "main".into(),
-                    schema_name: None,
-                    environment_type: None,
+
+                    context: ConnectionContext {
+                        connection_id,
+                        db_type: database::DatabaseType::SQLite,
+                        connection_name: "test".into(),
+                        database_name: "main".into(),
+                        schema_name: None,
+                        environment_type: None,
+                    },
                 };
                 blanco_app.update(cx, |app, cx| {
                     app.editor_panel().clone().update(cx, |panel, cx| {

@@ -1,3 +1,4 @@
+use blanco_core::ConnectionContext;
 use gpui::{
     App, Entity, InteractiveElement, ParentElement, SharedString, StatefulInteractiveElement as _,
     Styled, Window, div, prelude::FluentBuilder, px, rems,
@@ -319,12 +320,14 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                         window.listener_for(&self.parent, move |_this, _event, window, cx| {
                             window.dispatch_action(
                                 Box::new(OpenSchemaGraph {
-                                    connection_id,
-                                    connection_name: connection_name_for_graph.clone(),
-                                    db_type,
-                                    database_name: database_name_for_graph.clone(),
-                                    schema_name: None,
-                                    environment_type,
+                                    context: ConnectionContext {
+                                        connection_id,
+                                        connection_name: connection_name_for_graph.clone(),
+                                        db_type,
+                                        database_name: database_name_for_graph.clone(),
+                                        schema_name: None,
+                                        environment_type,
+                                    },
                                 }),
                                 cx,
                             );
@@ -352,14 +355,18 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                 // new connection-scoped command tab.
                 if metadata.db_type.inspects_objects() {
                     let action = CreateNewQueryTab {
-                        connection_id: metadata.connection_id,
-                        connection_name: metadata.connection_name.clone(),
-                        db_type: metadata.db_type,
-                        database_name: metadata.database_name.clone().unwrap_or_default(),
-                        schema_name: metadata.schema_name.clone(),
                         table_name: None,
-                        environment_type: metadata.environment_type,
+
                         inspect_key: false,
+
+                        context: ConnectionContext {
+                            connection_id: metadata.connection_id,
+                            connection_name: metadata.connection_name.clone(),
+                            db_type: metadata.db_type,
+                            database_name: metadata.database_name.clone().unwrap_or_default(),
+                            schema_name: metadata.schema_name.clone(),
+                            environment_type: metadata.environment_type,
+                        },
                     };
                     menu.item(
                         PopupMenuItem::new("New Query").on_click(window.listener_for(
@@ -379,22 +386,14 @@ impl TreeDelegate for ConnectionsTreeDelegate {
             | TreeItemKind::View
             | TreeItemKind::MaterializedView => {
                 if let Some(action) = metadata.create_new_query_tab_action() {
-                    let connection_id = metadata.connection_id;
-                    let connection_name = metadata.connection_name.clone();
-                    let database_name = metadata.database_name.clone().unwrap_or_default();
-                    let schema_name = metadata.schema_name.clone();
+                    let context = action.context.clone();
                     let table_name = metadata.table_name.clone();
-                    let db_type = metadata.db_type;
-                    let environment_type = metadata.environment_type;
+                    let db_type = context.db_type;
 
-                    let connection_name_for_structure = connection_name.clone();
-                    let database_name_for_structure = database_name.clone();
-                    let schema_name_for_structure = schema_name.clone();
+                    let context_for_export = context.clone();
+                    let context_for_structure = context.clone();
                     let table_name_for_structure = table_name.clone().unwrap_or_default();
-
-                    let connection_name_for_import = connection_name.clone();
-                    let database_name_for_import = database_name.clone();
-                    let schema_name_for_import = schema_name.clone();
+                    let context_for_import = context.clone();
                     let table_name_for_import = table_name.clone();
 
                     // Export/Import/Structure are relational-table operations
@@ -449,12 +448,8 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                         menu = menu.item(PopupMenuItem::new("Export Data").on_click(
                             window.listener_for(&self.parent, move |this, _event, window, cx| {
                                 this.export_table_data(
-                                    connection_id,
-                                    connection_name.clone(),
-                                    database_name.clone(),
-                                    schema_name.clone(),
+                                    context_for_export.clone(),
                                     table_name.clone(),
-                                    db_type,
                                     window,
                                     cx,
                                 );
@@ -466,12 +461,8 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                         menu = menu.item(PopupMenuItem::new("Import Data").on_click(
                             window.listener_for(&self.parent, move |this, _event, window, cx| {
                                 this.import_table_data(
-                                    connection_id,
-                                    connection_name_for_import.clone(),
-                                    database_name_for_import.clone(),
-                                    schema_name_for_import.clone(),
+                                    context_for_import.clone(),
                                     table_name_for_import.clone(),
-                                    db_type,
                                     window,
                                     cx,
                                 );
@@ -495,15 +486,8 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                                         move |_this, _event, window, cx| {
                                             window.dispatch_action(
                                                 Box::new(OpenTableStructure {
-                                                    connection_id,
-                                                    connection_name: connection_name_for_structure
-                                                        .clone(),
-                                                    db_type,
-                                                    database_name: database_name_for_structure
-                                                        .clone(),
-                                                    schema_name: schema_name_for_structure.clone(),
                                                     table_name: table_name_for_structure.clone(),
-                                                    environment_type,
+                                                    context: context_for_structure.clone(),
                                                 }),
                                                 cx,
                                             );
@@ -553,24 +537,14 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                     }
 
                     if matches!(metadata.kind, TreeItemKind::Schema) {
-                        let connection_name_for_graph = metadata.connection_name.clone();
-                        let database_name_for_graph =
-                            metadata.database_name.clone().unwrap_or_default();
-                        let schema_name_for_graph = metadata.schema_name.clone();
-                        let environment_type_for_graph = metadata.environment_type;
-
+                        let context_for_graph = context;
                         menu = menu.separator().item(
                             PopupMenuItem::new("View Schema Graph").on_click(window.listener_for(
                                 &self.parent,
                                 move |_this, _event, window, cx| {
                                     window.dispatch_action(
                                         Box::new(OpenSchemaGraph {
-                                            connection_id,
-                                            connection_name: connection_name_for_graph.clone(),
-                                            db_type,
-                                            database_name: database_name_for_graph.clone(),
-                                            schema_name: schema_name_for_graph.clone(),
-                                            environment_type: environment_type_for_graph,
+                                            context: context_for_graph.clone(),
                                         }),
                                         cx,
                                     );

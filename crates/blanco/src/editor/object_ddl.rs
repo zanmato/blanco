@@ -6,18 +6,12 @@ use gpui::{
 };
 use gpui_component::{ActiveTheme, v_flex};
 
-use app_database::EnvironmentType;
+use blanco_core::ConnectionContext;
 
 pub struct ObjectDdlTab {
     pub title: String,
     pub kind: RoutineKind,
-    pub _connection_id: i64,
-    pub _db_type: database::DatabaseType,
-    pub _connection_name: Option<String>,
-    pub _database_name: String,
-    pub _schema_name: Option<String>,
-    pub _object_name: String,
-    pub _environment_type: Option<EnvironmentType>,
+    pub context: ConnectionContext,
     sql_view: Entity<SqlView>,
     focus_handle: FocusHandle,
     loading: bool,
@@ -25,16 +19,10 @@ pub struct ObjectDdlTab {
 }
 
 impl ObjectDdlTab {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         kind: RoutineKind,
-        connection_id: i64,
-        db_type: database::DatabaseType,
-        connection_name: Option<String>,
-        database_name: String,
-        schema_name: Option<String>,
+        context: ConnectionContext,
         object_name: String,
-        environment_type: Option<EnvironmentType>,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -44,13 +32,7 @@ impl ObjectDdlTab {
         Self {
             title,
             kind,
-            _connection_id: connection_id,
-            _db_type: db_type,
-            _connection_name: connection_name,
-            _database_name: database_name,
-            _schema_name: schema_name,
-            _object_name: object_name,
-            _environment_type: environment_type,
+            context,
             sql_view,
             focus_handle: cx.focus_handle(),
             loading: true,

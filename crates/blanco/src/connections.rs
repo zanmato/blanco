@@ -11,6 +11,7 @@ use crate::export::modal::ExportModal;
 use crate::import::modal::ImportModal;
 use crate::result_ext::ResultExt;
 use app_database::{AppDatabase, ConnectionData, EnvironmentType};
+use blanco_core::ConnectionContext;
 use blanco_core::DatabaseService as DatabaseServiceTrait;
 use blanco_ui::IconName;
 use blanco_ui::tree::{Tree, TreeItem, TreeState};
@@ -150,26 +151,32 @@ impl CreateNewQueryTabParams for TreeItemMetadata {
             | TreeItemKind::Table
             | TreeItemKind::View
             | TreeItemKind::MaterializedView => Some(CreateNewQueryTab {
-                connection_id: self.connection_id,
-                connection_name: self.connection_name.clone(),
-                db_type: self.db_type,
-                database_name: self.database_name.clone().unwrap_or_default(),
-                schema_name: self.schema_name.clone(),
                 table_name: self.table_name.clone(),
-                environment_type: self.environment_type,
+
                 inspect_key: false,
+
+                context: ConnectionContext {
+                    connection_id: self.connection_id,
+                    connection_name: self.connection_name.clone(),
+                    db_type: self.db_type,
+                    database_name: self.database_name.clone().unwrap_or_default(),
+                    schema_name: self.schema_name.clone(),
+                    environment_type: self.environment_type,
+                },
             }),
         }
     }
 
     fn create_new_script_tab_action(&self) -> CreateNewScriptTab {
         CreateNewScriptTab {
-            connection_id: self.connection_id,
-            connection_name: self.connection_name.clone(),
-            db_type: self.db_type,
-            database_name: self.database_name.clone().unwrap_or_default(),
-            schema_name: self.schema_name.clone(),
-            environment_type: self.environment_type,
+            context: ConnectionContext {
+                connection_id: self.connection_id,
+                connection_name: self.connection_name.clone(),
+                db_type: self.db_type,
+                database_name: self.database_name.clone().unwrap_or_default(),
+                schema_name: self.schema_name.clone(),
+                environment_type: self.environment_type,
+            },
         }
     }
 }
@@ -466,13 +473,20 @@ impl ConnectionsPanel {
                         window.dispatch_action(
                             Box::new(crate::app::OpenObjectDdl {
                                 kind: routine_kind,
-                                connection_id: metadata.connection_id,
-                                connection_name: metadata.connection_name.clone(),
-                                db_type: metadata.db_type,
-                                database_name: metadata.database_name.clone().unwrap_or_default(),
-                                schema_name: metadata.schema_name.clone(),
+
                                 object_name: name,
-                                environment_type: metadata.environment_type,
+
+                                context: ConnectionContext {
+                                    connection_id: metadata.connection_id,
+                                    connection_name: metadata.connection_name.clone(),
+                                    db_type: metadata.db_type,
+                                    database_name: metadata
+                                        .database_name
+                                        .clone()
+                                        .unwrap_or_default(),
+                                    schema_name: metadata.schema_name.clone(),
+                                    environment_type: metadata.environment_type,
+                                },
                             }),
                             cx,
                         );
@@ -882,31 +896,16 @@ impl ConnectionsPanel {
             .child(Input::new(&self.filter_input).small())
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn export_table_data(
         &mut self,
-        connection_id: i64,
-        _connection_name: String,
-        database_name: String,
-        schema_name: Option<String>,
+        context: ConnectionContext,
         table_name: Option<String>,
-        db_type: database::DatabaseType,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if let Some(table_name) = table_name {
             // Create the export modal content
-            let modal_content = cx.new(|cx| {
-                ExportModal::new(
-                    connection_id,
-                    database_name,
-                    schema_name,
-                    table_name,
-                    db_type,
-                    window,
-                    cx,
-                )
-            });
+            let modal_content = cx.new(|cx| ExportModal::new(context, table_name, window, cx));
 
             window.open_dialog(cx, move |dialog, _window, cx| {
                 let is_exporting = modal_content.read(cx).is_exporting();
@@ -942,15 +941,10 @@ impl ConnectionsPanel {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn import_table_data(
         &mut self,
-        connection_id: i64,
-        _connection_name: String,
-        database_name: String,
-        schema_name: Option<String>,
+        context: ConnectionContext,
         table_name: Option<String>,
-        db_type: database::DatabaseType,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -959,17 +953,7 @@ impl ConnectionsPanel {
             return;
         };
 
-        let modal_content = cx.new(|cx| {
-            ImportModal::new(
-                connection_id,
-                database_name,
-                schema_name,
-                table_name,
-                db_type,
-                window,
-                cx,
-            )
-        });
+        let modal_content = cx.new(|cx| ImportModal::new(context, table_name, window, cx));
 
         window.open_dialog(cx, move |dialog, _window, _cx| {
             dialog

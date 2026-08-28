@@ -8,6 +8,7 @@ publish.workspace = true
 path = "src/app_database.rs"
 
 [dependencies]
+blanco-core = { path = "../blanco-core" }
 database = { path = "../database" }
 gpui = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }

@@ -17,11 +17,11 @@ mod table_structure;
 mod tabs;
 
 pub use tabs::{
-    ObjectDdlParams, QueryTab, ScriptTab, SettingsTab, TabCreationParams, TabType,
-    TableStructureParams,
+    ConnectionBackedTab, ObjectDdlParams, QueryTab, ScriptTab, SettingsTab, TabCreationParams,
+    TabType, TableStructureParams,
 };
 
-use blanco_core::{ColumnInfo, IndexInfo};
+use blanco_core::ConnectionContext;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, KeybindingKeystroke, Keystroke,
     ParentElement as _, Task, WeakEntity, Window,
@@ -39,7 +39,7 @@ use tracing::{debug, error, info};
 use self::object_ddl::ObjectDdlTab;
 use self::snippet_editor::SnippetEditor;
 use self::table_structure::TableStructureTab;
-use crate::agent::{ChatPanel, ChatProviderResolver, ChatSessionContext, TabLanguage};
+use crate::agent::{ChatPanel, ChatProviderResolver, ChatSessionContext};
 use crate::app_settings::AppSettings;
 use crate::result_ext::ResultExt;
 use crate::results_panel::ResultsPanel;
@@ -140,26 +140,20 @@ fn keystroke_hint(action: &str, cx: &App) -> KeybindingKeystroke {
 impl EditorPanel {
     /// The results panel of the currently active query tab, if any.
     pub fn active_results_panel(&self) -> Option<Entity<ResultsPanel>> {
-        match self.tabs.get(self.active_tab_ix) {
-            Some(TabType::Query(tab)) => Some(tab.results_panel.clone()),
-            _ => None,
-        }
+        self.tabs
+            .get(self.active_tab_ix)
+            .and_then(TabType::query)
+            .map(|tab| tab.results_panel.clone())
     }
 
     #[cfg(test)]
     pub fn active_query_tab(&self) -> Option<&QueryTab> {
-        match self.tabs.get(self.active_tab_ix) {
-            Some(TabType::Query(tab)) => Some(tab),
-            _ => None,
-        }
+        self.tabs.get(self.active_tab_ix).and_then(TabType::query)
     }
 
     #[cfg(test)]
     pub fn active_script_tab(&self) -> Option<&ScriptTab> {
-        match self.tabs.get(self.active_tab_ix) {
-            Some(TabType::Script(tab)) => Some(tab),
-            _ => None,
-        }
+        self.tabs.get(self.active_tab_ix).and_then(TabType::script)
     }
 
     #[cfg(test)]
@@ -172,11 +166,8 @@ impl EditorPanel {
     fn connection_backed_editors(&self) -> Vec<Entity<EditorState>> {
         self.tabs
             .iter()
-            .filter_map(|tab| match tab {
-                TabType::Query(query_tab) => Some(query_tab.editor.clone()),
-                TabType::Script(script_tab) => Some(script_tab.editor.clone()),
-                _ => None,
-            })
+            .filter_map(TabType::connection_tab)
+            .map(|tab| tab.editor.clone())
             .collect()
     }
 
@@ -205,11 +196,7 @@ impl EditorPanel {
     fn close_tab(&mut self, tab_index: usize, cx: &mut Context<Self>) {
         if tab_index < self.tabs.len() && self.tabs.len() > 1 {
             // Get the db_id before removing the tab
-            let db_id = match self.tabs.get(tab_index) {
-                Some(TabType::Query(query_tab)) => query_tab.db_id,
-                Some(TabType::Script(script_tab)) => script_tab.db_id,
-                _ => None,
-            };
+            let db_id = self.tabs.get(tab_index).and_then(TabType::db_id);
 
             // Remove tab from UI
             self.tabs.remove(tab_index);
@@ -239,17 +226,14 @@ impl EditorPanel {
     }
 
     pub fn rename_tab(&mut self, tab_index: usize, new_name: &str, cx: &mut Context<Self>) {
-        let renamed = match self.tabs.get_mut(tab_index) {
-            Some(TabType::Query(query_tab)) => {
-                let old_name = std::mem::replace(&mut query_tab.title, new_name.to_string());
-                Some((old_name, query_tab.db_id))
-            }
-            Some(TabType::Script(script_tab)) => {
-                let old_name = std::mem::replace(&mut script_tab.title, new_name.to_string());
-                Some((old_name, script_tab.db_id))
-            }
-            _ => None,
-        };
+        let renamed = self
+            .tabs
+            .get_mut(tab_index)
+            .and_then(TabType::connection_tab_mut)
+            .map(|tab| {
+                let old_name = std::mem::replace(&mut tab.title, new_name.to_string());
+                (old_name, tab.db_id)
+            });
 
         if let Some((old_name, db_id)) = renamed {
             // Update database if this tab has a db_id
@@ -373,16 +357,11 @@ impl EditorPanel {
         params: TableStructureParams,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> WeakEntity<TableStructureTab> {
         let tab = cx.new(|cx| {
             TableStructureTab::new(
-                params.connection_id,
-                params.db_type,
-                Some(params.connection_name),
-                params.database_name,
-                params.schema_name,
+                params.context,
                 params.table_name,
-                params.environment_type,
                 Vec::new(),
                 Vec::new(),
                 window,
@@ -390,11 +369,12 @@ impl EditorPanel {
             )
         });
 
+        let weak = tab.downgrade();
         self.tabs.push(TabType::TableStructure(tab));
         self.active_tab_ix = self.tabs.len() - 1;
         self.scroll_tabbar_to_the_end(window, cx);
-
         cx.notify();
+        weak
     }
 
     pub fn create_object_ddl_tab(
@@ -404,18 +384,7 @@ impl EditorPanel {
         cx: &mut Context<Self>,
     ) -> WeakEntity<ObjectDdlTab> {
         let tab = cx.new(|cx| {
-            ObjectDdlTab::new(
-                params.kind,
-                params.connection_id,
-                params.db_type,
-                Some(params.connection_name),
-                params.database_name,
-                params.schema_name,
-                params.object_name,
-                params.environment_type,
-                window,
-                cx,
-            )
+            ObjectDdlTab::new(params.kind, params.context, params.object_name, window, cx)
         });
         let weak = tab.downgrade();
         self.tabs.push(TabType::ObjectDdl(tab));
@@ -425,86 +394,24 @@ impl EditorPanel {
         weak
     }
 
-    pub fn update_last_table_structure_tab(
-        &mut self,
-        columns: Vec<ColumnInfo>,
-        indexes: Vec<IndexInfo>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(TabType::TableStructure(tab)) = self.tabs.last_mut() {
-            tab.update(cx, |tab, cx| {
-                tab.set_columns(columns, window, cx);
-                tab.set_indexes(indexes, window, cx);
-            });
-        }
-    }
-
     pub fn create_schema_graph_tab(
         &mut self,
         params: schema_graph::SchemaGraphParams,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
-        let tab = cx.new(|cx| {
-            schema_graph::SchemaGraphTab::new(
-                params.connection_id,
-                params.db_type,
-                Some(params.connection_name),
-                params.database_name,
-                params.schema_name,
-                params.environment_type,
-                window,
-                cx,
-            )
-        });
-
+    ) -> WeakEntity<schema_graph::SchemaGraphTab> {
+        let tab = cx.new(|cx| schema_graph::SchemaGraphTab::new(params.context, window, cx));
+        let weak = tab.downgrade();
         self.tabs.push(TabType::SchemaGraph(tab));
         self.active_tab_ix = self.tabs.len() - 1;
         self.scroll_tabbar_to_the_end(window, cx);
         cx.notify();
-    }
-
-    pub fn update_last_schema_graph_tab(
-        &mut self,
-        tables: Vec<blanco_core::connection_trait::TableSchemaInfo>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(TabType::SchemaGraph(tab)) = self.tabs.last_mut() {
-            tab.update(cx, |tab, cx| {
-                tab.update_with_schema(tables, window, cx);
-            });
-        }
-    }
-
-    pub fn set_schema_graph_error(
-        &mut self,
-        error: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(TabType::SchemaGraph(tab)) = self.tabs.last_mut() {
-            tab.update(cx, |tab, cx| {
-                tab.set_error(error, window, cx);
-            });
-        }
+        weak
     }
 
     /// Titles of the open tabs in display order, for the command palette.
     pub fn tab_titles(&self, cx: &App) -> Vec<String> {
-        self.tabs
-            .iter()
-            .map(|tab| match tab {
-                TabType::Query(query_tab) => query_tab.title.clone(),
-                TabType::Script(script_tab) => script_tab.title.clone(),
-                TabType::Settings(settings_tab) => settings_tab.title.clone(),
-                TabType::Snippet(snippet_editor) => snippet_editor.read(cx).get_title(),
-                TabType::TableStructure(tab) => tab.read(cx).title.clone(),
-                TabType::ObjectDdl(tab) => tab.read(cx).title.clone(),
-                TabType::SchemaGraph(tab) => tab.read(cx).title.clone(),
-            })
-            .collect()
+        self.tabs.iter().map(|tab| tab.title(cx)).collect()
     }
 
     pub fn activate_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -631,15 +538,17 @@ impl EditorPanel {
                     content: Some(tab_content),
                     db_id: tab_db_id,
                     last_run_at: tab_data.last_run_at,
-                    connection_id: _connection_id,
-                    db_type: tab_db_type,
-                    connection_name: tab_data.connection_name.clone(),
-                    database_name: tab_data
-                        .database_name
-                        .clone()
-                        .unwrap_or_else(|| "default".to_string()),
-                    schema_name: None, // Schema not yet persisted in query tabs
-                    environment_type: tab_data.environment_type,
+                    context: ConnectionContext {
+                        connection_id: _connection_id,
+                        db_type: tab_db_type,
+                        connection_name: tab_data.connection_name.clone().unwrap_or_default(),
+                        database_name: tab_data
+                            .database_name
+                            .clone()
+                            .unwrap_or_else(|| "default".to_string()),
+                        schema_name: tab_data.schema_name.clone(),
+                        environment_type: tab_data.environment_type,
+                    },
                 };
                 if tab_data.tab_kind == app_database::EditorKind::Script {
                     self.create_and_add_script_tab(window, params, cx);
@@ -672,16 +581,16 @@ impl EditorPanel {
         let db_service: Arc<dyn DatabaseServiceTrait> =
             Arc::new(DatabaseService::global(cx).clone());
         let sql_completion_provider = SqlCompletionProvider::new(
-            params.connection_id,
-            params.database_name.clone(),
-            params.schema_name.clone(),
-            params.db_type,
+            params.context.connection_id,
+            params.context.database_name.clone(),
+            params.context.schema_name.clone(),
+            params.context.db_type,
             db_service,
         );
 
         // SQL completions and statement-based selection ranges only make sense
         // for SQL backends. Line-oriented backends (Redis) get neither.
-        let supports_sql = params.db_type.supports_sql();
+        let supports_sql = params.context.db_type.supports_sql();
 
         let editor = cx.new({
             let sql_completion_provider = sql_completion_provider.clone();
@@ -695,7 +604,7 @@ impl EditorPanel {
                 let tab_size = editor_settings.tab_size;
 
                 let mut editor = EditorState::new(window, cx)
-                    .language(params.db_type.editor_language().to_string())
+                    .language(params.context.db_type.editor_language().to_string())
                     .line_number(true)
                     .folding(folding)
                     .tab_size(TabSize {
@@ -723,7 +632,7 @@ impl EditorPanel {
                         dyn gpui_component::input::SelectionRangeProvider,
                     > = Rc::new(provider);
                     editor.lsp_mut().selection_range_provider = Some(selection_range_provider);
-                } else if params.db_type == database::DatabaseType::Redis {
+                } else if params.context.db_type == database::DatabaseType::Redis {
                     // Redis gets command/subcommand completion instead of the
                     // SQL schema-aware completion.
                     let completion_provider: Rc<dyn gpui_component::input::CompletionProvider> =
@@ -764,7 +673,7 @@ impl EditorPanel {
         let editor_settings = AppSettings::global(cx).settings.editor.clone();
         let sqruff_service = if supports_sql {
             match SqruffService::new(
-                params.db_type.to_sqruff_dialect(),
+                params.context.db_type.to_sqruff_dialect(),
                 &formatter_settings,
                 &editor_settings,
             ) {
@@ -784,9 +693,9 @@ impl EditorPanel {
         // Create query tab with the connection string
         let results_panel = cx.new(|cx| {
             ResultsPanel::new(
-                params.connection_id,
-                &params.database_name,
-                params.db_type,
+                params.context.connection_id,
+                &params.context.database_name,
+                params.context.db_type,
                 window,
                 cx,
             )
@@ -797,22 +706,21 @@ impl EditorPanel {
         self._subscriptions
             .push(cx.observe(&results_panel, |_, _, cx| cx.notify()));
         let query_tab = QueryTab {
-            title: params.title.clone(),
-            connection_id: params.connection_id,
-            _db_type: params.db_type,
-            connection_name: params.connection_name.clone(),
-            database_name: params.database_name.clone(),
-            schema_name: params.schema_name.clone(),
-            environment_type: params.environment_type,
-            editor: editor.clone(),
-            db_id: params.db_id,
-            last_run_at: params.last_run_at,
-            results_panel,
+            base: ConnectionBackedTab {
+                title: params.title.clone(),
+                context: params.context.clone(),
+                editor: editor.clone(),
+                db_id: params.db_id,
+                last_run_at: params.last_run_at,
+                results_panel,
+                chat_enabled: false,
+                chat_panel: None,
+            },
             sql_view: cx.new(|cx| {
                 SqlView::new(
                     10,
                     cx.theme().highlight_theme.clone(),
-                    params.db_type.editor_language(),
+                    params.context.db_type.editor_language(),
                 )
                 .show_copy_button(false)
             }),
@@ -820,9 +728,6 @@ impl EditorPanel {
                 .new(|cx| SqlView::new(usize::MAX, cx.theme().highlight_theme.clone(), "sql")),
             sqruff_service,
             completion_provider: supports_sql.then_some(sql_completion_provider),
-            // Chat functionality
-            chat_enabled: false,
-            chat_panel: None,
             sql_view_visible: true,
             last_parameter_values: HashMap::new(),
         };
@@ -845,7 +750,7 @@ impl EditorPanel {
         cx: &mut Context<Self>,
     ) {
         let editor_settings = AppSettings::global(cx).settings.editor.clone();
-        let db_type = params.db_type;
+        let db_type = params.context.db_type;
         let editor = cx.new(|cx| {
             let mut editor = EditorState::new(window, cx)
                 .language(SCRIPT_EDITOR_LANGUAGE.to_string())
@@ -887,9 +792,9 @@ impl EditorPanel {
 
         let results_panel = cx.new(|cx| {
             ResultsPanel::new(
-                params.connection_id,
-                &params.database_name,
-                params.db_type,
+                params.context.connection_id,
+                &params.context.database_name,
+                params.context.db_type,
                 window,
                 cx,
             )
@@ -898,17 +803,16 @@ impl EditorPanel {
             .push(cx.observe(&results_panel, |_, _, cx| cx.notify()));
 
         let script_tab = ScriptTab {
-            title: params.title,
-            connection_id: params.connection_id,
-            db_type,
-            connection_name: params.connection_name,
-            database_name: params.database_name,
-            schema_name: params.schema_name,
-            environment_type: params.environment_type,
-            editor,
-            db_id: params.db_id,
-            last_run_at: params.last_run_at,
-            results_panel,
+            base: ConnectionBackedTab {
+                title: params.title,
+                context: params.context,
+                editor,
+                db_id: params.db_id,
+                last_run_at: params.last_run_at,
+                results_panel,
+                chat_enabled: false,
+                chat_panel: None,
+            },
             log_view: cx.new(|cx| {
                 SqlView::new(
                     SCRIPT_LOG_MAX_LINES,
@@ -918,8 +822,6 @@ impl EditorPanel {
                 .show_copy_button(false)
             }),
             log_visible: true,
-            chat_enabled: false,
-            chat_panel: None,
         };
 
         self.tabs.push(TabType::Script(Box::new(script_tab)));
@@ -954,11 +856,8 @@ impl EditorPanel {
         let Some(TabType::Query(query_tab)) = self.tabs.get(self.active_tab_ix) else {
             return;
         };
-        if query_tab.environment_type == Some(EnvironmentType::Prod) {
-            let connection_name = query_tab
-                .connection_name
-                .clone()
-                .unwrap_or_else(|| "This connection".to_string());
+        if query_tab.context.environment_type == Some(EnvironmentType::Prod) {
+            let connection_name = query_tab.context.connection_name.clone();
             self.confirm_prod_write(
                 "Commit edits to PROD?",
                 format!(
@@ -1050,49 +949,23 @@ impl EditorPanel {
         // identity and what language the tab's buffer is in; the panel itself
         // is built the same way, so both branches go through
         // `create_chat_panel`.
-        let (enabled, panel) = match self.tabs.get_mut(self.active_tab_ix) {
-            Some(TabType::Query(query_tab)) => {
-                query_tab.chat_enabled = !query_tab.chat_enabled;
-                if !query_tab.chat_enabled || query_tab.chat_panel.is_some() {
-                    cx.notify();
-                    return;
-                }
-                let context = ChatSessionContext::new()
-                    .with_input_state(query_tab.editor.downgrade())
-                    .with_connection(
-                        query_tab.connection_id,
-                        query_tab.database_name.clone(),
-                        query_tab._db_type,
-                    )
-                    .with_tab_language(TabLanguage::Query);
-                (
-                    &mut query_tab.chat_enabled,
-                    (&mut query_tab.chat_panel, context),
-                )
-            }
-            Some(TabType::Script(script_tab)) => {
-                script_tab.chat_enabled = !script_tab.chat_enabled;
-                if !script_tab.chat_enabled || script_tab.chat_panel.is_some() {
-                    cx.notify();
-                    return;
-                }
-                let context = ChatSessionContext::new()
-                    .with_input_state(script_tab.editor.downgrade())
-                    .with_connection(
-                        script_tab.connection_id,
-                        script_tab.database_name.clone(),
-                        script_tab.db_type,
-                    )
-                    .with_tab_language(TabLanguage::Script);
-                (
-                    &mut script_tab.chat_enabled,
-                    (&mut script_tab.chat_panel, context),
-                )
-            }
-            _ => return,
+        let Some(active) = self.tabs.get_mut(self.active_tab_ix) else {
+            return;
         };
-
-        let (chat_panel, session_context) = panel;
+        let Some(language) = active.tab_language() else {
+            return;
+        };
+        let Some(tab) = active.connection_tab_mut() else {
+            return;
+        };
+        tab.chat_enabled = !tab.chat_enabled;
+        if !tab.chat_enabled || tab.chat_panel.is_some() {
+            cx.notify();
+            return;
+        }
+        let session_context = tab.chat_session_context(language);
+        let enabled = &mut tab.chat_enabled;
+        let chat_panel = &mut tab.chat_panel;
         match Self::create_chat_panel(session_context, window, cx) {
             Ok(panel) => *chat_panel = Some(panel),
             Err(error) => {
@@ -1139,10 +1012,13 @@ impl EditorPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let editor = match self.tabs.get(self.active_tab_ix) {
-            Some(TabType::Query(query_tab)) => query_tab.editor.clone(),
-            Some(TabType::Script(script_tab)) => script_tab.editor.clone(),
-            _ => return false,
+        let Some(editor) = self
+            .tabs
+            .get(self.active_tab_ix)
+            .and_then(TabType::connection_tab)
+            .map(|tab| tab.editor.clone())
+        else {
+            return false;
         };
         editor.update(cx, |state, cx| {
             state.focus(window, cx);

@@ -2,8 +2,8 @@ use blanco_core::RoutineKind;
 use blanco_ui::{IconName, SqlViewMessage, Tab, TabBar};
 use gpui::{
     AnyElement, App, ClickEvent, Context, FocusHandle, Focusable, FontWeight, InteractiveElement,
-    IntoElement, ParentElement, Render, SharedString, Styled, WeakEntity, Window, div,
-    prelude::FluentBuilder, px, rems,
+    IntoElement, ParentElement, Render, Styled, WeakEntity, Window, div, prelude::FluentBuilder,
+    px, rems,
 };
 use gpui_component::{
     ActiveTheme, Disableable as _, Icon, Sizable, WindowExt as _,
@@ -50,11 +50,11 @@ impl EditorPanel {
                     return;
                 }
 
-                let tab_title = match this.tabs.get(*ix) {
-                    Some(TabType::Query(query_tab)) => Some(query_tab.title.clone()),
-                    Some(TabType::Script(script_tab)) => Some(script_tab.title.clone()),
-                    _ => None,
-                };
+                let tab_title = this
+                    .tabs
+                    .get(*ix)
+                    .and_then(TabType::connection_tab)
+                    .map(|tab| tab.title.clone());
                 if let Some(tab_title) = tab_title {
                     // Open rename modal on double click
                     let form = RenameTabForm::new(tab_title, window, cx);
@@ -129,11 +129,7 @@ impl EditorPanel {
     }
 
     fn render_tab_bar_item(&self, ix: usize, tab: &TabType, cx: &mut Context<Self>) -> Tab {
-        let last_run_at = match tab {
-            TabType::Query(query_tab) => query_tab.last_run_at,
-            TabType::Script(script_tab) => script_tab.last_run_at,
-            _ => None,
-        };
+        let last_run_at = tab.connection_tab().and_then(|tab| tab.last_run_at);
         // Mirror the tab strip: the last remaining tab cannot be closed.
         let closable = self.tabs.len() > 1;
         self.render_tab_bar_item_inner(ix, tab, cx)
@@ -146,22 +142,41 @@ impl EditorPanel {
             })
     }
 
+    /// The icon that tells the tab kinds apart in the strip.
+    fn tab_icon(tab: &TabType, cx: &App) -> Option<Icon> {
+        let theme = cx.theme();
+        Some(match tab {
+            TabType::Query(_) => return None,
+            TabType::Script(_) => Icon::new(IconName::Braces).text_color(theme.yellow),
+            TabType::Snippet(_) => Icon::new(IconName::File).text_color(theme.green),
+            TabType::Settings(_) => Icon::new(IconName::Settings),
+            TabType::ObjectDdl(tab) => {
+                let (icon, color) = match tab.read(cx).kind {
+                    RoutineKind::Procedure => (IconName::SquareTerminal, theme.magenta),
+                    RoutineKind::Function => (IconName::Braces, theme.cyan),
+                    RoutineKind::Trigger => (IconName::DatabaseConnected, theme.yellow),
+                };
+                Icon::new(icon).text_color(color)
+            }
+            TabType::TableStructure(_) => Icon::new(IconName::Sheet).text_color(theme.blue),
+            TabType::SchemaGraph(_) => Icon::new(IconName::Network).text_color(theme.cyan),
+        })
+    }
+
+    /// One strip item for any tab kind. Tabs bound to a connection are grouped
+    /// under its name with the environment badge; the rest sit under "Other".
     fn render_tab_bar_item_inner(&self, ix: usize, tab: &TabType, cx: &mut Context<Self>) -> Tab {
-        match tab {
-            TabType::Query(query_tab) => {
-                let show_close_button = self.tabs.len() > 1;
-                let tab_index = ix;
+        let show_close_button = self.tabs.len() > 1;
+        let label = tab.title(cx);
+        let context = tab.context(cx);
+        let icon = Self::tab_icon(tab, cx);
 
-                let connection_label = query_tab
-                    .connection_name
-                    .clone()
-                    .unwrap_or_else(|| "No Connection".to_string());
-                let group_env_type = query_tab.environment_type;
-                let group_connection_label = connection_label.clone();
-
-                Tab::new()
-                    .label(&query_tab.title)
-                    .group(connection_label)
+        let mut item = Tab::new().label(label);
+        item = match &context {
+            Some(context) => {
+                let group_label = context.connection_name.clone();
+                let group_env_type = context.environment_type;
+                item.group(context.connection_name.clone())
                     .group_label(move |_, cx| {
                         h_flex()
                             .gap_2()
@@ -170,165 +185,46 @@ impl EditorPanel {
                                 div()
                                     .text_xs()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child(group_connection_label.clone()),
+                                    .child(group_label.clone()),
                             )
                             .when_some(group_env_type, |this, env_type| {
                                 this.child(Self::environment_badge(env_type, cx))
                             })
                     })
-                    .suffix(
-                        h_flex()
-                            .gap_1()
-                            .pr_1()
-                            .child(
-                                div()
-                                    .pr_1()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(
-                                        query_tab
-                                            .connection_name
-                                            .clone()
-                                            .unwrap_or_else(|| "No Connection".to_string()),
-                                    ),
-                            )
-                            .when_some(query_tab.environment_type, |this, env_type| {
-                                this.child(Self::environment_badge(env_type, cx))
-                            })
-                            .when(show_close_button, |this| {
-                                this.child(self.close_tab_button(("close-tab", ix), tab_index, cx))
-                            })
-                            .into_any_element(),
-                    )
             }
-            TabType::Script(script_tab) => {
-                let show_close_button = self.tabs.len() > 1;
-                let connection_label = script_tab
-                    .connection_name
-                    .clone()
-                    .unwrap_or_else(|| "No Connection".to_string());
-                let environment_type = script_tab.environment_type;
+            None => item.group("Other"),
+        };
 
-                Tab::new()
-                    .label(&script_tab.title)
-                    .group(connection_label.clone())
-                    .group_label({
-                        let connection_label = connection_label.clone();
-                        move |_, cx| {
-                            h_flex()
-                                .gap_2()
-                                .items_center()
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(connection_label.clone()),
-                                )
-                                .when_some(environment_type, |this, env_type| {
-                                    this.child(Self::environment_badge(env_type, cx))
-                                })
-                        }
+        let connection_suffix = tab.connection_tab().map(|tab| {
+            (
+                tab.context.connection_name.clone(),
+                tab.context.environment_type,
+            )
+        });
+
+        item.suffix(
+            h_flex()
+                .gap_1()
+                .items_center()
+                .pr_1()
+                .when_some(icon, |this, icon| this.child(icon))
+                .when_some(connection_suffix, |this, (name, env_type)| {
+                    this.child(
+                        div()
+                            .pr_1()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(name),
+                    )
+                    .when_some(env_type, |this, env_type| {
+                        this.child(Self::environment_badge(env_type, cx))
                     })
-                    .suffix(
-                        h_flex()
-                            .gap_1()
-                            .pr_1()
-                            .child(Icon::new(IconName::Braces).text_color(cx.theme().yellow))
-                            .child(
-                                div()
-                                    .pr_1()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(connection_label),
-                            )
-                            .when_some(environment_type, |this, env_type| {
-                                this.child(Self::environment_badge(env_type, cx))
-                            })
-                            .when(show_close_button, |this| {
-                                this.child(self.close_tab_button(("close-script-tab", ix), ix, cx))
-                            })
-                            .into_any_element(),
-                    )
-            }
-            TabType::Snippet(snippet_editor) => {
-                let label = snippet_editor.read(cx).get_title();
-                let tab_index = ix;
-
-                Tab::new().label(label).group("Other").suffix(
-                    h_flex()
-                        .gap_2()
-                        .items_center()
-                        .pr_1()
-                        .child(Icon::new(IconName::File).text_color(cx.theme().green))
-                        .child(self.close_tab_button(("close-snippet-tab", ix), tab_index, cx)),
-                )
-            }
-            TabType::Settings(settings_tab) => {
-                let label = settings_tab.title.clone();
-                let tab_index = ix;
-
-                Tab::new().label(label).group("Other").suffix(
-                    h_flex()
-                        .gap_2()
-                        .items_center()
-                        .pr_1()
-                        .child(Icon::new(IconName::Settings))
-                        .child(self.close_tab_button(("close-settings-tab", ix), tab_index, cx)),
-                )
-            }
-            TabType::ObjectDdl(object_ddl_tab) => {
-                let inner = object_ddl_tab.read(cx);
-                let label = SharedString::from(inner.title.clone());
-                let (icon, color) = match inner.kind {
-                    RoutineKind::Procedure => (IconName::SquareTerminal, cx.theme().magenta),
-                    RoutineKind::Function => (IconName::Braces, cx.theme().cyan),
-                    RoutineKind::Trigger => (IconName::DatabaseConnected, cx.theme().yellow),
-                };
-                let tab_index = ix;
-                Tab::new().label(label).group("Other").suffix(
-                    h_flex()
-                        .gap_2()
-                        .items_center()
-                        .pr_1()
-                        .child(Icon::new(icon).text_color(color))
-                        .child(self.close_tab_button(("close-object-ddl-tab", ix), tab_index, cx)),
-                )
-            }
-            TabType::TableStructure(table_structure_tab) => {
-                let label = table_structure_tab.read(cx).title.clone();
-                let tab_index = ix;
-
-                Tab::new().label(label).group("Other").suffix(
-                    h_flex()
-                        .gap_2()
-                        .items_center()
-                        .pr_1()
-                        .child(Icon::new(IconName::Sheet).text_color(cx.theme().blue))
-                        .child(self.close_tab_button(
-                            ("close-table-structure-tab", ix),
-                            tab_index,
-                            cx,
-                        )),
-                )
-            }
-            TabType::SchemaGraph(schema_graph_tab) => {
-                let label = schema_graph_tab.read(cx).title.clone();
-                let tab_index = ix;
-
-                Tab::new().label(label).group("Other").suffix(
-                    h_flex()
-                        .gap_2()
-                        .items_center()
-                        .pr_1()
-                        .child(Icon::new(IconName::Network).text_color(cx.theme().cyan))
-                        .child(self.close_tab_button(
-                            ("close-schema-graph-tab", ix),
-                            tab_index,
-                            cx,
-                        )),
-                )
-            }
-        }
+                })
+                .when(show_close_button, |this| {
+                    this.child(self.close_tab_button(("close-tab", ix), ix, cx))
+                })
+                .into_any_element(),
+        )
     }
 
     fn render_row_operations_bar(
@@ -341,7 +237,7 @@ impl EditorPanel {
         // buttons are hidden for them. The SQL Log and Chat toggles stay: Redis
         // tabs still have a command log view. Gate on the backend capability so
         // new drivers slot in automatically.
-        let supports_sql = query_tab._db_type.supports_sql();
+        let supports_sql = query_tab.context.db_type.supports_sql();
         let commit_in_progress = query_tab.results_panel.read(cx).is_commit_in_progress();
 
         h_flex()
@@ -560,7 +456,7 @@ impl EditorPanel {
         query_tab: &QueryTab,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let supports_sql = query_tab._db_type.supports_sql();
+        let supports_sql = query_tab.context.db_type.supports_sql();
         h_resizable("editor-split")
             .with_state(&self.editor_chat_resize_state)
             .child(

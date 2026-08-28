@@ -43,7 +43,7 @@ impl EditorPanel {
         };
 
         // Linting is SQL-only (sqruff); non-SQL backends have no linter.
-        if !query_tab._db_type.supports_sql() {
+        if !query_tab.context.db_type.supports_sql() {
             return;
         }
 
@@ -160,7 +160,7 @@ impl EditorPanel {
         };
 
         // Formatting is SQL-only (sqruff); non-SQL backends have no formatter.
-        if !query_tab._db_type.supports_sql() {
+        if !query_tab.context.db_type.supports_sql() {
             return;
         }
 

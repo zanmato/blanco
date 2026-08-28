@@ -56,8 +56,8 @@ impl EditorPanel {
             return;
         }
 
-        let connection_id = script_tab.connection_id;
-        let database_name = script_tab.database_name.clone();
+        let connection_id = script_tab.context.connection_id;
+        let database_name = script_tab.context.database_name.clone();
         let results_panel = script_tab.results_panel.clone();
         let log_view = script_tab.log_view.clone();
         let editor_entity = script_tab.editor.clone();
@@ -68,11 +68,11 @@ impl EditorPanel {
             content: full_text,
             position: tab_index as i32,
             connection_id: Some(connection_id),
-            connection_type: None,
-            connection_name: script_tab.connection_name.clone(),
+            connection_type: Some(script_tab.context.db_type.as_str().to_string()),
+            connection_name: Some(script_tab.context.connection_name.clone()),
             database_name: Some(database_name.clone()),
-            schema_name: script_tab.schema_name.clone(),
-            environment_type: script_tab.environment_type,
+            schema_name: script_tab.context.schema_name.clone(),
+            environment_type: script_tab.context.environment_type,
             tab_kind: app_database::EditorKind::Script,
             last_run_at: Some(run_timestamp),
         };
@@ -107,10 +107,7 @@ impl EditorPanel {
         })
         .detach();
 
-        let activity_label = script_tab
-            .connection_name
-            .clone()
-            .unwrap_or_else(|| database_name.clone());
+        let activity_label = script_tab.context.connection_name.clone();
         let activity =
             ActivityReporter::global(cx).begin(format!("{activity_label}: running script"));
 

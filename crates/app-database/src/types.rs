@@ -1,42 +1,6 @@
 use database::{ConnectionConfig, DatabaseType};
 
-/// Environment type for database connections
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum EnvironmentType {
-    #[default]
-    Dev = 1,
-    Test = 2,
-    Prod = 3,
-}
-
-impl EnvironmentType {
-    pub fn from_i32(value: i32) -> Self {
-        match value {
-            1 => EnvironmentType::Dev,
-            2 => EnvironmentType::Test,
-            3 => EnvironmentType::Prod,
-            _ => EnvironmentType::Dev, // Default to Dev for invalid values
-        }
-    }
-
-    pub fn to_i32(self) -> i32 {
-        self as i32
-    }
-
-    pub fn display_name(self) -> &'static str {
-        match self {
-            EnvironmentType::Dev => "DEV",
-            EnvironmentType::Test => "TEST",
-            EnvironmentType::Prod => "PROD",
-        }
-    }
-}
-
-impl std::fmt::Display for EnvironmentType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.display_name())
-    }
-}
+pub use blanco_core::EnvironmentType;
 
 /// What an editor buffer holds: statements for the connection's own dialect, or
 /// a JavaScript program that drives the connection through the injected `db`

@@ -12,19 +12,14 @@ use gpui_component::{
 };
 
 use crate::result_ext::ResultExt as _;
-use app_database::EnvironmentType;
+use blanco_core::ConnectionContext;
 use blanco_core::{ColumnInfo, IndexInfo};
 use blanco_ui::{SqlView, SqlViewMessage};
 
 pub struct TableStructureTab {
     pub title: String,
-    pub _connection_id: i64,
-    pub _db_type: database::DatabaseType,
-    pub _connection_name: Option<String>,
-    pub _database_name: String,
-    pub _schema_name: Option<String>,
-    pub _table_name: String,
-    pub _environment_type: Option<EnvironmentType>,
+    pub context: ConnectionContext,
+    pub table_name: String,
     columns_table_state: Entity<TableState<ColumnsTableDelegate>>,
     indexes_table_state: Entity<TableState<IndexesTableDelegate>>,
     focus_handle: FocusHandle,
@@ -38,15 +33,9 @@ pub struct TableStructureTab {
 }
 
 impl TableStructureTab {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        connection_id: i64,
-        db_type: database::DatabaseType,
-        connection_name: Option<String>,
-        database_name: String,
-        schema_name: Option<String>,
+        context: ConnectionContext,
         table_name: String,
-        environment_type: Option<EnvironmentType>,
         columns: Vec<ColumnInfo>,
         indexes: Vec<IndexInfo>,
         window: &mut Window,
@@ -75,13 +64,8 @@ impl TableStructureTab {
 
         Self {
             title,
-            _connection_id: connection_id,
-            _db_type: db_type,
-            _connection_name: connection_name,
-            _database_name: database_name,
-            _schema_name: schema_name,
-            _table_name: table_name,
-            _environment_type: environment_type,
+            context,
+            table_name,
             columns_table_state,
             indexes_table_state,
             focus_handle: cx.focus_handle(),
@@ -98,7 +82,7 @@ impl TableStructureTab {
     /// Whether this driver can produce a `CREATE TABLE` statement. MSSQL has no
     /// implementation, so the button is hidden rather than surfacing an error.
     fn supports_table_ddl(&self) -> bool {
-        self._db_type.dialect().supports_create_table_ddl()
+        self.context.dialect().supports_create_table_ddl()
     }
 
     fn toggle_ddl(&mut self, cx: &mut Context<Self>) {
@@ -119,10 +103,10 @@ impl TableStructureTab {
         cx.notify();
 
         let db_service = database::DatabaseService::global(cx).clone();
-        let connection_id = self._connection_id;
-        let database_name = self._database_name.clone();
-        let schema_name = self._schema_name.clone();
-        let table_name = self._table_name.clone();
+        let connection_id = self.context.connection_id;
+        let database_name = self.context.database_name.clone();
+        let schema_name = self.context.schema_name.clone();
+        let table_name = self.table_name.clone();
 
         cx.spawn(async move |this, cx| {
             use database::DatabaseServiceTrait as _;

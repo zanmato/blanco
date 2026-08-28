@@ -8,7 +8,8 @@ use crate::import::service::{
 };
 use crate::result_ext::ResultExt;
 use blanco_core::ColumnInfo;
-use database::{DatabaseService, DatabaseType};
+use blanco_core::ConnectionContext;
+use database::DatabaseService;
 use encoding_rs::Encoding;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
@@ -86,11 +87,8 @@ fn effective_headers(detected: &DetectedFile) -> Vec<String> {
 
 pub struct ImportModal {
     focus_handle: FocusHandle,
-    connection_id: i64,
-    database_name: String,
-    schema_name: Option<String>,
+    context: ConnectionContext,
     table_name: String,
-    db_type: DatabaseType,
 
     file_input: Entity<InputState>,
     encoding_select: Entity<SelectState<Vec<String>>>,
@@ -120,11 +118,8 @@ pub struct ImportModal {
 impl ImportModal {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        connection_id: i64,
-        database_name: String,
-        schema_name: Option<String>,
+        context: ConnectionContext,
         table_name: String,
-        db_type: DatabaseType,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -172,9 +167,9 @@ impl ImportModal {
                 handle
                     .read_with(&*window, |modal: &Self, _| {
                         (
-                            modal.connection_id,
-                            modal.database_name.clone(),
-                            modal.schema_name.clone(),
+                            modal.context.connection_id,
+                            modal.context.database_name.clone(),
+                            modal.context.schema_name.clone(),
                             modal.table_name.clone(),
                         )
                     })
@@ -209,11 +204,8 @@ impl ImportModal {
 
         Self {
             focus_handle: cx.focus_handle(),
-            connection_id,
-            database_name,
-            schema_name,
+            context,
             table_name,
-            db_type,
             file_input,
             encoding_select,
             delimiter_select,
@@ -586,10 +578,10 @@ impl ImportModal {
             .as_ref()
             .map(|detected| (detected.format, detected.headers.clone()))
             .unwrap_or((detect::ImportFormat::Csv, Vec::new()));
-        let db_type = self.db_type;
-        let connection_id = self.connection_id;
-        let database_name = self.database_name.clone();
-        let schema_name = self.schema_name.clone();
+        let db_type = self.context.db_type;
+        let connection_id = self.context.connection_id;
+        let database_name = self.context.database_name.clone();
+        let schema_name = self.context.schema_name.clone();
         let table_name = self.table_name.clone();
         let fq_table = quote_qualified(schema_name.as_deref(), &table_name, db_type);
         let db_service = DatabaseService::global(cx).clone();
@@ -702,13 +694,17 @@ impl ImportModal {
         if compiled.is_empty() {
             return Some("-- map at least one column --".into());
         }
-        let fq_table = quote_qualified(self.schema_name.as_deref(), &self.table_name, self.db_type);
+        let fq_table = quote_qualified(
+            self.context.schema_name.as_deref(),
+            &self.table_name,
+            self.context.db_type,
+        );
         let conflict = self.resolved_conflict(cx);
         let statements = preview_statements(
             &fq_table,
             &compiled,
             &detected.sample_rows,
-            self.db_type,
+            self.context.db_type,
             &conflict,
             3,
         );

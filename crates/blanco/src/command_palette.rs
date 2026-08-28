@@ -1,3 +1,4 @@
+use blanco_core::ConnectionContext;
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Render, SharedString,
@@ -771,25 +772,31 @@ fn execute_command(cmd: &CommandType, window: &mut Window, cx: &mut App) {
         }
         CommandType::NewQueryForDatabase(database) => window.dispatch_action(
             Box::new(CreateNewQueryTab {
-                connection_id: database.connection_id,
-                connection_name: database.connection_name.clone(),
-                db_type: database.db_type,
-                database_name: database.database_name.clone(),
-                schema_name: None,
                 table_name: None,
-                environment_type: Some(database.environment_type),
+
                 inspect_key: false,
+
+                context: ConnectionContext {
+                    connection_id: database.connection_id,
+                    connection_name: database.connection_name.clone(),
+                    db_type: database.db_type,
+                    database_name: database.database_name.clone(),
+                    schema_name: None,
+                    environment_type: Some(database.environment_type),
+                },
             }),
             cx,
         ),
         CommandType::NewScriptForDatabase(database) => window.dispatch_action(
             Box::new(CreateNewScriptTab {
-                connection_id: database.connection_id,
-                connection_name: database.connection_name.clone(),
-                db_type: database.db_type,
-                database_name: database.database_name.clone(),
-                schema_name: None,
-                environment_type: Some(database.environment_type),
+                context: ConnectionContext {
+                    connection_id: database.connection_id,
+                    connection_name: database.connection_name.clone(),
+                    db_type: database.db_type,
+                    database_name: database.database_name.clone(),
+                    schema_name: None,
+                    environment_type: Some(database.environment_type),
+                },
             }),
             cx,
         ),

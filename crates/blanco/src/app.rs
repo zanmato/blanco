@@ -34,7 +34,8 @@ use crate::{
     snippets_panel::{RefreshSnippets, SnippetsPanel, SnippetsPanelEvent},
     status_bar::{ActivityMessage, ActivityReporter, ActivityResult, StatusBarState, StatusKind},
 };
-use app_database::{AppDatabase, ConnectionData, EnvironmentType};
+use app_database::{AppDatabase, ConnectionData};
+use blanco_core::ConnectionContext;
 
 actions!(
     blanco_app,
@@ -199,13 +200,8 @@ pub struct ExecuteSubstitutedQuery {
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
 pub struct CreateNewQueryTab {
-    pub connection_id: i64,
-    pub connection_name: String,
-    pub db_type: database::DatabaseType,
-    pub database_name: String,
-    pub schema_name: Option<String>,
+    pub context: ConnectionContext,
     pub table_name: Option<String>,
-    pub environment_type: Option<EnvironmentType>,
     /// When set, the new tab immediately inspects `table_name` as a key (used by
     /// the "Inspect Key" action on key/value backends). Plain "New Query" leaves
     /// this false and just opens an editor tab.
@@ -217,48 +213,28 @@ pub struct CreateNewQueryTab {
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
 pub struct CreateNewScriptTab {
-    pub connection_id: i64,
-    pub connection_name: String,
-    pub db_type: database::DatabaseType,
-    pub database_name: String,
-    pub schema_name: Option<String>,
-    pub environment_type: Option<EnvironmentType>,
+    pub context: ConnectionContext,
 }
 
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
 pub struct OpenObjectDdl {
     pub kind: blanco_core::RoutineKind,
-    pub connection_id: i64,
-    pub connection_name: String,
-    pub db_type: database::DatabaseType,
-    pub database_name: String,
-    pub schema_name: Option<String>,
+    pub context: ConnectionContext,
     pub object_name: String,
-    pub environment_type: Option<EnvironmentType>,
 }
 
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
 pub struct OpenTableStructure {
-    pub connection_id: i64,
-    pub connection_name: String,
-    pub db_type: database::DatabaseType,
-    pub database_name: String,
-    pub schema_name: Option<String>,
+    pub context: ConnectionContext,
     pub table_name: String,
-    pub environment_type: Option<EnvironmentType>,
 }
 
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
 pub struct OpenSchemaGraph {
-    pub connection_id: i64,
-    pub connection_name: String,
-    pub db_type: database::DatabaseType,
-    pub database_name: String,
-    pub schema_name: Option<String>,
-    pub environment_type: Option<EnvironmentType>,
+    pub context: ConnectionContext,
 }
 
 #[derive(Action, Clone, PartialEq, Eq)]
@@ -890,23 +866,23 @@ impl BlancoApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let title = match (&action.schema_name, &action.table_name) {
-            (None, None) => action.database_name.clone(),
-            (Some(schema), None) => format!("{}.{}", action.database_name, schema),
+        let context = &action.context;
+        let title = match (&context.schema_name, &action.table_name) {
+            (None, None) => context.database_name.clone(),
+            (Some(schema), None) => format!("{}.{}", context.database_name, schema),
             (Some(schema), Some(table)) => {
-                format!("{}.{}.{}", action.database_name, schema, table)
+                format!("{}.{}.{}", context.database_name, schema, table)
             }
             (None, Some(table)) => table.to_string(),
         };
 
         // Non-SQL backends (Redis) don't get a SELECT scaffold; a clicked key
         // opens the key inspector instead (handled below).
-        let content = if action.db_type.supports_sql() {
+        let content = if context.dialect().supports_sql() {
             action.table_name.as_ref().map(|table| {
-                action
-                    .db_type
+                context
                     .dialect()
-                    .select_scaffold(action.schema_name.as_deref(), table, 100)
+                    .select_scaffold(context.schema_name.as_deref(), table, 100)
             })
         } else {
             None
@@ -920,12 +896,7 @@ impl BlancoApp {
                     content,
                     db_id: None,
                     last_run_at: None,
-                    connection_id: action.connection_id,
-                    db_type: action.db_type,
-                    connection_name: Some(action.connection_name.clone()),
-                    database_name: action.database_name.clone(),
-                    schema_name: action.schema_name.clone(),
-                    environment_type: action.environment_type,
+                    context: context.clone(),
                 },
                 cx,
             );
@@ -937,8 +908,8 @@ impl BlancoApp {
             && let Some(key) = action.table_name.clone()
         {
             self.open_redis_key(
-                action.connection_id,
-                action.database_name.clone(),
+                context.connection_id,
+                context.database_name.clone(),
                 key,
                 window,
                 cx,
@@ -954,9 +925,10 @@ impl BlancoApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let title = match &action.schema_name {
-            Some(schema) => format!("{}.{} script", action.database_name, schema),
-            None => format!("{} script", action.database_name),
+        let context = &action.context;
+        let title = match &context.schema_name {
+            Some(schema) => format!("{}.{} script", context.database_name, schema),
+            None => format!("{} script", context.database_name),
         };
 
         self.editor_panel.update(cx, |panel, cx| {
@@ -967,12 +939,7 @@ impl BlancoApp {
                     content: None,
                     db_id: None,
                     last_run_at: None,
-                    connection_id: action.connection_id,
-                    db_type: action.db_type,
-                    connection_name: Some(action.connection_name.clone()),
-                    database_name: action.database_name.clone(),
-                    schema_name: action.schema_name.clone(),
-                    environment_type: action.environment_type,
+                    context: context.clone(),
                 },
                 cx,
             );
@@ -1030,30 +997,26 @@ impl BlancoApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.editor_panel.update(cx, |panel, cx| {
+        let weak_tab = self.editor_panel.update(cx, |panel, cx| {
             panel.create_table_structure_tab(
                 TableStructureParams {
-                    connection_id: action.connection_id,
-                    connection_name: action.connection_name.clone(),
-                    db_type: action.db_type,
-                    database_name: action.database_name.clone(),
-                    schema_name: action.schema_name.clone(),
+                    context: action.context.clone(),
                     table_name: action.table_name.clone(),
-                    environment_type: action.environment_type,
                 },
                 window,
                 cx,
-            );
+            )
         });
 
         let db_service = database::DatabaseService::global(cx).clone();
-        let connection_id = action.connection_id;
-        let database_name = action.database_name.clone();
-        let schema_name = action.schema_name.clone();
+        let connection_id = action.context.connection_id;
+        let database_name = action.context.database_name.clone();
+        let schema_name = action.context.schema_name.clone();
         let table_name = action.table_name.clone();
-        let editor_panel = self.editor_panel.clone();
-        let activity = ActivityReporter::global(cx)
-            .begin(format!("{}: loading structure", action.connection_name));
+        let activity = ActivityReporter::global(cx).begin(format!(
+            "{}: loading structure",
+            action.context.connection_name
+        ));
 
         cx.spawn_in(window, async move |_, window| {
             let _activity = activity;
@@ -1074,9 +1037,12 @@ impl BlancoApp {
 
                 window
                     .update(|window, cx| {
-                        editor_panel.update(cx, |panel, cx| {
-                            panel.update_last_table_structure_tab(columns, indexes, window, cx);
-                        });
+                        if let Some(tab) = weak_tab.upgrade() {
+                            tab.update(cx, |tab, cx| {
+                                tab.set_columns(columns, window, cx);
+                                tab.set_indexes(indexes, window, cx);
+                            });
+                        }
                     })
                     .log_err();
             }
@@ -1096,13 +1062,8 @@ impl BlancoApp {
             panel.create_object_ddl_tab(
                 ObjectDdlParams {
                     kind: action.kind,
-                    connection_id: action.connection_id,
-                    connection_name: action.connection_name.clone(),
-                    db_type: action.db_type,
-                    database_name: action.database_name.clone(),
-                    schema_name: action.schema_name.clone(),
+                    context: action.context.clone(),
                     object_name: action.object_name.clone(),
-                    environment_type: action.environment_type,
                 },
                 window,
                 cx,
@@ -1110,13 +1071,13 @@ impl BlancoApp {
         });
 
         let db_service = database::DatabaseService::global(cx).clone();
-        let connection_id = action.connection_id;
-        let database_name = action.database_name.clone();
-        let schema_name = action.schema_name.clone();
+        let connection_id = action.context.connection_id;
+        let database_name = action.context.database_name.clone();
+        let schema_name = action.context.schema_name.clone();
         let object_name = action.object_name.clone();
         let kind = action.kind;
-        let activity =
-            ActivityReporter::global(cx).begin(format!("{}: loading DDL", action.connection_name));
+        let activity = ActivityReporter::global(cx)
+            .begin(format!("{}: loading DDL", action.context.connection_name));
 
         cx.spawn_in(window, async move |_, window| {
             let _activity = activity;
@@ -1158,26 +1119,20 @@ impl BlancoApp {
     ) {
         use crate::editor::schema_graph::SchemaGraphParams;
 
-        self.editor_panel.update(cx, |panel, cx| {
+        let weak_tab = self.editor_panel.update(cx, |panel, cx| {
             panel.create_schema_graph_tab(
                 SchemaGraphParams {
-                    connection_id: action.connection_id,
-                    connection_name: action.connection_name.clone(),
-                    db_type: action.db_type,
-                    database_name: action.database_name.clone(),
-                    schema_name: action.schema_name.clone(),
-                    environment_type: action.environment_type,
+                    context: action.context.clone(),
                 },
                 window,
                 cx,
-            );
+            )
         });
 
         let db_service = database::DatabaseService::global(cx).clone();
-        let connection_id = action.connection_id;
-        let database_name = action.database_name.clone();
-        let schema_name = action.schema_name.clone();
-        let editor_panel = self.editor_panel.clone();
+        let connection_id = action.context.connection_id;
+        let database_name = action.context.database_name.clone();
+        let schema_name = action.context.schema_name.clone();
 
         cx.spawn_in(window, async move |_, window| {
             use database::DatabaseServiceTrait;
@@ -1211,22 +1166,22 @@ impl BlancoApp {
 
                     window
                         .update(|window, cx| {
-                            editor_panel.update(cx, |panel, cx| {
-                                panel.update_last_schema_graph_tab(all_table_info, window, cx);
-                            });
+                            if let Some(tab) = weak_tab.upgrade() {
+                                tab.update(cx, |tab, cx| {
+                                    tab.update_with_schema(all_table_info, window, cx);
+                                });
+                            }
                         })
                         .log_err();
                 }
                 Err(e) => {
                     window
-                        .update(|_window, cx| {
-                            editor_panel.update(cx, |panel, cx| {
-                                panel.set_schema_graph_error(
-                                    format!("Failed to connect: {e}"),
-                                    _window,
-                                    cx,
-                                );
-                            });
+                        .update(|window, cx| {
+                            if let Some(tab) = weak_tab.upgrade() {
+                                tab.update(cx, |tab, cx| {
+                                    tab.set_error(format!("Failed to connect: {e}"), window, cx);
+                                });
+                            }
                         })
                         .log_err();
                 }

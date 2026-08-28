@@ -4,6 +4,7 @@
 //! It defines the core interfaces for database connections, completion providers,
 //! and database service traits.
 
+pub mod connection_context;
 pub mod connection_trait;
 pub mod database_service;
 pub mod database_type;
@@ -21,6 +22,7 @@ pub use connection_trait::{
     ResultPayload, RoutineKind, TableMetadata, TableSchemaInfo, WriteOperation,
 };
 
+pub use connection_context::{ConnectionContext, EnvironmentType};
 pub use database_service::{ConnectionStatus, DatabaseService};
 pub use database_type::{DatabaseType, ParamStyles};
 pub use dialect::{Dialect, UpsertStyle, ValuesQueryStyle};

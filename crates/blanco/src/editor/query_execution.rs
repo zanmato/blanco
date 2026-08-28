@@ -36,11 +36,8 @@ impl EditorPanel {
         if let Some(TabType::Script(script_tab)) = self.tabs.get(tab_index) {
             // A script can issue any statement through `db`, so the whole run
             // is confirmed rather than individual statements.
-            if script_tab.environment_type == Some(EnvironmentType::Prod) {
-                let connection_name = script_tab
-                    .connection_name
-                    .clone()
-                    .unwrap_or_else(|| "This connection".to_string());
+            if script_tab.context.environment_type == Some(EnvironmentType::Prod) {
+                let connection_name = script_tab.context.connection_name.clone();
                 self.confirm_prod_write(
                     "Run script on PROD?",
                     format!(
@@ -67,9 +64,9 @@ impl EditorPanel {
             let selected_text = editor.selected_text().to_string();
 
             // Clone the values we need
-            let connection_id = query_tab.connection_id;
-            let database_name = query_tab.database_name.clone();
-            let db_type = query_tab._db_type;
+            let connection_id = query_tab.context.connection_id;
+            let database_name = query_tab.context.database_name.clone();
+            let db_type = query_tab.context.db_type;
 
             // Non-SQL backends (Redis) have no grammar to parse and no bind
             // parameters: treat the buffer as one command per line and run the
@@ -144,9 +141,9 @@ impl EditorPanel {
         let full_text = editor.text().to_string();
         let cursor_pos = editor.cursor();
         let selected_text = editor.selected_text().to_string();
-        let connection_id = query_tab.connection_id;
-        let database_name = query_tab.database_name.clone();
-        let db_type = query_tab._db_type;
+        let connection_id = query_tab.context.connection_id;
+        let database_name = query_tab.context.database_name.clone();
+        let db_type = query_tab.context.db_type;
 
         let raw = if !selected_text.trim().is_empty() {
             selected_text
@@ -180,18 +177,15 @@ impl EditorPanel {
         let Some(TabType::Query(query_tab)) = self.tabs.get(self.active_tab_ix) else {
             return;
         };
-        let is_prod = query_tab.environment_type == Some(EnvironmentType::Prod);
-        let is_write = blanco_core::write_guard::classify(query_tab._db_type, &query)
+        let is_prod = query_tab.context.environment_type == Some(EnvironmentType::Prod);
+        let is_write = blanco_core::write_guard::classify(query_tab.context.db_type, &query)
             == StatementAccess::Write;
         if !(is_prod && is_write) {
             self.execute_query_unchecked(query, connection_id, database_name, window, cx);
             return;
         }
 
-        let connection_name = query_tab
-            .connection_name
-            .clone()
-            .unwrap_or_else(|| "This connection".to_string());
+        let connection_name = query_tab.context.connection_name.clone();
         let database_name = database_name.to_string();
         let weak_editor_panel = cx.entity().downgrade();
         window.open_dialog(cx, move |dialog, _, _| {
@@ -255,18 +249,17 @@ impl EditorPanel {
             let _results_panel = query_tab.results_panel.clone();
             let _sql_view = query_tab.sql_view.clone();
 
-            let connection_type = None;
             let tab_data = QueryTabData {
                 id: query_tab.db_id,
                 title: query_tab.title.clone(),
                 content: content,
                 position: tab_index as i32,
-                connection_id: Some(query_tab.connection_id),
-                connection_type,
-                connection_name: query_tab.connection_name.clone(),
-                database_name: Some(query_tab.database_name.clone()),
-                schema_name: query_tab.schema_name.clone(),
-                environment_type: query_tab.environment_type,
+                connection_id: Some(query_tab.context.connection_id),
+                connection_type: Some(query_tab.context.db_type.as_str().to_string()),
+                connection_name: Some(query_tab.context.connection_name.clone()),
+                database_name: Some(query_tab.context.database_name.clone()),
+                schema_name: query_tab.context.schema_name.clone(),
+                environment_type: query_tab.context.environment_type,
                 tab_kind: app_database::EditorKind::Query,
                 last_run_at: Some(run_timestamp),
             };
@@ -274,8 +267,8 @@ impl EditorPanel {
             // Trigger the save operation in background
             let app_database = AppDatabase::global(cx).clone();
             let _title = query_tab.title.clone();
-            let connection_id = query_tab.connection_id;
-            let db_type = query_tab._db_type;
+            let connection_id = query_tab.context.connection_id;
+            let db_type = query_tab.context.db_type;
 
             cx.spawn(async move |entity_handle, cx| {
                 // Create the final tab data with connection_id
@@ -315,10 +308,7 @@ impl EditorPanel {
             // Report the in-flight query to the status bar. The guard moves into
             // the foreground result task: success/error finish it with an
             // outcome, cancellation drops it (clearing the line).
-            let activity_label = query_tab
-                .connection_name
-                .clone()
-                .unwrap_or_else(|| query_tab.database_name.clone());
+            let activity_label = query_tab.context.connection_name.clone();
             let activity =
                 ActivityReporter::global(cx).begin(format!("{activity_label}: executing query"));
 
@@ -418,7 +408,7 @@ impl EditorPanel {
             let history_db = AppDatabase::global(cx).clone();
             let history_query = query_for_metadata.clone();
             let history_connection_id = connection_id;
-            let history_connection_name = query_tab.connection_name.clone();
+            let history_connection_name = query_tab.context.connection_name.clone();
             let history_database_name = database_name.clone();
             let history_max_items =
                 AppSettings::global(cx).settings.database.max_history_items as i64;
@@ -603,7 +593,7 @@ impl EditorPanel {
                                 success: true,
                                 error_message: None,
                                 connection_id: Some(history_connection_id),
-                                connection_name: history_connection_name.clone(),
+                                connection_name: Some(history_connection_name.clone()),
                                 database_name: Some(history_database_name.clone()),
                             })
                             .await
@@ -658,7 +648,7 @@ impl EditorPanel {
                                 success: false,
                                 error_message: Some(error_message),
                                 connection_id: Some(history_connection_id),
-                                connection_name: history_connection_name.clone(),
+                                connection_name: Some(history_connection_name.clone()),
                                 database_name: Some(history_database_name.clone()),
                             })
                             .await

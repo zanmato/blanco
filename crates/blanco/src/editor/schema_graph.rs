@@ -4,7 +4,7 @@ use gpui::{
 };
 use gpui_component::v_flex;
 
-use app_database::EnvironmentType;
+use blanco_core::ConnectionContext;
 use blanco_core::connection_trait::TableSchemaInfo;
 use blanco_ui::graph_view::{
     FieldBadge, GraphEdge, GraphModel, GraphNode, GraphNodeField, GraphView, compute_node_sizes,
@@ -13,57 +13,32 @@ use blanco_ui::graph_view::{
 
 #[derive(Clone)]
 pub struct SchemaGraphParams {
-    pub connection_id: i64,
-    pub connection_name: String,
-    pub db_type: database::DatabaseType,
-    pub database_name: String,
-    pub schema_name: Option<String>,
-    pub environment_type: Option<EnvironmentType>,
+    pub context: ConnectionContext,
 }
 
 pub struct SchemaGraphTab {
     pub title: String,
-    pub _connection_id: i64,
-    pub _db_type: database::DatabaseType,
-    pub _connection_name: Option<String>,
-    pub _database_name: String,
-    pub _schema_name: Option<String>,
-    pub _environment_type: Option<EnvironmentType>,
+    pub context: ConnectionContext,
     graph_view: Entity<GraphView>,
     focus_handle: FocusHandle,
 }
 
 impl SchemaGraphTab {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        connection_id: i64,
-        db_type: database::DatabaseType,
-        connection_name: Option<String>,
-        database_name: String,
-        schema_name: Option<String>,
-        environment_type: Option<EnvironmentType>,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(context: ConnectionContext, _window: &mut Window, cx: &mut Context<Self>) -> Self {
         let graph_view = cx.new(|cx| {
             let mut view = GraphView::new(cx);
             view.loading = true;
             view
         });
 
-        let title = match &schema_name {
+        let title = match &context.schema_name {
             Some(schema) => format!("Schema: {}", schema),
-            None => format!("Schema: {}", database_name),
+            None => format!("Schema: {}", context.database_name),
         };
 
         Self {
             title,
-            _connection_id: connection_id,
-            _db_type: db_type,
-            _connection_name: connection_name,
-            _database_name: database_name,
-            _schema_name: schema_name,
-            _environment_type: environment_type,
+            context,
             graph_view,
             focus_handle: cx.focus_handle(),
         }
