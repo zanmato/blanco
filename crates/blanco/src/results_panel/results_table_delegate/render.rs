@@ -115,6 +115,11 @@ impl ResultsTableDelegate {
                         .h(overlay_size.height)
                         .bg(cx.theme().background)
                         .shadow_lg()
+                        // The table's scroll masks consume wheel events in the
+                        // capture phase, before anything drawn above them gets
+                        // a turn, and only defer to hitboxes that occlude them.
+                        // Without this the table scrolls instead of the editor.
+                        .occlude()
                         .on_action(cx.listener(
                             move |table, _event: &gpui_component::input::Escape, window, cx| {
                                 Self::handle_minimize(table, (col_ix, row_ix), is_json, window, cx);
