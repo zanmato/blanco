@@ -18,7 +18,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use blanco_core::{ColumnType, QueryResult};
 use database::DatabaseServiceTrait;
@@ -47,6 +47,10 @@ const RESULT_ID_PROPERTY: &str = "__blancoResultId";
 /// Reported when the user presses Stop. Not something a script can catch:
 /// cancellation unwinds the whole run via the interrupt handler.
 pub const CANCELLED_MESSAGE: &str = "cancelled by user";
+
+/// Prefix of the message reported when a script outlives its configured
+/// wall-clock budget. Like cancellation it is not catchable from JS.
+pub const TIMED_OUT_PREFIX: &str = "timed out after";
 
 /// The file name QuickJS attributes evaluated source to, and therefore the
 /// prefix its stack frames carry. Used to recover line numbers for editor
@@ -89,6 +93,7 @@ pub fn spawn_script(
     connection_id: i64,
     database_name: String,
     tokio: tokio::runtime::Handle,
+    timeout: Option<Duration>,
 ) -> ScriptJob {
     let cancel = Arc::new(AtomicBool::new(false));
     let (sender, receiver) = unbounded();
@@ -105,6 +110,8 @@ pub fn spawn_script(
                     database_name,
                     tokio,
                     cancel,
+                    deadline: timeout.map(|timeout| Instant::now() + timeout),
+                    timeout,
                     events: sender.clone(),
                     results: RefCell::new(Vec::new()),
                 };
@@ -151,7 +158,11 @@ fn run_script(source: &str, host: Rc<ScriptHost>) -> Result<(), String> {
     // Aborts even a `while (true) {}` that never reaches a host call.
     runtime.set_interrupt_handler(Some(Box::new({
         let cancel = host.cancel.clone();
-        move || cancel.load(Ordering::Relaxed)
+        let deadline = host.deadline;
+        move || {
+            cancel.load(Ordering::Relaxed)
+                || deadline.is_some_and(|deadline| Instant::now() >= deadline)
+        }
     })));
 
     let context =
@@ -168,8 +179,8 @@ fn run_script(source: &str, host: Rc<ScriptHost>) -> Result<(), String> {
 
     // The interrupt handler surfaces as an ordinary evaluation failure; report
     // it as a cancel rather than as a script error.
-    if host.cancel.load(Ordering::Relaxed) {
-        return Err(CANCELLED_MESSAGE.to_string());
+    if let Some(message) = host.stop_message() {
+        return Err(message);
     }
     result
 }
@@ -181,17 +192,46 @@ struct ScriptHost {
     database_name: String,
     tokio: tokio::runtime::Handle,
     cancel: Arc<AtomicBool>,
+    /// Wall-clock budget for the whole run, `None` when unlimited.
+    deadline: Option<Instant>,
+    timeout: Option<Duration>,
     events: Sender<ScriptEvent>,
     /// Raw results handed out to JS, indexed by [`RESULT_ID_PROPERTY`].
     results: RefCell<Vec<QueryResult>>,
 }
 
-/// Marker for "the user pressed Stop while this call was waiting".
+/// Marker for "the user pressed Stop or the budget ran out while this call was
+/// waiting".
 struct Cancelled;
 
 impl ScriptHost {
     fn emit(&self, event: ScriptEvent) {
         self.events.send_blocking(event).ok();
+    }
+
+    fn timed_out(&self) -> bool {
+        self.deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+    }
+
+    fn should_stop(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed) || self.timed_out()
+    }
+
+    /// The user-facing reason the run was aborted, if it was. An explicit
+    /// Stop wins over the timeout when both apply.
+    fn stop_message(&self) -> Option<String> {
+        if self.cancel.load(Ordering::Relaxed) {
+            Some(CANCELLED_MESSAGE.to_string())
+        } else if self.timed_out() {
+            let seconds = self
+                .timeout
+                .map(|timeout| timeout.as_secs())
+                .unwrap_or_default();
+            Some(format!("{TIMED_OUT_PREFIX} {seconds} s"))
+        } else {
+            None
+        }
     }
 
     /// Run `future` on the app's tokio runtime, abandoning it if the cancel
@@ -200,7 +240,7 @@ impl ScriptHost {
     /// Sound only because the caller is a plain OS thread: `block_on` from a
     /// runtime worker or from GPUI's foreground thread would deadlock.
     fn block_on<T>(&self, future: impl Future<Output = T>) -> Result<T, Cancelled> {
-        if self.cancel.load(Ordering::Relaxed) {
+        if self.should_stop() {
             return Err(Cancelled);
         }
         self.tokio.block_on(async {
@@ -210,7 +250,7 @@ impl ScriptHost {
                     biased;
                     output = &mut future => return Ok(output),
                     _ = tokio::time::sleep(CANCEL_POLL_INTERVAL) => {
-                        if self.cancel.load(Ordering::Relaxed) {
+                        if self.should_stop() {
                             return Err(Cancelled);
                         }
                     }
@@ -639,6 +679,7 @@ mod tests {
                 self.connection_id,
                 "main".to_string(),
                 self.handle.clone(),
+                None,
             );
             let cancel = job.cancel.clone();
             let mut events = Vec::new();
@@ -776,6 +817,7 @@ mod tests {
             environment.connection_id,
             "main".to_string(),
             environment.handle.clone(),
+            None,
         );
 
         std::thread::sleep(Duration::from_millis(50));
@@ -787,6 +829,30 @@ mod tests {
             .expect("script should report a terminal event");
         match event {
             ScriptEvent::Finished(Err(message)) => assert_eq!(message, CANCELLED_MESSAGE),
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn timeout_interrupts_a_runaway_loop() {
+        let environment = TestEnvironment::new();
+        let job = spawn_script(
+            "while (true) {}".to_string(),
+            environment.db.clone(),
+            environment.connection_id,
+            "main".to_string(),
+            environment.handle.clone(),
+            Some(Duration::from_millis(200)),
+        );
+
+        let event = job
+            .events
+            .recv_blocking()
+            .expect("script should report a terminal event");
+        match event {
+            ScriptEvent::Finished(Err(message)) => {
+                assert!(message.starts_with(TIMED_OUT_PREFIX), "{message}")
+            }
             other => panic!("unexpected event: {other:?}"),
         }
     }

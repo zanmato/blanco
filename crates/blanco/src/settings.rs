@@ -111,6 +111,9 @@ impl Settings {
                 "database.query_timeout_seconds" => {
                     settings.database.query_timeout_seconds = value.parse().unwrap_or_default();
                 }
+                "database.script_timeout_seconds" => {
+                    settings.database.script_timeout_seconds = value.parse().unwrap_or_default();
+                }
                 "database.show_connection_notifications" => {
                     settings.database.show_connection_notifications =
                         value.parse().unwrap_or_default();
@@ -252,6 +255,9 @@ pub struct EditorSettings {
 pub struct DatabaseSettings {
     pub default_connection_timeout_seconds: u32,
     pub query_timeout_seconds: u32,
+    /// Wall-clock budget for a script run in seconds, 0 for unlimited. Scripts
+    /// are meant for long sequential work, so the default is unlimited.
+    pub script_timeout_seconds: u32,
     pub show_connection_notifications: bool,
     /// Maximum number of query-history entries to retain. Older entries beyond
     /// this count are pruned after each execution.
@@ -307,6 +313,7 @@ impl Default for DatabaseSettings {
         Self {
             default_connection_timeout_seconds: 30,
             query_timeout_seconds: 60,
+            script_timeout_seconds: 0,
             show_connection_notifications: true,
             max_history_items: 1000,
         }

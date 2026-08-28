@@ -123,17 +123,25 @@ impl EditorPanel {
 
         let db_service: Arc<dyn DatabaseServiceTrait> =
             Arc::new(DatabaseService::global(cx).clone());
+        // Scripts have no per-query timeout: the whole point is long,
+        // sequential work. The optional wall-clock budget and Stop are the ways
+        // out.
+        let script_timeout_seconds = crate::app_settings::AppSettings::global(cx)
+            .settings
+            .database
+            .script_timeout_seconds;
+        let timeout = (script_timeout_seconds > 0)
+            .then(|| std::time::Duration::from_secs(u64::from(script_timeout_seconds)));
         let job = scripting::spawn_script(
             source,
             db_service,
             connection_id,
             database_name,
             gpui_tokio::Tokio::handle(cx),
+            timeout,
         );
         self.script_cancel = Some(job.cancel.clone());
 
-        // Scripts have no query timeout: the whole point is long, sequential
-        // work. Stop is the way out.
         let events = job.events;
         let start_time = std::time::Instant::now();
 
@@ -192,6 +200,9 @@ impl EditorPanel {
                 }
                 Err(message) if message == scripting::CANCELLED_MESSAGE => {
                     activity.finish(ActivityResult::Err("script cancelled".into()))
+                }
+                Err(message) if message.starts_with(scripting::TIMED_OUT_PREFIX) => {
+                    activity.finish(ActivityResult::Err("script timed out".into()))
                 }
                 Err(_) => activity.finish(ActivityResult::Err("script failed".into())),
             }

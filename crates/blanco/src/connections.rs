@@ -95,6 +95,19 @@ pub enum TreeItemKind {
     Category,
 }
 
+impl TreeItemKind {
+    /// The routine kind behind a procedure/function/trigger node, `None` for
+    /// every other node.
+    pub fn routine_kind(&self) -> Option<blanco_core::RoutineKind> {
+        match self {
+            TreeItemKind::Procedure => Some(blanco_core::RoutineKind::Procedure),
+            TreeItemKind::Function => Some(blanco_core::RoutineKind::Function),
+            TreeItemKind::Trigger => Some(blanco_core::RoutineKind::Trigger),
+            _ => None,
+        }
+    }
+}
+
 /// Metadata for tree items to enable proper context menu actions
 #[derive(Clone, Debug)]
 pub struct TreeItemMetadata {
@@ -447,13 +460,9 @@ impl ConnectionsPanel {
                     self.record_category_expansion(item_id, cx);
                 }
                 TreeItemKind::Procedure | TreeItemKind::Function | TreeItemKind::Trigger => {
-                    let routine_kind = match metadata.kind {
-                        TreeItemKind::Procedure => blanco_core::RoutineKind::Procedure,
-                        TreeItemKind::Function => blanco_core::RoutineKind::Function,
-                        TreeItemKind::Trigger => blanco_core::RoutineKind::Trigger,
-                        _ => unreachable!(),
-                    };
-                    if let Some(name) = metadata.table_name.clone() {
+                    if let (Some(routine_kind), Some(name)) =
+                        (metadata.kind.routine_kind(), metadata.table_name.clone())
+                    {
                         window.dispatch_action(
                             Box::new(crate::app::OpenObjectDdl {
                                 kind: routine_kind,

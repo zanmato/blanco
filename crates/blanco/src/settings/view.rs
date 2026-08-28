@@ -415,6 +415,43 @@ impl SettingsView {
                     )
                     .description("Timeout in seconds for SQL query execution (10-600 seconds)."),
                     SettingItem::new(
+                        "Script Timeout",
+                        SettingField::number_input(
+                            NumberFieldOptions {
+                                min: 0.0,
+                                max: 86400.0,
+                                step: 30.0,
+                            },
+                            move |cx: &App| {
+                                AppSettings::global(cx)
+                                    .settings
+                                    .database
+                                    .script_timeout_seconds as f64
+                            },
+                            {
+                                let view_handle = view_handle.clone();
+                                move |val: f64, cx: &mut App| {
+                                    AppSettings::global_mut(cx)
+                                        .settings
+                                        .database
+                                        .script_timeout_seconds = val as u32;
+
+                                    let key = "database.script_timeout_seconds".to_string();
+                                    let value = val.to_string();
+                                    if let Some(view) = view_handle.upgrade() {
+                                        view.update(cx, |view, cx| {
+                                            view.save_setting_debounced(key, value, false, cx);
+                                        });
+                                    }
+                                }
+                            },
+                        )
+                        .default_value(default_settings.database.script_timeout_seconds as f64),
+                    )
+                    .description(
+                        "Wall-clock limit in seconds for a script run. 0 means unlimited, Stop is always available.",
+                    ),
+                    SettingItem::new(
                         "Show Connection Notifications",
                         SettingField::switch(
                             move |cx: &App| {

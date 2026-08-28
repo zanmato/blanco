@@ -114,79 +114,72 @@ fn build_config(
     );
     configs.insert("indentation".to_string(), Value::Map(indentation_config));
 
-    let mut kw_config = ahash::AHashMap::new();
-    kw_config.insert(
-        "capitalisation_policy".to_string(),
-        Value::String(formatter.keywords_policy.as_str().into()),
+    // sqruff nests per-rule options under a `rules` map (the `[sqruff:rules:x]`
+    // sections of a config file); a flat "rules:x" key is silently ignored.
+    let mut rules = ahash::AHashMap::new();
+    let mut rule = |name: &str, entries: Vec<(&str, Value)>| {
+        let section: ahash::AHashMap<String, Value> = entries
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value))
+            .collect();
+        rules.insert(name.to_string(), Value::Map(section));
+    };
+    rule(
+        "capitalisation.keywords",
+        vec![(
+            "capitalisation_policy",
+            Value::String(formatter.keywords_policy.as_str().into()),
+        )],
     );
-    configs.insert(
-        "rules:capitalisation.keywords".to_string(),
-        Value::Map(kw_config),
+    rule(
+        "capitalisation.identifiers",
+        vec![(
+            "extended_capitalisation_policy",
+            Value::String(formatter.identifiers_policy.as_str().into()),
+        )],
     );
-
-    let mut ident_config = ahash::AHashMap::new();
-    ident_config.insert(
-        "extended_capitalisation_policy".to_string(),
-        Value::String(formatter.identifiers_policy.as_str().into()),
+    rule(
+        "capitalisation.functions",
+        vec![(
+            "extended_capitalisation_policy",
+            Value::String(formatter.functions_policy.as_str().into()),
+        )],
     );
-    configs.insert(
-        "rules:capitalisation.identifiers".to_string(),
-        Value::Map(ident_config),
+    rule(
+        "capitalisation.literals",
+        vec![(
+            "capitalisation_policy",
+            Value::String(formatter.literals_policy.as_str().into()),
+        )],
     );
-
-    let mut func_config = ahash::AHashMap::new();
-    func_config.insert(
-        "extended_capitalisation_policy".to_string(),
-        Value::String(formatter.functions_policy.as_str().into()),
+    rule(
+        "capitalisation.types",
+        vec![(
+            "extended_capitalisation_policy",
+            Value::String(formatter.types_policy.as_str().into()),
+        )],
     );
-    configs.insert(
-        "rules:capitalisation.functions".to_string(),
-        Value::Map(func_config),
+    rule(
+        "convention.select_trailing_comma",
+        vec![(
+            "select_clause_trailing_comma",
+            Value::String(formatter.select_clause_trailing_comma.as_str().into()),
+        )],
     );
-
-    let mut lit_config = ahash::AHashMap::new();
-    lit_config.insert(
-        "capitalisation_policy".to_string(),
-        Value::String(formatter.literals_policy.as_str().into()),
+    rule(
+        "convention.terminator",
+        vec![
+            (
+                "multiline_newline",
+                Value::Bool(formatter.terminator_multiline_newline),
+            ),
+            (
+                "require_final_semicolon",
+                Value::Bool(formatter.require_final_semicolon),
+            ),
+        ],
     );
-    configs.insert(
-        "rules:capitalisation.literals".to_string(),
-        Value::Map(lit_config),
-    );
-
-    let mut types_config = ahash::AHashMap::new();
-    types_config.insert(
-        "extended_capitalisation_policy".to_string(),
-        Value::String(formatter.types_policy.as_str().into()),
-    );
-    configs.insert(
-        "rules:capitalisation.types".to_string(),
-        Value::Map(types_config),
-    );
-
-    let mut trailing_comma_config = ahash::AHashMap::new();
-    trailing_comma_config.insert(
-        "select_clause_trailing_comma".to_string(),
-        Value::String(formatter.select_clause_trailing_comma.as_str().into()),
-    );
-    configs.insert(
-        "rules:convention.select_trailing_comma".to_string(),
-        Value::Map(trailing_comma_config),
-    );
-
-    let mut terminator_config = ahash::AHashMap::new();
-    terminator_config.insert(
-        "multiline_newline".to_string(),
-        Value::Bool(formatter.terminator_multiline_newline),
-    );
-    terminator_config.insert(
-        "require_final_semicolon".to_string(),
-        Value::Bool(formatter.require_final_semicolon),
-    );
-    configs.insert(
-        "rules:convention.terminator".to_string(),
-        Value::Map(terminator_config),
-    );
+    configs.insert("rules".to_string(), Value::Map(rules));
 
     FluffConfig::new(configs, None, None)
 }
@@ -320,5 +313,116 @@ impl SqruffService {
             "JJ" => DiagnosticSeverity::Warning,
             _ => DiagnosticSeverity::Warning,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn upper_keywords() -> FormatterSettings {
+        FormatterSettings {
+            keywords_policy: "upper".to_string(),
+            ..FormatterSettings::default()
+        }
+    }
+
+    #[test]
+    fn fingerprint_is_stable_for_equal_settings_and_changes_with_any_policy() {
+        let editor = EditorSettings::default();
+        let base = FormatterSettings::default();
+        assert_eq!(
+            compute_fingerprint(&base, &editor),
+            compute_fingerprint(&base.clone(), &editor)
+        );
+
+        let variants = [
+            FormatterSettings {
+                keywords_policy: "upper".to_string(),
+                ..base.clone()
+            },
+            FormatterSettings {
+                indented_joins: !base.indented_joins,
+                ..base.clone()
+            },
+            FormatterSettings {
+                max_line_length: base.max_line_length + 1,
+                ..base.clone()
+            },
+            FormatterSettings {
+                exclude_rules: std::collections::HashSet::new(),
+                ..base.clone()
+            },
+            FormatterSettings {
+                require_final_semicolon: !base.require_final_semicolon,
+                ..base.clone()
+            },
+        ];
+        for variant in &variants {
+            assert_ne!(
+                compute_fingerprint(variant, &editor),
+                compute_fingerprint(&base, &editor),
+                "{variant:?}"
+            );
+        }
+
+        let wider_tabs = EditorSettings {
+            tab_size: editor.tab_size + 2,
+            ..editor
+        };
+        assert_ne!(
+            compute_fingerprint(&base, &wider_tabs),
+            compute_fingerprint(&base, &editor)
+        );
+    }
+
+    #[test]
+    fn formats_per_dialect_without_diagnostics() {
+        let editor = EditorSettings::default();
+        let formatter = upper_keywords();
+        for db_type in [
+            blanco_core::DatabaseType::PostgreSQL,
+            blanco_core::DatabaseType::MySQL,
+            blanco_core::DatabaseType::SQLite,
+            blanco_core::DatabaseType::MsSql,
+            blanco_core::DatabaseType::ClickHouse,
+        ] {
+            let dialect = db_type.to_sqruff_dialect();
+            let service = SqruffService::new(dialect, &formatter, &editor)
+                .unwrap_or_else(|error| panic!("{dialect}: {error}"));
+            let formatted = service
+                .format("select a,b from t where a=1", &formatter, &editor)
+                .unwrap_or_else(|error| panic!("{dialect}: {error}"));
+            assert!(formatted.contains("SELECT"), "{dialect}: {formatted}");
+            assert!(formatted.contains("FROM"), "{dialect}: {formatted}");
+            assert!(formatted.contains("WHERE"), "{dialect}: {formatted}");
+
+            let diagnostics = service
+                .lint(&formatted, &formatter, &editor, None)
+                .unwrap_or_else(|error| panic!("{dialect}: {error}"));
+            assert!(
+                diagnostics.is_empty(),
+                "{dialect}: formatted SQL should lint clean, got {diagnostics:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rebuilds_linter_when_settings_change() {
+        let editor = EditorSettings::default();
+        let service = SqruffService::new("postgres", &FormatterSettings::default(), &editor)
+            .expect("linter should build");
+        let lower = FormatterSettings {
+            keywords_policy: "lower".to_string(),
+            ..FormatterSettings::default()
+        };
+        let formatted = service
+            .format("SELECT a FROM t", &lower, &editor)
+            .expect("format should succeed");
+        assert!(formatted.contains("select"), "{formatted}");
+        let formatted = service
+            .format("select a from t", &upper_keywords(), &editor)
+            .expect("format should succeed");
+        assert!(formatted.contains("SELECT"), "{formatted}");
     }
 }

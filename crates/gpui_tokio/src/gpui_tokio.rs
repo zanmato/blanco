@@ -31,9 +31,14 @@ impl Global for GlobalTokio {}
 
 impl GlobalTokio {
     fn new() -> Self {
+        // Database I/O, SSH tunnels, LLM streaming and script host calls all
+        // share this pool, so two workers let one slow query starve the rest.
+        // GPUI's own executor runs alongside, hence the cap.
+        let worker_threads = std::thread::available_parallelism()
+            .map(|count| count.get().clamp(4, 8))
+            .unwrap_or(4);
         let runtime = tokio::runtime::Builder::new_multi_thread()
-            // Since we now have two executors, let's try to keep our footprint small
-            .worker_threads(2)
+            .worker_threads(worker_threads)
             .enable_all()
             .build()
             .expect("Failed to initialize Tokio");
