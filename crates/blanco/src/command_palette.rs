@@ -506,7 +506,7 @@ impl CommandPalette {
         if let Some(handle) = self.previous_focus.take().and_then(|h| h.upgrade()) {
             window.focus(&handle, cx);
         } else {
-            window.blur();
+            window.blur(cx);
         }
         cx.notify();
     }

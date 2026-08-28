@@ -1754,11 +1754,13 @@ impl Render for BlancoApp {
                                                 .min_w_0()
                                                 .h_full()
                                                 .overflow_hidden()
-                                                .bg(cx.theme().background)
+                                                // The shell is the darkest
+                                                // surface; this card holds the
+                                                // editor, so it takes the
+                                                // content surface the active
+                                                // tab is painted with.
+                                                .bg(cx.theme().tab_active)
                                                 .rounded(PANEL_RADIUS)
-                                                // This card shares the shell
-                                                // colour, so the border is what
-                                                // makes its outline readable.
                                                 .border_1()
                                                 .border_color(cx.theme().border)
                                                 .child(self.editor_panel.clone()),

@@ -865,12 +865,11 @@ impl ConnectionsPanel {
         Tree::new(&self.tree_state)
     }
 
-    fn render_filter(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_filter(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .px_2()
-            .py_1()
-            .border_b_1()
-            .border_color(cx.theme().border)
+            .pt_1()
+            .pb_2()
             .child(Input::new(&self.filter_input).small())
     }
 

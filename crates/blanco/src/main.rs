@@ -333,6 +333,29 @@ mod tests {
                     );
                 }
             }
+
+            // Parsing as JSON only proves the file is well formed. The loader
+            // ignores keys it does not recognise, so a token spelled the way
+            // Zed spells it (`link.foreground` for `link`) parses cleanly and
+            // then silently falls back to gpui-component's default theme.
+            // Deserializing into the loader's own type is what catches that.
+            let theme_set: gpui_component::ThemeSet = serde_json::from_slice(&bytes)
+                .unwrap_or_else(|error| panic!("{path} does not match the theme schema: {error}"));
+            for theme in &theme_set.themes {
+                let colors = &theme.colors;
+                assert!(
+                    colors.background.is_some()
+                        && colors.title_bar.is_some()
+                        && colors.status_bar.is_some()
+                        && colors.tab_bar.is_some()
+                        && colors.sidebar.is_some()
+                        && colors.table.is_some()
+                        && colors.table_head.is_some()
+                        && colors.link.is_some(),
+                    "{path}: {} leaves load-bearing colors unset",
+                    theme.name
+                );
+            }
         }
 
         for expected in [
