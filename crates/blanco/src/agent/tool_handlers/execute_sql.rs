@@ -28,15 +28,6 @@ fn contains_drop_statement(sql: &str) -> bool {
     }
 }
 
-fn needs_auto_limit(sql: &str) -> bool {
-    let upper = sql.to_uppercase();
-    let trimmed = upper.trim();
-    if !trimmed.starts_with("SELECT") {
-        return false;
-    }
-    !upper.contains("LIMIT")
-}
-
 pub struct ExecuteSqlHandler;
 
 #[async_trait(?Send)]
@@ -93,14 +84,13 @@ impl AgentToolHandler for ExecuteSqlHandler {
             }
         };
 
-        let mut sql = sql;
-        if needs_auto_limit(&sql) {
-            sql = format!(
-                "{}\nLIMIT {}",
-                sql.trim_end().trim_end_matches(';'),
-                EXECUTE_SQL_AUTO_LIMIT
-            );
-        }
+        // Without a known backend fall back to Postgres, whose LIMIT form is
+        // the common one.
+        let sql = context
+            .db_type
+            .unwrap_or(blanco_core::DatabaseType::PostgreSQL)
+            .dialect()
+            .apply_row_limit(&sql, EXECUTE_SQL_AUTO_LIMIT);
 
         match context
             .db_service

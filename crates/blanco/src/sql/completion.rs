@@ -35,14 +35,11 @@ const CACHE_TTL_SECONDS: u64 = 300; // 5 minutes cache TTL
 /// (MySQL, SQLite, ClickHouse) fall back to the database name since their
 /// "schema" is effectively the database.
 fn default_schema_for(driver: DatabaseType, database_name: &str) -> String {
-    match driver {
-        DatabaseType::PostgreSQL => "public".to_string(),
-        DatabaseType::MsSql => "dbo".to_string(),
-        DatabaseType::MySQL
-        | DatabaseType::SQLite
-        | DatabaseType::ClickHouse
-        | DatabaseType::Redis => database_name.to_string(),
-    }
+    driver
+        .dialect()
+        .default_schema()
+        .map(str::to_string)
+        .unwrap_or_else(|| database_name.to_string())
 }
 
 /// SQL keywords for completion and keyword detection

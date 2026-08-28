@@ -66,12 +66,7 @@ impl PlanTree {
 /// Parse the result of [`crate::DatabaseType`]'s EXPLAIN into a tree, or
 /// `None` when the backend's output is not structured (or did not parse).
 pub fn parse_plan(db_type: DatabaseType, result: &QueryResult) -> Option<PlanTree> {
-    match db_type {
-        DatabaseType::PostgreSQL => parse_postgres(result),
-        DatabaseType::SQLite => parse_sqlite(result),
-        DatabaseType::MySQL => parse_mysql_tree(result),
-        _ => None,
-    }
+    db_type.dialect().parse_explain_plan(result)
 }
 
 fn single_cell(result: &QueryResult) -> Option<String> {
@@ -88,7 +83,7 @@ fn single_cell(result: &QueryResult) -> Option<String> {
     }
 }
 
-fn parse_postgres(result: &QueryResult) -> Option<PlanTree> {
+pub(crate) fn parse_postgres(result: &QueryResult) -> Option<PlanTree> {
     let text = single_cell(result)?;
     let value: serde_json::Value = serde_json::from_str(text.trim()).ok()?;
     let entries = value.as_array()?;
@@ -172,7 +167,7 @@ fn postgres_node(plan: &serde_json::Value) -> PlanNode {
 }
 
 /// `EXPLAIN QUERY PLAN` rows are `(id, parent, notused, detail)`.
-fn parse_sqlite(result: &QueryResult) -> Option<PlanTree> {
+pub(crate) fn parse_sqlite(result: &QueryResult) -> Option<PlanTree> {
     let id_col = result.columns.iter().position(|c| c == "id")?;
     let parent_col = result.columns.iter().position(|c| c == "parent")?;
     let detail_col = result.columns.iter().position(|c| c == "detail")?;
@@ -209,7 +204,7 @@ fn parse_sqlite(result: &QueryResult) -> Option<PlanTree> {
 
 /// `EXPLAIN FORMAT=TREE` is indented text where each node starts with `-> `.
 /// Nesting is derived from the indentation of the arrow.
-fn parse_mysql_tree(result: &QueryResult) -> Option<PlanTree> {
+pub(crate) fn parse_mysql_tree(result: &QueryResult) -> Option<PlanTree> {
     let text = single_cell(result)?;
     let mut stack: Vec<(usize, PlanNode)> = Vec::new();
     let mut roots: Vec<PlanNode> = Vec::new();

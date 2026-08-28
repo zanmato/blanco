@@ -113,7 +113,10 @@ impl ResultsTableDelegate {
     }
 
     pub fn is_editable(&self) -> bool {
-        if matches!(self.db_type, Some(database::DatabaseType::ClickHouse)) {
+        if self
+            .db_type
+            .is_some_and(|db_type| !db_type.dialect().rows_editable())
+        {
             return false;
         }
         self.table_name.is_some() && self.primary_key_is_complete()

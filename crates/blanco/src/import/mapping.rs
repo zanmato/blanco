@@ -1,4 +1,5 @@
 use blanco_core::ColumnInfo;
+use blanco_core::UpsertStyle;
 use database::DatabaseType;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -106,21 +107,11 @@ pub fn slugify(value: &str) -> String {
 }
 
 pub fn quote_ident(ident: &str, db_type: DatabaseType) -> String {
-    match db_type {
-        DatabaseType::MySQL => format!("`{}`", ident.replace('`', "``")),
-        _ => format!("\"{}\"", ident.replace('"', "\"\"")),
-    }
+    db_type.dialect().quote_identifier(ident)
 }
 
 pub fn quote_qualified(schema: Option<&str>, table: &str, db_type: DatabaseType) -> String {
-    match schema {
-        Some(s) if !s.is_empty() => format!(
-            "{}.{}",
-            quote_ident(s, db_type),
-            quote_ident(table, db_type)
-        ),
-        _ => quote_ident(table, db_type),
-    }
+    db_type.dialect().quote_qualified(schema, table)
 }
 
 pub fn build_insert_sql(
@@ -134,11 +125,9 @@ pub fn build_insert_sql(
     let quoted_cols: Vec<String> = columns.iter().map(|c| quote_ident(c, db_type)).collect();
     let placeholders_per_row = columns.len();
 
+    let dialect = db_type.dialect();
     let placeholder_for = |global_idx: usize, col_idx: usize| -> String {
-        let ph = match db_type {
-            DatabaseType::PostgreSQL => format!("${}", global_idx + 1),
-            _ => "?".to_string(),
-        };
+        let ph = dialect.placeholder(global_idx);
         if db_type == DatabaseType::PostgreSQL
             && let Some(dt) = data_types.get(col_idx)
         {
@@ -154,12 +143,7 @@ pub fn build_insert_sql(
         .iter()
         .any(|dt| !is_text_type(&dt.to_lowercase()));
 
-    let placeholder_for_simple = |global_idx: usize| -> String {
-        match db_type {
-            DatabaseType::PostgreSQL => format!("${}", global_idx + 1),
-            _ => "?".to_string(),
-        }
-    };
+    let placeholder_for_simple = |global_idx: usize| -> String { dialect.placeholder(global_idx) };
 
     let mut values_groups: Vec<String> = Vec::with_capacity(row_count);
     for row in 0..row_count {
@@ -176,24 +160,17 @@ pub fn build_insert_sql(
         values_groups.push(format!("({})", group.join(",")));
     }
 
-    let mut sql = match (db_type, conflict) {
-        (DatabaseType::MySQL, ConflictStrategy::DoNothing { .. }) => format!(
-            "INSERT IGNORE INTO {} ({}) VALUES {}",
-            fq_table,
-            quoted_cols.join(","),
-            values_groups.join(",")
-        ),
-        _ => format!(
-            "INSERT INTO {} ({}) VALUES {}",
-            fq_table,
-            quoted_cols.join(","),
-            values_groups.join(",")
-        ),
-    };
+    let mut sql = format!(
+        "{} {} ({}) VALUES {}",
+        insert_keyword(db_type, conflict),
+        fq_table,
+        quoted_cols.join(","),
+        values_groups.join(",")
+    );
 
-    match (db_type, conflict) {
-        (DatabaseType::MySQL, ConflictStrategy::DoNothing { .. }) => {}
-        (DatabaseType::MySQL, ConflictStrategy::Update { update_columns, .. }) => {
+    match (dialect.upsert_style(), conflict) {
+        (UpsertStyle::OnDuplicateKey, ConflictStrategy::DoNothing { .. }) => {}
+        (UpsertStyle::OnDuplicateKey, ConflictStrategy::Update { update_columns, .. }) => {
             let assignments: Vec<String> = update_columns
                 .iter()
                 .map(|c| {
@@ -291,13 +268,9 @@ pub fn preview_statements(
         return vec!["-- no sample data --".to_string()];
     }
 
-    let insert_keyword = match (db_type, conflict) {
-        (DatabaseType::MySQL, ConflictStrategy::DoNothing { .. }) => "INSERT IGNORE INTO",
-        _ => "INSERT INTO",
-    };
     let mut stmt = format!(
         "{} {} ({})\nVALUES {}",
-        insert_keyword,
+        insert_keyword(db_type, conflict),
         fq_table,
         quoted_cols.join(", "),
         rows.join(",\n       "),
@@ -307,15 +280,24 @@ pub fn preview_statements(
     vec![stmt]
 }
 
+/// `INSERT IGNORE` is MySQL's spelling of "do nothing on conflict"; every
+/// other backend says it in a trailing clause instead.
+fn insert_keyword(db_type: DatabaseType, conflict: &ConflictStrategy) -> &'static str {
+    match (db_type.dialect().upsert_style(), conflict) {
+        (UpsertStyle::OnDuplicateKey, ConflictStrategy::DoNothing { .. }) => "INSERT IGNORE INTO",
+        _ => "INSERT INTO",
+    }
+}
+
 fn append_conflict_clause(
     sql: &mut String,
     _columns: &[String],
     db_type: DatabaseType,
     conflict: &ConflictStrategy,
 ) {
-    match (db_type, conflict) {
-        (DatabaseType::MySQL, ConflictStrategy::DoNothing { .. }) => {}
-        (DatabaseType::MySQL, ConflictStrategy::Update { update_columns, .. }) => {
+    match (db_type.dialect().upsert_style(), conflict) {
+        (UpsertStyle::OnDuplicateKey, ConflictStrategy::DoNothing { .. }) => {}
+        (UpsertStyle::OnDuplicateKey, ConflictStrategy::Update { update_columns, .. }) => {
             if !update_columns.is_empty() {
                 let assignments: Vec<String> = update_columns
                     .iter()

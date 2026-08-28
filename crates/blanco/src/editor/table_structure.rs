@@ -98,7 +98,7 @@ impl TableStructureTab {
     /// Whether this driver can produce a `CREATE TABLE` statement. MSSQL has no
     /// implementation, so the button is hidden rather than surfacing an error.
     fn supports_table_ddl(&self) -> bool {
-        !matches!(self._db_type, database::DatabaseType::MsSql)
+        self._db_type.dialect().supports_create_table_ddl()
     }
 
     fn toggle_ddl(&mut self, cx: &mut Context<Self>) {

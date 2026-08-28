@@ -902,13 +902,12 @@ impl BlancoApp {
         // Non-SQL backends (Redis) don't get a SELECT scaffold; a clicked key
         // opens the key inspector instead (handled below).
         let content = if action.db_type.supports_sql() {
-            action
-                .table_name
-                .as_ref()
-                .map(|table| match &action.schema_name {
-                    Some(schema) => format!("SELECT * FROM {}.{} LIMIT 100;", schema, table),
-                    None => format!("SELECT * FROM {} LIMIT 100;", table),
-                })
+            action.table_name.as_ref().map(|table| {
+                action
+                    .db_type
+                    .dialect()
+                    .select_scaffold(action.schema_name.as_deref(), table, 100)
+            })
         } else {
             None
         };

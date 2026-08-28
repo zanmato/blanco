@@ -46,6 +46,8 @@ pub struct ToolContext {
     pub db_service: Arc<dyn DatabaseService>,
     pub connection_id: Option<i64>,
     pub database_name: Option<String>,
+    /// Backend of the tab's connection, `None` when the tab has none yet.
+    pub db_type: Option<DatabaseType>,
     pub input_state: Option<WeakEntity<EditorState>>,
 }
 

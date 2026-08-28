@@ -48,36 +48,7 @@ impl TableChangeOperation {
     }
 
     fn quote_identifier(identifier: &str, database_type: database::DatabaseType) -> String {
-        identifier
-            .split('.')
-            .map(|part| {
-                let part = part.trim();
-                match database_type {
-                    database::DatabaseType::MySQL => {
-                        let unquoted = part
-                            .strip_prefix('`')
-                            .and_then(|value| value.strip_suffix('`'))
-                            .unwrap_or(part);
-                        format!("`{}`", unquoted.replace('`', "``"))
-                    }
-                    database::DatabaseType::MsSql => {
-                        let unquoted = part
-                            .strip_prefix('[')
-                            .and_then(|value| value.strip_suffix(']'))
-                            .unwrap_or(part);
-                        format!("[{}]", unquoted.replace(']', "]]"))
-                    }
-                    _ => {
-                        let unquoted = part
-                            .strip_prefix('"')
-                            .and_then(|value| value.strip_suffix('"'))
-                            .unwrap_or(part);
-                        format!("\"{}\"", unquoted.replace('"', "\"\""))
-                    }
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(".")
+        database_type.dialect().quote_path(identifier)
     }
 
     /// Values that pass through unquoted so users can type them into a cell and
@@ -135,11 +106,7 @@ impl TableChangeOperation {
     /// Always quote, never interpret. Used for primary key values in WHERE
     /// clauses, which come from the server and are data by definition.
     fn format_literal(value: &str, database_type: database::DatabaseType) -> String {
-        let escaped = match database_type {
-            database::DatabaseType::MySQL => value.replace('\\', "\\\\").replace('\'', "''"),
-            _ => value.replace('\'', "''"),
-        };
-        format!("'{escaped}'")
+        database_type.dialect().string_literal(value)
     }
 
     fn format_where_clause(
@@ -202,12 +169,7 @@ impl TableChangeOperation {
                 // Every column was omitted (all defaults): MySQL has no
                 // `DEFAULT VALUES` form, everything else has no `()` form.
                 if self.changes.is_empty() {
-                    return match database_type {
-                        database::DatabaseType::MySQL => {
-                            format!("INSERT INTO {table_name} () VALUES ()")
-                        }
-                        _ => format!("INSERT INTO {table_name} DEFAULT VALUES"),
-                    };
+                    return database_type.dialect().insert_defaults_sql(&table_name);
                 }
                 let columns: Vec<String> = self
                     .changes

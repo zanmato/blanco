@@ -7,7 +7,7 @@ use sqlparser::{
         Expr, ObjectName, SelectItem, SelectItemQualifiedWildcardKind, SetExpr, Statement,
         TableFactor, TableObject, TableWithJoins,
     },
-    dialect::{Dialect, GenericDialect, MsSqlDialect, MySqlDialect, PostgreSqlDialect},
+    dialect::Dialect,
     parser::Parser,
 };
 
@@ -23,17 +23,9 @@ pub struct TableExtractor {
 
 impl TableExtractor {
     pub fn for_driver(driver: DatabaseType) -> Self {
-        let dialect: Box<dyn Dialect> = match driver {
-            DatabaseType::SQLite => Box::new(GenericDialect {}),
-            DatabaseType::PostgreSQL => Box::new(PostgreSqlDialect {}),
-            DatabaseType::MySQL => Box::new(MySqlDialect {}),
-            DatabaseType::ClickHouse => Box::new(GenericDialect {}),
-            DatabaseType::MsSql => Box::new(MsSqlDialect {}),
-            // Redis is not SQL; TableExtractor is never used for it (gated by
-            // supports_sql), but the match must remain exhaustive.
-            DatabaseType::Redis => Box::new(GenericDialect {}),
-        };
-        Self { dialect }
+        Self {
+            dialect: driver.dialect().sqlparser_dialect(),
+        }
     }
 
     fn parse_sql(&self, sql: &str) -> Result<Option<Statement>> {

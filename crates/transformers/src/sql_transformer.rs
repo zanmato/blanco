@@ -97,7 +97,7 @@ impl DataTransformer for SqlTransformer {
                         Some(val) => {
                             if should_quote_value(col_type) {
                                 output.push('\'');
-                                sql_escape_string_to(val, &mut output);
+                                sql_escape_string_to(val, self.db_type, &mut output);
                                 output.push('\'');
                             } else {
                                 output.push_str(val);
@@ -178,7 +178,7 @@ impl DataTransformer for SqlTransformer {
                 Some(val) => {
                     if should_quote_value(col_type) {
                         output.push('\'');
-                        sql_escape_string_to(val, &mut output);
+                        sql_escape_string_to(val, self.db_type, &mut output);
                         output.push('\'');
                     } else {
                         output.push_str(val);
@@ -203,33 +203,16 @@ impl DataTransformer for SqlTransformer {
     }
 }
 
-pub(crate) fn sql_escape_string_to(value: &str, output: &mut String) {
-    // Check if we need to escape at all
-    if !value.contains('\'') {
+pub(crate) fn sql_escape_string_to(value: &str, db_type: DatabaseType, output: &mut String) {
+    if !value.contains('\'') && !value.contains('\\') {
         output.push_str(value);
         return;
     }
-
-    for c in value.chars() {
-        if c == '\'' {
-            output.push_str("''");
-        } else {
-            output.push(c);
-        }
-    }
+    output.push_str(&db_type.dialect().escape_string_literal(value));
 }
 
 pub(crate) fn sql_identifier(name: &str, db_type: DatabaseType) -> String {
-    match db_type {
-        DatabaseType::MySQL => format!("`{}`", name.replace('`', "``")),
-        DatabaseType::PostgreSQL | DatabaseType::SQLite | DatabaseType::ClickHouse => {
-            format!("\"{}\"", name.replace('"', "\"\""))
-        }
-        DatabaseType::MsSql => format!("[{}]", name.replace(']', "]]")),
-        // Redis results are not exported as SQL INSERTs; fall back to
-        // double-quote identifier quoting so the match stays exhaustive.
-        DatabaseType::Redis => format!("\"{}\"", name.replace('"', "\"\"")),
-    }
+    db_type.dialect().quote_identifier(name)
 }
 
 #[cfg(test)]
@@ -238,7 +221,7 @@ mod tests {
 
     fn sql_escape_string(value: &str) -> String {
         let mut output = String::new();
-        sql_escape_string_to(value, &mut output);
+        sql_escape_string_to(value, DatabaseType::PostgreSQL, &mut output);
         output
     }
 

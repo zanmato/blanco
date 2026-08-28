@@ -38,8 +38,9 @@ impl ValuesTransformer {
 fn format_row_values(
     cells: &[Option<String>],
     column_types: &[Option<ColumnType>],
-    use_row_keyword: bool,
+    db_type: DatabaseType,
 ) -> String {
+    let use_row_keyword = db_type.dialect().values_query_style().row_keyword;
     let mut output = String::with_capacity(cells.len() * 30);
 
     if use_row_keyword {
@@ -64,7 +65,7 @@ fn format_row_values(
             Some(val) => {
                 if should_quote_value(col_type) {
                     output.push('\'');
-                    sql_escape_string_to(val, &mut output);
+                    sql_escape_string_to(val, db_type, &mut output);
                     output.push('\'');
                 } else {
                     output.push_str(val);
@@ -106,7 +107,7 @@ impl DataTransformer for ValuesTransformer {
         let estimated_capacity = (data.selected_rows.len() * 150) + 300;
         let mut output = String::with_capacity(estimated_capacity);
 
-        if matches!(db_type, DatabaseType::SQLite) {
+        if db_type.dialect().values_query_style().as_cte {
             output.push_str("WITH ");
             output.push_str(&sql_identifier(table_name, db_type));
             output.push('(');
@@ -116,7 +117,6 @@ impl DataTransformer for ValuesTransformer {
             output.push_str("SELECT *\nFROM (\nVALUES\n");
         }
 
-        let use_row_keyword = matches!(db_type, DatabaseType::MySQL);
         let row_count = data.selected_rows.len();
 
         for (i, row) in data.selected_rows.iter().enumerate() {
@@ -129,7 +129,7 @@ impl DataTransformer for ValuesTransformer {
                     .map(|c| c.value.clone())
                     .collect::<Vec<_>>(),
                 &column_types,
-                use_row_keyword,
+                db_type,
             );
 
             output.push_str("  ");
@@ -142,7 +142,7 @@ impl DataTransformer for ValuesTransformer {
             }
         }
 
-        if matches!(db_type, DatabaseType::SQLite) {
+        if db_type.dialect().values_query_style().as_cte {
             output.push_str(")\nSELECT *\nFROM ");
             output.push_str(&sql_identifier(table_name, db_type));
             output.push_str(";\n");
@@ -172,7 +172,7 @@ impl DataTransformer for ValuesTransformer {
 
         let mut output = String::with_capacity(200);
 
-        if matches!(db_type, DatabaseType::SQLite) {
+        if db_type.dialect().values_query_style().as_cte {
             output.push_str("WITH ");
             output.push_str(&sql_identifier(table_name, db_type));
             output.push('(');
@@ -192,7 +192,6 @@ impl DataTransformer for ValuesTransformer {
         column_types: &[ColumnType],
     ) -> Result<String, TransformError> {
         let db_type = self.db_type;
-        let use_row_keyword = matches!(db_type, DatabaseType::MySQL);
 
         let mut output = String::with_capacity((row_data.len() * 50) + 20);
 
@@ -209,7 +208,7 @@ impl DataTransformer for ValuesTransformer {
         let column_type_refs: Vec<Option<ColumnType>> =
             column_types.iter().map(|ct| Some(*ct)).collect();
 
-        let values = format_row_values(row_data, &column_type_refs, use_row_keyword);
+        let values = format_row_values(row_data, &column_type_refs, db_type);
         output.push_str(&values);
 
         Ok(output)
@@ -222,7 +221,7 @@ impl DataTransformer for ValuesTransformer {
         let mut output = String::with_capacity(200);
         output.push('\n');
 
-        if matches!(db_type, DatabaseType::SQLite) {
+        if db_type.dialect().values_query_style().as_cte {
             output.push_str(")\nSELECT *\nFROM ");
             output.push_str(&sql_identifier(table_name, db_type));
             output.push_str(";\n");
@@ -322,7 +321,7 @@ mod tests {
         let result = transformer.transform_selected_data(&data).unwrap();
 
         assert!(result.starts_with("SELECT *\nFROM (\nVALUES\n"));
-        assert!(result.contains(") AS \"events\"(\"id\", \"name\");\n"));
+        assert!(result.contains(") AS `events`(`id`, `name`);\n"));
     }
 
     #[test]

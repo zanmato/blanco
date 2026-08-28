@@ -150,15 +150,7 @@ pub fn function_groups(dialect: DatabaseType) -> &'static [FunctionGroup] {
         OnceLock::new(),
         OnceLock::new(),
     ];
-    let slot = match dialect {
-        DatabaseType::PostgreSQL => 0,
-        DatabaseType::MySQL => 1,
-        DatabaseType::SQLite => 2,
-        DatabaseType::MsSql => 3,
-        DatabaseType::ClickHouse => 4,
-        DatabaseType::Redis => 5,
-    };
-    GROUPS[slot].get_or_init(|| group_by_name(builtin_functions(dialect)))
+    GROUPS[dialect.index()].get_or_init(|| group_by_name(builtin_functions(dialect)))
 }
 
 #[cfg(test)]

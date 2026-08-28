@@ -8,6 +8,7 @@ pub mod connection_trait;
 pub mod database_service;
 pub mod database_type;
 pub mod ddl;
+pub mod dialect;
 pub mod explain_plan;
 pub mod table_extractor;
 pub mod write_guard;
@@ -22,6 +23,7 @@ pub use connection_trait::{
 
 pub use database_service::{ConnectionStatus, DatabaseService};
 pub use database_type::{DatabaseType, ParamStyles};
+pub use dialect::{Dialect, UpsertStyle, ValuesQueryStyle};
 pub use table_extractor::TableExtractor;
 pub use write_guard::StatementAccess;
 

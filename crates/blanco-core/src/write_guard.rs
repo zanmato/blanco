@@ -167,9 +167,10 @@ const REDIS_WRITE_SUBCOMMANDS: &[(&str, &str)] = &[
 ];
 
 pub fn classify(driver: DatabaseType, text: &str) -> StatementAccess {
-    match driver {
-        DatabaseType::Redis => classify_redis(text),
-        _ => classify_sql(text),
+    if driver.dialect().supports_sql() {
+        classify_sql(text)
+    } else {
+        classify_redis(text)
     }
 }
 

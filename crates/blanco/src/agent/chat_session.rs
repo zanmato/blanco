@@ -57,18 +57,7 @@ fn system_prompt_for(tab_language: TabLanguage, db_type: Option<DatabaseType>) -
 fn script_system_prompt(db_type: Option<DatabaseType>) -> String {
     let supports_sql = db_type.map(|db| db.supports_sql()).unwrap_or(true);
     let dialect = match db_type {
-        Some(db_type) if supports_sql => format!(
-            "The connection is {}, so every statement string you pass to `db.query`, \
-             `db.execute` and `db.transaction` must be {} SQL.",
-            db_type.as_str(),
-            db_type.as_str()
-        ),
-        Some(db_type) => format!(
-            "The connection is {}, which does not speak SQL: the strings you pass to `db.query`, \
-             `db.execute` and `db.transaction` are command text in `redis-cli` syntax (e.g. \
-             `GET user:1`), one command per call, and bind parameters are unavailable.",
-            db_type.as_str()
-        ),
+        Some(db_type) => db_type.dialect().command_syntax_description(),
         None => "The connection's type is unknown; write portable SQL.".to_string(),
     };
 
@@ -675,7 +664,7 @@ impl ChatSession {
             let tool_call = tool_call.clone();
 
             // Get tool context and registry from session
-            let (tool_registry, input_state, connection_id, database_name, db_service) =
+            let (tool_registry, input_state, connection_id, database_name, db_type, db_service) =
                 match chat_session_handle.update_in(async_cx, |session, _window, cx| {
                     let db_service = DatabaseService::global(cx);
                     Ok::<_, anyhow::Error>((
@@ -683,6 +672,7 @@ impl ChatSession {
                         session.input_state.clone(),
                         session.connection_id,
                         session.database_name.clone(),
+                        session.db_type,
                         Arc::new(db_service.clone()) as Arc<dyn blanco_core::DatabaseService>,
                     ))
                 }) {
@@ -733,6 +723,7 @@ impl ChatSession {
                 db_service,
                 connection_id,
                 database_name,
+                db_type,
                 input_state,
             };
 

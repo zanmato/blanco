@@ -370,14 +370,7 @@ impl ConnectionData {
                     .unwrap_or_else(|| format!("{}.db", self.name)),
             ),
             _ => {
-                let default_port = match self.db_type {
-                    DatabaseType::PostgreSQL => 5432,
-                    DatabaseType::MySQL => 3306,
-                    DatabaseType::ClickHouse => 8123,
-                    DatabaseType::MsSql => 1433,
-                    DatabaseType::Redis => 6379,
-                    DatabaseType::SQLite => 0,
-                };
+                let default_port = i32::from(self.db_type.dialect().default_port());
 
                 let mut config = ConnectionConfig::new(
                     connection_id,

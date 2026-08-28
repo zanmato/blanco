@@ -24,24 +24,11 @@ impl TableOperation {
 /// Quote one identifier for `db_type`. Input is taken as a bare name; any
 /// quote characters in it are escaped, not interpreted.
 pub fn quote_identifier(db_type: DatabaseType, identifier: &str) -> String {
-    match db_type {
-        DatabaseType::MySQL | DatabaseType::ClickHouse => {
-            format!("`{}`", identifier.replace('`', "``"))
-        }
-        DatabaseType::MsSql => format!("[{}]", identifier.replace(']', "]]")),
-        _ => format!("\"{}\"", identifier.replace('"', "\"\"")),
-    }
+    db_type.dialect().quote_identifier(identifier)
 }
 
 fn qualified(db_type: DatabaseType, schema: Option<&str>, name: &str) -> String {
-    match schema.filter(|schema| !schema.is_empty()) {
-        Some(schema) => format!(
-            "{}.{}",
-            quote_identifier(db_type, schema),
-            quote_identifier(db_type, name)
-        ),
-        None => quote_identifier(db_type, name),
-    }
+    db_type.dialect().quote_qualified(schema, name)
 }
 
 /// Build the statement for `operation` on `name`, or `None` when the backend
