@@ -22,6 +22,7 @@ mod history_panel;
 mod import;
 mod keybindings;
 mod logging;
+mod mcp;
 mod redis_completion;
 mod redis_syntax;
 mod result_ext;
@@ -126,6 +127,7 @@ fn main() {
         // Initialize database service with tokio runtime handle for automatic SSH tunnel establishment
         let db_service = DatabaseService::new(runtime_handle.clone());
         cx.set_global(db_service);
+        mcp::McpService::init(cx);
 
         // Load connections from app database and add them to the database service
         let app_database = AppDatabase::global(cx).clone();
@@ -190,6 +192,10 @@ fn main() {
         }
 
         settings::apply_font_settings(cx);
+
+        if AppSettings::global(cx).settings.mcp.enabled {
+            mcp::McpService::start(cx);
+        }
 
         cx.set_text_rendering_mode(gpui::TextRenderingMode::Subpixel);
 

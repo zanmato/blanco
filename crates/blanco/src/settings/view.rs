@@ -1,21 +1,26 @@
 use crate::app_settings::AppSettings;
+use crate::mcp::{McpService, McpStatus};
 use crate::settings::Settings;
 use crate::settings::formatter_page::formatter_page;
 use crate::settings::keybindings_page::keybindings_page;
 use app_database::AppDatabase;
 use gpui::{
-    App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, Render, SharedString,
-    Styled, Subscription, Task, Window, px, rems,
+    App, AppContext, ClipboardItem, Context, Entity, FocusHandle, Focusable, IntoElement,
+    ParentElement, Render, SharedString, Styled, Subscription, Task, Window, div,
+    prelude::FluentBuilder as _, px, rems,
 };
 use gpui_component::ThemeRegistry;
 use gpui_component::{
     ActiveTheme, Sizable,
+    button::Button,
     group_box::GroupBoxVariant,
+    h_flex,
     select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
     setting::{
         NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage,
         Settings as GpuiSettings,
     },
+    v_flex,
 };
 use std::time::Duration;
 
@@ -57,7 +62,9 @@ impl SettingsView {
             save_tasks: std::collections::HashMap::new(),
             ui_font_select: None,
             mono_font_select: None,
-            _subscriptions: Vec::new(),
+            // Re-render when the MCP server starts, stops or fails so the
+            // status row stays current.
+            _subscriptions: vec![cx.observe_global::<McpService>(|_, cx| cx.notify())],
         }
     }
 
@@ -587,6 +594,39 @@ impl SettingsView {
                         }),
                     )
                     .description("Monospace font used in the SQL editor and results table."),
+                    SettingItem::new(
+                        "Terminal Font Size",
+                        SettingField::number_input(
+                            NumberFieldOptions {
+                                min: 8.0,
+                                max: 32.0,
+                                step: 1.0,
+                            },
+                            move |cx: &App| {
+                                AppSettings::global(cx).settings.appearance.terminal_font_size
+                                    as f64
+                            },
+                            {
+                                let view_handle = view_handle.clone();
+                                move |val: f64, cx: &mut App| {
+                                    AppSettings::global_mut(cx)
+                                        .settings
+                                        .appearance
+                                        .terminal_font_size = val as f32;
+
+                                    let key = "appearance.terminal_font_size".to_string();
+                                    let value = val.to_string();
+                                    if let Some(view) = view_handle.upgrade() {
+                                        view.update(cx, |view, cx| {
+                                            view.save_setting_debounced(key, value, false, cx);
+                                        });
+                                    }
+                                }
+                            },
+                        )
+                        .default_value(default_settings.appearance.terminal_font_size as f64),
+                    )
+                    .description("Font size in pixels for the terminal pane (8-32)."),
                 ]),
             ]),
             // Chat Settings Page
@@ -720,7 +760,7 @@ impl SettingsView {
                             },
                             move |cx: &App| AppSettings::global(cx).settings.chat.max_tokens as f64,
                             {
-                                let view_handle = view_handle;
+                                let view_handle = view_handle.clone();
                                 move |val: f64, cx: &mut App| {
                                     AppSettings::global_mut(cx).settings.chat.max_tokens =
                                         val as u32;
@@ -744,8 +784,202 @@ impl SettingsView {
                     ),
                 ]),
             ]),
+            // MCP Server Settings Page
+            SettingPage::new("MCP Server").resettable(true).groups(vec![
+                SettingGroup::new().title("Server").items(vec![
+                    SettingItem::new(
+                        "Enable MCP server",
+                        SettingField::switch(
+                            move |cx: &App| AppSettings::global(cx).settings.mcp.enabled,
+                            {
+                                let view_handle = view_handle.clone();
+                                move |val: bool, cx: &mut App| {
+                                    AppSettings::global_mut(cx).settings.mcp.enabled = val;
+                                    if val {
+                                        McpService::start(cx);
+                                    } else {
+                                        McpService::stop(cx);
+                                    }
+
+                                    let key = "mcp.enabled".to_string();
+                                    let value = val.to_string();
+                                    if let Some(view) = view_handle.upgrade() {
+                                        view.update(cx, |view, cx| {
+                                            view.save_setting_debounced(key, value, false, cx);
+                                        });
+                                    }
+                                }
+                            },
+                        )
+                        .default_value(default_settings.mcp.enabled),
+                    )
+                    .description(
+                        "Expose the open tabs, saved connections, SQL execution and schema \
+                         browsing to external agents (Claude Code, OpenCode, ...) over a local \
+                         MCP endpoint on 127.0.0.1. Requests must carry the bearer token shown \
+                         below.",
+                    ),
+                    SettingItem::new(
+                        "Port",
+                        SettingField::number_input(
+                            NumberFieldOptions {
+                                min: 1024.0,
+                                max: 65535.0,
+                                step: 1.0,
+                            },
+                            move |cx: &App| AppSettings::global(cx).settings.mcp.port as f64,
+                            {
+                                let view_handle = view_handle.clone();
+                                move |val: f64, cx: &mut App| {
+                                    let port = val.clamp(1024.0, 65535.0) as u16;
+                                    AppSettings::global_mut(cx).settings.mcp.port = port;
+                                    if McpService::global(cx).is_running() {
+                                        McpService::restart(cx);
+                                    }
+
+                                    let key = "mcp.port".to_string();
+                                    if let Some(view) = view_handle.upgrade() {
+                                        view.update(cx, |view, cx| {
+                                            view.save_setting_debounced(
+                                                key,
+                                                port.to_string(),
+                                                false,
+                                                cx,
+                                            );
+                                        });
+                                    }
+                                }
+                            },
+                        )
+                        .default_value(default_settings.mcp.port as f64),
+                    )
+                    .description(
+                        "Loopback port the server listens on. Changing it restarts a running \
+                         server and rotates the token.",
+                    ),
+                    SettingItem::new(
+                        "Allow writes without confirmation",
+                        SettingField::switch(
+                            move |cx: &App| AppSettings::global(cx).settings.mcp.allow_writes,
+                            {
+                                let view_handle = view_handle;
+                                move |val: bool, cx: &mut App| {
+                                    AppSettings::global_mut(cx).settings.mcp.allow_writes = val;
+                                    McpService::set_allow_writes(cx, val);
+
+                                    let key = "mcp.allow_writes".to_string();
+                                    let value = val.to_string();
+                                    if let Some(view) = view_handle.upgrade() {
+                                        view.update(cx, |view, cx| {
+                                            view.save_setting_debounced(key, value, false, cx);
+                                        });
+                                    }
+                                }
+                            },
+                        )
+                        .default_value(default_settings.mcp.allow_writes),
+                    )
+                    .description(
+                        "Run INSERT, UPDATE, DELETE and DDL sent by an agent without asking. \
+                         Writes on PROD connections and DROP/TRUNCATE always ask, and reads \
+                         never do.",
+                    ),
+                    SettingItem::render(|_, _, cx| mcp_status_element(cx)),
+                ]),
+            ]),
         ]
     }
+}
+
+/// Status line plus the copy buttons an agent setup needs: endpoint URL, token,
+/// the `claude mcp add` one-liner and the agent workspace folder.
+fn mcp_status_element(cx: &mut App) -> gpui::AnyElement {
+    let theme = cx.theme();
+    let workspace = crate::mcp::discovery::workspace_dir();
+    let (status_text, status_color, endpoint) = match McpService::global(cx).status() {
+        McpStatus::Running { port, token } => (
+            format!("Running at {}", crate::mcp::discovery::server_url(*port)),
+            theme.green,
+            Some((*port, token.clone())),
+        ),
+        McpStatus::Stopped => ("Stopped".to_string(), theme.muted_foreground, None),
+        McpStatus::Error(message) => (format!("Error: {message}"), theme.red, None),
+    };
+
+    v_flex()
+        .gap_2()
+        .w_full()
+        .child(
+            v_flex()
+                .gap_1()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child("Status"),
+                )
+                .child(div().text_sm().text_color(status_color).child(status_text))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(format!(
+                            "Agent workspace: {} (a tab's terminal pane opens there; start \
+                             claude, opencode or codex and .mcp.json / opencode.json point \
+                             them at this server)",
+                            workspace.display()
+                        )),
+                ),
+        )
+        .child(
+            h_flex()
+                .gap_2()
+                .flex_wrap()
+                .when_some(endpoint, |this, (port, token)| {
+                    let url = crate::mcp::discovery::server_url(port);
+                    let command = crate::mcp::discovery::claude_mcp_add_command(port, &token);
+                    this.child(
+                        Button::new("mcp-copy-url")
+                            .small()
+                            .outline()
+                            .label("Copy URL")
+                            .on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(url.clone()));
+                            }),
+                    )
+                    .child(
+                        Button::new("mcp-copy-token")
+                            .small()
+                            .outline()
+                            .label("Copy token")
+                            .on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(token.clone()));
+                            }),
+                    )
+                    .child(
+                        Button::new("mcp-copy-claude-command")
+                            .small()
+                            .outline()
+                            .label("Copy `claude mcp add` command")
+                            .on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(command.clone()));
+                            }),
+                    )
+                })
+                .child(
+                    Button::new("mcp-open-workspace")
+                        .small()
+                        .outline()
+                        .label("Open workspace folder")
+                        .on_click(move |_, _, cx| {
+                            if let Err(error) = std::fs::create_dir_all(&workspace) {
+                                tracing::warn!("Failed to create the agent workspace: {error}");
+                            }
+                            cx.reveal_path(&workspace);
+                        }),
+                ),
+        )
+        .into_any_element()
 }
 
 impl Focusable for SettingsView {

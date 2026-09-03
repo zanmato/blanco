@@ -27,6 +27,7 @@ sql-parser = { path = "../sql-parser" }
 transformers = { path = "../transformers" }
 blanco_ui = { path = "../ui", package = "blanco-ui" }
 blanco-core = { path = "../blanco-core" }
+blanco-terminal = { path = "../terminal" }
 database = { path = "../database" }
 
 # LLM client
@@ -61,10 +62,18 @@ encoding_rs_io = "0.1"
 deunicode = "1"
 
 # Tokio runtime handle for sqlx-tokio bridging
-tokio = { version = "1", features = ["rt", "macros", "time"] }
+tokio = { version = "1", features = ["rt", "macros", "time", "net"] }
+
+# MCP server exposing tabs, connections and SQL execution to external agents
+rmcp = { version = "3.2", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+tower = "0.5"
+tokio-util = "0.7"
+schemars = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time"] }
+rmcp = { version = "3.2", default-features = false, features = ["client", "transport-streamable-http-client-reqwest", "reqwest-native-tls"] }
 sqlite = { path = "../sqlite" }
 gpui = { workspace = true, features = ["test-support"] }
 tempfile = { workspace = true }

@@ -19,8 +19,8 @@ mod execute_sql;
 mod explore_tables;
 mod list_tables;
 mod markdown;
-mod read_tab;
-mod write_tab;
+pub(crate) mod read_tab;
+pub(crate) mod write_tab;
 
 use execute_sql::ExecuteSqlHandler;
 use explore_tables::ExploreTablesHandler;

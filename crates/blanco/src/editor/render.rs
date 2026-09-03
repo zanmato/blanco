@@ -249,7 +249,11 @@ impl EditorPanel {
             // Sits flush against the bottom of the editor card, and GPUI's
             // content mask is rectangular, so it has to round its own corners
             // or it squares off the card's.
-            .rounded_b(crate::app::PANEL_RADIUS)
+            // The terminal pane docks under this bar, so the rounded corners
+            // belong to the terminal when it is open.
+            .when(!query_tab.terminal_enabled, |this| {
+                this.rounded_b(crate::app::PANEL_RADIUS)
+            })
             .flex_wrap()
             .when(supports_sql, |bar| {
                 bar.child(
@@ -315,11 +319,22 @@ impl EditorPanel {
                 Button::new("toggle-sql-log")
                     .outline()
                     .small()
-                    .icon(IconName::SquareTerminal)
+                    .icon(IconName::Logs)
                     .tooltip("Toggle SQL Log")
                     .when(query_tab.sql_view_visible, |btn| btn.primary())
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.toggle_sql_view_for_active_tab(window, cx);
+                    })),
+            )
+            .child(
+                Button::new("toggle-terminal")
+                    .outline()
+                    .small()
+                    .icon(IconName::SquareTerminal)
+                    .tooltip("Toggle Terminal")
+                    .when(query_tab.terminal_enabled, |btn| btn.primary())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_terminal_for_active_tab(window, cx);
                     })),
             )
             .child(
@@ -451,6 +466,61 @@ impl EditorPanel {
             .into_any_element()
     }
 
+    /// The tab's editor.
+    fn render_editor(
+        &self,
+        editor: &gpui::Entity<gpui_component::input::EditorState>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div().size_full().min_h_0().min_w_0().relative().child(
+            Editor::new(editor)
+                .bordered(false)
+                .h_full()
+                .w_full()
+                .rounded_none()
+                .font_family(cx.theme().mono_font_family.clone())
+                .text_size(px(14.)),
+        )
+    }
+
+    /// The tab's main column (editor, results and the bottom bar) with the
+    /// terminal pane docked under it when the pane is open, like the panel
+    /// area in VS Code and Zed. The split has its own state so the terminal
+    /// height is remembered across toggles without disturbing the
+    /// editor/results split.
+    fn render_with_terminal(
+        &self,
+        content: impl IntoElement,
+        terminal: Option<gpui::Entity<blanco_terminal::view::TerminalView>>,
+        split_id: &'static str,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let content = div().size_full().min_h_0().min_w_0().child(content);
+        div()
+            .h_full()
+            .w_full()
+            .overflow_hidden()
+            .min_w_0()
+            .map(|this| match terminal {
+                Some(terminal) => this.child(
+                    v_resizable(split_id)
+                        .with_state(&self.editor_terminal_resize_state)
+                        .child(resizable_panel().child(content))
+                        .child(
+                            resizable_panel().size(220.).child(
+                                div()
+                                    .size_full()
+                                    .min_h_0()
+                                    .border_t_1()
+                                    .border_color(cx.theme().border)
+                                    .child(terminal),
+                            ),
+                        ),
+                ),
+                None => this.child(content),
+            })
+    }
+
     fn render_query_tab_content(
         &self,
         query_tab: &QueryTab,
@@ -461,61 +531,47 @@ impl EditorPanel {
             .with_state(&self.editor_chat_resize_state)
             .child(
                 resizable_panel().child(
-                    v_resizable("editor-results-split")
-                        .with_state(&self.editor_results_resize_state)
-                        .child(
-                            resizable_panel().size(200.).child(
-                                v_flex()
-                                    .h_full()
-                                    .w_full()
-                                    .overflow_hidden()
-                                    .min_w_0()
-                                    .child(
-                                        div().flex_1().min_h_0().w_full().relative().child(
-                                            Editor::new(&query_tab.editor)
-                                                .bordered(false)
-                                                .h_full()
-                                                .w_full()
-                                                .rounded_none()
-                                                .font_family(cx.theme().mono_font_family.clone())
-                                                .text_size(px(14.)),
-                                        ),
-                                    ),
-                            ),
-                        )
-                        .child(
-                            resizable_panel().size(200.).child(
-                                v_flex()
-                                    .h_full()
-                                    .w_full()
-                                    .min_w_0()
-                                    .child(
-                                        h_flex()
-                                            .p_2()
-                                            .gap_2()
-                                            .border_t_1()
-                                            .border_color(cx.theme().border)
-                                            .bg(cx.theme().title_bar)
-                                            .justify_between()
-                                            .child({
-                                                let position =
-                                                    query_tab.editor.read(cx).cursor_position();
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .child(format!(
-                                                        "Ln {}, Col {}",
-                                                        position.line + 1,
-                                                        position.character + 1
-                                                    ))
-                                            })
-                                            .child(
-                                                h_flex()
-                                                    .gap_2()
-                                                    // Format/lint and EXPLAIN are SQL-only; hide
-                                                    // them for non-SQL backends (e.g. Redis).
-                                                    .when(supports_sql, |this| {
-                                                        this.child(
+                    self.render_with_terminal(
+                        v_resizable("editor-results-split")
+                            .with_state(&self.editor_results_resize_state)
+                            .child(
+                                resizable_panel()
+                                    .size(200.)
+                                    .child(self.render_editor(&query_tab.editor, cx)),
+                            )
+                            .child(
+                                resizable_panel().size(200.).child(
+                                    v_flex()
+                                        .h_full()
+                                        .w_full()
+                                        .min_w_0()
+                                        .child(
+                                            h_flex()
+                                                .p_2()
+                                                .gap_2()
+                                                .border_t_1()
+                                                .border_color(cx.theme().border)
+                                                .bg(cx.theme().title_bar)
+                                                .justify_between()
+                                                .child({
+                                                    let position =
+                                                        query_tab.editor.read(cx).cursor_position();
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(cx.theme().muted_foreground)
+                                                        .child(format!(
+                                                            "Ln {}, Col {}",
+                                                            position.line + 1,
+                                                            position.character + 1
+                                                        ))
+                                                })
+                                                .child(
+                                                    h_flex()
+                                                        .gap_2()
+                                                        // Format/lint and EXPLAIN are SQL-only; hide
+                                                        // them for non-SQL backends (e.g. Redis).
+                                                        .when(supports_sql, |this| {
+                                                            this.child(
                                                             Button::new("format-query")
                                                                 .outline()
                                                                 .small()
@@ -533,10 +589,10 @@ impl EditorPanel {
                                                                     },
                                                                 )),
                                                         )
-                                                    })
-                                                    .map(|this| {
-                                                        if self.loading {
-                                                            this.child(
+                                                        })
+                                                        .map(|this| {
+                                                            if self.loading {
+                                                                this.child(
                                                         Button::new("abort-query")
                                                             .danger()
                                                             .small()
@@ -549,8 +605,8 @@ impl EditorPanel {
                                                                 },
                                                             )),
                                                     )
-                                                        } else {
-                                                            this.when(supports_sql, |this| {
+                                                            } else {
+                                                                this.when(supports_sql, |this| {
                                                                 this.child(
                                                         Button::new("explain-query")
                                                             .outline()
@@ -588,46 +644,54 @@ impl EditorPanel {
                                                                         },
                                                                     )),
                                                             )
-                                                        }
-                                                    }),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            // Without an explicit width this wrapper collapses to
-                                            // its content's max-content width during intrinsic
-                                            // sizing: a single narrow result column (or a long,
-                                            // unwrappable SQL line in the log below) leaves the
-                                            // results table pinned to that width instead of filling
-                                            // the resizable panel. `w_full` forces it to the panel.
-                                            .w_full()
-                                            .min_h_0()
-                                            .overflow_hidden()
-                                            .map(|d| {
-                                                if query_tab.sql_view_visible {
-                                                    d.child(
-                                                        v_resizable("results-log-split")
-                                                            .with_state(
-                                                                &self.results_log_resize_state,
-                                                            )
-                                                            .child(resizable_panel().child(
-                                                                query_tab.results_panel.clone(),
-                                                            ))
-                                                            .child(
-                                                                resizable_panel().size(120.).child(
-                                                                    query_tab.sql_view.clone(),
+                                                            }
+                                                        }),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                // Without an explicit width this wrapper collapses to
+                                                // its content's max-content width during intrinsic
+                                                // sizing: a single narrow result column (or a long,
+                                                // unwrappable SQL line in the log below) leaves the
+                                                // results table pinned to that width instead of filling
+                                                // the resizable panel. `w_full` forces it to the panel.
+                                                .w_full()
+                                                .min_h_0()
+                                                .overflow_hidden()
+                                                .map(|d| {
+                                                    if query_tab.sql_view_visible {
+                                                        d.child(
+                                                            v_resizable("results-log-split")
+                                                                .with_state(
+                                                                    &self.results_log_resize_state,
+                                                                )
+                                                                .child(resizable_panel().child(
+                                                                    query_tab.results_panel.clone(),
+                                                                ))
+                                                                .child(
+                                                                    resizable_panel()
+                                                                        .size(120.)
+                                                                        .child(
+                                                                            query_tab
+                                                                                .sql_view
+                                                                                .clone(),
+                                                                        ),
                                                                 ),
-                                                            ),
-                                                    )
-                                                } else {
-                                                    d.child(query_tab.results_panel.clone())
-                                                }
-                                            }),
-                                    )
-                                    .child(self.render_row_operations_bar(query_tab, cx)),
+                                                        )
+                                                    } else {
+                                                        d.child(query_tab.results_panel.clone())
+                                                    }
+                                                }),
+                                        )
+                                        .child(self.render_row_operations_bar(query_tab, cx)),
+                                ),
                             ),
-                        ),
+                        query_tab.base.terminal_pane_view(),
+                        "editor-terminal-split",
+                        cx,
+                    ),
                 ),
             )
             .when(
@@ -664,162 +728,193 @@ impl EditorPanel {
             .with_state(&self.script_editor_chat_resize_state)
             .child(
                 resizable_panel().child(
-                    v_resizable("script-editor-results-split")
-                        .with_state(&self.editor_results_resize_state)
-                        .child(
-                            resizable_panel().size(200.).child(
-                                v_flex()
-                                    .h_full()
-                                    .w_full()
-                                    .overflow_hidden()
-                                    .min_w_0()
-                                    .child(
-                                        div().flex_1().min_h_0().w_full().relative().child(
-                                            Editor::new(&script_tab.editor)
-                                                .bordered(false)
-                                                .h_full()
-                                                .w_full()
-                                                .rounded_none()
-                                                .font_family(cx.theme().mono_font_family.clone())
-                                                .text_size(px(14.)),
-                                        ),
-                                    ),
-                            ),
-                        )
-                        .child(
-                            resizable_panel().size(200.).child(
-                                v_flex()
-                                    .h_full()
-                                    .w_full()
-                                    .min_w_0()
-                                    .child(
-                                        h_flex()
-                                            .p_2()
-                                            .gap_2()
-                                            .border_t_1()
-                                            .border_color(cx.theme().border)
-                                            .bg(cx.theme().title_bar)
-                                            .justify_between()
-                                            .child({
-                                                let position =
-                                                    script_tab.editor.read(cx).cursor_position();
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .child(format!(
-                                                        "Ln {}, Col {}",
-                                                        position.line + 1,
-                                                        position.character + 1
-                                                    ))
-                                            })
-                                            .child(h_flex().gap_2().map(|this| {
-                                                if self.loading {
-                                                    this.child(
-                                                        Button::new("stop-script")
-                                                            .danger()
-                                                            .small()
-                                                            .icon(IconName::SquareStop)
-                                                            .label("Stop")
-                                                            .tooltip("Stop the running script")
-                                                            .on_click(cx.listener(
-                                                                |panel, _, _window, cx| {
-                                                                    panel.cancel_running_script(cx);
-                                                                },
-                                                            )),
-                                                    )
-                                                } else {
-                                                    this.child(
-                                                        Button::new("run-script")
-                                                            .outline()
-                                                            .small()
-                                                            .icon(IconName::Play)
-                                                            .label("Run Script")
-                                                            .tooltip(format!(
-                                                                "Run Script ({})",
-                                                                self.run_query_keystroke
-                                                            ))
-                                                            .on_click(cx.listener(
-                                                                |panel, _, window, cx| {
-                                                                    panel.on_run_query(window, cx)
-                                                                },
-                                                            )),
-                                                    )
-                                                }
-                                            })),
-                                    )
-                                    .child(div().flex_1().w_full().min_h_0().overflow_hidden().map(
-                                        |d| {
-                                            if script_tab.log_visible {
-                                                d.child(
-                                                    v_resizable("script-results-log-split")
-                                                        .with_state(&self.results_log_resize_state)
-                                                        .child(resizable_panel().child(
-                                                            script_tab.results_panel.clone(),
+                    self.render_with_terminal(
+                        v_resizable("script-editor-results-split")
+                            .with_state(&self.editor_results_resize_state)
+                            .child(
+                                resizable_panel()
+                                    .size(200.)
+                                    .child(self.render_editor(&script_tab.editor, cx)),
+                            )
+                            .child(
+                                resizable_panel().size(200.).child(
+                                    v_flex()
+                                        .h_full()
+                                        .w_full()
+                                        .min_w_0()
+                                        .child(
+                                            h_flex()
+                                                .p_2()
+                                                .gap_2()
+                                                .border_t_1()
+                                                .border_color(cx.theme().border)
+                                                .bg(cx.theme().title_bar)
+                                                .justify_between()
+                                                .child({
+                                                    let position = script_tab
+                                                        .editor
+                                                        .read(cx)
+                                                        .cursor_position();
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(cx.theme().muted_foreground)
+                                                        .child(format!(
+                                                            "Ln {}, Col {}",
+                                                            position.line + 1,
+                                                            position.character + 1
                                                         ))
-                                                        .child(
-                                                            resizable_panel()
-                                                                .size(160.)
-                                                                .child(script_tab.log_view.clone()),
-                                                        ),
+                                                })
+                                                .child(h_flex().gap_2().map(|this| {
+                                                    if self.loading {
+                                                        this.child(
+                                                            Button::new("stop-script")
+                                                                .danger()
+                                                                .small()
+                                                                .icon(IconName::SquareStop)
+                                                                .label("Stop")
+                                                                .tooltip("Stop the running script")
+                                                                .on_click(cx.listener(
+                                                                    |panel, _, _window, cx| {
+                                                                        panel
+                                                                            .cancel_running_script(
+                                                                                cx,
+                                                                            );
+                                                                    },
+                                                                )),
+                                                        )
+                                                    } else {
+                                                        this.child(
+                                                            Button::new("run-script")
+                                                                .outline()
+                                                                .small()
+                                                                .icon(IconName::Play)
+                                                                .label("Run Script")
+                                                                .tooltip(format!(
+                                                                    "Run Script ({})",
+                                                                    self.run_query_keystroke
+                                                                ))
+                                                                .on_click(cx.listener(
+                                                                    |panel, _, window, cx| {
+                                                                        panel.on_run_query(
+                                                                            window, cx,
+                                                                        )
+                                                                    },
+                                                                )),
+                                                        )
+                                                    }
+                                                })),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .w_full()
+                                                .min_h_0()
+                                                .overflow_hidden()
+                                                .map(|d| {
+                                                    if script_tab.log_visible {
+                                                        d.child(
+                                                            v_resizable("script-results-log-split")
+                                                                .with_state(
+                                                                    &self.results_log_resize_state,
+                                                                )
+                                                                .child(
+                                                                    resizable_panel().child(
+                                                                        script_tab
+                                                                            .results_panel
+                                                                            .clone(),
+                                                                    ),
+                                                                )
+                                                                .child(
+                                                                    resizable_panel()
+                                                                        .size(160.)
+                                                                        .child(
+                                                                            script_tab
+                                                                                .log_view
+                                                                                .clone(),
+                                                                        ),
+                                                                ),
+                                                        )
+                                                    } else {
+                                                        d.child(script_tab.results_panel.clone())
+                                                    }
+                                                }),
+                                        )
+                                        .child(
+                                            h_flex()
+                                                .p_2()
+                                                .gap_2()
+                                                .border_t_1()
+                                                .bg(cx.theme().title_bar)
+                                                .border_color(cx.theme().border)
+                                                .when(!script_tab.terminal_enabled, |this| {
+                                                    this.rounded_b(crate::app::PANEL_RADIUS)
+                                                })
+                                                .child(div().flex_1())
+                                                .child(
+                                                    Button::new("toggle-script-log")
+                                                        .outline()
+                                                        .small()
+                                                        .icon(IconName::Logs)
+                                                        .tooltip("Toggle console log")
+                                                        .when(script_tab.log_visible, |btn| {
+                                                            btn.primary()
+                                                        })
+                                                        .on_click(cx.listener(
+                                                            |this, _, _window, cx| {
+                                                                if let Some(TabType::Script(
+                                                                    script_tab,
+                                                                )) = this
+                                                                    .tabs
+                                                                    .get_mut(this.active_tab_ix)
+                                                                {
+                                                                    script_tab.log_visible =
+                                                                        !script_tab.log_visible;
+                                                                    cx.notify();
+                                                                }
+                                                            },
+                                                        )),
                                                 )
-                                            } else {
-                                                d.child(script_tab.results_panel.clone())
-                                            }
-                                        },
-                                    ))
-                                    .child(
-                                        h_flex()
-                                            .p_2()
-                                            .gap_2()
-                                            .border_t_1()
-                                            .bg(cx.theme().title_bar)
-                                            .border_color(cx.theme().border)
-                                            .rounded_b(crate::app::PANEL_RADIUS)
-                                            .child(div().flex_1())
-                                            .child(
-                                                Button::new("toggle-script-log")
-                                                    .outline()
-                                                    .small()
-                                                    .icon(IconName::SquareTerminal)
-                                                    .tooltip("Toggle console log")
-                                                    .when(script_tab.log_visible, |btn| {
-                                                        btn.primary()
-                                                    })
-                                                    .on_click(cx.listener(
-                                                        |this, _, _window, cx| {
-                                                            if let Some(TabType::Script(
-                                                                script_tab,
-                                                            )) = this
-                                                                .tabs
-                                                                .get_mut(this.active_tab_ix)
-                                                            {
-                                                                script_tab.log_visible =
-                                                                    !script_tab.log_visible;
-                                                                cx.notify();
-                                                            }
-                                                        },
-                                                    )),
-                                            )
-                                            .child(
-                                                Button::new("toggle-script-chat")
-                                                    .outline()
-                                                    .small()
-                                                    .icon(IconName::Bot)
-                                                    .tooltip("Toggle Chat")
-                                                    .when(script_tab.chat_enabled, |btn| {
-                                                        btn.primary()
-                                                    })
-                                                    .on_click(cx.listener(
-                                                        |this, _, window, cx| {
-                                                            this.toggle_chat_for_active_tab(
+                                                .child(
+                                                    Button::new("toggle-script-terminal")
+                                                        .outline()
+                                                        .small()
+                                                        .icon(IconName::SquareTerminal)
+                                                        .tooltip("Toggle Terminal")
+                                                        .when(script_tab.terminal_enabled, |btn| {
+                                                            btn.primary()
+                                                        })
+                                                        .on_click(cx.listener(
+                                                            |this, _, window, cx| {
+                                                                this.toggle_terminal_for_active_tab(
                                                                 window, cx,
                                                             );
-                                                        },
-                                                    )),
-                                            ),
-                                    ),
+                                                            },
+                                                        )),
+                                                )
+                                                .child(
+                                                    Button::new("toggle-script-chat")
+                                                        .outline()
+                                                        .small()
+                                                        .icon(IconName::Bot)
+                                                        .tooltip("Toggle Chat")
+                                                        .when(script_tab.chat_enabled, |btn| {
+                                                            btn.primary()
+                                                        })
+                                                        .on_click(cx.listener(
+                                                            |this, _, window, cx| {
+                                                                this.toggle_chat_for_active_tab(
+                                                                    window, cx,
+                                                                );
+                                                            },
+                                                        )),
+                                                ),
+                                        ),
+                                ),
                             ),
-                        ),
+                        script_tab.base.terminal_pane_view(),
+                        "script-editor-terminal-split",
+                        cx,
+                    ),
                 ),
             )
             .when(

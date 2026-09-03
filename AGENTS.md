@@ -16,6 +16,57 @@ This requires the tree-sitter CLI (`cargo install tree-sitter-cli`). The blanco 
 
 `scripts/setup.sh` also generates the in-tree `crates/tree-sitter-redis` grammar, which highlights the editor when the active connection is a Redis (non-SQL) backend. Unlike sequel it is not a submodule (we author it), but its generated `src/parser.c` + `src/tree_sitter/*.h` are likewise gitignored and produced by `tree-sitter generate`. The command/subcommand catalog is codegenned from a live server (`COMMAND LIST` / `COMMAND DOCS`) into two committed artifacts: `grammar/keywords.js` (consumed by the grammar) and `bindings/rust/commands.rs` (exposed as `tree_sitter_redis::commands` + `tree_sitter_redis::subcommands_for`, consumed by the editor's Redis completion provider so highlighting and completion share one command set). Regenerate both after a Redis upgrade with `python3 crates/tree-sitter-redis/scripts/extract-redis-commands.py` (defaults to the docker-compose dev server on `127.0.0.1:6400`). The editor language is chosen per connection by `DatabaseType::editor_language()` (`"sql"` vs `"redis"`); both grammars are registered at startup in `main.rs` (`sql::register_languages` + `redis_syntax::register_language`). Redis tabs get `redis_completion::RedisCompletionProvider` (command/subcommand completion) instead of the SQL completion/selection-range/linting machinery, which is gated behind `supports_sql()`.
 
+## SQL function catalogs and signature help
+
+Built-in function completion and the signature-help popover read per-dialect
+catalogs in `crates/blanco/src/sql/functions/`. `postgres.rs` (pg_catalog.pg_proc),
+`mysql.rs` (MariaDB `mysql.help_topic`) and `clickhouse.rs` (`system.functions`)
+are generated from the docker-compose dev servers by
+`python3 scripts/extract-sql-functions.py all` (stdlib only: uses the host `psql`,
+`docker exec` into the MariaDB container, and ClickHouse's HTTP port).
+`sqlite.rs` and `mssql.rs` are curated by hand because those engines expose no
+signature catalog; the `sqlite` subcommand only lints the curated file against
+`pragma_function_list`. Every catalog is sorted by lowercased name so
+`sql::functions::lookup` can binary-search and overloads stay adjacent; a test
+asserts the order. User-defined functions come from
+`Connection::list_function_signatures` (Postgres, MySQL, MSSQL) and are cached in
+`MetadataCache::functions_by_schema`.
+
+The popover itself lives in the gpui-component fork (`SignatureHelpProvider`,
+`SignatureHelpPopover`; branch `blanco`). `sql::signature_help` implements the
+provider using `CompletionContext::enclosing_call`, which the parser fills from
+the tree-sitter `invocation` node with a textual fallback for unclosed calls.
+Function completion items insert `name($0)` as an LSP snippet; the fork's
+`insert_completion` places the caret at `$0`, so help opens right after accepting.
+
+## Dialect, ConnectionContext and tabs
+
+Every per-backend SQL fact lives on `blanco_core::Dialect` (`crates/blanco-core/src/dialect.rs`),
+obtained with `db_type.dialect()`: identifier quoting (`quote_identifier`, `quote_qualified`,
+`quote_path`), string literal escaping, bind placeholders, row limiting (`apply_row_limit`
+emits `TOP n` for SQL Server), EXPLAIN wrapping and plan parsing, upsert spelling, default
+schema/port and capability flags (`supports_sql`, `rows_editable`, `supports_create_table_ddl`,
+`supports_column_ddl`). Do not match on `DatabaseType` in UI, transformer or import code; add a
+method here instead so a new backend is one arm per method. `DatabaseType::ALL` / `index()`
+give the connection dialog order.
+
+The identity a tab or action works against is one `blanco_core::ConnectionContext`
+(connection id, name, type, database, schema, environment). Actions such as
+`CreateNewQueryTab`, the `*Params` structs and every tab carry `context` rather than the six
+fields. `EnvironmentType` lives in blanco-core (re-exported by app-database).
+
+Query and script tabs embed a shared `ConnectionBackedTab` (`editor/tabs.rs`) and deref to
+it, so `tab.title`, `tab.editor`, `tab.context`, `tab.db_id` work on both. Prefer the
+`TabType` accessors (`title(cx)`, `context(cx)`, `connection_tab()`, `query()`, `db_id()`)
+over matching on the enum; the tab strip groups every connection-bound tab under its
+connection using `context(cx)`.
+
+Column and index DDL is built by `blanco_core::ddl::{column_operation_sql, index_operation_sql}`
+and driven from the structure tab (`editor/table_structure.rs`: toolbar buttons, row context
+menus, transactional execution, `reload()`). SQLite cannot change a column's type, nullability
+or default in place and reports `DdlError::Unsupported` instead of a lossy table rebuild.
+`test_column_and_index_ddl_round_trip` exercises the builders against every compose backend.
+
 ## Architecture
 
 ### File Structure
@@ -84,6 +135,15 @@ gpui-component provides a comprehensive theme system:
 - **Access Theme**: `cx.theme()` provides access to all theme colors and settings
 - **Change Theme**: `Theme::change(ThemeMode::Dark, window, cx)` to switch modes
 - **Global Access**: `Theme::global(cx)` or `Theme::global_mut(cx)` for mutations
+
+Themes live in `crates/blanco/assets/themes/` and are embedded in the binary. The
+loader ignores keys it does not recognise, so a token spelled the way Zed spells
+it parses cleanly and then silently falls back to gpui-component's default theme.
+The authority on key names is `ThemeConfigColors` in gpui-component's
+`theme/schema.rs`; `embedded_themes_are_registered_and_parse` in `main.rs`
+deserializes each file into `ThemeSet` to catch drift. `catppuccin.json` is
+generated, not hand-edited: change the role mapping in
+`scripts/generate-catppuccin-theme.py` and re-run it.
 
 ### Using Themes
 

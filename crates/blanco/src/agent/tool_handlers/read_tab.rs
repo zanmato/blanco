@@ -11,7 +11,71 @@ use llm::{
 use super::{AgentToolHandler, ToolContext};
 
 /// Maximum lines to return when no range is specified
-const READ_TAB_DEFAULT_LIMIT: usize = 200;
+pub(crate) const READ_TAB_DEFAULT_LIMIT: usize = 200;
+
+/// A line-numbered window of a tab's text. Line numbers are 1-based and
+/// inclusive; an empty tab reports zeros.
+pub(crate) struct TabSlice {
+    pub content: String,
+    pub total_lines: usize,
+    pub start_line: usize,
+    pub end_line: usize,
+}
+
+impl TabSlice {
+    /// Whether lines after `end_line` were left out.
+    pub(crate) fn truncated(&self) -> bool {
+        self.total_lines > self.end_line
+    }
+}
+
+/// Cut `rope` to the requested 1-based inclusive range, numbering each line.
+/// Without a range the first `READ_TAB_DEFAULT_LIMIT` lines are returned so a
+/// huge buffer does not flood the model; a half-open range extends to the
+/// buffer's edge. Out-of-range bounds are clamped rather than rejected. Shared
+/// by the agent's `read-tab` tool and the MCP `read_tab` tool.
+pub(crate) fn slice_tab_text(
+    rope: &ropey::Rope,
+    requested_start: Option<usize>,
+    requested_end: Option<usize>,
+) -> TabSlice {
+    let total_lines = rope.lines_len();
+    if total_lines == 0 {
+        return TabSlice {
+            content: String::new(),
+            total_lines: 0,
+            start_line: 0,
+            end_line: 0,
+        };
+    }
+
+    let (start, end) = match (requested_start, requested_end) {
+        (Some(start), Some(end)) => (start, end),
+        (Some(start), None) => (start, total_lines),
+        (None, Some(end)) => (1, end),
+        (None, None) if total_lines > READ_TAB_DEFAULT_LIMIT => (1, READ_TAB_DEFAULT_LIMIT),
+        (None, None) => (1, total_lines),
+    };
+
+    let start = start.clamp(1, total_lines);
+    let end = end.min(total_lines).max(start);
+
+    let slice = rope.slice_lines((start - 1)..end);
+    let content = slice
+        .to_string()
+        .lines()
+        .enumerate()
+        .map(|(offset, line)| format!("{}: {}", start + offset, line))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    TabSlice {
+        content,
+        total_lines,
+        start_line: start,
+        end_line: end,
+    }
+}
 
 /// Read tab tool handler with optional line range support
 pub struct ReadTabHandler {
@@ -39,38 +103,14 @@ impl AgentToolHandler for ReadTabHandler {
                 .map(|v| v.max(1) as usize);
 
             match input_state.read_with(cx, |input, _cx| {
-                let rope = input.text();
-                let total_lines = rope.lines_len();
-
-                if total_lines == 0 {
-                    return (String::new(), 0usize, 0usize, 0usize);
-                }
-
-                let (start, end) = match (requested_start, requested_end) {
-                    (Some(s), Some(e)) => (s, e),
-                    (Some(s), None) => (s, total_lines),
-                    (None, Some(e)) => (1, e),
-                    (None, None) if total_lines > READ_TAB_DEFAULT_LIMIT => {
-                        (1, READ_TAB_DEFAULT_LIMIT)
-                    }
-                    (None, None) => (1, total_lines),
-                };
-
-                let start = start.min(total_lines);
-                let end = end.min(total_lines).max(start);
-
-                let slice = rope.slice_lines((start - 1)..end);
-                let content = slice.to_string();
-                let numbered = content
-                    .lines()
-                    .enumerate()
-                    .map(|(i, line)| format!("{}: {}", start + i, line))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-
-                (numbered, total_lines, start, end)
+                slice_tab_text(input.text(), requested_start, requested_end)
             }) {
-                Ok((content, total_lines, start, end)) => {
+                Ok(TabSlice {
+                    content,
+                    total_lines,
+                    start_line: start,
+                    end_line: end,
+                }) => {
                     let mut json = serde_json::json!({
                         "content": content,
                         "total_lines": total_lines,

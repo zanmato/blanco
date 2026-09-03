@@ -1,4 +1,10 @@
-use blanco_ui::{Tab, TabBar};
+use blanco_ui::IconName as BlancoIcon;
+use std::collections::VecDeque;
+
+use crate::mcp::McpService;
+use crate::mcp::bridge::{
+    ConfirmReply, McpRequest, Reply as McpReply, WriteConfirmation, send_reply,
+};
 use gpui::{
     Action, App, AppContext, BorrowAppContext, Context, Entity, FocusHandle, Focusable,
     InteractiveElement, IntoElement, Menu, MenuItem, ParentElement, Render, SharedString, Styled,
@@ -7,7 +13,7 @@ use gpui::{
 use gpui_component::{
     ActiveTheme, Icon, IconName, Root, Sizable as _, TitleBar, WindowExt as _,
     button::{Button, ButtonVariants as _},
-    dialog::{DialogAction, DialogFooter},
+    dialog::{DialogAction, DialogClose, DialogFooter},
     global_state::GlobalState,
     h_flex,
     menu::AppMenuBar,
@@ -15,6 +21,7 @@ use gpui_component::{
     resizable::{ResizablePanel, ResizableState, h_resizable, resizable_panel},
     spinner::Spinner,
     status_bar::StatusBar,
+    v_flex,
 };
 use serde::Deserialize;
 use smol::channel;
@@ -43,6 +50,7 @@ actions!(
         Quit,
         OpenConnection,
         OpenSettings,
+        OpenTerminal,
         OpenNewConnectionModal,
         NewSnippet,
         CommitChanges,
@@ -300,12 +308,37 @@ pub(crate) const PANEL_RADIUS: gpui::Pixels = px(8.);
 /// on each side of the split so the two cards end up `PANEL_GAP` apart.
 pub(crate) const PANEL_GAP: gpui::Pixels = px(6.);
 
-/// Which view is active in the sidebar's segmented tab bar.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum SidebarTab {
+/// Width of the icon rail on the left edge of the sidebar card. It is the
+/// only part of the sidebar that stays visible while collapsed.
+pub(crate) const SIDEBAR_RAIL_WIDTH: gpui::Pixels = px(48.);
+
+/// Which view is active in the sidebar, selected from the icon rail.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SidebarTab {
     Connections,
     Snippets,
     History,
+}
+
+impl SidebarTab {
+    /// Rail order, top to bottom.
+    const ALL: [SidebarTab; 3] = [Self::Connections, Self::Snippets, Self::History];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Connections => "Connections",
+            Self::Snippets => "Snippets",
+            Self::History => "History",
+        }
+    }
+
+    fn icon(self) -> BlancoIcon {
+        match self {
+            Self::Connections => BlancoIcon::Database,
+            Self::Snippets => BlancoIcon::Braces,
+            Self::History => BlancoIcon::History,
+        }
+    }
 }
 
 pub struct BlancoApp {
@@ -324,6 +357,11 @@ pub struct BlancoApp {
     _action_task: Task<()>,
     _activity_task: Task<()>,
     _save_window_bounds_task: Task<()>,
+    /// Drains MCP requests onto the foreground; see `spawn_mcp_listener`.
+    _mcp_task: Task<()>,
+    /// `run_tab` callers waiting for their query tab's run to end, matched to
+    /// `EditorPanelEvent::QueryRunEnded` by tab index in arrival order.
+    mcp_run_replies: VecDeque<(usize, McpReply<serde_json::Value>)>,
 }
 
 impl BlancoApp {
@@ -332,6 +370,7 @@ impl BlancoApp {
 
         let action_task = Self::spawn_service_listener(cx);
         let (status_bar, activity_task) = Self::spawn_activity_status(cx);
+        let mcp_task = Self::spawn_mcp_listener(window, cx);
 
         let sidebar = cx.new(|cx| ConnectionsPanel::new(window, cx));
         let snippets_panel = cx.new(|cx| SnippetsPanel::new(window, cx));
@@ -374,7 +413,214 @@ impl BlancoApp {
             _action_task: action_task,
             _activity_task: activity_task,
             _save_window_bounds_task: Task::ready(()),
+            _mcp_task: mcp_task,
+            mcp_run_replies: VecDeque::new(),
         }
+    }
+
+    /// Answer MCP requests on the foreground. The receiver is handed over by
+    /// `McpService` once; a second `BlancoApp` (tests) gets no listener.
+    fn spawn_mcp_listener(window: &mut Window, cx: &mut Context<Self>) -> Task<()> {
+        let Some(receiver) = McpService::take_bridge_receiver(cx) else {
+            return Task::ready(());
+        };
+        cx.spawn_in(window, async move |weak_app, cx| {
+            while let Ok(request) = receiver.recv().await {
+                if weak_app
+                    .update_in(cx, |app, window, cx| {
+                        app.handle_mcp_request(request, window, cx);
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+            info!("MCP bridge listener ended");
+        })
+    }
+
+    fn handle_mcp_request(
+        &mut self,
+        request: McpRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let editor_panel = self.editor_panel.clone();
+        match request {
+            McpRequest::ListTabs { reply } => {
+                let tabs = editor_panel.read(cx).tab_summaries(cx);
+                send_reply(&reply, Ok(tabs));
+            }
+            McpRequest::ReadTab {
+                tab,
+                start_line,
+                end_line,
+                reply,
+            } => {
+                let result = editor_panel.read(cx).resolve_tab(tab).and_then(|index| {
+                    editor_panel
+                        .read(cx)
+                        .read_tab_text(index, start_line, end_line, cx)
+                });
+                send_reply(&reply, result);
+            }
+            McpRequest::WriteTab { tab, edit, reply } => {
+                let result = editor_panel.update(cx, |panel, cx| {
+                    let index = panel.resolve_tab(tab)?;
+                    panel.write_tab_text(index, &edit, window, cx)
+                });
+                send_reply(&reply, result);
+            }
+            McpRequest::CreateQueryTab {
+                context,
+                content,
+                title,
+                reply,
+            } => {
+                let result = editor_panel.update(cx, |panel, cx| {
+                    panel.create_query_tab_for_mcp(context, content, title, window, cx)
+                });
+                send_reply(&reply, result);
+                cx.notify();
+            }
+            McpRequest::SetActiveTab { tab, reply } => {
+                let result = editor_panel.update(cx, |panel, cx| {
+                    let index = panel.resolve_tab(tab)?;
+                    panel.activate_tab_for_mcp(index, window, cx)
+                });
+                send_reply(&reply, result);
+            }
+            McpRequest::TabConnection { tab, reply } => {
+                let panel = editor_panel.read(cx);
+                let result = panel.resolve_tab(tab).and_then(|index| {
+                    let summary = panel.tab_summary_at(index, cx)?;
+                    summary.connection.ok_or_else(|| {
+                        format!(
+                            "Tab {index} ({}) is not bound to a connection; pass connection_id or pick a query tab.",
+                            summary.kind
+                        )
+                    })
+                });
+                send_reply(&reply, result);
+            }
+            McpRequest::RunTab { tab, reply } => {
+                let index = match editor_panel.read(cx).resolve_tab(tab) {
+                    Ok(index) => index,
+                    Err(error) => {
+                        send_reply(&reply, Err(error));
+                        return;
+                    }
+                };
+                // Register before running: a run that fails synchronously
+                // emits `QueryRunEnded` from inside `run_query_tab_for_mcp`.
+                self.mcp_run_replies.push_back((index, reply));
+                let outcome = editor_panel.update(cx, |panel, cx| {
+                    panel.run_query_tab_for_mcp(index, window, cx)
+                });
+                if let Err(error) = outcome {
+                    self.resolve_mcp_run(index, Err(error));
+                }
+            }
+            McpRequest::ConfirmWrite {
+                confirmation,
+                reply,
+            } => {
+                self.show_mcp_write_confirmation(
+                    confirmation,
+                    ConfirmReply::new(reply),
+                    window,
+                    cx,
+                );
+            }
+        }
+    }
+
+    /// Hand a finished run to the oldest `run_tab` caller waiting on that tab.
+    fn resolve_mcp_run(&mut self, tab_index: usize, outcome: Result<serde_json::Value, String>) {
+        let Some(position) = self
+            .mcp_run_replies
+            .iter()
+            .position(|(index, _)| *index == tab_index)
+        else {
+            return;
+        };
+        if let Some((_, reply)) = self.mcp_run_replies.remove(position) {
+            send_reply(&reply, outcome);
+        }
+    }
+
+    /// The dialog an MCP write waits on. Run answers `true`; Cancel, Escape,
+    /// the backdrop, or the dialog going away for any other reason answer
+    /// `false` through `ConfirmReply`'s drop.
+    fn show_mcp_write_confirmation(
+        &mut self,
+        confirmation: WriteConfirmation,
+        reply: ConfirmReply,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let is_prod = confirmation.environment == Some(blanco_core::EnvironmentType::Prod);
+        let title = if is_prod {
+            "An agent wants to write to PROD"
+        } else {
+            "An agent wants to run a write statement"
+        };
+        let target = format!(
+            "{} / {}{}",
+            confirmation.connection_name,
+            confirmation.database_name,
+            confirmation
+                .environment
+                .map(|environment| format!(" ({environment})"))
+                .unwrap_or_default()
+        );
+        let sql = SharedString::from(confirmation.sql);
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let reply_on_run = reply.clone();
+            let reply_on_close = reply.clone();
+            dialog
+                .title(title)
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(format!(
+                                    "Connected through the MCP server, against {target}."
+                                )),
+                        )
+                        .child(
+                            div()
+                                .p_2()
+                                .max_h(px(320.))
+                                .overflow_hidden()
+                                .rounded(cx.theme().radius)
+                                .bg(cx.theme().muted)
+                                .font_family(cx.theme().mono_font_family.clone())
+                                .text_sm()
+                                .whitespace_normal()
+                                .child(sql.clone()),
+                        ),
+                )
+                .footer(
+                    DialogFooter::new()
+                        .child(
+                            DialogClose::new()
+                                .child(Button::new("mcp-write-cancel").label("Cancel").outline()),
+                        )
+                        .child(
+                            DialogAction::new().child(
+                                Button::new("mcp-write-run")
+                                    .danger()
+                                    .label(if is_prod { "Run on PROD" } else { "Run" })
+                                    .on_click(move |_, _, _| reply_on_run.answer(true)),
+                            ),
+                        ),
+                )
+                .on_close(move |_, _, _| reply_on_close.answer(false))
+        });
     }
 
     /// Spawn the background task that translates `DatabaseServiceMessage`s
@@ -536,6 +782,9 @@ impl BlancoApp {
                         panel.reload(cx);
                     });
                 }
+                EditorPanelEvent::QueryRunEnded { tab_index, outcome } => {
+                    app.resolve_mcp_run(*tab_index, outcome.clone());
+                }
             },
         ));
 
@@ -668,8 +917,72 @@ impl BlancoApp {
             })
     }
 
-    /// The left sidebar: a segmented tab strip (Connections / Snippets /
-    /// History) over the currently selected panel.
+    /// The icon rail on the left edge of the sidebar: one button per
+    /// [`SidebarTab`] at the top and a settings shortcut pinned to the bottom.
+    /// It sits outside the resizable group so that collapsing the sidebar
+    /// leaves the rail in place without disturbing the panel's stored width.
+    fn render_sidebar_rail(&self, cx: &Context<Self>) -> impl IntoElement {
+        let collapsed = self.sidebar_collapsed;
+        // The rail is the activity bar, so its resting icons take the inactive
+        // tab colour (overlay0 in Catppuccin, what VS Code uses for
+        // `activityBar.inactiveForeground`) rather than `muted_foreground`,
+        // which is tuned for secondary text and reads far too bright on icons.
+        let inactive = cx.theme().tab_foreground;
+        let active = cx.theme().foreground;
+        v_flex()
+            .flex_none()
+            .w(SIDEBAR_RAIL_WIDTH)
+            .h_full()
+            .items_center()
+            .py(PANEL_GAP)
+            .gap_1()
+            // The rail supplies the whole gap to whichever card follows it,
+            // mirroring the shell's inset on its left, so the icons sit
+            // centred between the window edge and the card border.
+            .mr(PANEL_GAP)
+            .children(SidebarTab::ALL.into_iter().enumerate().map(|(ix, tab)| {
+                let is_active = !collapsed && tab == self.sidebar_tab;
+                Button::new(("sidebar-rail", ix))
+                    .ghost()
+                    // `Button::icon` scales the icon from the button size, and
+                    // a child-bearing button only derives padding from
+                    // `Sizable::size`, so the box is sized explicitly to get a
+                    // 24px glyph in a 36px hit target.
+                    .w(px(36.))
+                    .h(px(36.))
+                    .px_0()
+                    .justify_center()
+                    .child(Icon::from(tab.icon()).size_6().text_color(if is_active {
+                        active
+                    } else {
+                        inactive
+                    }))
+                    .tooltip(tab.label())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.select_sidebar_tab(tab, cx);
+                    }))
+            }))
+            .child(div().flex_1())
+            .child(
+                Button::new("sidebar-rail-settings")
+                    .ghost()
+                    .w(px(36.))
+                    .h(px(36.))
+                    .px_0()
+                    .justify_center()
+                    .child(
+                        Icon::from(BlancoIcon::Settings)
+                            .size_6()
+                            .text_color(inactive),
+                    )
+                    .tooltip("Settings")
+                    .on_click(|_, window, cx| {
+                        window.dispatch_action(Box::new(OpenSettings), cx);
+                    }),
+            )
+    }
+
+    /// The left sidebar card: the panel selected in the rail.
     fn render_sidebar_panel(&self, cx: &Context<Self>) -> ResizablePanel {
         resizable_panel()
             // Kept in the tree while collapsed rather than omitted, so the
@@ -690,56 +1003,35 @@ impl BlancoApp {
                         .rounded(PANEL_RADIUS)
                         .border_1()
                         .border_color(cx.theme().border)
-                        // The segmented trough paints its own background, so it
-                        // is inset by this wrapper rather than padding the bar
-                        // itself, which would otherwise square the card's top
-                        // corners.
                         .child(
-                            div().flex_none().p(PANEL_GAP).child(
-                                TabBar::new("sidebar-tabs")
-                                    .segmented()
-                                    .w_full()
-                                    .selected_index(match self.sidebar_tab {
-                                        SidebarTab::Connections => 0,
-                                        SidebarTab::Snippets => 1,
-                                        SidebarTab::History => 2,
-                                    })
-                                    .on_click({
-                                        let view = cx.entity().downgrade();
-                                        move |ix: &usize, _, _, cx| {
-                                            let tab = match ix {
-                                                1 => SidebarTab::Snippets,
-                                                2 => SidebarTab::History,
-                                                _ => SidebarTab::Connections,
-                                            };
-                                            view.update(cx, |this, cx| {
-                                                this.sidebar_tab = tab;
-                                                // Pick up queries run since this
-                                                // panel was last shown.
-                                                if tab == SidebarTab::History {
-                                                    this.history_panel.update(cx, |panel, cx| {
-                                                        panel.reload(cx);
-                                                    });
-                                                }
-                                                cx.notify();
-                                            })
-                                            .log_err();
-                                        }
-                                    })
-                                    .child(Tab::new().label("Connections").flex_1())
-                                    .child(Tab::new().label("Snippets").flex_1())
-                                    .child(Tab::new().label("History").flex_1()),
+                            div().flex_1().min_h_0().overflow_hidden().pt_2().map(
+                                |this| match self.sidebar_tab {
+                                    SidebarTab::Connections => this.child(self.sidebar.clone()),
+                                    SidebarTab::Snippets => this.child(self.snippets_panel.clone()),
+                                    SidebarTab::History => this.child(self.history_panel.clone()),
+                                },
                             ),
-                        )
-                        .child(div().flex_1().min_h_0().overflow_hidden().map(|this| {
-                            match self.sidebar_tab {
-                                SidebarTab::Connections => this.child(self.sidebar.clone()),
-                                SidebarTab::Snippets => this.child(self.snippets_panel.clone()),
-                                SidebarTab::History => this.child(self.history_panel.clone()),
-                            }
-                        })),
+                        ),
                 ),
             )
+    }
+
+    /// Rail click: switch to `tab` and make sure the sidebar is open, or
+    /// collapse it when the already visible section is clicked again.
+    pub(crate) fn select_sidebar_tab(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
+        if tab == self.sidebar_tab && !self.sidebar_collapsed {
+            self.sidebar_collapsed = true;
+        } else {
+            self.sidebar_tab = tab;
+            self.sidebar_collapsed = false;
+            // Pick up queries run since this panel was last shown.
+            if tab == SidebarTab::History {
+                self.history_panel.update(cx, |panel, cx| {
+                    panel.reload(cx);
+                });
+            }
+        }
+        cx.notify();
     }
 
     #[cfg(test)]
@@ -752,13 +1044,25 @@ impl BlancoApp {
         self.sidebar_collapsed
     }
 
+    #[cfg(test)]
+    pub fn sidebar_tab(&self) -> SidebarTab {
+        self.sidebar_tab
+    }
+
     fn on_quit(&mut self, _: &Quit, _window: &mut Window, cx: &mut Context<Self>) {
+        McpService::stop(cx);
         cx.quit();
     }
 
     fn toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
         self.sidebar_collapsed = !self.sidebar_collapsed;
         cx.notify();
+    }
+
+    fn on_open_terminal(&mut self, _: &OpenTerminal, window: &mut Window, cx: &mut Context<Self>) {
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.toggle_terminal_for_active_tab(window, cx);
+        });
     }
 
     fn on_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
@@ -1617,6 +1921,7 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_quit))
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::on_settings))
+            .on_action(cx.listener(Self::on_open_terminal))
             .on_action(cx.listener(Self::on_create_new_query_tab))
             .on_action(cx.listener(Self::on_refresh_connection_tree))
             .on_action(cx.listener(Self::on_create_new_script_tab))
@@ -1661,48 +1966,54 @@ impl Render for BlancoApp {
                     .px(PANEL_GAP)
                     .pb(px(2.))
                     .pt(px(1.))
+                    .child(self.render_sidebar_rail(cx))
                     .child(
-                        h_resizable("main-layout")
-                            .with_state(&self.main_resize_state)
-                            // The cards draw their own borders, so the handle
-                            // only needs to stay draggable; its line would
-                            // otherwise float in the gutter and overshoot the
-                            // rounded corners.
-                            .invisible_handles()
-                            // Left side: Connections panel sidebar
-                            .child(self.render_sidebar_panel(cx))
-                            // Main panel
-                            .child(
-                                resizable_panel().child(
-                                    div()
-                                        .size_full()
-                                        .when(!self.sidebar_collapsed, |this| {
-                                            this.pl(PANEL_GAP / 2.)
-                                        })
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .flex_1()
-                                                // Let this shrink below its
-                                                // content width, or the panel
-                                                // grows to fit the widest tab
-                                                // and the tab bar never scrolls.
-                                                .min_w_0()
-                                                .h_full()
-                                                .overflow_hidden()
-                                                // The shell is the darkest
-                                                // surface; this card holds the
-                                                // editor, so it takes the
-                                                // content surface the active
-                                                // tab is painted with.
-                                                .bg(cx.theme().tab_active)
-                                                .rounded(PANEL_RADIUS)
-                                                .border_1()
-                                                .border_color(cx.theme().border)
-                                                .child(self.editor_panel.clone()),
-                                        ),
+                        div().flex_1().min_w_0().h_full().child(
+                            h_resizable("main-layout")
+                                .with_state(&self.main_resize_state)
+                                // The cards draw their own borders, so the handle
+                                // only needs to stay draggable; its line would
+                                // otherwise float in the gutter and overshoot the
+                                // rounded corners.
+                                .invisible_handles()
+                                // Left side: the sidebar body next to the rail
+                                .child(self.render_sidebar_panel(cx))
+                                // Main panel
+                                .child(
+                                    resizable_panel().child(
+                                        div()
+                                            .size_full()
+                                            // The other half of the gap comes from
+                                            // the sidebar body. While collapsed
+                                            // the rail's margin is the whole gap.
+                                            .when(!self.sidebar_collapsed, |this| {
+                                                this.pl(PANEL_GAP / 2.)
+                                            })
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .flex_1()
+                                                    // Let this shrink below its
+                                                    // content width, or the panel
+                                                    // grows to fit the widest tab
+                                                    // and the tab bar never scrolls.
+                                                    .min_w_0()
+                                                    .h_full()
+                                                    .overflow_hidden()
+                                                    // The shell is the darkest
+                                                    // surface; this card holds the
+                                                    // editor, so it takes the
+                                                    // content surface the active
+                                                    // tab is painted with.
+                                                    .bg(cx.theme().tab_active)
+                                                    .rounded(PANEL_RADIUS)
+                                                    .border_1()
+                                                    .border_color(cx.theme().border)
+                                                    .child(self.editor_panel.clone()),
+                                            ),
+                                    ),
                                 ),
-                            ),
+                        ),
                     ),
             )
             // Status bar pinned to the bottom, spanning the full window width.
@@ -1740,6 +2051,46 @@ fn init_menus(cx: &mut App) {
         gpui::KeyBinding::new("shift-tab", EditPrevCell, Some("CellEditor")),
     ]);
 
+    // Clipboard shortcuts inside a terminal tab. Plain ctrl-c/ctrl-v must reach
+    // the shell (interrupt, literal), so the shifted chords copy and paste.
+    cx.bind_keys([
+        gpui::KeyBinding::new(
+            "ctrl-shift-c",
+            blanco_terminal::view::Copy,
+            Some("Terminal"),
+        ),
+        gpui::KeyBinding::new(
+            "ctrl-shift-v",
+            blanco_terminal::view::Paste,
+            Some("Terminal"),
+        ),
+        gpui::KeyBinding::new(
+            "shift-insert",
+            blanco_terminal::view::Paste,
+            Some("Terminal"),
+        ),
+        gpui::KeyBinding::new(
+            "ctrl-shift-a",
+            blanco_terminal::view::SelectAll,
+            Some("Terminal"),
+        ),
+        gpui::KeyBinding::new(
+            "ctrl-shift-k",
+            blanco_terminal::view::ClearScrollback,
+            Some("Terminal"),
+        ),
+        #[cfg(target_os = "macos")]
+        gpui::KeyBinding::new("cmd-c", blanco_terminal::view::Copy, Some("Terminal")),
+        #[cfg(target_os = "macos")]
+        gpui::KeyBinding::new("cmd-v", blanco_terminal::view::Paste, Some("Terminal")),
+        #[cfg(target_os = "macos")]
+        gpui::KeyBinding::new(
+            "cmd-k",
+            blanco_terminal::view::ClearScrollback,
+            Some("Terminal"),
+        ),
+    ]);
+
     cx.set_menus(build_menu());
 
     let menu = build_menu().into_iter().map(|menu| menu.owned()).collect();
@@ -1752,6 +2103,7 @@ fn build_menu() -> Vec<Menu> {
             name: "File".into(),
             items: vec![
                 MenuItem::action("New Connection", OpenNewConnectionModal),
+                MenuItem::action("Toggle Terminal", OpenTerminal),
                 MenuItem::action("New Snippet", NewSnippet),
                 MenuItem::action("Settings", OpenSettings),
                 MenuItem::Separator,
@@ -1782,4 +2134,59 @@ fn build_menu() -> Vec<Menu> {
             disabled: false,
         },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_harness::FullAppHarness;
+    use gpui::{TestAppContext, VisualTestContext};
+
+    #[gpui::test]
+    async fn test_sidebar_rail_reopens_and_collapses(cx: &mut TestAppContext) {
+        let harness = FullAppHarness::new(cx);
+        let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+        let app = harness.app;
+
+        cx.update(|window, cx| {
+            let handle = app.read(cx).focus_handle(cx);
+            window.focus(&handle, cx);
+            window.dispatch_action(Box::new(ToggleSidebar), cx);
+        });
+        cx.run_until_parked();
+        assert!(app.read_with(&cx, |app, _| app.sidebar_collapsed()));
+
+        app.update(&mut cx, |app, cx| {
+            app.select_sidebar_tab(SidebarTab::History, cx)
+        });
+        cx.run_until_parked();
+        app.read_with(&cx, |app, _| {
+            assert!(
+                !app.sidebar_collapsed(),
+                "clicking a rail icon should re-open"
+            );
+            assert_eq!(app.sidebar_tab(), SidebarTab::History);
+        });
+
+        app.update(&mut cx, |app, cx| {
+            app.select_sidebar_tab(SidebarTab::History, cx)
+        });
+        cx.run_until_parked();
+        app.read_with(&cx, |app, _| {
+            assert!(
+                app.sidebar_collapsed(),
+                "clicking the active icon should collapse"
+            );
+            assert_eq!(app.sidebar_tab(), SidebarTab::History);
+        });
+
+        app.update(&mut cx, |app, cx| {
+            app.select_sidebar_tab(SidebarTab::Snippets, cx)
+        });
+        cx.run_until_parked();
+        app.read_with(&cx, |app, _| {
+            assert!(!app.sidebar_collapsed());
+            assert_eq!(app.sidebar_tab(), SidebarTab::Snippets);
+        });
+    }
 }

@@ -1,6 +1,6 @@
 use crate::app::{
-    CommitChanges, ExplainQuery, FormatQuery, OpenSettings, RollbackChanges, RunQuery,
-    ToggleCommandPalette,
+    CommitChanges, ExplainQuery, FormatQuery, OpenSettings, OpenTerminal, RollbackChanges,
+    RunQuery, ToggleCommandPalette,
 };
 use crate::settings::Settings;
 
@@ -54,6 +54,11 @@ pub const CUSTOMIZABLE_BINDINGS: &[BindingDef] = &[
         label: "Open settings",
         default: "super-,",
     },
+    BindingDef {
+        action: "OpenTerminal",
+        label: "Toggle terminal",
+        default: "ctrl-`",
+    },
 ];
 
 /// The built-in keystroke for an action, or `""` when the action is unknown.
@@ -99,6 +104,7 @@ fn key_binding(action: &str, keystrokes: &str) -> Option<gpui::KeyBinding> {
         "CommitChanges" => gpui::KeyBinding::new(keystrokes, CommitChanges, None),
         "RollbackChanges" => gpui::KeyBinding::new(keystrokes, RollbackChanges, None),
         "OpenSettings" => gpui::KeyBinding::new(keystrokes, OpenSettings, None),
+        "OpenTerminal" => gpui::KeyBinding::new(keystrokes, OpenTerminal, None),
         _ => return None,
     };
     Some(binding)

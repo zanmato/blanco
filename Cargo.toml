@@ -17,6 +17,7 @@ members = [
     "crates/app-database",
     "crates/sql-parser",
     "crates/transformers",
+    "crates/terminal",
 ]
 
 [workspace.package]
@@ -74,6 +75,11 @@ sqlparser = "0.61"
 
 tempfile = "3.8"
 dirs = "5"
+
+# Terminal emulation. The zed-industries fork adds a child signal mask and
+# window-id plumbing the upstream crate lacks; the crate itself is Apache-2.0.
+alacritty_terminal = { git = "https://github.com/zed-industries/alacritty", rev = "4c129667ce56611becdc82de6e28218c80e2e88f" }
+vte = { version = "0.15", default-features = false, features = ["std", "ansi"] }
 
 # Additional dependencies
 env_logger = "0.11"

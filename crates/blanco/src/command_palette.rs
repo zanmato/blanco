@@ -20,7 +20,7 @@ use crate::{
         ConnectToConnection, CopyAsCSV, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV,
         CreateNewQueryTab, CreateNewScriptTab, ExplainQuery, ExportAsCSV, ExportAsJSON,
         ExportAsMarkdown, ExportAsSQL, ExportAsTSV, FormatQuery, NewSnippet,
-        OpenNewConnectionModal, OpenSettings, RollbackChanges, RunQuery, SwitchTheme,
+        OpenNewConnectionModal, OpenSettings, OpenTerminal, RollbackChanges, RunQuery, SwitchTheme,
         ToggleRenderWhitespace, ToggleSidebar, ToggleWordWrap,
     },
     connections::ConnectionsPanel,
@@ -99,6 +99,7 @@ pub enum CommandType {
     FormatQuery,
     NewSnippet,
     OpenSettings,
+    OpenTerminal,
     OpenNewConnectionModal,
     ToggleSidebar,
     CommitChanges,
@@ -726,6 +727,7 @@ fn keybinding_for_command(cmd: &CommandType, window: &Window) -> Option<gpui_com
     let action: Box<dyn gpui::Action> = match cmd {
         CommandType::FormatQuery => Box::new(FormatQuery),
         CommandType::OpenSettings => Box::new(OpenSettings),
+        CommandType::OpenTerminal => Box::new(OpenTerminal),
         CommandType::CommitChanges => Box::new(CommitChanges),
         CommandType::RollbackChanges => Box::new(RollbackChanges),
         _ => return None,
@@ -740,6 +742,7 @@ fn execute_command(cmd: &CommandType, window: &mut Window, cx: &mut App) {
         CommandType::FormatQuery => window.dispatch_action(Box::new(FormatQuery), cx),
         CommandType::NewSnippet => window.dispatch_action(Box::new(NewSnippet), cx),
         CommandType::OpenSettings => window.dispatch_action(Box::new(OpenSettings), cx),
+        CommandType::OpenTerminal => window.dispatch_action(Box::new(OpenTerminal), cx),
         CommandType::OpenNewConnectionModal => {
             window.dispatch_action(Box::new(OpenNewConnectionModal), cx)
         }
@@ -1070,6 +1073,7 @@ fn build_commands(
             CommandType::OpenNewConnectionModal,
         ),
         leaf("Open Settings", "View", CommandType::OpenSettings),
+        leaf("Toggle Terminal", "View", CommandType::OpenTerminal),
         leaf("Toggle Sidebar", "View", CommandType::ToggleSidebar),
         leaf("Commit Changes", "Edit", CommandType::CommitChanges),
         leaf("Rollback Changes", "Edit", CommandType::RollbackChanges),

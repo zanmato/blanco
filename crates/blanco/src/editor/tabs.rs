@@ -44,9 +44,22 @@ pub struct ConnectionBackedTab {
     pub results_panel: Entity<ResultsPanel>,
     pub chat_enabled: bool,
     pub chat_panel: Option<Entity<ChatPanel>>,
+    /// Whether the terminal pane under the editor is shown.
+    pub terminal_enabled: bool,
+    /// The pane's shell, spawned the first time the pane is opened and kept
+    /// while it is hidden.
+    pub terminal: Option<super::terminal_pane::TerminalPane>,
 }
 
 impl ConnectionBackedTab {
+    /// The terminal view to show under the editor, when the pane is open.
+    pub fn terminal_pane_view(&self) -> Option<Entity<blanco_terminal::view::TerminalView>> {
+        if !self.terminal_enabled {
+            return None;
+        }
+        self.terminal.as_ref().map(|pane| pane.view.clone())
+    }
+
     /// The chat session context for this tab's buffer.
     pub fn chat_session_context(&self, language: TabLanguage) -> ChatSessionContext {
         ChatSessionContext::new()

@@ -13,8 +13,10 @@ mod script_execution;
 mod script_execution_test;
 mod snippet_editor;
 mod sql_operations;
+mod tab_access;
 mod table_structure;
 mod tabs;
+mod terminal_pane;
 
 pub use tabs::{
     ConnectionBackedTab, ObjectDdlParams, QueryTab, ScriptTab, SettingsTab, TabCreationParams,
@@ -23,7 +25,7 @@ pub use tabs::{
 
 use blanco_core::ConnectionContext;
 use gpui::{
-    App, AppContext, Context, Entity, FocusHandle, KeybindingKeystroke, Keystroke,
+    App, AppContext, Context, Entity, FocusHandle, Focusable as _, KeybindingKeystroke, Keystroke,
     ParentElement as _, Task, WeakEntity, Window,
 };
 use gpui_component::{
@@ -67,6 +69,8 @@ pub struct EditorPanel {
     script_editor_chat_resize_state: Entity<ResizableState>,
     editor_results_resize_state: Entity<ResizableState>,
     results_log_resize_state: Entity<ResizableState>,
+    /// Split between a tab's content column and its terminal pane.
+    editor_terminal_resize_state: Entity<ResizableState>,
     loading: bool,
     linting_enabled: bool,
     _run_query_task: Task<()>,
@@ -87,6 +91,14 @@ pub struct EditorPanel {
 pub enum EditorPanelEvent {
     /// A query finished executing and was written to the history log.
     QueryRecorded,
+    /// A Run on a query tab is over, one way or another: `Ok` carries the final
+    /// result set as JSON (capped rows), `Err` the failure, the user's cancel,
+    /// or why it never started. Emitted for every run so the MCP `run_tab`
+    /// bridge can answer its caller; other listeners may ignore it.
+    QueryRunEnded {
+        tab_index: usize,
+        outcome: Result<serde_json::Value, String>,
+    },
 }
 
 impl gpui::EventEmitter<EditorPanelEvent> for EditorPanel {}
@@ -409,6 +421,83 @@ impl EditorPanel {
         weak
     }
 
+    /// Show or hide the terminal pane docked under the active tab. The shell
+    /// is spawned on first use and kept while hidden; when it exits the pane
+    /// closes and the next toggle starts a fresh shell. The MCP server is
+    /// started first so the agents launched from the pane find it.
+    pub fn toggle_terminal_for_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self
+            .tabs
+            .get_mut(self.active_tab_ix)
+            .and_then(TabType::connection_tab_mut)
+        else {
+            return;
+        };
+        tab.terminal_enabled = !tab.terminal_enabled;
+        if !tab.terminal_enabled {
+            cx.notify();
+            return;
+        }
+        if tab.terminal.is_none() {
+            if !crate::mcp::McpService::global(cx).is_running() {
+                crate::mcp::McpService::start(cx);
+            }
+            let tab_id = tab.editor.entity_id().as_u64();
+            let terminal = match terminal_pane::spawn_tab_terminal(tab_id, &tab.context, window, cx)
+            {
+                Ok(terminal) => terminal,
+                Err(error) => {
+                    error!("Failed to start a terminal: {error:#}");
+                    tab.terminal_enabled = false;
+                    window.push_notification(
+                        (
+                            gpui_component::notification::NotificationType::Error,
+                            format!("Could not start a terminal: {error:#}"),
+                        ),
+                        cx,
+                    );
+                    return;
+                }
+            };
+            let view = cx.new(|cx| {
+                blanco_terminal::view::TerminalView::new(
+                    terminal,
+                    terminal_pane::style_from_theme,
+                    window,
+                    cx,
+                )
+            });
+            let subscription = cx.subscribe(&view, |panel, exited_view, event, cx| {
+                if let blanco_terminal::view::TerminalViewEvent::Exited = event {
+                    for tab in panel
+                        .tabs
+                        .iter_mut()
+                        .filter_map(TabType::connection_tab_mut)
+                    {
+                        if tab
+                            .terminal
+                            .as_ref()
+                            .is_some_and(|pane| pane.view == exited_view)
+                        {
+                            tab.terminal = None;
+                            tab.terminal_enabled = false;
+                        }
+                    }
+                    cx.notify();
+                }
+            });
+            tab.terminal = Some(terminal_pane::TerminalPane {
+                view,
+                _subscription: subscription,
+            });
+        }
+        if let Some(pane) = &tab.terminal {
+            let focus_handle = pane.view.read(cx).focus_handle(cx);
+            window.focus(&focus_handle, cx);
+        }
+        cx.notify();
+    }
+
     /// Titles of the open tabs in display order, for the command palette.
     pub fn tab_titles(&self, cx: &App) -> Vec<String> {
         self.tabs.iter().map(|tab| tab.title(cx)).collect()
@@ -443,6 +532,7 @@ impl EditorPanel {
         let script_editor_chat_resize_state = cx.new(|_| ResizableState::default());
         let editor_results_resize_state = cx.new(|_| ResizableState::default());
         let results_log_resize_state = cx.new(|_| ResizableState::default());
+        let editor_terminal_resize_state = cx.new(|_| ResizableState::default());
 
         let mut panel = Self {
             focus_handle: cx.focus_handle(),
@@ -456,6 +546,7 @@ impl EditorPanel {
             script_editor_chat_resize_state,
             editor_results_resize_state,
             results_log_resize_state,
+            editor_terminal_resize_state,
             loading: false,
             linting_enabled: false,
             _run_query_task: Task::ready(()),
@@ -714,6 +805,8 @@ impl EditorPanel {
                 last_run_at: params.last_run_at,
                 results_panel,
                 chat_enabled: false,
+                terminal_enabled: false,
+                terminal: None,
                 chat_panel: None,
             },
             sql_view: cx.new(|cx| {
@@ -811,6 +904,8 @@ impl EditorPanel {
                 last_run_at: params.last_run_at,
                 results_panel,
                 chat_enabled: false,
+                terminal_enabled: false,
+                terminal: None,
                 chat_panel: None,
             },
             log_view: cx.new(|cx| {

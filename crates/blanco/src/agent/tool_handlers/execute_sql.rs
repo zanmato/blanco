@@ -8,6 +8,7 @@ use llm::{
 };
 
 use super::{AgentToolHandler, ToolContext};
+use crate::mcp::tools::run_sql_json;
 
 const EXECUTE_SQL_MAX_ROWS: usize = 100;
 const EXECUTE_SQL_AUTO_LIMIT: usize = 100;
@@ -86,76 +87,33 @@ impl AgentToolHandler for ExecuteSqlHandler {
 
         // Without a known backend fall back to Postgres, whose LIMIT form is
         // the common one.
-        let sql = context
+        let db_type = context
             .db_type
-            .unwrap_or(blanco_core::DatabaseType::PostgreSQL)
-            .dialect()
-            .apply_row_limit(&sql, EXECUTE_SQL_AUTO_LIMIT);
+            .unwrap_or(blanco_core::DatabaseType::PostgreSQL);
 
-        match context
-            .db_service
-            .execute_script(connection_id, context.database_name.as_deref(), &sql)
-            .await
-            // The tool runs a single statement; surface the final result-set,
-            // matching the script path the editor uses (and its OID resolution).
-            .map(|results| results.into_iter().last().unwrap_or_default())
+        let arguments = match run_sql_json(
+            context.db_service.as_ref(),
+            connection_id,
+            context.database_name.as_deref(),
+            db_type,
+            &sql,
+            Some(EXECUTE_SQL_AUTO_LIMIT),
+            EXECUTE_SQL_MAX_ROWS,
+        )
+        .await
         {
-            Ok(result) => {
-                let truncated = result.rows.len() > EXECUTE_SQL_MAX_ROWS;
-                let error_message = if result.is_error {
-                    result.rows.first().map(|first_row| {
-                        first_row
-                            .iter()
-                            .filter_map(|v| v.as_deref())
-                            .collect::<Vec<&str>>()
-                            .join(" ")
-                    })
-                } else {
-                    None
-                };
-                let display_rows: Vec<_> =
-                    result.rows.into_iter().take(EXECUTE_SQL_MAX_ROWS).collect();
-
-                let mut json_result = serde_json::json!({
-                    "columns": result.columns,
-                    "rows": display_rows,
-                    "rows_affected": result.rows_affected,
-                    "execution_time_ms": result.execution_time_ms,
-                    "truncated": truncated,
-                });
-
-                if truncated {
-                    json_result["hint"] = serde_json::json!(format!(
-                        "Result truncated to {} rows. Add a LIMIT clause or WHERE filter to narrow results.",
-                        EXECUTE_SQL_MAX_ROWS
-                    ));
-                }
-
-                if result.is_error {
-                    json_result["error"] = serde_json::json!(true);
-                    if let Some(msg) = error_message {
-                        json_result["error_message"] = serde_json::json!(msg);
-                    }
-                }
-
-                ToolCall {
-                    id: "execute-sql".to_string(),
-                    call_type: "function".to_string(),
-                    function: FunctionCall {
-                        name: "execute-sql".to_string(),
-                        arguments: json_result.to_string(),
-                    },
-                }
+            Ok(json_result) => json_result.to_string(),
+            Err(e) => {
+                serde_json::json!({"error": format!("Query execution failed: {}", e)}).to_string()
             }
-            Err(e) => ToolCall {
-                id: "execute-sql".to_string(),
-                call_type: "function".to_string(),
-                function: FunctionCall {
-                    name: "execute-sql".to_string(),
-                    arguments:
-                        serde_json::json!({"error": format!("Query execution failed: {}", e)})
-                            .to_string(),
-                },
+        };
+
+        ToolCall {
+            id: "execute-sql".to_string(),
+            call_type: "function".to_string(),
+            function: FunctionCall {
+                name: "execute-sql".to_string(),
+                arguments,
             },
         }
     }

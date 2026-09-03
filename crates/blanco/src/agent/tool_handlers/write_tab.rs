@@ -17,14 +17,56 @@ pub struct WriteTabHandler {
     pub content_noun: &'static str,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum WriteOperation {
+/// How `content` is combined with the tab's current text. Shared with the MCP
+/// `write_tab` tool, whose JSON parameter deserializes straight into it.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum WriteOperation {
+    #[default]
     ReplaceAll,
     InsertBeforeLine,
     ReplaceLines,
 }
 
-fn apply_line_operation(
+impl WriteOperation {
+    /// The wire name (`replace_all`, `insert_before_line`, `replace_lines`);
+    /// anything else falls back to `ReplaceAll`, which is what the agent tool
+    /// has always done with an unknown operation.
+    pub(crate) fn parse(name: &str) -> Self {
+        match name {
+            "insert_before_line" => WriteOperation::InsertBeforeLine,
+            "replace_lines" => WriteOperation::ReplaceLines,
+            _ => WriteOperation::ReplaceAll,
+        }
+    }
+
+    /// One-line confirmation of what a successful write did.
+    pub(crate) fn summary(self, start_line: Option<usize>, end_line: Option<usize>) -> String {
+        match self {
+            WriteOperation::ReplaceAll => "Content written to tab".to_string(),
+            WriteOperation::InsertBeforeLine => {
+                format!("Inserted before line {}", start_line.unwrap_or(0))
+            }
+            WriteOperation::ReplaceLines => format!(
+                "Replaced lines {}-{}",
+                start_line.unwrap_or(0),
+                end_line.unwrap_or(0)
+            ),
+        }
+    }
+}
+
+pub(crate) fn apply_line_operation(
     current_text: &str,
     operation: WriteOperation,
     content: &str,
@@ -94,11 +136,7 @@ impl AgentToolHandler for WriteTabHandler {
                 .and_then(|v| v.as_str())
                 .unwrap_or("replace_all");
 
-            let operation = match operation_str {
-                "insert_before_line" => WriteOperation::InsertBeforeLine,
-                "replace_lines" => WriteOperation::ReplaceLines,
-                _ => WriteOperation::ReplaceAll,
-            };
+            let operation = WriteOperation::parse(operation_str);
 
             let start_line = arguments
                 .get("start_line")
@@ -119,19 +157,7 @@ impl AgentToolHandler for WriteTabHandler {
                 Ok::<usize, String>(total_lines)
             }) {
                 Ok(Ok(total_lines)) => {
-                    let message = match operation {
-                        WriteOperation::ReplaceAll => "Content written to tab".to_string(),
-                        WriteOperation::InsertBeforeLine => {
-                            format!("Inserted before line {}", start_line.unwrap_or(0))
-                        }
-                        WriteOperation::ReplaceLines => {
-                            format!(
-                                "Replaced lines {}-{}",
-                                start_line.unwrap_or(0),
-                                end_line.unwrap_or(0)
-                            )
-                        }
-                    };
+                    let message = operation.summary(start_line, end_line);
 
                     ToolCall {
                         id: "write-tab".to_string(),

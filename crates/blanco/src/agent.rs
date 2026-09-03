@@ -8,7 +8,7 @@ mod chat_session;
 mod chat_types;
 mod openai_compatible;
 mod streaming;
-mod tool_handlers;
+pub(crate) mod tool_handlers;
 
 // Re-export main types for the editor panel
 pub use agent_chat::ChatPanel;

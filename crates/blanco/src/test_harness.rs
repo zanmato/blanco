@@ -224,6 +224,7 @@ impl FullAppHarness {
 
             let db_service = DatabaseService::new(runtime_handle.clone());
             cx.set_global(db_service);
+            crate::mcp::McpService::init(cx);
 
             let settings = AppSettings::new(cx, Settings::default());
             cx.set_global(settings);

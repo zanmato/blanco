@@ -1,0 +1,22 @@
+[package]
+name = "blanco-terminal"
+version.workspace = true
+edition = "2024"
+publish = false
+
+[lib]
+path = "src/terminal.rs"
+
+[dependencies]
+gpui = { workspace = true }
+alacritty_terminal = { workspace = true }
+vte = { workspace = true }
+anyhow = { workspace = true }
+smol = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true

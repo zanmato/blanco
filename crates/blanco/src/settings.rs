@@ -65,6 +65,9 @@ pub struct Settings {
     pub database: DatabaseSettings,
     pub appearance: AppearanceSettings,
     pub chat: ChatSettings,
+    /// The built-in MCP server external agents connect to.
+    #[serde(default)]
+    pub mcp: McpSettings,
     /// Last known window geometry, restored on the next startup. Empty until the
     /// window has been moved or resized at least once.
     #[serde(default)]
@@ -130,6 +133,11 @@ impl Settings {
                 "appearance.mono_font_family" => {
                     settings.appearance.mono_font_family = value.clone();
                 }
+                "appearance.terminal_font_size" => {
+                    settings.appearance.terminal_font_size = value
+                        .parse()
+                        .unwrap_or(AppearanceSettings::default().terminal_font_size);
+                }
                 "chat.provider" => {
                     settings.chat.provider = value.clone();
                 }
@@ -150,6 +158,15 @@ impl Settings {
                 }
                 "chat.show_thinking_process" => {
                     settings.chat.show_thinking_process = value.parse().unwrap_or_default();
+                }
+                "mcp.enabled" => {
+                    settings.mcp.enabled = value.parse().unwrap_or_default();
+                }
+                "mcp.port" => {
+                    settings.mcp.port = value.parse().unwrap_or(McpSettings::DEFAULT_PORT);
+                }
+                "mcp.allow_writes" => {
+                    settings.mcp.allow_writes = value.parse().unwrap_or_default();
                 }
                 "formatter.indented_joins" => {
                     settings.formatter.indented_joins = value.parse().unwrap_or(false);
@@ -269,6 +286,8 @@ pub struct AppearanceSettings {
     pub theme: String,
     pub font_family: String,
     pub mono_font_family: String,
+    /// Terminal pane font size in pixels.
+    pub terminal_font_size: f32,
 }
 
 /// Persisted window geometry, in logical pixels. `width`/`height` are `None`
@@ -282,6 +301,32 @@ pub struct WindowSettings {
     pub width: Option<f32>,
     pub height: Option<f32>,
     pub maximized: bool,
+}
+
+/// The built-in MCP server. Off by default: it grants whoever holds the token
+/// access to every configured database.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpSettings {
+    pub enabled: bool,
+    /// Loopback port to listen on.
+    pub port: u16,
+    /// Run data-modifying statements without the confirmation dialog. PROD
+    /// connections and DROP/TRUNCATE still confirm.
+    pub allow_writes: bool,
+}
+
+impl McpSettings {
+    pub const DEFAULT_PORT: u16 = 7821;
+}
+
+impl Default for McpSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: Self::DEFAULT_PORT,
+            allow_writes: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -326,6 +371,7 @@ impl Default for AppearanceSettings {
             theme: "One Dark - Darkened".to_string(),
             font_family: String::new(),
             mono_font_family: String::new(),
+            terminal_font_size: 12.0,
         }
     }
 }

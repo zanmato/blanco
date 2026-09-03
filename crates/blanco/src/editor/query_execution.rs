@@ -6,6 +6,8 @@ use gpui_component::{
     notification::NotificationType,
 };
 use ropey::Rope;
+use std::cell::Cell;
+use std::rc::Rc;
 use tracing::{debug, error};
 
 use crate::app_settings::AppSettings;
@@ -80,6 +82,10 @@ impl EditorPanel {
                 };
                 if command.is_empty() {
                     window.push_notification((NotificationType::Error, "No command to run"), cx);
+                    cx.emit(super::EditorPanelEvent::QueryRunEnded {
+                        tab_index,
+                        outcome: Err("No command to run".to_string()),
+                    });
                     return;
                 }
                 self.execute_query(command, connection_id, &database_name, window, cx);
@@ -113,6 +119,10 @@ impl EditorPanel {
 
             if query.is_empty() {
                 window.push_notification((NotificationType::Error, "No query to execute"), cx);
+                cx.emit(super::EditorPanelEvent::QueryRunEnded {
+                    tab_index,
+                    outcome: Err("No query to execute".to_string()),
+                });
                 return;
             }
 
@@ -188,10 +198,17 @@ impl EditorPanel {
         let connection_name = query_tab.context.connection_name.clone();
         let database_name = database_name.to_string();
         let weak_editor_panel = cx.entity().downgrade();
+        let tab_index = self.active_tab_ix;
+        // Whether the user clicked Run; the close hook fires for every way the
+        // dialog goes away, so it reports a cancel only when nothing ran.
+        let confirmed = Rc::new(Cell::new(false));
         window.open_dialog(cx, move |dialog, _, _| {
             let query = query.clone();
             let database_name = database_name.clone();
             let weak_editor_panel = weak_editor_panel.clone();
+            let confirmed_on_run = confirmed.clone();
+            let confirmed_on_close = confirmed.clone();
+            let weak_on_close = weak_editor_panel.clone();
             dialog
                 .title("Run write statement on PROD?")
                 .child(format!(
@@ -206,6 +223,7 @@ impl EditorPanel {
                         .child(DialogAction::new().child(
                             Button::new("prod-write-run").danger().label("Run on PROD").on_click(
                                 move |_, window, cx| {
+                                    confirmed_on_run.set(true);
                                     let query = query.clone();
                                     let database_name = database_name.clone();
                                     weak_editor_panel
@@ -223,6 +241,21 @@ impl EditorPanel {
                             ),
                         )),
                 )
+                .on_close(move |_, _, cx| {
+                    if confirmed_on_close.get() {
+                        return;
+                    }
+                    weak_on_close
+                        .update(cx, |_, cx| {
+                            cx.emit(super::EditorPanelEvent::QueryRunEnded {
+                                tab_index,
+                                outcome: Err(
+                                    "The user did not confirm the write on PROD.".to_string()
+                                ),
+                            });
+                        })
+                        .log_err();
+                })
         });
     }
 
@@ -431,6 +464,10 @@ impl EditorPanel {
                                 .update(cx, |editor_panel, cx| {
                                     editor_panel.loading = false;
                                     editor_panel.abort_query_task = None;
+                                    cx.emit(super::EditorPanelEvent::QueryRunEnded {
+                                        tab_index,
+                                        outcome: Err("Query cancelled by the user.".to_string()),
+                                    });
                                     cx.notify();
                                 })
                                 .ok();
@@ -530,6 +567,19 @@ impl EditorPanel {
                                     || *bytes >= LARGE_RESULT_BYTES
                             });
 
+                        // The final result set as the MCP bridge reports it,
+                        // built before the results move into the grid. Capped
+                        // rows keep this cheap on every run.
+                        let run_outcome = results
+                            .last()
+                            .map(|result| {
+                                crate::mcp::tools::result_to_json(
+                                    result,
+                                    crate::mcp::tools::DEFAULT_MAX_ROWS,
+                                )
+                            })
+                            .unwrap_or(serde_json::Value::Null);
+
                         window
                             .update(move |window, cx| {
                                 // Update results panel
@@ -576,6 +626,10 @@ impl EditorPanel {
                                     .update(cx, |editor_panel, cx| {
                                         editor_panel.loading = false;
                                         editor_panel.abort_query_task = None;
+                                        cx.emit(super::EditorPanelEvent::QueryRunEnded {
+                                            tab_index,
+                                            outcome: Ok(run_outcome),
+                                        });
                                         cx.notify();
                                     })
                                     .ok();
@@ -623,6 +677,10 @@ impl EditorPanel {
                                     .update(cx, |editor_panel, cx| {
                                         editor_panel.loading = false;
                                         editor_panel.abort_query_task = None;
+                                        cx.emit(super::EditorPanelEvent::QueryRunEnded {
+                                            tab_index,
+                                            outcome: Err(error_message.clone()),
+                                        });
                                         cx.notify();
                                     })
                                     .ok();
@@ -696,7 +754,12 @@ impl EditorPanel {
             cx.new(|cx| ParameterForm::new(query.clone(), params, &initial_values, window, cx));
 
         let weak_editor_panel = cx.entity().downgrade();
+        let tab_index = self.active_tab_ix;
+        let submitted = Rc::new(Cell::new(false));
         window.open_dialog(cx, move |modal, _, _| {
+            let submitted_on_ok = submitted.clone();
+            let submitted_on_close = submitted.clone();
+            let weak_on_close = weak_editor_panel.clone();
             modal
                 .title("Query Parameters")
                 .w(px(500.))
@@ -714,8 +777,14 @@ impl EditorPanel {
                     let database_name = database_name.clone();
                     let weak_editor_panel = weak_editor_panel.clone();
                     move |_event, window, cx| {
+                        submitted_on_ok.set(true);
                         let substituted_query = param_form.read(cx).get_substituted_query(cx);
                         let entered_values = param_form.read(cx).current_values(cx);
+                        // Close this dialog before running: `execute_query` may
+                        // open the PROD confirmation, and returning `true` here
+                        // would then pop that dialog off the stack instead of
+                        // this one, leaving the parameter form stuck open.
+                        window.close_dialog(cx);
                         weak_editor_panel
                             .update(cx, |editor_panel, cx| {
                                 if let Some(TabType::Query(query_tab)) =
@@ -732,8 +801,24 @@ impl EditorPanel {
                                 );
                             })
                             .ok();
-                        true // Close dialog
+                        false
                     }
+                })
+                .on_close(move |_, _, cx| {
+                    if submitted_on_close.get() {
+                        return;
+                    }
+                    weak_on_close
+                        .update(cx, |_, cx| {
+                            cx.emit(super::EditorPanelEvent::QueryRunEnded {
+                                tab_index,
+                                outcome: Err(
+                                    "The statement has bind parameters and the user cancelled the parameter form."
+                                        .to_string(),
+                                ),
+                            });
+                        })
+                        .log_err();
                 })
         });
     }
