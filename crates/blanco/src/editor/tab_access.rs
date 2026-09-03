@@ -7,11 +7,163 @@ use gpui::{App, Context, Window};
 use gpui_component::input::RopeExt as _;
 
 use super::{EditorPanel, TabCreationParams, TabType, tabs::ConnectionBackedTab};
-use crate::agent::tool_handlers::read_tab::slice_tab_text;
-use crate::agent::tool_handlers::write_tab::apply_line_operation;
 use crate::mcp::bridge::{
     TabConnection, TabContent, TabEdit, TabSelector, TabSummary, WriteOutcome,
 };
+
+/// Maximum lines to return when no range is specified
+pub(crate) const READ_TAB_DEFAULT_LIMIT: usize = 200;
+
+/// A line-numbered window of a tab's text. Line numbers are 1-based and
+/// inclusive; an empty tab reports zeros.
+pub(crate) struct TabSlice {
+    pub content: String,
+    pub total_lines: usize,
+    pub start_line: usize,
+    pub end_line: usize,
+}
+
+impl TabSlice {
+    /// Whether lines after `end_line` were left out.
+    pub(crate) fn truncated(&self) -> bool {
+        self.total_lines > self.end_line
+    }
+}
+
+/// Cut `rope` to the requested 1-based inclusive range, numbering each line.
+/// Without a range the first `READ_TAB_DEFAULT_LIMIT` lines are returned so a
+/// huge buffer does not flood the model; a half-open range extends to the
+/// buffer's edge. Out-of-range bounds are clamped rather than rejected.
+pub(crate) fn slice_tab_text(
+    rope: &ropey::Rope,
+    requested_start: Option<usize>,
+    requested_end: Option<usize>,
+) -> TabSlice {
+    let total_lines = rope.lines_len();
+    if total_lines == 0 {
+        return TabSlice {
+            content: String::new(),
+            total_lines: 0,
+            start_line: 0,
+            end_line: 0,
+        };
+    }
+
+    let (start, end) = match (requested_start, requested_end) {
+        (Some(start), Some(end)) => (start, end),
+        (Some(start), None) => (start, total_lines),
+        (None, Some(end)) => (1, end),
+        (None, None) if total_lines > READ_TAB_DEFAULT_LIMIT => (1, READ_TAB_DEFAULT_LIMIT),
+        (None, None) => (1, total_lines),
+    };
+
+    let start = start.clamp(1, total_lines);
+    let end = end.min(total_lines).max(start);
+
+    let slice = rope.slice_lines((start - 1)..end);
+    let content = slice
+        .to_string()
+        .lines()
+        .enumerate()
+        .map(|(offset, line)| format!("{}: {}", start + offset, line))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    TabSlice {
+        content,
+        total_lines,
+        start_line: start,
+        end_line: end,
+    }
+}
+
+/// How `content` is combined with the tab's current text. The MCP `write_tab`
+/// tool's JSON parameter deserializes straight into it.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum WriteOperation {
+    #[default]
+    ReplaceAll,
+    InsertBeforeLine,
+    ReplaceLines,
+}
+
+impl WriteOperation {
+    /// One-line confirmation of what a successful write did.
+    pub(crate) fn summary(self, start_line: Option<usize>, end_line: Option<usize>) -> String {
+        match self {
+            WriteOperation::ReplaceAll => "Content written to tab".to_string(),
+            WriteOperation::InsertBeforeLine => {
+                format!("Inserted before line {}", start_line.unwrap_or(0))
+            }
+            WriteOperation::ReplaceLines => format!(
+                "Replaced lines {}-{}",
+                start_line.unwrap_or(0),
+                end_line.unwrap_or(0)
+            ),
+        }
+    }
+}
+
+pub(crate) fn apply_line_operation(
+    current_text: &str,
+    operation: WriteOperation,
+    content: &str,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
+) -> Result<String, String> {
+    match operation {
+        WriteOperation::ReplaceAll => Ok(content.to_string()),
+        WriteOperation::InsertBeforeLine => {
+            let target = start_line.ok_or("start_line is required for insert_before_line")?;
+            if target == 0 {
+                return Err("start_line must be 1 or greater".to_string());
+            }
+            let mut lines: Vec<String> = current_text.lines().map(|l| l.to_string()).collect();
+            let insert_at = (target - 1).min(lines.len());
+            let new_lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+            for (i, new_line) in new_lines.into_iter().enumerate() {
+                lines.insert(insert_at + i, new_line);
+            }
+            // Preserve trailing newline if original had one
+            let mut result = lines.join("\n");
+            if current_text.ends_with('\n') {
+                result.push('\n');
+            }
+            Ok(result)
+        }
+        WriteOperation::ReplaceLines => {
+            let start = start_line.ok_or("start_line is required for replace_lines")?;
+            let end = end_line.ok_or("end_line is required for replace_lines")?;
+            if start == 0 || end == 0 {
+                return Err("start_line and end_line must be 1 or greater".to_string());
+            }
+            if start > end {
+                return Err("start_line must be <= end_line".to_string());
+            }
+            let mut lines: Vec<String> = current_text.lines().map(|l| l.to_string()).collect();
+            let replace_start = (start - 1).min(lines.len());
+            let replace_end = end.min(lines.len());
+            let new_lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+            lines.splice(replace_start..replace_end, new_lines);
+            let mut result = lines.join("\n");
+            if current_text.ends_with('\n') {
+                result.push('\n');
+            }
+            Ok(result)
+        }
+    }
+}
 
 fn tab_kind(tab: &TabType) -> &'static str {
     match tab {

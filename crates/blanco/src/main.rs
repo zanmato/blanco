@@ -5,7 +5,6 @@ use tikv_jemallocator::Jemalloc;
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
 
-mod agent;
 mod app;
 mod app_settings;
 mod assets;
@@ -158,7 +157,7 @@ fn main() {
             .block_on(async move { app_database.load_all_settings().await })
             .unwrap_or_default();
 
-        let app_settings = AppSettings::new(cx, Settings::from_key_values(&settings));
+        let app_settings = AppSettings::new(Settings::from_key_values(&settings));
         blanco_core::set_connect_timeout_secs(
             app_settings
                 .settings

@@ -9,7 +9,6 @@ use blanco_ui::SqlView;
 use gpui::{App, Entity};
 use gpui_component::input::EditorState;
 
-use crate::agent::{ChatPanel, ChatSessionContext, TabLanguage};
 use crate::results_panel::ResultsPanel;
 use crate::settings::SettingsView;
 use crate::sql::{SqlCompletionProvider, SqruffService};
@@ -30,7 +29,7 @@ pub enum TabType {
 }
 
 /// What every tab bound to a connection has in common: the identity it works
-/// against, its code editor, results grid and chat, and the app-database row
+/// against, its code editor, results grid and terminal, and the app-database row
 /// it persists to. [`QueryTab`] and [`ScriptTab`] embed one and deref to it,
 /// so the panel treats the two kinds alike wherever the buffer's language does
 /// not matter.
@@ -42,8 +41,6 @@ pub struct ConnectionBackedTab {
     /// Unix seconds of the last run, shown in the tab overflow menu.
     pub last_run_at: Option<i64>,
     pub results_panel: Entity<ResultsPanel>,
-    pub chat_enabled: bool,
-    pub chat_panel: Option<Entity<ChatPanel>>,
     /// Whether the terminal pane under the editor is shown.
     pub terminal_enabled: bool,
     /// The pane's shell, spawned the first time the pane is opened and kept
@@ -58,18 +55,6 @@ impl ConnectionBackedTab {
             return None;
         }
         self.terminal.as_ref().map(|pane| pane.view.clone())
-    }
-
-    /// The chat session context for this tab's buffer.
-    pub fn chat_session_context(&self, language: TabLanguage) -> ChatSessionContext {
-        ChatSessionContext::new()
-            .with_input_state(self.editor.downgrade())
-            .with_connection(
-                self.context.connection_id,
-                self.context.database_name.clone(),
-                self.context.db_type,
-            )
-            .with_tab_language(language)
     }
 }
 
@@ -94,8 +79,7 @@ pub struct QueryTab {
 /// (formatter, linter, SQL completion, parameter modal): a script's "query" is
 /// an arbitrary program, so none of those apply. It keeps the results panel
 /// (fed only by explicit `db.display(...)` calls), the log view that the
-/// script's `console` output streams into, and the chat panel, whose session is
-/// told the tab holds JavaScript.
+/// script's `console` output streams into, and the terminal pane.
 pub struct ScriptTab {
     pub base: ConnectionBackedTab,
     pub log_view: Entity<SqlView>,
@@ -155,7 +139,7 @@ impl TabType {
         }
     }
 
-    /// The shared editor/results/chat state of a query or script tab.
+    /// The shared editor/results/terminal state of a query or script tab.
     pub fn connection_tab(&self) -> Option<&ConnectionBackedTab> {
         match self {
             TabType::Query(tab) => Some(&tab.base),
@@ -168,15 +152,6 @@ impl TabType {
         match self {
             TabType::Query(tab) => Some(&mut tab.base),
             TabType::Script(tab) => Some(&mut tab.base),
-            _ => None,
-        }
-    }
-
-    /// What the buffer of a query or script tab holds.
-    pub fn tab_language(&self) -> Option<TabLanguage> {
-        match self {
-            TabType::Query(_) => Some(TabLanguage::Query),
-            TabType::Script(_) => Some(TabLanguage::Script),
             _ => None,
         }
     }

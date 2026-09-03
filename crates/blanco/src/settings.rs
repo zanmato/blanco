@@ -64,7 +64,6 @@ pub struct Settings {
     pub formatter: FormatterSettings,
     pub database: DatabaseSettings,
     pub appearance: AppearanceSettings,
-    pub chat: ChatSettings,
     /// The built-in MCP server external agents connect to.
     #[serde(default)]
     pub mcp: McpSettings,
@@ -137,27 +136,6 @@ impl Settings {
                     settings.appearance.terminal_font_size = value
                         .parse()
                         .unwrap_or(AppearanceSettings::default().terminal_font_size);
-                }
-                "chat.provider" => {
-                    settings.chat.provider = value.clone();
-                }
-                "chat.model" => {
-                    settings.chat.model = value.clone();
-                }
-                "chat.base_url" => {
-                    settings.chat.base_url = value.clone();
-                }
-                "chat.max_tokens" => {
-                    settings.chat.max_tokens = value.parse().unwrap_or_default();
-                }
-                "chat.temperature" => {
-                    settings.chat.temperature = value.parse().unwrap_or_default();
-                }
-                "chat.auto_execute_queries" => {
-                    settings.chat.auto_execute_queries = value.parse().unwrap_or_default();
-                }
-                "chat.show_thinking_process" => {
-                    settings.chat.show_thinking_process = value.parse().unwrap_or_default();
                 }
                 "mcp.enabled" => {
                     settings.mcp.enabled = value.parse().unwrap_or_default();
@@ -329,18 +307,6 @@ impl Default for McpSettings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatSettings {
-    pub provider: String,
-    pub model: String,
-    pub api_key: String,
-    pub base_url: String,
-    pub max_tokens: u32,
-    pub temperature: f32,
-    pub auto_execute_queries: bool,
-    pub show_thinking_process: bool,
-}
-
 impl Default for EditorSettings {
     fn default() -> Self {
         Self {
@@ -372,21 +338,6 @@ impl Default for AppearanceSettings {
             font_family: String::new(),
             mono_font_family: String::new(),
             terminal_font_size: 12.0,
-        }
-    }
-}
-
-impl Default for ChatSettings {
-    fn default() -> Self {
-        Self {
-            provider: "openai".to_string(),
-            model: "gpt-4".to_string(),
-            api_key: "".to_string(),
-            base_url: "https://api.openai.com/v1".to_string(),
-            max_tokens: 8192,
-            temperature: 0.7,
-            auto_execute_queries: false,
-            show_thinking_process: false,
         }
     }
 }

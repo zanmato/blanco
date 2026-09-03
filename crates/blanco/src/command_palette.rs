@@ -1398,7 +1398,7 @@ mod visual_tests {
             let db_service = DatabaseService::new(runtime_handle);
             cx.set_global(db_service);
 
-            let settings = AppSettings::new(cx, Settings::default());
+            let settings = AppSettings::new(Settings::default());
             cx.set_global(settings);
 
             cx.open_window(Default::default(), |window, cx| {

@@ -13,7 +13,7 @@ mod script_execution;
 mod script_execution_test;
 mod snippet_editor;
 mod sql_operations;
-mod tab_access;
+pub(crate) mod tab_access;
 mod table_structure;
 mod tabs;
 mod terminal_pane;
@@ -41,7 +41,6 @@ use tracing::{debug, error, info};
 use self::object_ddl::ObjectDdlTab;
 use self::snippet_editor::SnippetEditor;
 use self::table_structure::TableStructureTab;
-use crate::agent::{ChatPanel, ChatProviderResolver, ChatSessionContext};
 use crate::app_settings::AppSettings;
 use crate::result_ext::ResultExt;
 use crate::results_panel::ResultsPanel;
@@ -63,10 +62,6 @@ pub struct EditorPanel {
     _subscriptions: Vec<gpui::Subscription>,
     run_query_keystroke: KeybindingKeystroke,
     format_query_keystroke: KeybindingKeystroke,
-    editor_chat_resize_state: Entity<ResizableState>,
-    /// Kept separate from [`Self::editor_chat_resize_state`] so a script tab's
-    /// chat width does not follow a query tab's, and vice versa.
-    script_editor_chat_resize_state: Entity<ResizableState>,
     editor_results_resize_state: Entity<ResizableState>,
     results_log_resize_state: Entity<ResizableState>,
     /// Split between a tab's content column and its terminal pane.
@@ -528,8 +523,6 @@ impl EditorPanel {
     ) -> Self {
         info!("Loading {} saved tabs", saved_tabs.len());
 
-        let editor_chat_resize_state = cx.new(|_| ResizableState::default());
-        let script_editor_chat_resize_state = cx.new(|_| ResizableState::default());
         let editor_results_resize_state = cx.new(|_| ResizableState::default());
         let results_log_resize_state = cx.new(|_| ResizableState::default());
         let editor_terminal_resize_state = cx.new(|_| ResizableState::default());
@@ -542,8 +535,6 @@ impl EditorPanel {
             _subscriptions: Vec::new(),
             run_query_keystroke: keystroke_hint("RunQuery", cx),
             format_query_keystroke: keystroke_hint("FormatQuery", cx),
-            editor_chat_resize_state,
-            script_editor_chat_resize_state,
             editor_results_resize_state,
             results_log_resize_state,
             editor_terminal_resize_state,
@@ -804,10 +795,8 @@ impl EditorPanel {
                 db_id: params.db_id,
                 last_run_at: params.last_run_at,
                 results_panel,
-                chat_enabled: false,
                 terminal_enabled: false,
                 terminal: None,
-                chat_panel: None,
             },
             sql_view: cx.new(|cx| {
                 SqlView::new(
@@ -903,10 +892,8 @@ impl EditorPanel {
                 db_id: params.db_id,
                 last_run_at: params.last_run_at,
                 results_panel,
-                chat_enabled: false,
                 terminal_enabled: false,
                 terminal: None,
-                chat_panel: None,
             },
             log_view: cx.new(|cx| {
                 SqlView::new(
@@ -1036,60 +1023,6 @@ impl EditorPanel {
 
             window.push_notification("Changes rolled back", cx);
         }
-    }
-
-    /// Toggle chat for the active tab
-    pub fn toggle_chat_for_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // The two tab kinds differ only in which fields hold the connection
-        // identity and what language the tab's buffer is in; the panel itself
-        // is built the same way, so both branches go through
-        // `create_chat_panel`.
-        let Some(active) = self.tabs.get_mut(self.active_tab_ix) else {
-            return;
-        };
-        let Some(language) = active.tab_language() else {
-            return;
-        };
-        let Some(tab) = active.connection_tab_mut() else {
-            return;
-        };
-        tab.chat_enabled = !tab.chat_enabled;
-        if !tab.chat_enabled || tab.chat_panel.is_some() {
-            cx.notify();
-            return;
-        }
-        let session_context = tab.chat_session_context(language);
-        let enabled = &mut tab.chat_enabled;
-        let chat_panel = &mut tab.chat_panel;
-        match Self::create_chat_panel(session_context, window, cx) {
-            Ok(panel) => *chat_panel = Some(panel),
-            Err(error) => {
-                tracing::error!(
-                    "Failed to create chat provider: {error}. Not creating chat panel."
-                );
-                *enabled = false;
-            }
-        }
-
-        cx.notify();
-    }
-
-    fn create_chat_panel(
-        session_context: ChatSessionContext,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> anyhow::Result<Entity<ChatPanel>> {
-        let llm_instance = ChatProviderResolver::get_llm_for_connection(cx)?;
-        Ok(cx.new(|cx| {
-            ChatPanel::new(
-                llm_instance.llm.clone(),
-                llm_instance.provider_name.clone(),
-                llm_instance.model_name.clone(),
-                session_context,
-                window,
-                cx,
-            )
-        }))
     }
 
     pub fn toggle_sql_view_for_active_tab(&mut self, _window: &mut Window, cx: &mut Context<Self>) {

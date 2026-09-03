@@ -30,7 +30,7 @@ use super::tools::{
     DEFAULT_MAX_ROWS, MAX_ROWS_LIMIT, WritePolicy, contains_destructive_ddl, run_sql_json,
     write_policy,
 };
-use crate::agent::tool_handlers::write_tab::WriteOperation;
+use crate::editor::tab_access::WriteOperation;
 
 /// How long a tab operation may wait on the foreground. These are immediate in
 /// practice; the bound only guards against a wedged window.

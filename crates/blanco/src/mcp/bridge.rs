@@ -14,7 +14,7 @@ use blanco_core::{ConnectionContext, EnvironmentType};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::agent::tool_handlers::write_tab::WriteOperation;
+use crate::editor::tab_access::WriteOperation;
 
 /// One-shot answer channel for a request. Bounded to one so a reply can never
 /// block the foreground, and `Result<_, String>` so a domain error ("no such

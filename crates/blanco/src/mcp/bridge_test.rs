@@ -12,7 +12,7 @@ use gpui::{TestAppContext, VisualTestContext};
 
 use super::McpService;
 use super::bridge::{McpBridgeClient, McpRequest, TabSelector, TabSummary};
-use crate::agent::tool_handlers::write_tab::WriteOperation;
+use crate::editor::tab_access::WriteOperation;
 use crate::test_harness::FullAppHarness;
 
 /// Poll `future` to completion while pumping the GPUI executor, so the

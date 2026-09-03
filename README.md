@@ -28,7 +28,6 @@ and Redis.
   `db.display`) running in a sandboxed QuickJS runtime.
 - SSH tunnels with `known_hosts` verification, TLS, credentials in the OS
   keychain.
-- Optional AI chat with tool approval for exploring schemas and running SQL.
 
 ## Building
 

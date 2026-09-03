@@ -30,8 +30,6 @@ blanco-core = { path = "../blanco-core" }
 blanco-terminal = { path = "../terminal" }
 database = { path = "../database" }
 
-# LLM client
-llm = { version = "1.3.7", features = ["openai", "anthropic", "google"] }
 
 # Additional dependencies
 smol = { workspace = true }

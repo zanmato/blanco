@@ -96,7 +96,7 @@ impl TestHarness {
             let db_service = DatabaseService::new(runtime_handle.clone());
             cx.set_global(db_service);
 
-            let settings = AppSettings::new(cx, Settings::default());
+            let settings = AppSettings::new(Settings::default());
             cx.set_global(settings);
 
             let connection_id = next_connection_id();
@@ -226,7 +226,7 @@ impl FullAppHarness {
             cx.set_global(db_service);
             crate::mcp::McpService::init(cx);
 
-            let settings = AppSettings::new(cx, Settings::default());
+            let settings = AppSettings::new(Settings::default());
             cx.set_global(settings);
 
             let connection_id = next_connection_id();
