@@ -95,41 +95,9 @@ const RESULT_MEMBERS: &[Member] = &[
 ];
 
 /// Appended to `query`/`execute` docs on backends without bind parameters,
-/// where passing `params` fails at the driver. Shared by the completion items
-/// and the agent's API reference so both say the same thing.
+/// where passing `params` fails at the driver.
 const NO_BIND_PARAMETERS_NOTE: &str =
     "This connection has no bind parameters: pass the command fully formed and omit `params`.";
-
-/// Markdown reference for the injected `db` object, rendered from the same
-/// tables the editor completes from so the agent prompt cannot drift from the
-/// completion docs.
-pub fn api_reference(supports_bind_parameters: bool) -> String {
-    let mut reference = String::new();
-
-    for (heading, members) in [("db", DB_MEMBERS), ("QueryResult", RESULT_MEMBERS)] {
-        reference.push_str(&format!("`{heading}`:\n\n"));
-        for member in members {
-            // The docs are written as prose paragraphs for a hover popup; a
-            // prompt reads better as one line per member.
-            let mut documentation = member.documentation.replace("\n\n", " ");
-            if !supports_bind_parameters && member_takes_parameters(member) {
-                documentation.push(' ');
-                documentation.push_str(NO_BIND_PARAMETERS_NOTE);
-            }
-            // A method's detail is its signature and already names it; a
-            // field's is only its type.
-            let signature = if member.kind == CompletionItemKind::METHOD {
-                member.detail.to_string()
-            } else {
-                format!("{}: {}", member.name, member.detail)
-            };
-            reference.push_str(&format!("- `{signature}` — {documentation}\n"));
-        }
-        reference.push('\n');
-    }
-
-    reference
-}
 
 fn member_takes_parameters(member: &Member) -> bool {
     matches!(member.name, "query" | "execute")
@@ -335,25 +303,6 @@ mod tests {
             .into_iter()
             .map(|item| item.label)
             .collect()
-    }
-
-    #[test]
-    fn api_reference_covers_every_member() {
-        let reference = api_reference(true);
-
-        for member in DB_MEMBERS.iter().chain(RESULT_MEMBERS) {
-            assert!(
-                reference.contains(member.detail),
-                "missing {}: {reference}",
-                member.name
-            );
-        }
-        assert!(!reference.contains(NO_BIND_PARAMETERS_NOTE), "{reference}");
-    }
-
-    #[test]
-    fn api_reference_notes_missing_bind_parameters() {
-        assert!(api_reference(false).contains(NO_BIND_PARAMETERS_NOTE));
     }
 
     #[test]

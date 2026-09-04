@@ -323,6 +323,7 @@ impl BlancoMcpServer {
             connection_name: connection.config.name.clone(),
             database_name: connection.database.clone(),
             environment: connection.environment,
+            language: connection.config.db_type.dialect().editor_language(),
             sql: sql.to_string(),
         };
         let allowed = tokio::time::timeout(

@@ -1,4 +1,4 @@
-use blanco_ui::IconName as BlancoIcon;
+use blanco_ui::{IconName as BlancoIcon, SqlView, SqlViewMessage};
 use std::collections::VecDeque;
 
 use crate::mcp::McpService;
@@ -574,7 +574,16 @@ impl BlancoApp {
                 .map(|environment| format!(" ({environment})"))
                 .unwrap_or_default()
         );
-        let sql = SharedString::from(confirmation.sql);
+        let sql_view = cx.new(|cx| {
+            let mut view = SqlView::new(
+                usize::MAX,
+                cx.theme().highlight_theme.clone(),
+                confirmation.language,
+            )
+            .show_copy_button(false);
+            view.append_text(&SqlViewMessage::SqlStatement(confirmation.sql), cx);
+            view
+        });
         window.open_dialog(cx, move |dialog, _, cx| {
             let reply_on_run = reply.clone();
             let reply_on_close = reply.clone();
@@ -593,15 +602,13 @@ impl BlancoApp {
                         )
                         .child(
                             div()
-                                .p_2()
-                                .max_h(px(320.))
+                                .h(px(320.))
+                                .min_h_0()
                                 .overflow_hidden()
                                 .rounded(cx.theme().radius)
-                                .bg(cx.theme().muted)
-                                .font_family(cx.theme().mono_font_family.clone())
-                                .text_sm()
-                                .whitespace_normal()
-                                .child(sql.clone()),
+                                .border_1()
+                                .border_color(cx.theme().border)
+                                .child(sql_view.clone()),
                         ),
                 )
                 .footer(
@@ -2053,7 +2060,20 @@ fn init_menus(cx: &mut App) {
 
     // Clipboard shortcuts inside a terminal tab. Plain ctrl-c/ctrl-v must reach
     // the shell (interrupt, literal), so the shifted chords copy and paste.
+    // tab/shift-tab are bound to focus navigation on the Root context, which
+    // would win over the terminal's raw key handler; re-bind them here so they
+    // reach the program (Claude Code cycles modes with shift-tab, TUIs use tab).
     cx.bind_keys([
+        gpui::KeyBinding::new(
+            "tab",
+            blanco_terminal::view::SendKeystroke("tab".into()),
+            Some("Terminal"),
+        ),
+        gpui::KeyBinding::new(
+            "shift-tab",
+            blanco_terminal::view::SendKeystroke("shift-tab".into()),
+            Some("Terminal"),
+        ),
         gpui::KeyBinding::new(
             "ctrl-shift-c",
             blanco_terminal::view::Copy,

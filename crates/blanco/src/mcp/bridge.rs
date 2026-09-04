@@ -105,6 +105,8 @@ pub(crate) struct WriteConfirmation {
     pub connection_name: String,
     pub database_name: String,
     pub environment: Option<EnvironmentType>,
+    /// Registered highlighter language for the connection's dialect.
+    pub language: &'static str,
     pub sql: String,
 }
 

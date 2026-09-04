@@ -300,6 +300,9 @@ impl ResultsTableDelegate {
         } else {
             format_value_for_display(current_value.as_deref().unwrap_or(""))
         };
+        // The clipboard gets the stored value, not the single-line rendering
+        // with its ⏎ / ⇥ markers.
+        let clipboard_text = current_value.unwrap_or_else(|| display_text.clone());
 
         // Check if this is a numeric column for right-alignment
         let is_numeric = self
@@ -325,7 +328,7 @@ impl ResultsTableDelegate {
                     .group_hover("", |this| this.visible())
                     .child(
                         Clipboard::new(format!("cell-clipboard-{}-{}", row_ix, col_ix))
-                            .value(display_text.clone()),
+                            .value(clipboard_text),
                     ),
             )
             .when_some(

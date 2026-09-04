@@ -444,6 +444,14 @@ impl Dialect {
         }
     }
 
+    /// Whether a new row's untouched primary key is inserted as an explicit
+    /// NULL instead of being omitted. SQLite has no column defaults for
+    /// generated keys: `INTEGER PRIMARY KEY` assigns a rowid when NULL is
+    /// inserted, which is also how other SQLite editors spell it.
+    pub fn generated_key_is_null(&self) -> bool {
+        matches!(self.0, DatabaseType::SQLite)
+    }
+
     /// An insert that takes every column's default. MySQL has no
     /// `DEFAULT VALUES` form, everything else has no `()` form.
     pub fn insert_defaults_sql(&self, quoted_table: &str) -> String {

@@ -122,6 +122,20 @@ impl ResultsTableDelegate {
         self.table_name.is_some() && self.primary_key_is_complete()
     }
 
+    /// The value a cell edit starts from: the pending edit when there is one,
+    /// otherwise the row data as loaded.
+    fn stored_cell_value(&self, row_ix: usize, col_ix: usize) -> Option<String> {
+        match self.edit_state.get_edited_value(row_ix, col_ix) {
+            Some(edited) => edited.clone(),
+            None => self
+                .rows
+                .get(row_ix)
+                .and_then(|row| row.get(col_ix))
+                .cloned()
+                .flatten(),
+        }
+    }
+
     /// Collapse an expanded cell editor back to a single-line inline input.
     pub(crate) fn handle_minimize(
         state: &mut TableState<ResultsTableDelegate>,
@@ -178,14 +192,24 @@ impl ResultsTableDelegate {
         window: &mut Window,
         cx: &mut Context<'_, TableState<ResultsTableDelegate>>,
     ) {
-        // Get current text before recreating input
-        let current_text = state
+        let inline_text = state
             .delegate_mut()
             .edit_state
             .editing_input
             .as_ref()
             .map(|input| input.text(cx))
             .unwrap_or_default();
+
+        // The single-line input silently drops line breaks, so its text is a
+        // lossy view of a multi-line value. When the user has not typed over
+        // it, restore the stored value so the expanded editor shows the real
+        // lines instead of them run together.
+        let current_text = match state.delegate().stored_cell_value(row_ix, col_ix) {
+            Some(stored) if flatten_line_breaks(&stored) == flatten_line_breaks(&inline_text) => {
+                stored
+            }
+            _ => inline_text,
+        };
 
         // Toggle expanded state
         state
@@ -220,4 +244,9 @@ impl ResultsTableDelegate {
         state.refresh(cx);
         cx.notify();
     }
+}
+
+/// Mirror of what the single-line input does to text it is given.
+fn flatten_line_breaks(text: &str) -> String {
+    text.replace(['\n', '\r'], "")
 }

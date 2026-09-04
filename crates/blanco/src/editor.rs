@@ -1000,7 +1000,10 @@ impl EditorPanel {
                 .results_panel
                 .update(cx, |panel, cx| panel.commit_all_edits(cx));
 
-            if changes.is_empty() {
+            // Added, duplicated and deleted rows are pending changes without
+            // any edited cell, so cell edits alone cannot decide emptiness.
+            let has_pending = query_tab.results_panel.read(cx).has_pending_edits(cx);
+            if changes.is_empty() && !has_pending {
                 window.push_notification("No changes to commit", cx);
                 return;
             }

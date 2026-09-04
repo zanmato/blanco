@@ -5,8 +5,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    App, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, KeyDownEvent, ParentElement, Render, Styled, Subscription, Window, actions, div,
+    Action, App, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, KeyDownEvent, Keystroke, ParentElement, Render, Styled,
+    Subscription, Window, actions, div,
 };
 
 use crate::element::{TerminalElement, TerminalStyle};
@@ -27,6 +28,15 @@ actions!(
         ScrollToBottom,
     ]
 );
+
+/// Send a keystroke such as `shift-tab` to the program, bypassing any
+/// application binding for the same chord. GPUI resolves key bindings before
+/// raw key-down handlers, so a chord bound higher up the tree (the root's
+/// tab/shift-tab focus navigation) never reaches the terminal unless the
+/// `Terminal` context binds it to this action.
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = terminal, no_json)]
+pub struct SendKeystroke(pub String);
 
 const BLINK_INTERVAL: Duration = Duration::from_millis(530);
 
@@ -142,6 +152,22 @@ impl TerminalView {
         }
     }
 
+    fn send_keystroke(&mut self, action: &SendKeystroke, _: &mut Window, cx: &mut Context<Self>) {
+        let keystroke = match Keystroke::parse(&action.0) {
+            Ok(keystroke) => keystroke,
+            Err(error) => {
+                tracing::warn!("terminal::SendKeystroke {:?}: {error}", action.0);
+                return;
+            }
+        };
+        let handled = self
+            .terminal
+            .update(cx, |terminal, _| terminal.send_keystroke(&keystroke));
+        if handled {
+            self.restart_blinking(cx);
+        }
+    }
+
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = self.terminal.read(cx).selected_text() {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
@@ -220,6 +246,7 @@ impl Render for TerminalView {
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::clear_scrollback))
             .on_action(cx.listener(Self::scroll_to_bottom))
+            .on_action(cx.listener(Self::send_keystroke))
             .on_key_down(cx.listener(Self::on_key_down))
             .child(TerminalElement::new(
                 self.terminal.clone(),

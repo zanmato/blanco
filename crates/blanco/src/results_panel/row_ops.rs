@@ -1,4 +1,4 @@
-use gpui::{Context, Window};
+use gpui::{App, Context, Window};
 
 use super::{ChangeType, ResultsPanel, TableChange};
 use crate::app::{AddRow, DeleteRow, DuplicateRow, SetCellDefault, SetCellNull};
@@ -54,10 +54,32 @@ impl ResultsPanel {
             return;
         }
 
-        let selected_rows = self.table_state.read(cx).selected_rows().clone();
-        for row_ix in selected_rows {
+        for row_ix in self.sorted_selected_rows(cx) {
             self.duplicate_row_with_row(row_ix, cx);
         }
+    }
+
+    /// The rows an action from a row's context menu applies to: the whole
+    /// selection when the clicked row is part of it, otherwise just that row.
+    fn rows_for_context_action(&self, row_ix: usize, cx: &App) -> Vec<usize> {
+        let selected_rows = self.table_state.read(cx).selected_rows();
+        if selected_rows.contains(&row_ix) {
+            self.sorted_selected_rows(cx)
+        } else {
+            vec![row_ix]
+        }
+    }
+
+    fn sorted_selected_rows(&self, cx: &App) -> Vec<usize> {
+        let mut rows: Vec<usize> = self
+            .table_state
+            .read(cx)
+            .selected_rows()
+            .iter()
+            .copied()
+            .collect();
+        rows.sort_unstable();
+        rows
     }
 
     pub fn duplicate_row_with_row(&mut self, row_ix: usize, cx: &mut Context<Self>) {
@@ -67,17 +89,21 @@ impl ResultsPanel {
 
         self.table_state.update(cx, |state, cx| {
             let delegate = state.delegate_mut();
-            if let Some(row_to_duplicate) = delegate.rows.get(row_ix).cloned() {
-                // Add the duplicated row
+            if let Some(mut row_to_duplicate) = delegate.rows.get(row_ix).cloned() {
+                // The copy must get its own key from the server, so its primary
+                // key cells start untouched and are omitted from the INSERT.
+                for pk_index in delegate.primary_key_column_indices().unwrap_or_default() {
+                    if let Some(cell) = row_to_duplicate.get_mut(pk_index) {
+                        *cell = None;
+                    }
+                }
                 delegate.rows.push(row_to_duplicate);
 
                 // Mark this as a pending new row
                 let new_row_index = delegate.rows.len() - 1;
                 delegate.edit_state.pending_new_rows.push(new_row_index);
 
-                // Track the INSERT change with proper column values (excluding primary key columns)
                 if let Some(table_name) = &delegate.table_name {
-                    // For new rows (duplicated rows), exclude primary key to avoid UPDATE/INSERT confusion
                     let values_vec = delegate.get_insert_values(new_row_index, true); // exclude_primary_key = true
 
                     let change = TableChange::new(
@@ -104,8 +130,7 @@ impl ResultsPanel {
             return;
         }
 
-        let selected_rows = self.table_state.read(cx).selected_rows().clone();
-        for row_ix in selected_rows {
+        for row_ix in self.sorted_selected_rows(cx).into_iter().rev() {
             self.delete_row_with_row(row_ix, cx);
         }
     }
@@ -188,7 +213,9 @@ impl ResultsPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.duplicate_row_with_row(action.row, cx);
+        for row_ix in self.rows_for_context_action(action.row, cx) {
+            self.duplicate_row_with_row(row_ix, cx);
+        }
     }
 
     pub(super) fn on_delete_row(
@@ -197,7 +224,15 @@ impl ResultsPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.delete_row_with_row(action.row, cx);
+        // Descending so removing a pending new row cannot shift the indices
+        // of rows still to be handled.
+        for row_ix in self
+            .rows_for_context_action(action.row, cx)
+            .into_iter()
+            .rev()
+        {
+            self.delete_row_with_row(row_ix, cx);
+        }
     }
 
     pub(super) fn on_set_cell_null(

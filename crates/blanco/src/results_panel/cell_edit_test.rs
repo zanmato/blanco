@@ -1,5 +1,6 @@
 use gpui::{TestAppContext, VisualTestContext};
 
+use crate::app::DeleteRow;
 use crate::results_panel::{CellInput, ResultsTableDelegate};
 use crate::test_harness::{TestHarness, result_cell, run_query, set_editor_text, wait_for_query};
 
@@ -161,8 +162,8 @@ async fn test_new_row_omits_default_columns_and_refreshes_after_commit(cx: &mut 
         "expected one INSERT, got {statements:?}"
     );
     assert!(
-        statements[0].ends_with(r#"("v") VALUES ('second')"#),
-        "INSERT should name only the touched non-default column, got {statements:?}"
+        statements[0].ends_with(r#"("id", "v") VALUES (NULL, 'second')"#),
+        "INSERT should send the SQLite key as NULL and omit the defaulted column, got {statements:?}"
     );
 
     harness
@@ -198,6 +199,76 @@ async fn test_new_row_omits_default_columns_and_refreshes_after_commit(cx: &mut 
         Some(Some("second".to_string()))
     );
 
+    let has_pending = results_panel.read_with(&cx, |panel, cx| panel.has_pending_edits(cx));
+    assert!(!has_pending, "commit should leave no pending edits");
+}
+
+/// Duplicating a row must not copy its primary key. On SQLite the copy's key
+/// is an explicit NULL (which assigns a fresh rowid), the INSERT spells it
+/// out, and the post-commit refresh shows the generated key.
+#[gpui::test]
+async fn test_duplicate_row_leaves_primary_key_to_the_server(cx: &mut TestAppContext) {
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    let results_panel = setup_editable_table(&harness, &mut cx).await;
+    let table_state = results_panel.read_with(&cx, |panel, _| panel.table_state().clone());
+
+    results_panel.update(&mut cx, |panel, cx| panel.duplicate_row_with_row(0, cx));
+    cx.run_until_parked();
+
+    let (key_cell, key_uses_default) = table_state.read_with(&cx, |state, _| {
+        let delegate = state.delegate();
+        (
+            delegate.rows.get(1).and_then(|row| row.first().cloned()),
+            delegate.cell_uses_default(1, 0),
+        )
+    });
+    assert_eq!(
+        key_cell,
+        Some(None),
+        "duplicated row must not carry the source key"
+    );
+    assert!(
+        !key_uses_default,
+        "SQLite has no key default, the cell shows NULL"
+    );
+
+    let statements = results_panel.read_with(&cx, |panel, cx| panel.preview_pending_sql(cx));
+    assert_eq!(
+        statements.len(),
+        1,
+        "expected one INSERT, got {statements:?}"
+    );
+    assert!(
+        statements[0].ends_with(r#"("id", "v") VALUES (NULL, 'orig')"#),
+        "INSERT should send the key as NULL, got {statements:?}"
+    );
+
+    harness
+        .editor_panel
+        .update_in(&mut cx, |panel, window, cx| {
+            panel.commit_current_changes(window, cx);
+        });
+    for _ in 0..100 {
+        cx.run_until_parked();
+        if result_cell(&harness, 1, 0, &cx) == Some(Some("2".to_string())) {
+            break;
+        }
+        cx.executor()
+            .timer(std::time::Duration::from_millis(20))
+            .await;
+    }
+
+    assert_eq!(
+        result_cell(&harness, 1, 0, &cx),
+        Some(Some("2".to_string())),
+        "refresh should surface the generated primary key"
+    );
+    assert_eq!(
+        result_cell(&harness, 1, 1, &cx),
+        Some(Some("orig".to_string()))
+    );
     let has_pending = results_panel.read_with(&cx, |panel, cx| panel.has_pending_edits(cx));
     assert!(!has_pending, "commit should leave no pending edits");
 }
@@ -369,6 +440,146 @@ async fn test_expanded_edit_survives_minimize(cx: &mut TestAppContext) {
     assert!(
         statements[0].contains("edited-value"),
         "UPDATE should carry the edited value, got {:?}",
+        statements
+    );
+}
+
+/// A multi-line value opens in the single-line inline input, which drops the
+/// line breaks. Expanding the cell must show the stored lines, not the
+/// flattened inline text.
+#[gpui::test]
+async fn test_maximize_restores_line_breaks_from_inline_input(cx: &mut TestAppContext) {
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    let results_panel = setup_editable_table(&harness, &mut cx).await;
+    set_editor_text(
+        &harness,
+        "UPDATE items SET v = 'first' || char(10) || 'second' || char(13) || char(10) || 'third' WHERE id = 1",
+        &mut cx,
+    );
+    run_query(&harness, &mut cx);
+    wait_for_query(&harness, &mut cx).await;
+    set_editor_text(&harness, "SELECT * FROM items", &mut cx);
+    run_query(&harness, &mut cx);
+    wait_for_query(&harness, &mut cx).await;
+
+    let stored = "first\nsecond\r\nthird";
+    assert_eq!(
+        result_cell(&harness, 0, 1, &cx).flatten().as_deref(),
+        Some(stored),
+        "fixture row should hold a multi-line value"
+    );
+
+    let table_state = results_panel.read_with(&cx, |panel, _| panel.table_state().clone());
+    results_panel.update_in(&mut cx, |panel, window, cx| {
+        panel.start_cell_edit(0, 1, window, cx);
+    });
+    cx.run_until_parked();
+
+    let inline_text = table_state.read_with(&cx, |state, cx| {
+        state
+            .delegate()
+            .edit_state
+            .get_editing_input()
+            .expect("inline editing input should exist")
+            .text(cx)
+    });
+    assert_eq!(
+        inline_text, "firstsecondthird",
+        "single-line input is expected to drop the line breaks"
+    );
+
+    table_state.update_in(&mut cx, |state, window, cx| {
+        ResultsTableDelegate::handle_maximize(state, 0, 1, false, window, cx);
+    });
+    cx.run_until_parked();
+
+    let expanded_text = table_state.read_with(&cx, |state, cx| {
+        match state
+            .delegate()
+            .edit_state
+            .get_editing_input()
+            .expect("expanded editing input should exist")
+        {
+            CellInput::Expanded(editor) => editor.read(cx).text().to_string(),
+            CellInput::Inline(_) => panic!("maximize switches the cell to the expanded editor"),
+        }
+    });
+    assert_eq!(
+        expanded_text, stored,
+        "expanded editor should show the stored value with its line breaks"
+    );
+}
+
+/// The toolbar Delete button acts on the whole row selection.
+#[gpui::test]
+async fn test_delete_marks_every_selected_row(cx: &mut TestAppContext) {
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    let results_panel = setup_editable_table(&harness, &mut cx).await;
+    set_editor_text(
+        &harness,
+        "INSERT INTO items (id, v) VALUES (2, 'two'), (3, 'three')",
+        &mut cx,
+    );
+    run_query(&harness, &mut cx);
+    wait_for_query(&harness, &mut cx).await;
+    set_editor_text(&harness, "SELECT * FROM items", &mut cx);
+    run_query(&harness, &mut cx);
+    wait_for_query(&harness, &mut cx).await;
+
+    let table_state = results_panel.read_with(&cx, |panel, _| panel.table_state().clone());
+    table_state.update(&mut cx, |state, cx| {
+        state.set_selected_row(0, cx);
+        state.add_selected_row(1, cx);
+        state.add_selected_row(2, cx);
+    });
+    cx.run_until_parked();
+
+    // The row context menu dispatches the action for the right-clicked row.
+    results_panel.update_in(&mut cx, |panel, window, cx| {
+        panel.on_delete_row(&DeleteRow { row: 1 }, window, cx)
+    });
+    cx.run_until_parked();
+
+    let (deleted, changes) = table_state.read_with(&cx, |state, _| {
+        (
+            state.delegate().edit_state.pending_deleted_rows.clone(),
+            state.delegate().edit_state.changes.clone(),
+        )
+    });
+    assert_eq!(
+        deleted.len(),
+        3,
+        "all selected rows should be marked deleted, got {:?}",
+        deleted
+    );
+    assert_eq!(
+        changes.len(),
+        3,
+        "one DELETE change per row, got {:?}",
+        changes
+    );
+
+    // Deleting again from the toolbar must not duplicate the changes.
+    results_panel.update(&mut cx, |panel, cx| panel.delete_row(cx));
+    cx.run_until_parked();
+    let changes =
+        table_state.read_with(&cx, |state, _| state.delegate().edit_state.changes.clone());
+    assert_eq!(
+        changes.len(),
+        3,
+        "already deleted rows are skipped, got {:?}",
+        changes
+    );
+
+    let statements = results_panel.read_with(&cx, |panel, cx| panel.preview_pending_sql(cx));
+    assert_eq!(
+        statements.len(),
+        3,
+        "preview should hold three DELETEs, got {:?}",
         statements
     );
 }

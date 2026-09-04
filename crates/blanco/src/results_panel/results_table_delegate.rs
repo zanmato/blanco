@@ -127,10 +127,23 @@ impl ResultsTableDelegate {
                 .get(row_index)
                 .and_then(|row| row.get(data_index))
                 .is_none_or(|value| value.is_none());
+        // An untouched primary key cell is omitted from the INSERT so the
+        // server generates the key, whether or not the column declares a
+        // default. On SQLite the key is inserted as NULL instead and shows as
+        // such.
         untouched
-            && self
+            && (self
                 .table_column_info(data_index)
                 .is_some_and(|info| info.default_value.is_some())
+                || (!self.generated_key_is_null()
+                    && self
+                        .primary_key_column_indices()
+                        .is_some_and(|indices| indices.contains(&data_index))))
+    }
+
+    pub(crate) fn generated_key_is_null(&self) -> bool {
+        self.db_type
+            .is_some_and(|db_type| db_type.dialect().generated_key_is_null())
     }
 
     /// Set the connection ID for database operations
@@ -632,6 +645,34 @@ mod tests {
         assert_eq!(
             operations[0].to_sql_query(DatabaseType::PostgreSQL),
             r#"INSERT INTO "items" ("name", "note") VALUES ('gls', NULL)"#
+        );
+    }
+
+    #[test]
+    fn test_new_row_with_empty_key_omits_it_or_sends_null_per_dialect() {
+        use database::DatabaseType;
+
+        let mut delegate = delegate_with_defaults();
+        delegate.db_type = Some(DatabaseType::PostgreSQL);
+        track_insert(&mut delegate, 0);
+        delegate
+            .edit_state
+            .edited_values
+            .insert((0, 2), Some("gls".to_string()));
+        assert!(delegate.cell_uses_default(0, 0));
+        let operations = delegate.create_change_operations();
+        assert_eq!(
+            operations[0].to_sql_query(DatabaseType::PostgreSQL),
+            r#"INSERT INTO "items" ("name", "note") VALUES ('gls', NULL)"#
+        );
+
+        delegate.db_type = Some(DatabaseType::SQLite);
+        delegate.table_columns[0].default_value = None;
+        assert!(!delegate.cell_uses_default(0, 0));
+        let operations = delegate.create_change_operations();
+        assert_eq!(
+            operations[0].to_sql_query(DatabaseType::SQLite),
+            r#"INSERT INTO "items" ("id", "name", "note") VALUES (NULL, 'gls', NULL)"#
         );
     }
 

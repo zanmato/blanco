@@ -25,7 +25,7 @@ impl ResultsTableDelegate {
             .all(|pk_name| self.columns.iter().any(|col| col.name.as_str() == *pk_name))
     }
 
-    fn primary_key_column_indices(&self) -> Option<Vec<usize>> {
+    pub(crate) fn primary_key_column_indices(&self) -> Option<Vec<usize>> {
         if !self.primary_key_is_complete() {
             return None;
         }
@@ -184,19 +184,23 @@ impl ResultsTableDelegate {
                         .push(column_change);
                 }
                 ChangeType::InsertRow => {
+                    // An empty key is left to the server: omitted from the
+                    // INSERT, or sent as an explicit NULL where the dialect
+                    // generates keys that way.
                     let pk_col_indices = self.primary_key_column_indices();
-                    let exclude_primary_key = pk_col_indices.as_ref().is_some_and(|indices| {
-                        indices.iter().all(|&idx| {
-                            let pk_value = self
-                                .edit_state
-                                .edited_values
-                                .get(&(change.row_index, idx))
-                                .or_else(|| {
-                                    self.rows.get(change.row_index).and_then(|row| row.get(idx))
-                                });
-                            pk_value.is_none_or(|v| v.as_ref().is_none_or(|s| s.is_empty()))
-                        })
-                    });
+                    let exclude_primary_key = !self.generated_key_is_null()
+                        && pk_col_indices.as_ref().is_some_and(|indices| {
+                            indices.iter().all(|&idx| {
+                                let pk_value = self
+                                    .edit_state
+                                    .edited_values
+                                    .get(&(change.row_index, idx))
+                                    .or_else(|| {
+                                        self.rows.get(change.row_index).and_then(|row| row.get(idx))
+                                    });
+                                pk_value.is_none_or(|v| v.as_ref().is_none_or(|s| s.is_empty()))
+                            })
+                        });
 
                     let column_names =
                         self.get_insert_column_names(change.row_index, exclude_primary_key);
