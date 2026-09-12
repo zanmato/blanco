@@ -31,11 +31,11 @@ use gpui::{
 use gpui_component::{
     ActiveTheme, WindowExt as _,
     button::{Button, ButtonVariants as _},
-    dialog::{DialogAction, DialogClose, DialogFooter},
+    dialog::{DialogClose, DialogFooter},
     input::{EditorState, InputEvent, TabSize},
     resizable::ResizableState,
 };
-use std::{collections::HashMap, rc::Rc, sync::Arc};
+use std::{cell::Cell, collections::HashMap, rc::Rc, sync::Arc};
 use tracing::{debug, error, info};
 
 use self::object_ddl::ObjectDdlTab;
@@ -53,6 +53,15 @@ use app_database::QueryTabData;
 use app_database::{AppDatabase, EnvironmentType};
 use blanco_ui::SqlView;
 use database::{DatabaseService, DatabaseServiceTrait};
+
+/// What the PROD write confirmation dialog shows, and which tab remembers
+/// the "don't ask again" choice.
+pub(crate) struct ProdWritePrompt {
+    pub title: &'static str,
+    pub message: String,
+    pub confirm_label: &'static str,
+    pub tab_index: usize,
+}
 
 pub struct EditorPanel {
     focus_handle: FocusHandle,
@@ -796,6 +805,7 @@ impl EditorPanel {
                 last_run_at: params.last_run_at,
                 results_panel,
                 terminal_enabled: false,
+                skip_prod_write_confirmation: false,
                 terminal: None,
             },
             sql_view: cx.new(|cx| {
@@ -893,6 +903,7 @@ impl EditorPanel {
                 last_run_at: params.last_run_at,
                 results_panel,
                 terminal_enabled: false,
+                skip_prod_write_confirmation: false,
                 terminal: None,
             },
             log_view: cx.new(|cx| {
@@ -941,12 +952,16 @@ impl EditorPanel {
         if query_tab.context.environment_type == Some(EnvironmentType::Prod) {
             let connection_name = query_tab.context.connection_name.clone();
             self.confirm_prod_write(
-                "Commit edits to PROD?",
-                format!(
-                    "\"{connection_name}\" is tagged as a production connection. The pending grid edits will be written to it."
-                ),
-                "Commit to PROD",
+                ProdWritePrompt {
+                    title: "Commit edits to PROD?",
+                    message: format!(
+                        "\"{connection_name}\" is tagged as a production connection. The pending grid edits will be written to it."
+                    ),
+                    confirm_label: "Commit to PROD",
+                    tab_index: self.active_tab_ix,
+                },
                 |panel, window, cx| panel.commit_current_changes_unchecked(window, cx),
+                None,
                 window,
                 cx,
             );
@@ -955,42 +970,105 @@ impl EditorPanel {
         self.commit_current_changes_unchecked(window, cx);
     }
 
-    /// Open a confirmation dialog for a write against a PROD connection and
-    /// run `on_confirm` on this panel when the user accepts.
+    /// Confirm a write against a PROD connection and run `on_confirm` on this
+    /// panel when the user accepts. The dialog offers to stop asking for the
+    /// rest of the tab's life. `on_cancel` runs when the dialog goes away
+    /// without a confirmation, however it was dismissed.
     pub(crate) fn confirm_prod_write(
         &mut self,
-        title: &'static str,
-        message: String,
-        confirm_label: &'static str,
+        prompt: ProdWritePrompt,
         on_confirm: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+        on_cancel: Option<Box<dyn Fn(&mut Self, &mut Context<Self>)>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let ProdWritePrompt {
+            title,
+            message,
+            confirm_label,
+            tab_index,
+        } = prompt;
+        let already_confirmed = self
+            .tabs
+            .get(tab_index)
+            .and_then(|tab| tab.connection_tab())
+            .is_some_and(|tab| tab.skip_prod_write_confirmation);
+        if already_confirmed {
+            on_confirm(self, window, cx);
+            return;
+        }
+
         let weak_panel = cx.entity().downgrade();
         let on_confirm = Rc::new(on_confirm);
+        let on_cancel: Option<Rc<dyn Fn(&mut Self, &mut Context<Self>)>> = on_cancel.map(Rc::from);
+        // The close hook fires for every way the dialog goes away, so it
+        // reports a cancel only when nothing ran.
+        let confirmed = Rc::new(Cell::new(false));
         window.open_dialog(cx, move |dialog, _, _| {
-            let weak_panel = weak_panel.clone();
-            let on_confirm = on_confirm.clone();
-            dialog.title(title).child(message.clone()).footer(
-                DialogFooter::new()
-                    .child(
-                        DialogClose::new()
-                            .child(Button::new("prod-write-cancel").label("Cancel").outline()),
-                    )
-                    .child(
-                        DialogAction::new().child(
+            let run = {
+                let weak_panel = weak_panel.clone();
+                let on_confirm = on_confirm.clone();
+                let confirmed = confirmed.clone();
+                move |remember: bool, window: &mut Window, cx: &mut App| {
+                    confirmed.set(true);
+                    let on_confirm = on_confirm.clone();
+                    weak_panel
+                        .update(cx, |panel, cx| {
+                            if remember
+                                && let Some(tab) = panel
+                                    .tabs
+                                    .get_mut(tab_index)
+                                    .and_then(|tab| tab.connection_tab_mut())
+                            {
+                                tab.skip_prod_write_confirmation = true;
+                            }
+                            on_confirm(panel, window, cx);
+                        })
+                        .log_err();
+                    window.close_dialog(cx);
+                }
+            };
+            let run_once = run.clone();
+            let run_and_remember = run;
+            let confirmed_on_close = confirmed.clone();
+            let weak_on_close = weak_panel.clone();
+            let on_cancel = on_cancel.clone();
+            dialog
+                .title(title)
+                .child(message.clone())
+                .footer(
+                    DialogFooter::new()
+                        .child(
+                            DialogClose::new()
+                                .child(Button::new("prod-write-cancel").label("Cancel").outline()),
+                        )
+                        // Two `DialogAction` siblings share one element id and
+                        // therefore one click state, so only one of them would
+                        // ever close the dialog. The run closure closes it instead.
+                        .child(
+                            Button::new("prod-write-confirm-remember")
+                                .outline()
+                                .label("Don't ask again for this tab")
+                                .on_click(move |_, window, cx| run_and_remember(true, window, cx)),
+                        )
+                        .child(
                             Button::new("prod-write-confirm")
                                 .danger()
                                 .label(confirm_label)
-                                .on_click(move |_, window, cx| {
-                                    let on_confirm = on_confirm.clone();
-                                    weak_panel
-                                        .update(cx, |panel, cx| on_confirm(panel, window, cx))
-                                        .log_err();
-                                }),
+                                .on_click(move |_, window, cx| run_once(false, window, cx)),
                         ),
-                    ),
-            )
+                )
+                .on_close(move |_, _, cx| {
+                    if confirmed_on_close.get() {
+                        return;
+                    }
+                    let Some(on_cancel) = on_cancel.clone() else {
+                        return;
+                    };
+                    weak_on_close
+                        .update(cx, |panel, cx| on_cancel(panel, cx))
+                        .log_err();
+                })
         });
     }
 

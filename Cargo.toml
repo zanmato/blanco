@@ -26,11 +26,12 @@ version = "0.1.0"
 publish = false
 
 [workspace.dependencies]
-# Core GPUI dependencies. These track zed main on purpose: gpui-component depends on
-# the same unpinned source, and pinning a `rev` here makes cargo resolve two copies of
-# gpui. Cargo.lock is the pin; bump it deliberately with `cargo update -p gpui`.
-gpui = { git = "https://github.com/zed-industries/zed" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", features = [
+# Core GPUI dependencies. gpui-component depends on the `gpui-pre` crates.io
+# snapshots of GPUI, so these must resolve to the same packages or cargo builds
+# two copies of gpui. Keep the version requirement in step with the one in
+# gpui-component's workspace Cargo.toml.
+gpui = { package = "gpui-pre", version = "0.3.1" }
+gpui_platform = { package = "gpui-pre-platform", version = "0.3.1", features = [
     "font-kit",
     "x11",
     "wayland",

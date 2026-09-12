@@ -830,11 +830,16 @@ fn test_column_and_index_ddl_round_trip() {
         let label = case.label;
         let db_type = case.config.db_type;
         let database = Some(case.database.as_str());
+        // `get_or_create_connection` only builds the driver; pools open on
+        // first use, so ping to learn whether the server is up before the
+        // first statement turns a down server into a pool timeout panic.
         let connection = runtime.block_on(async {
             service.add_connection_config(case.config.clone()).await;
-            service
+            let connection = service
                 .get_or_create_connection(case.config.id, database)
-                .await
+                .await?;
+            connection.ping().await?;
+            anyhow::Ok(connection)
         });
         let connection = match connection {
             Ok(connection) => connection,

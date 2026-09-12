@@ -310,7 +310,7 @@ pub(crate) const PANEL_GAP: gpui::Pixels = px(6.);
 
 /// Width of the icon rail on the left edge of the sidebar card. It is the
 /// only part of the sidebar that stays visible while collapsed.
-pub(crate) const SIDEBAR_RAIL_WIDTH: gpui::Pixels = px(48.);
+pub(crate) const SIDEBAR_RAIL_WIDTH: gpui::Pixels = px(42.);
 
 /// Which view is active in the sidebar, selected from the icon rail.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1011,13 +1011,18 @@ impl BlancoApp {
                         .border_1()
                         .border_color(cx.theme().border)
                         .child(
-                            div().flex_1().min_h_0().overflow_hidden().pt_2().map(
-                                |this| match self.sidebar_tab {
+                            // Same inset as the editor card's tab bar so the
+                            // filter and search inputs line up with it.
+                            div()
+                                .flex_1()
+                                .min_h_0()
+                                .overflow_hidden()
+                                .pt(PANEL_GAP)
+                                .map(|this| match self.sidebar_tab {
                                     SidebarTab::Connections => this.child(self.sidebar.clone()),
                                     SidebarTab::Snippets => this.child(self.snippets_panel.clone()),
                                     SidebarTab::History => this.child(self.history_panel.clone()),
-                                },
-                            ),
+                                }),
                         ),
                 ),
             )

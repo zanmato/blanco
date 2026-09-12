@@ -21,7 +21,7 @@ use database::{DatabaseService, DatabaseServiceTrait};
 use sql_parser::statement_parser::QueryParameter;
 
 use super::parameter_form::ParameterForm;
-use super::{EditorPanel, SQL_QUERY_LOG_MAX_LENGTH, TabType};
+use super::{EditorPanel, ProdWritePrompt, SQL_QUERY_LOG_MAX_LENGTH, TabType};
 
 /// Thresholds above which a loaded result gets a size warning.
 const LARGE_RESULT_ROWS: usize = 100_000;
@@ -41,12 +41,16 @@ impl EditorPanel {
             if script_tab.context.environment_type == Some(EnvironmentType::Prod) {
                 let connection_name = script_tab.context.connection_name.clone();
                 self.confirm_prod_write(
-                    "Run script on PROD?",
-                    format!(
-                        "\"{connection_name}\" is tagged as a production connection. Scripts can modify data through `db.execute` and `db.transaction`."
-                    ),
-                    "Run on PROD",
+                    ProdWritePrompt {
+                        title: "Run script on PROD?",
+                        message: format!(
+                            "\"{connection_name}\" is tagged as a production connection. Scripts can modify data through `db.execute` and `db.transaction`."
+                        ),
+                        confirm_label: "Run on PROD",
+                        tab_index,
+                    },
                     |panel, window, cx| panel.execute_script_tab(window, cx),
+                    None,
                     window,
                     cx,
                 );
@@ -197,66 +201,34 @@ impl EditorPanel {
 
         let connection_name = query_tab.context.connection_name.clone();
         let database_name = database_name.to_string();
-        let weak_editor_panel = cx.entity().downgrade();
         let tab_index = self.active_tab_ix;
-        // Whether the user clicked Run; the close hook fires for every way the
-        // dialog goes away, so it reports a cancel only when nothing ran.
-        let confirmed = Rc::new(Cell::new(false));
-        window.open_dialog(cx, move |dialog, _, _| {
-            let query = query.clone();
-            let database_name = database_name.clone();
-            let weak_editor_panel = weak_editor_panel.clone();
-            let confirmed_on_run = confirmed.clone();
-            let confirmed_on_close = confirmed.clone();
-            let weak_on_close = weak_editor_panel.clone();
-            dialog
-                .title("Run write statement on PROD?")
-                .child(format!(
+        self.confirm_prod_write(
+            ProdWritePrompt {
+                title: "Run write statement on PROD?",
+                message: format!(
                     "\"{connection_name}\" is tagged as a production connection and this statement modifies data."
-                ))
-                .footer(
-                    DialogFooter::new()
-                        .child(
-                            DialogClose::new()
-                                .child(Button::new("prod-write-cancel").label("Cancel").outline()),
-                        )
-                        .child(DialogAction::new().child(
-                            Button::new("prod-write-run").danger().label("Run on PROD").on_click(
-                                move |_, window, cx| {
-                                    confirmed_on_run.set(true);
-                                    let query = query.clone();
-                                    let database_name = database_name.clone();
-                                    weak_editor_panel
-                                        .update(cx, |editor_panel, cx| {
-                                            editor_panel.execute_query_unchecked(
-                                                query,
-                                                connection_id,
-                                                &database_name,
-                                                window,
-                                                cx,
-                                            );
-                                        })
-                                        .log_err();
-                                },
-                            ),
-                        )),
+                ),
+                confirm_label: "Run on PROD",
+                tab_index,
+            },
+            move |panel, window, cx| {
+                panel.execute_query_unchecked(
+                    query.clone(),
+                    connection_id,
+                    &database_name,
+                    window,
+                    cx,
                 )
-                .on_close(move |_, _, cx| {
-                    if confirmed_on_close.get() {
-                        return;
-                    }
-                    weak_on_close
-                        .update(cx, |_, cx| {
-                            cx.emit(super::EditorPanelEvent::QueryRunEnded {
-                                tab_index,
-                                outcome: Err(
-                                    "The user did not confirm the write on PROD.".to_string()
-                                ),
-                            });
-                        })
-                        .log_err();
-                })
-        });
+            },
+            Some(Box::new(move |_, cx| {
+                cx.emit(super::EditorPanelEvent::QueryRunEnded {
+                    tab_index,
+                    outcome: Err("The user did not confirm the write on PROD.".to_string()),
+                });
+            })),
+            window,
+            cx,
+        );
     }
 
     fn execute_query_unchecked(

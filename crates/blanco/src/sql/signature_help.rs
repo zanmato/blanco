@@ -9,7 +9,7 @@ use gpui::{App, AppContext as _, Task, Window};
 use gpui_component::input::{Rope, SignatureHelpProvider};
 use lsp_types::{
     Documentation, MarkupContent, MarkupKind, ParameterInformation, ParameterLabel, SignatureHelp,
-    SignatureInformation,
+    SignatureHelpContext, SignatureInformation,
 };
 use sql_parser::statement_parser::{self, EnclosingCall};
 use std::sync::Arc;
@@ -142,6 +142,7 @@ impl SignatureHelpProvider for SqlSignatureHelpProvider {
         &self,
         text: &Rope,
         offset: usize,
+        _context: SignatureHelpContext,
         _window: &mut Window,
         cx: &mut App,
     ) -> Task<Result<Option<SignatureHelp>>> {
@@ -176,6 +177,16 @@ impl SignatureHelpProvider for SqlSignatureHelpProvider {
             };
             Ok(build_signature_help(&call, driver, &user_functions))
         })
+    }
+
+    /// Opening a call starts help; a comma or the closing paren keeps it
+    /// tracking the argument under the cursor, or closes it once outside.
+    fn trigger_characters(&self) -> Vec<String> {
+        vec!["(".into()]
+    }
+
+    fn retrigger_characters(&self) -> Vec<String> {
+        vec![",".into(), ")".into()]
     }
 }
 

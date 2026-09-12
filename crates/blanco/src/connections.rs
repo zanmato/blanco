@@ -891,7 +891,6 @@ impl ConnectionsPanel {
     fn render_filter(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .px_2()
-            .pt_1()
             .pb_2()
             .child(Input::new(&self.filter_input).small())
     }

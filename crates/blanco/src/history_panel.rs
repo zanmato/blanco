@@ -283,7 +283,7 @@ impl Render for HistoryPanel {
                 h_flex()
                     .flex_none()
                     .px_2()
-                    .py_1p5()
+                    .pb_1p5()
                     .gap_2()
                     .items_center()
                     .border_b_1()
