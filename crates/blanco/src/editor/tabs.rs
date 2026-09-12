@@ -46,6 +46,10 @@ pub struct ConnectionBackedTab {
     /// The pane's shell, spawned the first time the pane is opened and kept
     /// while it is hidden.
     pub terminal: Option<super::terminal_pane::TerminalPane>,
+    /// The user asked not to be warned again about writes to PROD from this
+    /// tab. Lives with the tab and is never persisted, so a restart or a new
+    /// tab warns again.
+    pub skip_prod_write_confirmation: bool,
 }
 
 impl ConnectionBackedTab {
