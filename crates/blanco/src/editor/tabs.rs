@@ -1,13 +1,13 @@
 //! Tab data structures used by the editor panel.
 
 use std::collections::HashMap;
-use std::ops::{Deref, DerefMut};
+use std::ops::{Deref, DerefMut, Range};
 use std::sync::Arc;
 
 use blanco_core::RoutineKind;
 use blanco_ui::SqlView;
 use gpui::{App, Entity};
-use gpui_component::input::EditorState;
+use gpui_component::input::{EditorState, RangeDecorationCollection};
 
 use crate::results_panel::ResultsPanel;
 use crate::settings::SettingsView;
@@ -77,6 +77,26 @@ pub struct QueryTab {
     /// to prefill the parameter modal on subsequent runs within the same
     /// session.
     pub last_parameter_values: HashMap<String, String>,
+    /// Frame the editor draws around the statement the cursor sits in. Absent
+    /// for backends whose commands are single lines rather than `;`-delimited
+    /// statements (Redis), which have nothing to outline.
+    pub statement_outline: Option<RangeDecorationCollection>,
+    /// The statement the outline currently frames.
+    pub outlined_statement: OutlinedStatement,
+}
+
+/// The statement outline's last parse: the editor state it was made from, and
+/// the byte range it produced.
+///
+/// The editor notifies its observers on every repaint, not only on edits and
+/// cursor moves, so the outline checks this before parsing the buffer again.
+#[derive(Default)]
+pub struct OutlinedStatement {
+    /// Document version and selection the range was parsed from, or `None`
+    /// before the first parse.
+    pub parsed_from: Option<(u64, Range<usize>)>,
+    /// Byte range of the statement under the cursor, when there is one.
+    pub range: Option<Range<usize>>,
 }
 
 /// A JavaScript script tab. Mirrors [`QueryTab`] minus the SQL-only machinery

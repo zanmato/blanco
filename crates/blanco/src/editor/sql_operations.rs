@@ -1,24 +1,103 @@
+use std::ops::Range;
 use std::time::Duration;
 
-use gpui::{AppContext, Context, SharedString, Window};
-use gpui_component::{RopeExt, WindowExt as _, notification::NotificationType};
+use gpui::{AppContext, Context, Entity, SharedString, Window};
+use gpui_component::input::{EditorState, RangeDecoration};
+use gpui_component::{ActiveTheme as _, RopeExt, WindowExt as _, notification::NotificationType};
 
 use crate::app_settings::AppSettings;
 use crate::result_ext::ResultExt;
 use crate::settings::EditorSettings;
 use crate::settings::FormatterSettings;
-use crate::sql::extract_statement_info;
+use crate::sql::{active_statement_range, extract_statement_info};
 use crate::status_bar::ActivityReporter;
 
 use super::{EditorPanel, LINT_DEBOUNCE_MS, TabType};
 
+/// Opacity of the frame drawn around the statement under the cursor. The
+/// outline marks what Run would execute, so it has to stay behind the text
+/// rather than compete with the syntax colors.
+const STATEMENT_OUTLINE_OPACITY: f32 = 0.5;
+
 impl EditorPanel {
+    /// Re-frame the statement the cursor sits in, and re-lint when it moved.
+    ///
+    /// Driven from an observer of the editor, which notifies on both edits and
+    /// cursor moves. The editor also notifies for repaints that change
+    /// neither, so the buffer is only parsed again when the document version
+    /// or the selection has actually changed.
+    pub(super) fn refresh_statement_outline(
+        &mut self,
+        editor: &Entity<EditorState>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((tab_index, query_tab)) =
+            self.tabs
+                .iter_mut()
+                .enumerate()
+                .find_map(|(tab_index, tab)| match tab {
+                    TabType::Query(query_tab) if &query_tab.base.editor == editor => {
+                        Some((tab_index, query_tab))
+                    }
+                    _ => None,
+                })
+        else {
+            return;
+        };
+        let Some(outline) = query_tab.statement_outline.clone() else {
+            return;
+        };
+
+        let range = {
+            let state = editor.read(cx);
+            let selection = state.selected_range();
+            let parsed_from = (state.document_version(), selection.clone());
+            if query_tab.outlined_statement.parsed_from == Some(parsed_from.clone()) {
+                return;
+            }
+            query_tab.outlined_statement.parsed_from = Some(parsed_from);
+
+            // A selection is the user's own statement of scope; outlining the
+            // statement around it would only compete with it.
+            selection
+                .is_empty()
+                .then(|| active_statement_range(state.text(), state.cursor()))
+                .flatten()
+        };
+
+        // Setting entries the collection already holds neither repaints nor
+        // notifies the editor back, so the outline can be re-set from an
+        // observer of that same editor.
+        let color = cx.theme().primary.opacity(STATEMENT_OUTLINE_OPACITY);
+        outline.set(
+            range
+                .clone()
+                .map(|range| vec![RangeDecoration::new(range).with_color(color)])
+                .unwrap_or_default(),
+            cx,
+        );
+
+        if query_tab.outlined_statement.range == range {
+            return;
+        }
+        query_tab.outlined_statement.range = range.clone();
+
+        // The linter works on the active tab, so a background tab's outline
+        // must not point it at a range from the wrong buffer.
+        if self.linting_enabled
+            && tab_index == self.active_tab_ix
+            && let Some(range) = range
+        {
+            self.lint_current_query_debounced(range, cx);
+        }
+    }
+
     /// Trigger a debounced lint of the current query.
     ///
     /// This cancels any pending lint task and schedules a new one after the debounce delay.
     pub(super) fn lint_current_query_debounced(
         &mut self,
-        range: lsp_types::Range,
+        range: Range<usize>,
         cx: &mut Context<Self>,
     ) {
         self._lint_debounce_task = cx.spawn(async move |entity_handle, cx| {
@@ -34,8 +113,8 @@ impl EditorPanel {
         });
     }
 
-    /// Lint the current query/statement and update editor diagnostics.
-    pub(super) fn lint_current_query(&mut self, range: lsp_types::Range, cx: &mut Context<Self>) {
+    /// Lint the statement in `byte_range` and update editor diagnostics.
+    pub(super) fn lint_current_query(&mut self, byte_range: Range<usize>, cx: &mut Context<Self>) {
         let tab_index = self.active_tab_ix;
 
         let Some(TabType::Query(query_tab)) = self.tabs.get(tab_index) else {
@@ -49,19 +128,13 @@ impl EditorPanel {
 
         let editor = query_tab.editor.clone();
 
-        // Get the text for the given range
+        // The range was parsed from an earlier revision of the buffer, so clamp
+        // it before slicing.
         let (statement_text, byte_range) = {
-            let editor_ref = editor.read(cx);
-            let text = editor_ref.text();
+            let text = editor.read(cx).text();
+            let byte_range = byte_range.start.min(text.len())..byte_range.end.min(text.len());
 
-            // Convert LSP range to byte offsets
-            let start_byte = text.position_to_offset(&range.start);
-            let end_byte = text.position_to_offset(&range.end);
-
-            // Extract text from the range
-            let extracted = text.slice(start_byte..end_byte.min(text.len())).to_string();
-
-            (extracted, start_byte..end_byte)
+            (text.slice(byte_range.clone()).to_string(), byte_range)
         };
 
         let sqruff_service = if let Some(sqruff_service) = &query_tab.sqruff_service {

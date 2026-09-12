@@ -19,8 +19,8 @@ mod tabs;
 mod terminal_pane;
 
 pub use tabs::{
-    ConnectionBackedTab, ObjectDdlParams, QueryTab, ScriptTab, SettingsTab, TabCreationParams,
-    TabType, TableStructureParams,
+    ConnectionBackedTab, ObjectDdlParams, OutlinedStatement, QueryTab, ScriptTab, SettingsTab,
+    TabCreationParams, TabType, TableStructureParams,
 };
 
 use blanco_core::ConnectionContext;
@@ -46,9 +46,7 @@ use crate::result_ext::ResultExt;
 use crate::results_panel::ResultsPanel;
 use crate::script_completion::ScriptCompletionProvider;
 use crate::settings::SettingsView;
-use crate::sql::{
-    SqlCompletionProvider, SqlSelectionRangeProvider, SqlSignatureHelpProvider, SqruffService,
-};
+use crate::sql::{SqlCompletionProvider, SqlSignatureHelpProvider, SqruffService};
 use app_database::QueryTabData;
 use app_database::{AppDatabase, EnvironmentType};
 use blanco_ui::SqlView;
@@ -679,8 +677,8 @@ impl EditorPanel {
             db_service,
         );
 
-        // SQL completions and statement-based selection ranges only make sense
-        // for SQL backends. Line-oriented backends (Redis) get neither.
+        // SQL completions and the statement outline only make sense for SQL
+        // backends. Line-oriented backends (Redis) get neither.
         let supports_sql = params.context.db_type.supports_sql();
 
         let editor = cx.new({
@@ -716,13 +714,6 @@ impl EditorPanel {
                     let completion_provider: Rc<dyn gpui_component::input::CompletionProvider> =
                         Rc::new(sql_completion_provider);
                     editor.lsp_mut().completion_provider = Some(completion_provider);
-
-                    // Set up selection range provider for SQL statement highlighting
-                    let provider = SqlSelectionRangeProvider::new();
-                    let selection_range_provider: Rc<
-                        dyn gpui_component::input::SelectionRangeProvider,
-                    > = Rc::new(provider);
-                    editor.lsp_mut().selection_range_provider = Some(selection_range_provider);
                 } else if params.context.db_type == database::DatabaseType::Redis {
                     // Redis gets command/subcommand completion instead of the
                     // SQL schema-aware completion.
@@ -742,19 +733,29 @@ impl EditorPanel {
             });
         }
 
-        // Subscribe to editor text changes for auto-linting
+        // The frame around the statement the cursor sits in. Only SQL backends
+        // have statements to outline, so only they get a collection.
+        let statement_outline = supports_sql.then(|| {
+            editor.update(cx, |state, cx| {
+                state.create_range_decorations_collection(vec![], cx)
+            })
+        });
+
         let subscription = cx.subscribe_in(&editor, window, |this, _editor, event, window, cx| {
-            if let InputEvent::SelectionRangeChange { range } = event {
-                if this.linting_enabled {
-                    this.lint_current_query_debounced(*range, cx);
-                }
-                // Re-render so the Ln/Col indicator in the action bar tracks the cursor.
-                cx.notify();
-            } else if let InputEvent::PressEnter { secondary, .. } = event
+            if let InputEvent::PressEnter { secondary, .. } = event
                 && *secondary
             {
                 this.on_run_query(window, cx);
             }
+        });
+        self._subscriptions.push(subscription);
+
+        // The editor notifies on edits and on cursor moves, which is exactly
+        // when the statement under the cursor can change. Re-rendering here
+        // also keeps the Ln/Col indicator in the action bar on the cursor.
+        let subscription = cx.observe(&editor, |this, editor, cx| {
+            this.refresh_statement_outline(&editor, cx);
+            cx.notify();
         });
         self._subscriptions.push(subscription);
 
@@ -822,6 +823,8 @@ impl EditorPanel {
             completion_provider: supports_sql.then_some(sql_completion_provider),
             sql_view_visible: true,
             last_parameter_values: HashMap::new(),
+            statement_outline,
+            outlined_statement: OutlinedStatement::default(),
         };
 
         self.tabs.push(TabType::Query(Box::new(query_tab)));
@@ -834,7 +837,7 @@ impl EditorPanel {
     /// Create a JavaScript script tab bound to the same connection identity as
     /// a query tab. Scripts drive the database through the injected `db` object
     /// rather than through the SQL pipeline, so this deliberately skips the
-    /// completion, selection-range, formatter and linter wiring.
+    /// SQL completion, statement outline, formatter and sqruff wiring.
     pub fn create_and_add_script_tab(
         &mut self,
         window: &mut Window,
@@ -868,18 +871,23 @@ impl EditorPanel {
             state.replace(&content, window, cx);
         });
 
+        // A script's syntax check covers the whole buffer, so only edits can
+        // invalidate it.
         let subscription = cx.subscribe_in(&editor, window, |this, _editor, event, window, cx| {
-            if let InputEvent::SelectionRangeChange { .. } = event {
+            if let InputEvent::Change = event {
                 if this.linting_enabled {
                     this.lint_current_script_debounced(cx);
                 }
-                cx.notify();
             } else if let InputEvent::PressEnter { secondary, .. } = event
                 && *secondary
             {
                 this.on_run_query(window, cx);
             }
         });
+        self._subscriptions.push(subscription);
+
+        // Re-render so the Ln/Col indicator in the action bar tracks the cursor.
+        let subscription = cx.observe(&editor, |_, _, cx| cx.notify());
         self._subscriptions.push(subscription);
 
         let results_panel = cx.new(|cx| {
