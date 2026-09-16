@@ -233,15 +233,6 @@ impl ConnectionsPanel {
             let Some(connections) = load.await.log_err() else {
                 return;
             };
-            let hydrate =
-                cx.update(|cx| connection_credentials::hydrate_connections(connections, cx));
-            let connections = match hydrate.await {
-                Ok(connections) => connections,
-                Err(error) => {
-                    tracing::error!("Failed to load connection credentials: {error}");
-                    return;
-                }
-            };
             this_handle
                 .update(cx, |this, cx| {
                     this.connections = connections;

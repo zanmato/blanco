@@ -67,6 +67,21 @@ menus, transactional execution, `reload()`). SQLite cannot change a column's typ
 or default in place and reports `DdlError::Unsupported` instead of a lossy table rebuild.
 `test_column_and_index_ddl_round_trip` exercises the builders against every compose backend.
 
+## Connection secrets
+
+Passwords, SSH passwords and key passphrases live in the OS keyring through GPUI's
+credential API, one entry per connection and `database::SecretKind`. They are never
+loaded in bulk: the sidebar's `ConnectionData` and `DatabaseService`'s stored
+`ConnectionConfig`s carry no secrets (callers pass `config.without_secrets()`), and
+`DatabaseService::get_or_create_connection` fills the missing ones through its
+`ConnectionSecretStore` only when a new physical connection is opened. The store is
+`connection_credentials::KeyringSecretStore`, a channel bridge onto one foreground
+task that awaits each `read_credentials` before taking the next request. On Linux
+every GPUI credential read opens a fresh Secret Service session, and a burst of
+concurrent sessions crashes gnome-keyring-daemon, so keep reads serialized and lazy.
+The edit dialog hydrates the single connection it shows with
+`connection_credentials::hydrate_connection`.
+
 ## Architecture
 
 ### File Structure

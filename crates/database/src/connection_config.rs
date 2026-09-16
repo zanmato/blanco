@@ -1,6 +1,53 @@
 //! Connection configuration
 
+use async_trait::async_trait;
+
 pub use blanco_core::{DatabaseType, ParamStyles};
+
+/// One of the per-connection secrets kept outside the app database.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SecretKind {
+    Password,
+    SshPassword,
+    SshPrivateKeyPassword,
+}
+
+impl SecretKind {
+    pub const ALL: [SecretKind; 3] = [
+        SecretKind::Password,
+        SecretKind::SshPassword,
+        SecretKind::SshPrivateKeyPassword,
+    ];
+
+    /// Stable name used as the last path segment of the stored credential.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Password => "password",
+            Self::SshPassword => "ssh-password",
+            Self::SshPrivateKeyPassword => "ssh-private-key-password",
+        }
+    }
+}
+
+/// Where connection secrets are read from on demand. `DatabaseService` asks
+/// the store only for the secrets a connection is missing at the moment it is
+/// opened, so implementations may be slow or serialized without holding up
+/// anything else.
+#[async_trait]
+pub trait ConnectionSecretStore: Send + Sync {
+    async fn read(&self, connection_id: i64, kind: SecretKind) -> anyhow::Result<Option<String>>;
+}
+
+/// Store that never finds a secret, used until a real one is installed and by
+/// tests that pass secrets inline on the config.
+pub struct NoSecretStore;
+
+#[async_trait]
+impl ConnectionSecretStore for NoSecretStore {
+    async fn read(&self, _connection_id: i64, _kind: SecretKind) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
+}
 
 /// Connection configuration loaded from app database
 #[derive(Clone)]
@@ -437,6 +484,50 @@ impl ConnectionConfig {
     /// Check if this connection requires SSH tunneling
     pub fn requires_ssh_tunnel(&self) -> bool {
         self.ssh_host.is_some() && self.ssh_user.is_some()
+    }
+
+    /// The config with every secret cleared, the form kept in long-lived
+    /// structures so secrets only exist while a connection is being opened.
+    pub fn without_secrets(mut self) -> Self {
+        self.password = None;
+        self.ssh_password = None;
+        self.ssh_private_key_password = None;
+        self
+    }
+
+    pub fn secret(&self, kind: SecretKind) -> Option<&str> {
+        match kind {
+            SecretKind::Password => self.password.as_deref(),
+            SecretKind::SshPassword => self.ssh_password.as_deref(),
+            SecretKind::SshPrivateKeyPassword => self.ssh_private_key_password.as_deref(),
+        }
+    }
+
+    pub fn set_secret(&mut self, kind: SecretKind, value: Option<String>) {
+        match kind {
+            SecretKind::Password => self.password = value,
+            SecretKind::SshPassword => self.ssh_password = value,
+            SecretKind::SshPrivateKeyPassword => self.ssh_private_key_password = value,
+        }
+    }
+
+    /// Secrets this connection could use but does not carry yet. SQLite has
+    /// no password and SSH secrets only matter with a tunnel, so those never
+    /// cause a store lookup.
+    pub fn missing_secret_kinds(&self) -> Vec<SecretKind> {
+        let mut kinds = Vec::new();
+        if self.db_type != DatabaseType::SQLite && self.password.is_none() {
+            kinds.push(SecretKind::Password);
+        }
+        if self.requires_ssh_tunnel() {
+            if self.ssh_password.is_none() {
+                kinds.push(SecretKind::SshPassword);
+            }
+            if self.ssh_private_key_password.is_none() {
+                kinds.push(SecretKind::SshPrivateKeyPassword);
+            }
+        }
+        kinds
     }
 
     /// Get SSH port (default to 22 if not specified)

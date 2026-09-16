@@ -124,7 +124,8 @@ fn main() {
         }
 
         // Initialize database service with tokio runtime handle for automatic SSH tunnel establishment
-        let db_service = DatabaseService::new(runtime_handle.clone());
+        let mut db_service = DatabaseService::new(runtime_handle.clone());
+        db_service.set_secret_store(connection_credentials::KeyringSecretStore::install(cx));
         cx.set_global(db_service);
         mcp::McpService::init(cx);
 
@@ -133,15 +134,9 @@ fn main() {
         let connections = runtime_handle
             .block_on(async move { app_database.load_connections().await })
             .unwrap_or_default();
-        let connections =
-            match smol::block_on(connection_credentials::hydrate_connections(connections, cx)) {
-                Ok(connections) => connections,
-                Err(error) => {
-                    tracing::error!("Failed to load connection credentials: {error}");
-                    Vec::new()
-                }
-            };
 
+        // Secrets are not loaded here; `DatabaseService` fetches them from
+        // the keyring when a connection is opened.
         for connection in connections {
             if let Some(config) = connection.to_connection_config() {
                 let db_service = DatabaseService::global(cx).clone();

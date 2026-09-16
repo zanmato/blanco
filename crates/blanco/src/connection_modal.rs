@@ -11,8 +11,8 @@ use sqlite::SqliteForm;
 use types::ConnectorType;
 
 use gpui::{
-    App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
-    Styled, Window, div, prelude::FluentBuilder,
+    App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
+    ParentElement, Render, Styled, Window, div, prelude::FluentBuilder,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, IndexPath, WindowExt as _, h_flex,
@@ -493,7 +493,10 @@ impl Render for NewConnectionModal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let connector_type = self.get_selected_connector_type(cx);
 
-        v_flex().gap_4().child(
+        // The dialog focuses this handle when it opens; the close button and
+        // Escape dispatch `Cancel` along the focused element's path, so the
+        // handle has to be attached here for the dialog host to receive it.
+        v_flex().track_focus(&self.focus_handle).gap_4().child(
             v_flex()
                 .gap_4()
                 .child(

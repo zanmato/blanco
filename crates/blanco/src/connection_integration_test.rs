@@ -462,6 +462,36 @@ async fn run_driver_case(
     true
 }
 
+/// The dialog's close button dispatches `Cancel` along the focused element's
+/// path. The modal takes focus when the dialog opens, so its focus handle has
+/// to be attached to a rendered element or the dialog host never sees the
+/// action and the dialog cannot be closed that way.
+#[gpui::test]
+async fn test_new_connection_dialog_closes_on_cancel(cx: &mut TestAppContext) {
+    use gpui_component::WindowExt as _;
+
+    let harness = FullAppHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+    cx.run_until_parked();
+
+    // A fresh app database has no connections, so the first-run flow has
+    // already opened the new connection dialog.
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+
+    // Same dispatch as the dialog's close button.
+    cx.update(|window, cx| {
+        let cancel = cx
+            .build_action("ui::Cancel", None)
+            .expect("the dialog cancel action is registered");
+        window.dispatch_action(cancel, cx);
+    });
+    cx.run_until_parked();
+    assert!(
+        !cx.update(|window, cx| window.has_active_dialog(cx)),
+        "cancel should close the new connection dialog"
+    );
+}
+
 #[gpui::test]
 async fn test_sqlite_connect_and_query(cx: &mut TestAppContext) {
     let harness = FullAppHarness::new(cx);

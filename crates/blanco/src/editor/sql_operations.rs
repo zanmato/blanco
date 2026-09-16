@@ -2,7 +2,7 @@ use std::ops::Range;
 use std::time::Duration;
 
 use gpui::{AppContext, Context, Entity, SharedString, Window};
-use gpui_component::input::{EditorState, RangeDecoration};
+use gpui_component::input::{EditorState, RangeDecoration, RangeDecorationStyle};
 use gpui_component::{ActiveTheme as _, RopeExt, WindowExt as _, notification::NotificationType};
 
 use crate::app_settings::AppSettings;
@@ -72,7 +72,13 @@ impl EditorPanel {
         outline.set(
             range
                 .clone()
-                .map(|range| vec![RangeDecoration::new(range).with_color(color)])
+                .map(|range| {
+                    vec![
+                        RangeDecoration::new(range)
+                            .with_style(RangeDecorationStyle::Block)
+                            .with_color(color),
+                    ]
+                })
                 .unwrap_or_default(),
             cx,
         );

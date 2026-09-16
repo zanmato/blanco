@@ -744,7 +744,7 @@ impl BlancoApp {
                 ConnectionsPanelEvent::EditConnection {
                     connection_data, ..
                 } => {
-                    app.open_edit_connection_modal(*connection_data.clone(), window, cx);
+                    app.edit_connection_with_secrets(*connection_data.clone(), window, cx);
                 }
                 // First-run experience: if the initial load found no saved connections,
                 // greet the user with the new connection dialog instead of an empty window.
@@ -1589,7 +1589,9 @@ impl BlancoApp {
                                         }
                                         if let Some(config) = connection_data.to_connection_config()
                                         {
-                                            db_service.add_connection_config(config).await;
+                                            db_service
+                                                .add_connection_config(config.without_secrets())
+                                                .await;
                                         }
                                         sidebar.update_in(cx, |panel, _window, cx| {
                                             panel.reload_connections(cx);
@@ -1642,6 +1644,44 @@ impl BlancoApp {
             .read(cx)
             .focus_handle(cx)
             .focus(window, cx);
+    }
+
+    /// The sidebar keeps connections without their secrets, so fetch the
+    /// stored ones for this connection first. The dialog is not opened when
+    /// that fails: saving it with empty secret fields would delete them.
+    fn edit_connection_with_secrets(
+        &mut self,
+        connection_data: ConnectionData,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let store = database::DatabaseService::global(cx).secret_store();
+        cx.spawn_in(window, async move |this, cx| {
+            let hydrated =
+                connection_credentials::hydrate_connection(store.as_ref(), connection_data).await;
+            cx.update(|window, cx| match hydrated {
+                Ok(connection_data) => {
+                    this.update(cx, |app, cx| {
+                        app.open_edit_connection_modal(connection_data, window, cx);
+                    })
+                    .log_err();
+                }
+                Err(error) => {
+                    tracing::error!("Failed to load connection credentials: {error:#}");
+                    window.push_notification(
+                        (
+                            NotificationType::Error,
+                            SharedString::from(format!(
+                                "Failed to load connection credentials: {error:#}"
+                            )),
+                        ),
+                        cx,
+                    );
+                }
+            })
+            .log_err();
+        })
+        .detach();
     }
 
     fn open_edit_connection_modal(
@@ -1728,7 +1768,9 @@ impl BlancoApp {
                                             .await?;
                                         if let Some(config) = connection_data.to_connection_config()
                                         {
-                                            db_service.add_connection_config(config).await;
+                                            db_service
+                                                .add_connection_config(config.without_secrets())
+                                                .await;
                                         }
                                         sidebar.update_in(cx, |panel, _window, cx| {
                                             panel.reload_connections(cx);

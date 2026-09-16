@@ -9,7 +9,9 @@ use smol::lock::RwLock;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
 
-use crate::connection_config::{ConnectionConfig, DatabaseType};
+use crate::connection_config::{
+    ConnectionConfig, ConnectionSecretStore, DatabaseType, NoSecretStore,
+};
 use crate::factories::{
     ClickhouseConnectionFactory, MssqlConnectionFactory, MysqlConnectionFactory,
     PostgresConnectionFactory, RedisConnectionFactory, SqliteConnectionFactory,
@@ -59,6 +61,9 @@ pub struct DatabaseService {
     // Channel sender for dispatching actions from any context (shared via Arc)
     action_sender: SharedActionSender,
 
+    // Resolves a connection's secrets the moment it is opened
+    secret_store: Arc<dyn ConnectionSecretStore>,
+
     // Dependencies
     runtime_handle: tokio::runtime::Handle,
 }
@@ -90,8 +95,27 @@ impl DatabaseService {
             ssh_tunnels: Arc::new(RwLock::new(HashMap::new())),
             tunnel_connections: Arc::new(RwLock::new(HashMap::new())),
             action_sender: Arc::new(StdMutex::new(None)),
+            secret_store: Arc::new(NoSecretStore),
             runtime_handle,
         }
+    }
+
+    pub fn set_secret_store(&mut self, store: Arc<dyn ConnectionSecretStore>) {
+        self.secret_store = store;
+    }
+
+    pub fn secret_store(&self) -> Arc<dyn ConnectionSecretStore> {
+        Arc::clone(&self.secret_store)
+    }
+
+    /// Fill in the secrets `config` is missing, one store read after another
+    /// so a burst of connections never floods the backing keyring.
+    async fn resolve_secrets(&self, config: &mut ConnectionConfig) -> Result<()> {
+        for kind in config.missing_secret_kinds() {
+            let value = self.secret_store.read(config.id, kind).await?;
+            config.set_secret(kind, value);
+        }
+        Ok(())
     }
 
     /// Set the action sender (called via cx.update_global from app initialization)
@@ -176,6 +200,11 @@ impl DatabaseService {
                 return Ok(Arc::clone(existing_conn));
             }
         }
+
+        // Secrets are resolved only now, after the cache misses, and live in
+        // this local copy of the config for the duration of the connect.
+        let mut config = config;
+        self.resolve_secrets(&mut config).await?;
 
         // Check if this connection requires an SSH tunnel
         let mut connection_host = None;
@@ -778,6 +807,7 @@ impl Clone for DatabaseService {
             ssh_tunnels: Arc::clone(&self.ssh_tunnels),
             tunnel_connections: Arc::clone(&self.tunnel_connections),
             action_sender: Arc::clone(&self.action_sender),
+            secret_store: Arc::clone(&self.secret_store),
             runtime_handle: self.runtime_handle.clone(),
         }
     }
@@ -795,7 +825,66 @@ impl DatabaseService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connection_config::ConnectionConfig;
+    use crate::connection_config::{ConnectionConfig, SecretKind};
+
+    struct MapSecretStore(HashMap<(i64, SecretKind), String>);
+
+    #[async_trait]
+    impl ConnectionSecretStore for MapSecretStore {
+        async fn read(&self, connection_id: i64, kind: SecretKind) -> Result<Option<String>> {
+            Ok(self.0.get(&(connection_id, kind)).cloned())
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn resolve_secrets_fills_only_missing_kinds_from_the_store() {
+        let mut service = DatabaseService::new(tokio::runtime::Handle::current());
+        service.set_secret_store(Arc::new(MapSecretStore(HashMap::from([
+            ((1, SecretKind::Password), "db-secret".to_string()),
+            ((1, SecretKind::SshPassword), "ssh-secret".to_string()),
+        ]))));
+
+        let mut config = ConnectionConfig::new(
+            1,
+            "pg".into(),
+            DatabaseType::PostgreSQL,
+            "localhost".into(),
+            5432,
+            "app".into(),
+            "user".into(),
+            Some("inline".into()),
+        )
+        .without_secrets();
+        assert_eq!(config.missing_secret_kinds(), vec![SecretKind::Password]);
+
+        service.resolve_secrets(&mut config).await.expect("resolve");
+        assert_eq!(config.password.as_deref(), Some("db-secret"));
+        assert_eq!(config.ssh_password, None);
+
+        let mut tunnelled = config.clone().with_ssh_config(
+            "bastion".into(),
+            "ssh-user".into(),
+            None,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(
+            tunnelled.missing_secret_kinds(),
+            vec![SecretKind::SshPassword, SecretKind::SshPrivateKeyPassword]
+        );
+        service
+            .resolve_secrets(&mut tunnelled)
+            .await
+            .expect("resolve");
+        assert_eq!(tunnelled.ssh_password.as_deref(), Some("ssh-secret"));
+        assert_eq!(tunnelled.ssh_private_key_password, None);
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        assert!(sqlite_config(2, &dir.path().join("x.db"))
+            .missing_secret_kinds()
+            .is_empty());
+    }
 
     fn sqlite_config(id: i64, path: &std::path::Path) -> ConnectionConfig {
         ConnectionConfig::new_sqlite(

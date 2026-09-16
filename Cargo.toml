@@ -37,7 +37,10 @@ gpui_platform = { package = "gpui-pre-platform", version = "0.3.1", features = [
     "wayland",
     "runtime_shaders",
 ] }
-gpui-component = { git = "https://github.com/zanmato/gpui-component", branch = "blanco", features = ["tree-sitter", "tree-sitter-javascript"] }
+gpui-component = { git = "https://github.com/zanmato/gpui-component", branch = "blanco", features = [
+    "tree-sitter",
+    "tree-sitter-javascript",
+] }
 
 # LSP dependencies (needed by gpui-component)
 lsp-types = { version = "0.97.0", features = ["proposed"] }
