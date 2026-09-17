@@ -3139,7 +3139,7 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.6.1"
-source = "git+https://github.com/zanmato/gpui-component?branch=blanco#dc2c027b4cdf6f9aaa03a54a3bffe3c2ffd0f08d"
+source = "git+https://github.com/zanmato/gpui-component?branch=blanco#ecbb79da699a1d8c78d40c308c4e37b7175dbaab"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -3173,7 +3173,7 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.6.1"
-source = "git+https://github.com/zanmato/gpui-component?branch=blanco#dc2c027b4cdf6f9aaa03a54a3bffe3c2ffd0f08d"
+source = "git+https://github.com/zanmato/gpui-component?branch=blanco#ecbb79da699a1d8c78d40c308c4e37b7175dbaab"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3219,7 +3219,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-macros"
 version = "0.6.1"
-source = "git+https://github.com/zanmato/gpui-component?branch=blanco#dc2c027b4cdf6f9aaa03a54a3bffe3c2ffd0f08d"
+source = "git+https://github.com/zanmato/gpui-component?branch=blanco#ecbb79da699a1d8c78d40c308c4e37b7175dbaab"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -3230,7 +3230,7 @@ dependencies = [
 [[package]]
 name = "gpui-kit-assets"
 version = "0.6.1"
-source = "git+https://github.com/zanmato/gpui-component?branch=blanco#dc2c027b4cdf6f9aaa03a54a3bffe3c2ffd0f08d"
+source = "git+https://github.com/zanmato/gpui-component?branch=blanco#ecbb79da699a1d8c78d40c308c4e37b7175dbaab"
 dependencies = [
  "anyhow",
  "gpui-pre",
@@ -4103,7 +4103,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.4",
  "system-configuration 0.7.0",
  "tokio",
  "tower-service",
@@ -6580,7 +6580,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.2",
  "rustls 0.23.40",
- "socket2 0.5.10",
+ "socket2 0.6.4",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -6617,7 +6617,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.4",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -7924,7 +7924,7 @@ checksum = "7bd22781911de0ca6debda95f073c8f18bec65d1a94f1fa9573f3102e514cea4"
 dependencies = [
  "ahash 0.8.11",
  "annotate-snippets",
- "base64 0.21.7",
+ "base64 0.22.1",
  "encoding_rs_io",
  "getrandom 0.3.4",
  "granit-parser",

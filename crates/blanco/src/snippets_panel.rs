@@ -11,7 +11,7 @@ use blanco_ui::draggable_tree::{DraggableTree, DraggableTreeState, TreeItem};
 use gpui::{
     AppContext, ClipboardItem, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
     KeyDownEvent, ParentElement, Render, SharedString, Styled, Task, Window, actions,
-    prelude::FluentBuilder,
+    prelude::FluentBuilder, px,
 };
 use gpui_component::input::Input;
 use gpui_component::scroll::ScrollableElement as _;
@@ -39,6 +39,9 @@ impl EventEmitter<SnippetsPanelEvent> for SnippetsPanel {}
 
 pub struct SnippetsPanel {
     pub snippets: Vec<SnippetData>,
+    /// False until the first load lands, so the empty placeholder does not
+    /// flash while the snippets are still being read.
+    loaded: bool,
     tree_state: Entity<DraggableTreeState<SnippetsTreeDelegate>>,
     creating_group: bool,
     group_name_input: Option<Entity<InputState>>,
@@ -55,6 +58,7 @@ impl SnippetsPanel {
 
         let mut panel = Self {
             snippets: Vec::new(),
+            loaded: false,
             tree_state,
             creating_group: false,
             group_name_input: None,
@@ -79,6 +83,7 @@ impl SnippetsPanel {
             };
             this.update(cx, |this, cx| {
                 this.snippets = snippets;
+                this.loaded = true;
                 this.refresh_tree(cx);
                 cx.notify();
             })
@@ -303,6 +308,7 @@ impl Render for SnippetsPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let group_input = self.group_name_input.clone();
         let creating_group = self.creating_group;
+        let show_placeholder = self.loaded && self.snippets.is_empty() && !creating_group;
 
         v_flex()
             .id("snippets-panel")
@@ -318,6 +324,7 @@ impl Render for SnippetsPanel {
             .child(
                 v_flex()
                     .id("snippets-tree-container")
+                    .relative()
                     .flex_1()
                     .min_h_0()
                     .pb_6()
@@ -337,6 +344,22 @@ impl Render for SnippetsPanel {
                         )
                     })
                     .child(DraggableTree::new(&self.tree_state))
+                    // Laid over the tree rather than replacing it: the tree's
+                    // context menu is how the first snippet or group is added.
+                    .when(show_placeholder, |this| {
+                        this.child(
+                            v_flex()
+                                .absolute()
+                                .inset_0()
+                                .items_center()
+                                .justify_center()
+                                .gap_1()
+                                .text_size(px(12.))
+                                .text_color(cx.theme().muted_foreground)
+                                .child("No snippets yet")
+                                .child("Right-click to add a snippet or group"),
+                        )
+                    })
                     .overflow_y_scrollbar(),
             )
     }

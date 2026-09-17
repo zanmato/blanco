@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use async_trait::async_trait;
-use gpui::{App, Task};
+use gpui::{App, AsyncApp};
 
 use app_database::{ConnectionData, LegacyConnectionCredentials};
 use database::{ConnectionSecretStore, SecretKind};
@@ -19,17 +19,14 @@ fn credential_path(connection_id: i64, kind: SecretKind) -> String {
     format!("blanco://connections/{connection_id}/{}", kind.key())
 }
 
-fn start_writing_value(
-    connection_id: i64,
-    kind: SecretKind,
-    value: Option<&str>,
-    cx: &App,
-) -> Task<Result<()>> {
-    let path = credential_path(connection_id, kind);
-    match value.filter(|value| !value.is_empty()) {
-        Some(value) => cx.write_credentials(&path, kind.key(), value.as_bytes()),
-        None => cx.delete_credentials(&path),
+/// Deleting an entry that was never written is an error on macOS
+/// (`errSecItemNotFound`), and most connections lack at least one kind of
+/// secret, so only entries that exist are deleted.
+async fn delete_value(path: &str, cx: &AsyncApp) -> Result<()> {
+    if cx.update(|cx| cx.read_credentials(path)).await?.is_some() {
+        cx.update(|cx| cx.delete_credentials(path)).await?;
     }
+    Ok(())
 }
 
 fn secret_of(connection: &ConnectionData, kind: SecretKind) -> Option<&str> {
@@ -48,15 +45,24 @@ fn set_secret(connection: &mut ConnectionData, kind: SecretKind, value: Option<S
     }
 }
 
-pub fn start_writing_connection(
+/// Store the secrets the connection has and remove the ones it lacks, one
+/// keyring call at a time like every other access in this module.
+pub async fn write_connection(
     connection_id: i64,
     connection: &ConnectionData,
-    cx: &App,
-) -> Vec<Task<Result<()>>> {
-    SecretKind::ALL
-        .into_iter()
-        .map(|kind| start_writing_value(connection_id, kind, secret_of(connection, kind), cx))
-        .collect()
+    cx: &AsyncApp,
+) -> Result<()> {
+    for kind in SecretKind::ALL {
+        let path = credential_path(connection_id, kind);
+        match secret_of(connection, kind).filter(|value| !value.is_empty()) {
+            Some(value) => {
+                cx.update(|cx| cx.write_credentials(&path, kind.key(), value.as_bytes()))
+                    .await?
+            }
+            None => delete_value(&path, cx).await?,
+        }
+    }
+    Ok(())
 }
 
 pub async fn migrate_legacy_credentials(
@@ -81,13 +87,6 @@ pub async fn migrate_legacy_credentials(
                     .await?;
             }
         }
-    }
-    Ok(())
-}
-
-pub async fn finish_writing(tasks: Vec<Task<Result<()>>>) -> Result<()> {
-    for task in tasks {
-        task.await?;
     }
     Ok(())
 }
@@ -171,11 +170,11 @@ pub async fn hydrate_connection(
     Ok(connection)
 }
 
-pub fn start_deleting_connection(connection_id: i64, cx: &App) -> Vec<Task<Result<()>>> {
-    SecretKind::ALL
-        .into_iter()
-        .map(|kind| cx.delete_credentials(&credential_path(connection_id, kind)))
-        .collect()
+pub async fn delete_connection(connection_id: i64, cx: &AsyncApp) -> Result<()> {
+    for kind in SecretKind::ALL {
+        delete_value(&credential_path(connection_id, kind), cx).await?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

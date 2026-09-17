@@ -992,11 +992,6 @@ impl ConnectionsPanel {
                                 move |_, window, cx| {
                                     let this_handle = this_handle.clone();
                                     let app_database = AppDatabase::global(cx).clone();
-                                    let credential_tasks =
-                                        connection_credentials::start_deleting_connection(
-                                            connection_id,
-                                            cx,
-                                        );
                                     cx.spawn(async move |cx| {
                                         if let Err(e) =
                                             app_database.delete_connection(connection_id).await
@@ -1005,8 +1000,11 @@ impl ConnectionsPanel {
                                             return;
                                         }
                                         if let Err(error) =
-                                            connection_credentials::finish_writing(credential_tasks)
-                                                .await
+                                            connection_credentials::delete_connection(
+                                                connection_id,
+                                                cx,
+                                            )
+                                            .await
                                         {
                                             tracing::error!(
                                                 "Failed to delete connection credentials: {error}"

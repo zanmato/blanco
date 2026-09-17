@@ -350,7 +350,8 @@ pub struct BlancoApp {
     command_palette: Entity<CommandPalette>,
     sidebar_collapsed: bool,
     sidebar_tab: SidebarTab,
-    app_menu_bar: Entity<AppMenuBar>,
+    /// `None` on macOS, where the menus live in the system menu bar.
+    app_menu_bar: Option<Entity<AppMenuBar>>,
     main_resize_state: Entity<ResizableState>,
     status_bar: Entity<StatusBarState>,
     _subscriptions: Vec<Subscription>,
@@ -382,7 +383,7 @@ impl BlancoApp {
         let command_palette = cx.new(|cx| {
             CommandPalette::new(sidebar.downgrade(), editor_panel.downgrade(), window, cx)
         });
-        let app_menu_bar = AppMenuBar::new(cx);
+        let app_menu_bar = (!cfg!(target_os = "macos")).then(|| AppMenuBar::new(cx));
 
         let subscriptions = Self::wire_subscriptions(
             &sidebar,
@@ -886,24 +887,35 @@ impl BlancoApp {
     /// toggle on the right. `TitleBar` lays its children out left of the window
     /// controls, so a trailing child lands next to minimize/maximize/close.
     fn render_title_bar(&self, window: &mut Window, cx: &Context<Self>) -> impl IntoElement {
+        // On macOS the logo sits beside the 12px traffic lights with no menu
+        // bar after it, where the size used elsewhere dwarfs the controls.
+        let logo_height = if cfg!(target_os = "macos") {
+            px(18.)
+        } else {
+            px(28.)
+        };
         TitleBar::new().child(
             div()
                 .flex()
                 .items_center()
                 .justify_between()
                 .w_full()
+                // macOS has no window controls after the toggle, so without
+                // this it touches the window edge instead of lining up with
+                // the cards below.
+                .when(cfg!(target_os = "macos"), |this| this.pr(PANEL_GAP))
                 .child(
                     h_flex()
                         .items_center()
                         .gap_x_3()
                         .child(
                             svg()
-                                .h(px(40.))
-                                .w(px(128.))
+                                .h(logo_height)
+                                .w(logo_height * LOGO_ASPECT_RATIO)
                                 .text_color(window.text_style().color)
                                 .path("images/blanco.svg"),
                         )
-                        .child(self.app_menu_bar.clone()),
+                        .children(self.app_menu_bar.clone()),
                 )
                 .child(self.render_sidebar_toggle(cx)),
         )
@@ -1552,16 +1564,13 @@ impl BlancoApp {
                                         tracing::info!("Connection saved with ID: {connection_id}");
                                         let mut connection_data = conn_data;
                                         connection_data.id = Some(connection_id);
-                                        let credential_tasks = cx.update(|_, cx| {
-                                            connection_credentials::start_writing_connection(
+                                        if let Err(error) =
+                                            connection_credentials::write_connection(
                                                 connection_id,
                                                 &connection_data,
                                                 cx,
                                             )
-                                        })?;
-                                        if let Err(error) =
-                                            connection_credentials::finish_writing(credential_tasks)
-                                                .await
+                                            .await
                                         {
                                             if let Err(cleanup_error) = app_database
                                                 .delete_connection(connection_id)
@@ -1571,15 +1580,12 @@ impl BlancoApp {
                                                     "Failed to remove connection metadata after credential storage failed: {cleanup_error}"
                                                 );
                                             }
-                                            let cleanup_tasks = cx.update(|_, cx| {
-                                                connection_credentials::start_deleting_connection(
+                                            if let Err(cleanup_error) =
+                                                connection_credentials::delete_connection(
                                                     connection_id,
                                                     cx,
                                                 )
-                                            })?;
-                                            if let Err(cleanup_error) =
-                                                connection_credentials::finish_writing(cleanup_tasks)
-                                                    .await
+                                                .await
                                             {
                                                 tracing::error!(
                                                     "Failed to remove partially saved credentials: {cleanup_error}"
@@ -1757,15 +1763,12 @@ impl BlancoApp {
                                         );
                                         let mut connection_data = conn_data;
                                         connection_data.id = Some(connection_id);
-                                        let credential_tasks = cx.update(|_, cx| {
-                                            connection_credentials::start_writing_connection(
-                                                connection_id,
-                                                &connection_data,
-                                                cx,
-                                            )
-                                        })?;
-                                        connection_credentials::finish_writing(credential_tasks)
-                                            .await?;
+                                        connection_credentials::write_connection(
+                                            connection_id,
+                                            &connection_data,
+                                            cx,
+                                        )
+                                        .await?;
                                         if let Some(config) = connection_data.to_connection_config()
                                         {
                                             db_service
@@ -2079,6 +2082,9 @@ impl Render for BlancoApp {
     }
 }
 
+/// Width over height of `images/blanco.svg` (2304x512).
+const LOGO_ASPECT_RATIO: f32 = 4.5;
+
 fn init_menus(cx: &mut App) {
     // User-customizable shortcuts, resolved from settings (defaults overlaid
     // with any user overrides).
@@ -2160,22 +2166,42 @@ fn init_menus(cx: &mut App) {
 
     cx.set_menus(build_menu());
 
-    let menu = build_menu().into_iter().map(|menu| menu.owned()).collect();
-    GlobalState::global_mut(cx).set_app_menus(menu);
+    if !cfg!(target_os = "macos") {
+        let menu = build_menu().into_iter().map(|menu| menu.owned()).collect();
+        GlobalState::global_mut(cx).set_app_menus(menu);
+    }
 }
 
 fn build_menu() -> Vec<Menu> {
-    vec![
+    // macOS always shows the first menu as the application menu, titled with
+    // the app's name, and that is where Settings and Quit belong there.
+    let mut file_items = vec![
+        MenuItem::action("New Connection", OpenNewConnectionModal),
+        MenuItem::action("Toggle Terminal", OpenTerminal),
+        MenuItem::action("New Snippet", NewSnippet),
+    ];
+    let mut menus = Vec::new();
+    if cfg!(target_os = "macos") {
+        menus.push(Menu {
+            name: "Blanco".into(),
+            items: vec![
+                MenuItem::action("Settings…", OpenSettings),
+                MenuItem::separator(),
+                MenuItem::action("Quit Blanco", Quit),
+            ],
+            disabled: false,
+        });
+    } else {
+        file_items.extend([
+            MenuItem::action("Settings", OpenSettings),
+            MenuItem::separator(),
+            MenuItem::action("Quit", Quit),
+        ]);
+    }
+    menus.extend([
         Menu {
             name: "File".into(),
-            items: vec![
-                MenuItem::action("New Connection", OpenNewConnectionModal),
-                MenuItem::action("Toggle Terminal", OpenTerminal),
-                MenuItem::action("New Snippet", NewSnippet),
-                MenuItem::action("Settings", OpenSettings),
-                MenuItem::Separator,
-                MenuItem::action("Quit", Quit),
-            ],
+            items: file_items,
             disabled: false,
         },
         Menu {
@@ -2200,7 +2226,8 @@ fn build_menu() -> Vec<Menu> {
             ],
             disabled: false,
         },
-    ]
+    ]);
+    menus
 }
 
 #[cfg(test)]
