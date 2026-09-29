@@ -6,7 +6,7 @@ Blanco is a cross-platform SQL editor built with GPUI and gpui-component. It pro
 
 ## Getting Started
 
-The SQL grammar lives in the `crates/tree-sitter-sequel` git submodule, tracking the `main` branch of upstream `derekstride/tree-sitter-sql` (the crates.io release is far behind and missing grammar we rely on). Upstream gitignores the generated `src/parser.c` and `src/tree_sitter/*.h`, so they are produced locally and never committed. After cloning, run:
+The SQL grammar lives in the `crates/tree-sitter-sequel` git submodule, tracking the `drop-trigger-and-friends` branch of our fork `zanmato/tree-sitter-sql` (upstream `derekstride/tree-sitter-sql` plus grammar it lacks: `DROP TRIGGER` and the rest of the DROP family, standalone transaction control and savepoints, GRANT/REVOKE, utility statements, locking clauses and more, the crates.io release is further behind still). Grammar fixes go to that fork (on the `drop-trigger-and-friends` branch) with a corpus test, and the fork is rebased on upstream `main` to pick up their changes. Upstream gitignores the generated `src/parser.c` and `src/tree_sitter/*.h`, so they are produced locally and never committed. After cloning, run:
 
 ```bash
 ./scripts/setup.sh   # inits the submodule and runs `tree-sitter generate`

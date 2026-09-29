@@ -137,5 +137,7 @@ tree-sitter-sequel = { path = "crates/tree-sitter-sequel" }
 
 # To develop against a local gpui-component clone next to this repository, uncomment:
 # [patch."https://github.com/zanmato/gpui-component"]
-# gpui-component = { path = "../gpui-component/crates/ui" }
-# gpui-component-macros = { path = "../gpui-component/crates/macros" }
+# gpui-base = { path = "../gpui-component/crates/base" }
+# gpui-component = { path = "../gpui-component/crates/component" }
+# gpui-component-macros = { path = "../gpui-component/crates/component-macros" }
+# gpui-kit-assets = { path = "../gpui-component/crates/assets" }
