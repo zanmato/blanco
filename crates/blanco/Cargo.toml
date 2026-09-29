@@ -50,7 +50,6 @@ sqruff-lib = "0.34.1"
 sqruff-lib-dialects = "0.34.1"
 sqruff-lib-core = "0.34.1"
 ahash = "0.8"
-tikv-jemallocator = { workspace = true }
 
 # CSV import
 csv = "1"
@@ -68,6 +67,9 @@ axum = { version = "0.8", default-features = false, features = ["http1", "tokio"
 tower = "0.5"
 tokio-util = "0.7"
 schemars = "1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tikv-jemallocator = { workspace = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time"] }
