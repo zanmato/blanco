@@ -2,7 +2,7 @@
 
 Blanco is a native, cross platform SQL editor and database client built with
 [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) and
-[gpui-component](https://github.com/longbridge/gpui-component).
+[gpui-kit](https://github.com/longbridge/gpui-kit).
 
 Supported backends: PostgreSQL, MySQL/MariaDB, SQLite, SQL Server, ClickHouse
 and Redis.
@@ -29,6 +29,17 @@ and Redis.
 - SSH tunnels with `known_hosts` verification, TLS, credentials in the OS
   keychain.
 
+## Installing
+
+Prebuilt binaries for Linux (x86_64, plus a `.deb`), macOS (Apple silicon) and
+Windows (x86_64) are attached to each
+[release](https://github.com/zanmato/blanco/releases). On macOS you can use
+Homebrew:
+
+```bash
+brew install --cask zanmato/tap/blanco
+```
+
 ## Building
 
 Requirements: a recent stable Rust toolchain and the tree-sitter CLI
@@ -39,12 +50,6 @@ dependencies (X11/Wayland, Vulkan, fontconfig).
 ./scripts/setup.sh        # init the grammar submodule and generate parsers
 cargo run --release -p blanco
 ```
-
-`gpui` and `gpui-component` are git dependencies tracking a branch. `Cargo.lock`
-is the pin; bump deliberately with `cargo update -p gpui` and friends.
-
-A machine local `.cargo/config.toml` (for example to use `mold` as the linker)
-is gitignored, so contributor builds work without it.
 
 ## Layout
 
@@ -79,10 +84,6 @@ ssh-keyscan -p 2222 127.0.0.1 >> ~/.ssh/known_hosts
 
 Install the check script as a pre push hook with
 `ln -sf ../../scripts/check.sh .git/hooks/pre-push`.
-
-## Packaging
-
-`./scripts/package-deb` builds a Debian package into `build/`.
 
 ## Logs and data
 
