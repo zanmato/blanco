@@ -145,6 +145,22 @@ impl Connection for TokioConnection {
             .await
     }
 
+    async fn describe_query_columns(
+        &self,
+        query: &str,
+        database_name: Option<&str>,
+    ) -> Result<(Vec<String>, Vec<ColumnType>)> {
+        let inner = Arc::clone(&self.inner);
+        let query = query.to_string();
+        let database_name = database_name.map(str::to_string);
+        self.run(async move {
+            inner
+                .describe_query_columns(&query, database_name.as_deref())
+                .await
+        })
+        .await
+    }
+
     async fn execute_write(
         &self,
         query: &str,

@@ -492,7 +492,32 @@ impl EditorPanel {
                                 .flatten();
                             result.table_name = table_name.clone();
 
-                            if let (Some(table_name), false) = (&table_name, result.rows.is_empty())
+                            // Drivers learn the header from the first row, so a
+                            // read that matched nothing arrives without columns;
+                            // rebuild it so the grid can still add rows.
+                            if result.rows.is_empty()
+                                && result.columns.is_empty()
+                                && blanco_core::write_guard::classify(db_type, &query_for_metadata)
+                                    == StatementAccess::Read
+                            {
+                                match connection
+                                    .describe_query_columns(
+                                        &query_for_metadata,
+                                        Some(&database_name),
+                                    )
+                                    .await
+                                {
+                                    Ok((columns, column_types)) => {
+                                        result.columns = columns;
+                                        result.column_types = column_types;
+                                    }
+                                    Err(error) => {
+                                        tracing::warn!("Could not describe empty result: {error:#}");
+                                    }
+                                }
+                            }
+
+                            if let Some(table_name) = &table_name
                                 && let Ok(columns) =
                                     connection.get_columns_for_table(table_name, None).await
                             {

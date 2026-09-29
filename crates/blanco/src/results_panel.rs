@@ -906,6 +906,10 @@ impl ResultsPanel {
         self.commit_in_progress
     }
 
+    pub fn is_editable(&self, cx: &App) -> bool {
+        self.table_state.read(cx).delegate().is_editable()
+    }
+
     /// Generate the SQL statements that would be executed by Apply edits,
     /// without committing or executing anything.
     pub fn preview_pending_sql(&self, cx: &App) -> Vec<String> {

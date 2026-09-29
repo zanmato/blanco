@@ -5,7 +5,7 @@ use crate::app::{AddRow, DeleteRow, DuplicateRow, SetCellDefault, SetCellNull};
 
 impl ResultsPanel {
     pub fn add_new_row(&mut self, cx: &mut Context<Self>) {
-        if self.commit_in_progress {
+        if self.commit_in_progress || !self.table_state.read(cx).delegate().is_editable() {
             return;
         }
 

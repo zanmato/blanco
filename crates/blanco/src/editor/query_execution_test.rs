@@ -244,11 +244,10 @@ async fn test_empty_result_set(cx: &mut TestAppContext) {
     wait_for_query(&harness, &mut cx).await;
 
     assert_eq!(result_row_count(&harness, &cx), Some(0));
-    // Note: column metadata is currently lost for empty result sets in the
-    // stream-collect path, so the delegate ends up with no columns. Worth fixing
-    // separately; for now the test just guards against panics during rendering.
+    // The driver only learns the header from the first row, so the editor
+    // rebuilds it from the statement description when nothing matched.
     let columns = result_columns(&harness, &cx).expect("columns vec should be present");
-    assert!(columns.is_empty(), "got {columns:?}");
+    assert_eq!(columns, vec!["id".to_string(), "label".to_string()]);
 }
 
 /// Build a ParameterForm directly and confirm the substituted query is

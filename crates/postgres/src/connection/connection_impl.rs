@@ -5,7 +5,7 @@ use blanco_core::{
     QueryResult, RoutineKind,
 };
 use futures::{Stream, StreamExt};
-use sqlx::{Column, Row, TypeInfo};
+use sqlx::{Column, Executor, Row, TypeInfo};
 use std::sync::Arc;
 
 use super::{PgConnectionKey, PostgresConnection, QueryParam};
@@ -127,6 +127,35 @@ impl Connection for PostgresConnection {
         self.execute_script_inner(&pool, query).await.map_err(|e| {
             blanco_core::tag_sqlx_error(e).context("PostgreSQL script execution failed")
         })
+    }
+
+    async fn describe_query_columns(
+        &self,
+        query: &str,
+        database_name: Option<&str>,
+    ) -> Result<(Vec<String>, Vec<ColumnType>)> {
+        let database_name = database_name.ok_or(anyhow::anyhow!("missing database"))?;
+        let pool = self
+            .get_or_create_pool(database_name)
+            .await
+            .with_context(|| {
+                format!("Failed to get connection pool for database '{database_name}'")
+            })?;
+        let description = pool
+            .describe(query)
+            .await
+            .map_err(|e| blanco_core::tag_sqlx(e).context("PostgreSQL describe failed"))?;
+        let (columns, column_types) = description
+            .columns()
+            .iter()
+            .map(|col| {
+                (
+                    col.name().to_string(),
+                    PostgresConnection::map_postgres_type(col.type_info().name()),
+                )
+            })
+            .unzip();
+        Ok((columns, column_types))
     }
 
     async fn execute_write(

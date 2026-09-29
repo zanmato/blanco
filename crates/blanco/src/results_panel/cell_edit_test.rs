@@ -757,3 +757,116 @@ async fn compare_cells_opens_a_diff_dialog(cx: &mut TestAppContext) {
     );
     assert_eq!(kinds.first(), Some(&DiffRowKind::Equal));
 }
+
+/// A read that matches nothing still yields the table's header (rebuilt from
+/// the statement description), so "Add row" works on an empty table.
+#[gpui::test]
+async fn test_add_row_after_empty_result(cx: &mut TestAppContext) {
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    set_editor_text(
+        &harness,
+        "CREATE TABLE empty_items (id INTEGER PRIMARY KEY, v TEXT)",
+        &mut cx,
+    );
+    run_query(&harness, &mut cx);
+    wait_for_query(&harness, &mut cx).await;
+
+    set_editor_text(
+        &harness,
+        "SELECT * FROM empty_items WHERE v = 'first'",
+        &mut cx,
+    );
+    run_query(&harness, &mut cx);
+    wait_for_query(&harness, &mut cx).await;
+
+    let results_panel = harness.editor_panel.read_with(&cx, |panel, _| {
+        panel
+            .active_query_tab()
+            .expect("query tab should exist")
+            .results_panel
+            .clone()
+    });
+    let table_state = results_panel.read_with(&cx, |panel, _| panel.table_state().clone());
+
+    let (column_names, row_count) = table_state.read_with(&cx, |state, _| {
+        let delegate = state.delegate();
+        (
+            delegate
+                .columns
+                .iter()
+                .map(|column| column.name.to_string())
+                .collect::<Vec<_>>(),
+            delegate.rows.len(),
+        )
+    });
+    assert_eq!(row_count, 0);
+    assert_eq!(column_names, vec!["id".to_string(), "v".to_string()]);
+    assert!(
+        results_panel.read_with(&cx, |panel, cx| panel.is_editable(cx)),
+        "an empty single-table read should still be editable"
+    );
+
+    results_panel.update(&mut cx, |panel, cx| panel.add_new_row(cx));
+    cx.run_until_parked();
+
+    results_panel.update_in(&mut cx, |panel, window, cx| {
+        panel.start_cell_edit(0, 1, window, cx);
+    });
+    cx.run_until_parked();
+    let input = table_state.read_with(&cx, |state, _| {
+        match state
+            .delegate()
+            .edit_state
+            .get_editing_input()
+            .expect("editing input should exist")
+        {
+            CellInput::Inline(input) => input,
+            CellInput::Expanded(_) => panic!("a fresh cell edit is inline"),
+        }
+    });
+    input.update_in(&mut cx, |input, window, cx| {
+        input.replace_all("first", window, cx);
+    });
+    cx.run_until_parked();
+    results_panel.update(&mut cx, |panel, cx| panel.finalize_active_cell_edit(cx));
+    cx.run_until_parked();
+
+    let statements = results_panel.read_with(&cx, |panel, cx| panel.preview_pending_sql(cx));
+    assert_eq!(
+        statements.len(),
+        1,
+        "expected one INSERT, got {statements:?}"
+    );
+    assert!(
+        statements[0].ends_with(r#"("id", "v") VALUES (NULL, 'first')"#),
+        "INSERT should name the rebuilt columns, got {statements:?}"
+    );
+
+    harness
+        .editor_panel
+        .update_in(&mut cx, |panel, window, cx| {
+            panel.commit_current_changes(window, cx);
+        });
+
+    for _ in 0..100 {
+        cx.run_until_parked();
+        if result_cell(&harness, 0, 0, &cx) == Some(Some("1".to_string())) {
+            break;
+        }
+        cx.executor()
+            .timer(std::time::Duration::from_millis(20))
+            .await;
+    }
+
+    assert_eq!(
+        result_cell(&harness, 0, 0, &cx),
+        Some(Some("1".to_string())),
+        "refresh should surface the generated primary key"
+    );
+    assert_eq!(
+        result_cell(&harness, 0, 1, &cx),
+        Some(Some("first".to_string()))
+    );
+}

@@ -1035,3 +1035,129 @@ fn test_column_and_index_ddl_round_trip() {
             .unwrap_or_else(|error| panic!("{label}: drop: {error:#}"));
     }
 }
+
+/// `describe_query_columns` must return the header of a read that matches no
+/// rows, since the result-set path only learns columns from the first row.
+#[test]
+fn test_describe_query_columns_on_empty_result() {
+    use blanco_core::ColumnType;
+    use database::ConnectionConfig;
+
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let sqlite_path = temp_dir
+        .path()
+        .join("describe.db")
+        .to_string_lossy()
+        .to_string();
+
+    struct DescribeCase {
+        label: &'static str,
+        config: ConnectionConfig,
+        database: String,
+        create_table: &'static str,
+    }
+
+    let server = |case: &DriverCase, id: i64| {
+        ConnectionConfig::new(
+            id,
+            case.name.to_string(),
+            case.db_type,
+            case.host.clone(),
+            case.port.parse().expect("port"),
+            case.database.clone(),
+            case.username.clone(),
+            Some(case.password.clone()),
+        )
+    };
+    let postgres = postgres_case();
+    let mysql = mysql_case();
+    let mssql = mssql_case();
+    let cases = vec![
+        DescribeCase {
+            label: "SQLite",
+            config: ConnectionConfig::new_sqlite(9101, "describe-sqlite".to_string(), sqlite_path),
+            database: "main".to_string(),
+            create_table: "CREATE TABLE blanco_describe_test (id INTEGER PRIMARY KEY, label TEXT)",
+        },
+        DescribeCase {
+            label: postgres.label,
+            config: server(&postgres, 9102),
+            database: postgres.database.clone(),
+            create_table: "CREATE TABLE blanco_describe_test (id integer PRIMARY KEY, label text)",
+        },
+        DescribeCase {
+            label: mysql.label,
+            config: server(&mysql, 9103),
+            database: mysql.database.clone(),
+            create_table: "CREATE TABLE blanco_describe_test (id integer PRIMARY KEY, label text)",
+        },
+        DescribeCase {
+            label: mssql.label,
+            config: server(&mssql, 9104).with_trust_server_certificate(true),
+            database: mssql.database.clone(),
+            create_table: "CREATE TABLE blanco_describe_test (id integer PRIMARY KEY, label nvarchar(50))",
+        },
+    ];
+
+    let service = DatabaseService::new(runtime.handle().clone());
+
+    for case in cases {
+        let label = case.label;
+        let database = Some(case.database.as_str());
+        let connection = runtime.block_on(async {
+            service.add_connection_config(case.config.clone()).await;
+            let connection = service
+                .get_or_create_connection(case.config.id, database)
+                .await?;
+            connection.ping().await?;
+            anyhow::Ok(connection)
+        });
+        let connection = match connection {
+            Ok(connection) => connection,
+            Err(error) if strict() => panic!("{label}: server unreachable: {error:#}"),
+            Err(error) => {
+                eprintln!(
+                    "skip {label}: server unreachable ({error:#}). Set BLANCO_RUN_DB_TESTS=1 to require."
+                );
+                continue;
+            }
+        };
+
+        runtime
+            .block_on(connection.execute_write(
+                "DROP TABLE IF EXISTS blanco_describe_test",
+                database,
+                &[],
+            ))
+            .unwrap_or_else(|error| panic!("{label}: drop leftover: {error:#}"));
+        runtime
+            .block_on(connection.execute_write(case.create_table, database, &[]))
+            .unwrap_or_else(|error| panic!("{label}: create: {error:#}"));
+
+        let query = "SELECT * FROM blanco_describe_test WHERE id = -1";
+        let result = runtime
+            .block_on(connection.execute_script(query, database))
+            .unwrap_or_else(|error| panic!("{label}: query: {error:#}"));
+        assert_eq!(result.len(), 1, "{label}: one result set");
+        assert!(result[0].rows.is_empty(), "{label}: no rows");
+
+        let (columns, column_types) = runtime
+            .block_on(connection.describe_query_columns(query, database))
+            .unwrap_or_else(|error| panic!("{label}: describe: {error:#}"));
+        assert_eq!(
+            columns,
+            vec!["id".to_string(), "label".to_string()],
+            "{label}: column names"
+        );
+        assert_eq!(
+            column_types,
+            vec![ColumnType::Integer, ColumnType::Text],
+            "{label}: column types"
+        );
+
+        runtime
+            .block_on(connection.execute_write("DROP TABLE blanco_describe_test", database, &[]))
+            .unwrap_or_else(|error| panic!("{label}: drop: {error:#}"));
+    }
+}

@@ -558,6 +558,57 @@ impl Connection for MssqlConnection {
         })
     }
 
+    async fn describe_query_columns(
+        &self,
+        query: &str,
+        database_name: Option<&str>,
+    ) -> Result<(Vec<String>, Vec<ColumnType>)> {
+        let slot = self.client_slot(database_name).await;
+        let mut guard = slot.lock().await;
+        if guard.is_none() {
+            *guard = Some(self.establish(database_name).await?);
+        }
+        let client = guard.as_mut().expect("client established above");
+
+        // sp_describe_first_result_set compiles the batch without running it,
+        // unlike `query`, which would execute the statement a second time.
+        let rows = match async {
+            let stream = client
+                .query(
+                    "EXEC sp_describe_first_result_set @tsql = @P1, @params = NULL, @browse_information_mode = 0",
+                    &[&query],
+                )
+                .await?;
+            stream.into_first_result().await
+        }
+        .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                if is_connection_lost(&error) {
+                    *guard = None;
+                }
+                return Err(anyhow::anyhow!("MSSQL describe error: {error}"));
+            }
+        };
+        drop(guard);
+
+        let mut columns = Vec::with_capacity(rows.len());
+        let mut column_types = Vec::with_capacity(rows.len());
+        for row in &rows {
+            if row.try_get::<bool, _>("is_hidden")?.unwrap_or(false) {
+                continue;
+            }
+            let name = row.try_get::<&str, _>("name")?.unwrap_or_default();
+            let type_name = row
+                .try_get::<&str, _>("system_type_name")?
+                .unwrap_or_default();
+            columns.push(name.to_string());
+            column_types.push(Self::map_mssql_type(type_name));
+        }
+        Ok((columns, column_types))
+    }
+
     async fn execute_script(
         &self,
         query: &str,

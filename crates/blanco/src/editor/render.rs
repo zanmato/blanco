@@ -239,6 +239,7 @@ impl EditorPanel {
         // new drivers slot in automatically.
         let supports_sql = query_tab.context.db_type.supports_sql();
         let commit_in_progress = query_tab.results_panel.read(cx).is_commit_in_progress();
+        let rows_editable = query_tab.results_panel.read(cx).is_editable(cx);
 
         h_flex()
             .p_2()
@@ -262,7 +263,7 @@ impl EditorPanel {
                         .small()
                         .icon(IconName::Plus)
                         .label("Add")
-                        .disabled(commit_in_progress)
+                        .disabled(commit_in_progress || !rows_editable)
                         .on_click(cx.listener(|this, _, _window, cx| {
                             this.with_active_results_panel(cx, |panel, cx| {
                                 panel.add_new_row(cx);

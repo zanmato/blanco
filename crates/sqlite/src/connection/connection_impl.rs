@@ -5,7 +5,7 @@ use blanco_core::{
     connection_trait::ForeignKeyInfo, connection_trait::IndexInfo,
 };
 use futures::{Stream, StreamExt};
-use sqlx::{Column, Row, TypeInfo};
+use sqlx::{Column, Executor, Row, TypeInfo};
 use std::collections::HashMap;
 
 use super::{SqliteConnection, SqliteConnectionKey, convert_sqlite_row_value_to_string};
@@ -67,6 +67,29 @@ impl Connection for SqliteConnection {
         _database_name: Option<&str>,
     ) -> Result<Vec<QueryResult>> {
         self.execute_script_async(query).await
+    }
+
+    async fn describe_query_columns(
+        &self,
+        query: &str,
+        _database_name: Option<&str>,
+    ) -> Result<(Vec<String>, Vec<ColumnType>)> {
+        let pool = self
+            .pool
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Not connected to database"))?;
+        let description = pool.describe(query).await?;
+        let (columns, column_types) = description
+            .columns()
+            .iter()
+            .map(|col| {
+                (
+                    col.name().to_string(),
+                    SqliteConnection::map_sqlite_type(col.type_info().name()),
+                )
+            })
+            .unzip();
+        Ok((columns, column_types))
     }
 
     async fn execute_write(

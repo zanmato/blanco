@@ -5,7 +5,7 @@ use blanco_core::{
     connection_trait::ForeignKeyInfo, connection_trait::IndexInfo, connection_trait::RoutineKind,
 };
 use futures::{Stream, StreamExt};
-use sqlx::{Column, Row};
+use sqlx::{Column, Executor, Row};
 
 use super::{MysqlConnection, MysqlConnectionKey};
 
@@ -214,6 +214,29 @@ impl Connection for MysqlConnection {
         }
 
         Ok(out)
+    }
+
+    async fn describe_query_columns(
+        &self,
+        query: &str,
+        database_name: Option<&str>,
+    ) -> Result<(Vec<String>, Vec<ColumnType>), anyhow::Error> {
+        let database = database_name
+            .or(self.initial_database.as_deref())
+            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+        let pool = self.get_or_create_pool(database).await?;
+        let description = pool.describe(query).await.map_err(blanco_core::tag_sqlx)?;
+        let (columns, column_types) = description
+            .columns()
+            .iter()
+            .map(|col| {
+                (
+                    col.name().to_string(),
+                    Self::map_mysql_type(&col.type_info().to_string()),
+                )
+            })
+            .unzip();
+        Ok((columns, column_types))
     }
 
     async fn execute_write(

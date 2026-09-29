@@ -448,6 +448,21 @@ pub trait Connection: Send + Sync {
         Ok(outcome)
     }
 
+    /// Column names and types a read query would produce, without executing
+    /// it. Result-set drivers only learn the header from the first row, so a
+    /// statement that matches nothing comes back with no columns; the editor
+    /// uses this to rebuild the header so the grid can still add rows. The
+    /// default returns nothing, which is right for backends whose results
+    /// already carry the header regardless of row count (ClickHouse) or that
+    /// have no tabular schema (Redis).
+    async fn describe_query_columns(
+        &self,
+        _query: &str,
+        _database_name: Option<&str>,
+    ) -> Result<(Vec<String>, Vec<ColumnType>), anyhow::Error> {
+        Ok((Vec::new(), Vec::new()))
+    }
+
     /// Execute a query and return a true stream of rows for large datasets
     /// Returns a stream of row data (Vec<String>) that can be processed incrementally
     async fn execute_query_stream_rows(
