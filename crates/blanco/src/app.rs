@@ -1,9 +1,11 @@
 use blanco_ui::{IconName as BlancoIcon, SqlView, SqlViewMessage};
+use std::cell::Cell;
 use std::collections::VecDeque;
+use std::rc::Rc;
 
 use crate::mcp::McpService;
 use crate::mcp::bridge::{
-    ConfirmReply, McpRequest, Reply as McpReply, WriteConfirmation, send_reply,
+    ConfirmReply, McpRequest, Reply as McpReply, WriteAnswer, WriteConfirmation, send_reply,
 };
 use gpui::{
     Action, App, AppContext, BorrowAppContext, Context, Entity, FocusHandle, Focusable,
@@ -11,7 +13,7 @@ use gpui::{
     Subscription, Task, Window, actions, div, prelude::FluentBuilder, px, svg,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Root, Sizable as _, TitleBar, WindowExt as _,
+    ActiveTheme, Disableable as _, Icon, IconName, Sizable as _, TitleBar, WindowExt as _,
     button::{Button, ButtonVariants as _},
     dialog::{DialogAction, DialogClose, DialogFooter},
     global_state::GlobalState,
@@ -341,6 +343,9 @@ impl SidebarTab {
     }
 }
 
+/// An MCP write waiting for the user, with the channel its tool call awaits.
+type QueuedConfirmation = (WriteConfirmation, channel::Sender<WriteAnswer>);
+
 pub struct BlancoApp {
     focus_handle: FocusHandle,
     sidebar: Entity<ConnectionsPanel>,
@@ -363,6 +368,10 @@ pub struct BlancoApp {
     /// `run_tab` callers waiting for their query tab's run to end, matched to
     /// `EditorPanelEvent::QueryRunEnded` by tab index in arrival order.
     mcp_run_replies: VecDeque<(usize, McpReply<serde_json::Value>)>,
+    /// Write confirmations waiting for their turn; see
+    /// `spawn_mcp_confirmation_queue`.
+    mcp_confirmations: channel::Sender<QueuedConfirmation>,
+    _mcp_confirmation_task: Task<()>,
 }
 
 impl BlancoApp {
@@ -372,6 +381,8 @@ impl BlancoApp {
         let action_task = Self::spawn_service_listener(cx);
         let (status_bar, activity_task) = Self::spawn_activity_status(cx);
         let mcp_task = Self::spawn_mcp_listener(window, cx);
+        let (mcp_confirmations, mcp_confirmation_task) =
+            Self::spawn_mcp_confirmation_queue(window, cx);
 
         let sidebar = cx.new(|cx| ConnectionsPanel::new(window, cx));
         let snippets_panel = cx.new(|cx| SnippetsPanel::new(window, cx));
@@ -416,6 +427,8 @@ impl BlancoApp {
             _save_window_bounds_task: Task::ready(()),
             _mcp_task: mcp_task,
             mcp_run_replies: VecDeque::new(),
+            mcp_confirmations,
+            _mcp_confirmation_task: mcp_confirmation_task,
         }
     }
 
@@ -438,6 +451,72 @@ impl BlancoApp {
             }
             info!("MCP bridge listener ended");
         })
+    }
+
+    /// Show MCP write confirmations one at a time. Agents running in parallel
+    /// can ask at once, and stacking their dialogs would put a newer statement
+    /// under the pointer just as the user clicks Run on the one they read.
+    fn spawn_mcp_confirmation_queue(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (channel::Sender<QueuedConfirmation>, Task<()>) {
+        let (sender, receiver) = channel::unbounded::<QueuedConfirmation>();
+        let task = cx.spawn_in(window, async move |weak_app, cx| {
+            while let Ok((confirmation, reply)) = receiver.recv().await {
+                // The tool call timed out or its MCP session ended while queued.
+                if reply.is_closed() {
+                    continue;
+                }
+                let (answer_sender, answer_receiver) = channel::bounded(1);
+                let abandoned = Rc::new(Cell::new(false));
+                if weak_app
+                    .update_in(cx, |app, window, cx| {
+                        app.show_mcp_write_confirmation(
+                            confirmation,
+                            ConfirmReply::new(answer_sender),
+                            receiver.clone(),
+                            abandoned.clone(),
+                            window,
+                            cx,
+                        );
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+                let answer = smol::future::or(
+                    async { Some(answer_receiver.recv().await.unwrap_or(WriteAnswer::Refuse)) },
+                    async {
+                        reply.closed().await;
+                        None
+                    },
+                )
+                .await;
+                match answer {
+                    Some(answer) => {
+                        if reply.try_send(answer).is_err() {
+                            tracing::warn!(
+                                "MCP write confirmation arrived after the tool call gave up"
+                            );
+                        }
+                    }
+                    None => {
+                        // Closing it from here could pop a dialog the user
+                        // opened on top, so it stays up with Run disabled
+                        // until they dismiss it.
+                        abandoned.set(true);
+                        if weak_app
+                            .update_in(cx, |_, window, _| window.refresh())
+                            .is_err()
+                        {
+                            break;
+                        }
+                        answer_receiver.recv().await.ok();
+                    }
+                }
+            }
+        });
+        (sender, task)
     }
 
     fn handle_mcp_request(
@@ -526,12 +605,15 @@ impl BlancoApp {
                 confirmation,
                 reply,
             } => {
-                self.show_mcp_write_confirmation(
-                    confirmation,
-                    ConfirmReply::new(reply),
-                    window,
-                    cx,
-                );
+                if self
+                    .mcp_confirmations
+                    .try_send((confirmation, reply))
+                    .is_err()
+                {
+                    error!("MCP confirmation queue is closed; the write was refused");
+                }
+                // Refresh the open dialog's count of waiting requests.
+                window.refresh();
             }
         }
     }
@@ -550,13 +632,16 @@ impl BlancoApp {
         }
     }
 
-    /// The dialog an MCP write waits on. Run answers `true`; Cancel, Escape,
-    /// the backdrop, or the dialog going away for any other reason answer
-    /// `false` through `ConfirmReply`'s drop.
+    /// The dialog an MCP write waits on. Run and "Don't ask again" run it;
+    /// Cancel, Escape, or the dialog going away for any other reason refuse
+    /// through `ConfirmReply`'s drop. Clicking the backdrop does nothing, because the
+    /// click that focuses Blanco's window would otherwise refuse the write.
     fn show_mcp_write_confirmation(
         &mut self,
         confirmation: WriteConfirmation,
         reply: ConfirmReply,
+        waiting: channel::Receiver<QueuedConfirmation>,
+        abandoned: Rc<Cell<bool>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -585,11 +670,25 @@ impl BlancoApp {
             view.append_text(&SqlViewMessage::SqlStatement(confirmation.sql), cx);
             view
         });
+        let remember_label = (!confirmation.rememberable_kinds.is_empty()).then(|| {
+            format!(
+                "Don't ask again for {}",
+                confirmation.rememberable_kinds.join(", ")
+            )
+        });
+        let remember_tooltip = format!(
+            "Run it, and let this agent run these statements on {} without asking until it disconnects",
+            confirmation.connection_name
+        );
         window.open_dialog(cx, move |dialog, _, cx| {
             let reply_on_run = reply.clone();
+            let reply_on_remember = reply.clone();
             let reply_on_close = reply.clone();
+            let abandoned = abandoned.get();
+            let waiting_count = waiting.len();
             dialog
                 .title(title)
+                .overlay_closable(false)
                 .child(
                     v_flex()
                         .gap_2()
@@ -610,7 +709,24 @@ impl BlancoApp {
                                 .border_1()
                                 .border_color(cx.theme().border)
                                 .child(sql_view.clone()),
-                        ),
+                        )
+                        .when(abandoned, |this| {
+                            this.child(div().text_sm().text_color(cx.theme().danger).child(
+                                "The agent stopped waiting for an answer. The statement will not run.",
+                            ))
+                        })
+                        .when(waiting_count > 0, |this| {
+                            this.child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(if waiting_count == 1 {
+                                        "1 more request is waiting.".to_string()
+                                    } else {
+                                        format!("{waiting_count} more requests are waiting.")
+                                    }),
+                            )
+                        }),
                 )
                 .footer(
                     DialogFooter::new()
@@ -618,16 +734,31 @@ impl BlancoApp {
                             DialogClose::new()
                                 .child(Button::new("mcp-write-cancel").label("Cancel").outline()),
                         )
+                        .when_some(remember_label.clone(), |footer, label| {
+                            footer.child(
+                                DialogAction::new().child(
+                                    Button::new("mcp-write-remember")
+                                        .outline()
+                                        .label(label)
+                                        .tooltip(remember_tooltip.clone())
+                                        .disabled(abandoned)
+                                        .on_click(move |_, _, _| {
+                                            reply_on_remember.answer(WriteAnswer::RunAndRemember)
+                                        }),
+                                ),
+                            )
+                        })
                         .child(
                             DialogAction::new().child(
                                 Button::new("mcp-write-run")
                                     .danger()
                                     .label(if is_prod { "Run on PROD" } else { "Run" })
-                                    .on_click(move |_, _, _| reply_on_run.answer(true)),
+                                    .disabled(abandoned)
+                                    .on_click(move |_, _, _| reply_on_run.answer(WriteAnswer::Run)),
                             ),
                         ),
                 )
-                .on_close(move |_, _, _| reply_on_close.answer(false))
+                .on_close(move |_, _, _| reply_on_close.answer(WriteAnswer::Refuse))
         });
     }
 
@@ -1966,10 +2097,6 @@ impl Focusable for BlancoApp {
 
 impl Render for BlancoApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let sheet_layer = Root::render_sheet_layer(window, cx);
-        let dialog_layer = Root::render_dialog_layer(window, cx);
-        let notification_layer = Root::render_notification_layer(window, cx);
-
         div()
             .track_focus(&self.focus_handle)
             .key_context("BlancoApp")
@@ -2076,9 +2203,6 @@ impl Render for BlancoApp {
             // Status bar pinned to the bottom, spanning the full window width.
             .child(self.render_status_bar(cx))
             .child(self.command_palette.clone())
-            .children(sheet_layer)
-            .children(dialog_layer)
-            .children(notification_layer)
     }
 }
 
@@ -2282,5 +2406,74 @@ mod tests {
             assert!(!app.sidebar_collapsed());
             assert_eq!(app.sidebar_tab(), SidebarTab::Snippets);
         });
+    }
+
+    fn request_write_confirmation(
+        app: &Entity<BlancoApp>,
+        sql: &str,
+        cx: &mut VisualTestContext,
+    ) -> channel::Receiver<WriteAnswer> {
+        let (reply, receiver) = channel::bounded(1);
+        let confirmation = WriteConfirmation {
+            connection_name: "test".into(),
+            database_name: "main".into(),
+            environment: None,
+            language: "sql",
+            sql: sql.to_string(),
+            rememberable_kinds: vec!["DELETE".to_string()],
+        };
+        app.update_in(cx, |app, window, cx| {
+            app.handle_mcp_request(
+                McpRequest::ConfirmWrite {
+                    confirmation,
+                    reply,
+                },
+                window,
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        receiver
+    }
+
+    fn dismiss_dialog(cx: &mut VisualTestContext) {
+        cx.update(|window, cx| window.close_dialog(cx));
+        cx.run_until_parked();
+    }
+
+    fn has_dialog(cx: &mut VisualTestContext) -> bool {
+        cx.update(|window, cx| window.has_active_dialog(cx))
+    }
+
+    #[gpui::test]
+    async fn test_mcp_write_confirmations_are_shown_one_at_a_time(cx: &mut TestAppContext) {
+        let harness = FullAppHarness::new(cx);
+        let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+        let app = harness.app;
+        // Startup can open a dialog of its own; start from an empty stack.
+        cx.run_until_parked();
+        cx.update(|window, cx| window.close_all_dialogs(cx));
+
+        let first = request_write_confirmation(&app, "DELETE FROM a", &mut cx);
+        let second = request_write_confirmation(&app, "DELETE FROM b", &mut cx);
+        let abandoned = request_write_confirmation(&app, "DELETE FROM c", &mut cx);
+        drop(abandoned);
+        let fourth = request_write_confirmation(&app, "DELETE FROM d", &mut cx);
+        assert!(has_dialog(&mut cx));
+
+        // Stacked dialogs would close the newest first.
+        dismiss_dialog(&mut cx);
+        assert_eq!(first.try_recv(), Ok(WriteAnswer::Refuse));
+        assert!(second.try_recv().is_err(), "second is still waiting");
+        assert!(has_dialog(&mut cx), "the second request is shown next");
+
+        dismiss_dialog(&mut cx);
+        assert_eq!(second.try_recv(), Ok(WriteAnswer::Refuse));
+
+        // The request whose caller gave up while queued is skipped.
+        assert!(has_dialog(&mut cx));
+        dismiss_dialog(&mut cx);
+        assert_eq!(fourth.try_recv(), Ok(WriteAnswer::Refuse));
+        assert!(!has_dialog(&mut cx));
     }
 }

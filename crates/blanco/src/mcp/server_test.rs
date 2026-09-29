@@ -2,8 +2,8 @@
 //! server over the streamable HTTP transport, with the foreground bridge
 //! answered by a test task.
 
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 
 use app_database::AppDatabase;
 use database::{ConnectionConfig, DatabaseService};
@@ -13,12 +13,15 @@ use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use tokio_util::sync::CancellationToken;
 
-use super::bridge::{McpBridgeClient, McpRequest, TabSummary, send_reply};
+use super::bridge::{McpBridgeClient, McpRequest, TabSummary, WriteAnswer, send_reply};
 use super::server::{BlancoMcpServer, bind, serve};
 
 struct TestServer {
     port: u16,
     token: String,
+    /// `rememberable_kinds` of every write confirmation the fake foreground
+    /// was asked for, in order. It answers each with `RunAndRemember`.
+    confirmations: Arc<Mutex<Vec<Vec<String>>>>,
     cancellation: CancellationToken,
     _bridge_task: tokio::task::JoinHandle<()>,
     _serve_task: tokio::task::JoinHandle<anyhow::Result<()>>,
@@ -33,6 +36,7 @@ impl Drop for TestServer {
 /// Start a server on a free port, backed by an in-memory app database holding
 /// one SQLite connection, with a fake foreground that answers `ListTabs`.
 async fn start_test_server() -> TestServer {
+    let confirmations = Arc::new(Mutex::new(Vec::new()));
     let runtime_handle = tokio::runtime::Handle::current();
     let app_database = AppDatabase::new_in_memory(runtime_handle.clone())
         .await
@@ -50,35 +54,50 @@ async fn start_test_server() -> TestServer {
         .await;
 
     let (client, receiver) = McpBridgeClient::channel();
-    let bridge_task = tokio::spawn(async move {
-        while let Ok(request) = receiver.recv().await {
-            match request {
-                McpRequest::ListTabs { reply } => send_reply(
-                    &reply,
-                    Ok(vec![TabSummary {
-                        index: 0,
-                        id: Some(42),
-                        title: "Fake tab".to_string(),
-                        kind: "query",
-                        active: true,
-                        connection: None,
-                    }]),
-                ),
-                McpRequest::ReadTab { reply, .. } => {
-                    send_reply(&reply, Err("no tabs in this test".to_string()))
+    let bridge_task = tokio::spawn({
+        let confirmations = confirmations.clone();
+        async move {
+            while let Ok(request) = receiver.recv().await {
+                match request {
+                    McpRequest::ListTabs { reply } => send_reply(
+                        &reply,
+                        Ok(vec![TabSummary {
+                            index: 0,
+                            id: Some(42),
+                            title: "Fake tab".to_string(),
+                            kind: "query",
+                            active: true,
+                            connection: None,
+                        }]),
+                    ),
+                    McpRequest::ReadTab { reply, .. } => {
+                        send_reply(&reply, Err("no tabs in this test".to_string()))
+                    }
+                    McpRequest::TabConnection { reply, .. } => send_reply(
+                        &reply,
+                        Ok(super::bridge::TabConnection {
+                            connection_id: 1,
+                            connection_name: "test".to_string(),
+                            db_type: "SQLite".to_string(),
+                            database: "main".to_string(),
+                            schema: None,
+                            environment: None,
+                        }),
+                    ),
+                    McpRequest::ConfirmWrite {
+                        confirmation,
+                        reply,
+                    } => {
+                        confirmations
+                            .lock()
+                            .expect("confirmations lock")
+                            .push(confirmation.rememberable_kinds);
+                        reply
+                            .try_send(WriteAnswer::RunAndRemember)
+                            .expect("answer the confirmation");
+                    }
+                    _ => {}
                 }
-                McpRequest::TabConnection { reply, .. } => send_reply(
-                    &reply,
-                    Ok(super::bridge::TabConnection {
-                        connection_id: 1,
-                        connection_name: "test".to_string(),
-                        db_type: "SQLite".to_string(),
-                        database: "main".to_string(),
-                        schema: None,
-                        environment: None,
-                    }),
-                ),
-                _ => {}
             }
         }
     });
@@ -98,6 +117,7 @@ async fn start_test_server() -> TestServer {
     TestServer {
         port,
         token,
+        confirmations,
         cancellation,
         _bridge_task: bridge_task,
         _serve_task: serve_task,
@@ -240,4 +260,59 @@ async fn lists_tools_and_calls_them_over_http() {
     assert_eq!(missing_connection.is_error, Some(true));
 
     client.cancel().await.expect("close client");
+}
+
+async fn connect(server: &TestServer) -> rmcp::service::RunningService<rmcp::RoleClient, ()> {
+    let url = format!("http://127.0.0.1:{}/mcp", server.port);
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(url).auth_header(server.token.clone()),
+    );
+    ().serve(transport)
+        .await
+        .expect("initialize against the server")
+}
+
+async fn run_sql(client: &rmcp::service::RunningService<rmcp::RoleClient, ()>, sql: &str) {
+    let result = client
+        .call_tool(CallToolRequestParams::new("run_sql").with_arguments(
+            serde_json::Map::from_iter([
+                ("connection_id".to_string(), serde_json::json!(1)),
+                ("sql".to_string(), serde_json::json!(sql)),
+            ]),
+        ))
+        .await
+        .expect("call run_sql");
+    assert_ne!(result.is_error, Some(true), "{sql}: {result:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remembered_write_kinds_skip_the_dialog_for_that_session_only() {
+    let server = start_test_server().await;
+    let asked = || server.confirmations.lock().expect("lock").clone();
+
+    let first = connect(&server).await;
+    run_sql(&first, "CREATE TABLE items (id INTEGER)").await;
+    run_sql(&first, "INSERT INTO items VALUES (1)").await;
+    run_sql(&first, "INSERT INTO items VALUES (2)").await;
+    assert_eq!(asked(), [vec!["CREATE"], vec!["INSERT"]]);
+
+    // A mix still asks for the kind that was never granted.
+    run_sql(
+        &first,
+        "INSERT INTO items VALUES (3); UPDATE items SET id = 4",
+    )
+    .await;
+    assert_eq!(asked().len(), 3);
+    assert_eq!(asked()[2], ["INSERT", "UPDATE"]);
+
+    // Destructive DDL is never rememberable, even once asked.
+    run_sql(&first, "DROP TABLE items").await;
+    assert_eq!(asked()[3], Vec::<String>::new());
+
+    let second = connect(&server).await;
+    run_sql(&second, "CREATE TABLE other (id INTEGER)").await;
+    assert_eq!(asked().len(), 5, "a new session starts without grants");
+
+    first.cancel().await.expect("close first client");
+    second.cancel().await.expect("close second client");
 }

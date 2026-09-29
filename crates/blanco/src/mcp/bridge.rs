@@ -108,6 +108,18 @@ pub(crate) struct WriteConfirmation {
     /// Registered highlighter language for the connection's dialect.
     pub language: &'static str,
     pub sql: String,
+    /// Write kinds (`INSERT`, `UPDATE`, ...) the user may approve for the rest
+    /// of the agent's session. Empty when the dialog offers no such choice.
+    pub rememberable_kinds: Vec<String>,
+}
+
+/// The user's answer to a write confirmation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WriteAnswer {
+    Refuse,
+    Run,
+    /// Run, and stop asking for these write kinds in this MCP session.
+    RunAndRemember,
 }
 
 pub(crate) enum McpRequest {
@@ -148,10 +160,10 @@ pub(crate) enum McpRequest {
         tab: TabSelector,
         reply: Reply<serde_json::Value>,
     },
-    /// Ask the user whether a write may run. `true` when they click Run.
+    /// Ask the user whether a write may run.
     ConfirmWrite {
         confirmation: WriteConfirmation,
-        reply: smol::channel::Sender<bool>,
+        reply: smol::channel::Sender<WriteAnswer>,
     },
 }
 
@@ -189,7 +201,7 @@ impl McpBridgeClient {
     pub(crate) async fn confirm_write(
         &self,
         confirmation: WriteConfirmation,
-    ) -> Result<bool, String> {
+    ) -> Result<WriteAnswer, String> {
         let (reply, receiver) = smol::channel::bounded(1);
         self.sender
             .send(McpRequest::ConfirmWrite {
@@ -214,21 +226,21 @@ pub(crate) fn send_reply<T>(reply: &Reply<T>, result: Result<T, String>) {
     }
 }
 
-/// The confirm dialog's answer, shared by its Run button and its close path.
+/// The confirm dialog's answer, shared by its buttons and its close path.
 /// Whichever fires first wins, and dropping the last handle without an answer
 /// (the dialog was dismissed some other way) counts as a refusal, so the
 /// waiting tool call always gets an answer.
 #[derive(Clone)]
-pub(crate) struct ConfirmReply(Rc<RefCell<Option<smol::channel::Sender<bool>>>>);
+pub(crate) struct ConfirmReply(Rc<RefCell<Option<smol::channel::Sender<WriteAnswer>>>>);
 
 impl ConfirmReply {
-    pub(crate) fn new(sender: smol::channel::Sender<bool>) -> Self {
+    pub(crate) fn new(sender: smol::channel::Sender<WriteAnswer>) -> Self {
         Self(Rc::new(RefCell::new(Some(sender))))
     }
 
-    pub(crate) fn answer(&self, allowed: bool) {
+    pub(crate) fn answer(&self, answer: WriteAnswer) {
         if let Some(sender) = self.0.borrow_mut().take()
-            && sender.try_send(allowed).is_err()
+            && sender.try_send(answer).is_err()
         {
             tracing::warn!("MCP write confirmation arrived after the tool call gave up");
         }
@@ -238,7 +250,7 @@ impl ConfirmReply {
 impl Drop for ConfirmReply {
     fn drop(&mut self) {
         if Rc::strong_count(&self.0) == 1 {
-            self.answer(false);
+            self.answer(WriteAnswer::Refuse);
         }
     }
 }

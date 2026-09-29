@@ -18,17 +18,21 @@ use database::{ConnectionConfig, DatabaseService, DatabaseServiceTrait};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerInfo};
+use rmcp::service::RequestContext;
+use rmcp::transport::common::http_header::HEADER_SESSION_ID;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
-use rmcp::{ErrorData, ServerHandler, tool, tool_handler, tool_router};
+use rmcp::{ErrorData, RoleServer, ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
-use super::bridge::{McpBridgeClient, McpRequest, TabEdit, TabSelector, WriteConfirmation};
+use super::bridge::{
+    McpBridgeClient, McpRequest, TabEdit, TabSelector, WriteAnswer, WriteConfirmation,
+};
 use super::tools::{
-    DEFAULT_MAX_ROWS, MAX_ROWS_LIMIT, WritePolicy, contains_destructive_ddl, run_sql_json,
-    write_policy,
+    DEFAULT_MAX_ROWS, MAX_ROWS_LIMIT, SessionGrants, WritePolicy, contains_destructive_ddl,
+    run_sql_json, write_policy,
 };
 use crate::editor::tab_access::WriteOperation;
 
@@ -55,6 +59,9 @@ pub(crate) struct BlancoMcpServer {
     db_service: Arc<DatabaseService>,
     app_database: AppDatabase,
     allow_writes: Arc<AtomicBool>,
+    /// Fresh for every handler rmcp builds, which is one per MCP session; see
+    /// `for_new_session`.
+    session_grants: Arc<SessionGrants>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -231,13 +238,22 @@ impl BlancoMcpServer {
             db_service,
             app_database,
             allow_writes,
+            session_grants: Arc::default(),
             tool_router: Self::tool_router(),
         }
     }
 
+    /// The handler for a new MCP session: shared services, no write grants.
+    fn for_new_session(&self) -> Self {
+        Self {
+            session_grants: Arc::default(),
+            ..self.clone()
+        }
+    }
+
     /// Pick the connection a tool works against: an explicit id, else the
-    /// connection of the given (or active) tab, whose database also fills in
-    /// when none was passed.
+    /// connection of the given (or active) tab. When no database was passed,
+    /// the tab's database fills in as long as the tab is on that connection.
     async fn resolve_connection(
         &self,
         connection_id: Option<i64>,
@@ -245,6 +261,30 @@ impl BlancoMcpServer {
         tab: Option<TabSelector>,
     ) -> Result<ResolvedConnection, String> {
         let connection_id = match connection_id {
+            // Agents pass the id they were started with, and on a multi
+            // database server the connection's configured database is rarely
+            // the one the tab was opened on.
+            Some(connection_id) if database.is_none() => {
+                match self
+                    .bridge_request(
+                        |reply| McpRequest::TabConnection {
+                            tab: tab.unwrap_or_default(),
+                            reply,
+                        },
+                        TAB_REQUEST_TIMEOUT,
+                    )
+                    .await
+                {
+                    Ok(tab_connection) if tab_connection.connection_id == connection_id => {
+                        database = Some(tab_connection.database);
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        tracing::debug!("No tab database for connection {connection_id}: {error}");
+                    }
+                }
+                connection_id
+            }
             Some(connection_id) => connection_id,
             None => {
                 let tab_connection = self
@@ -299,7 +339,12 @@ impl BlancoMcpServer {
 
     /// Apply the write policy to `sql`, asking the user when needed. `Ok(())`
     /// means the statement may run.
-    async fn authorize(&self, connection: &ResolvedConnection, sql: &str) -> Result<(), String> {
+    async fn authorize(
+        &self,
+        connection: &ResolvedConnection,
+        sql: &str,
+        request: &RequestContext<RoleServer>,
+    ) -> Result<(), String> {
         let access = blanco_core::write_guard::classify(connection.config.db_type, sql);
         if access == StatementAccess::Read {
             return Ok(());
@@ -310,23 +355,34 @@ impl BlancoMcpServer {
                 connection.config.name
             ));
         }
+        let kinds = blanco_core::write_guard::write_kinds(connection.config.db_type, sql);
+        let destructive = contains_destructive_ddl(sql);
+        let is_prod = connection.is_prod();
+        let in_session = is_session_request(request);
+        let remembered = in_session && self.session_grants.covers(connection.config.id, &kinds);
         let policy = write_policy(
             access,
-            contains_destructive_ddl(sql),
-            connection.is_prod(),
-            self.allow_writes.load(Ordering::Relaxed),
+            destructive,
+            is_prod,
+            self.allow_writes.load(Ordering::Relaxed) || remembered,
         );
         if policy == WritePolicy::Run {
             return Ok(());
         }
+        let rememberable_kinds = if in_session && !is_prod && !destructive {
+            kinds
+        } else {
+            Vec::new()
+        };
         let confirmation = WriteConfirmation {
             connection_name: connection.config.name.clone(),
             database_name: connection.database.clone(),
             environment: connection.environment,
             language: connection.config.db_type.dialect().editor_language(),
             sql: sql.to_string(),
+            rememberable_kinds: rememberable_kinds.clone(),
         };
-        let allowed = tokio::time::timeout(
+        let answer = tokio::time::timeout(
             CONFIRM_TIMEOUT,
             self.bridge.confirm_write(confirmation),
         )
@@ -335,12 +391,28 @@ impl BlancoMcpServer {
             "The user did not answer the confirmation dialog in time; the statement was not run."
                 .to_string()
         })??;
-        if allowed {
-            Ok(())
-        } else {
-            Err("The user declined to run this statement in Blanco.".to_string())
+        match answer {
+            WriteAnswer::Run => Ok(()),
+            WriteAnswer::RunAndRemember => {
+                self.session_grants
+                    .grant(connection.config.id, &rememberable_kinds);
+                Ok(())
+            }
+            WriteAnswer::Refuse => {
+                Err("The user declined to run this statement in Blanco.".to_string())
+            }
         }
     }
+}
+
+/// rmcp builds one handler per session, but a client on the stateless protocol
+/// gets a fresh handler for every request, where a remembered grant would be
+/// dropped before the next call. Only offer to remember inside a session.
+fn is_session_request(request: &RequestContext<RoleServer>) -> bool {
+    request
+        .extensions
+        .get::<axum::http::request::Parts>()
+        .is_some_and(|parts| parts.headers.contains_key(HEADER_SESSION_ID))
 }
 
 #[tool_router]
@@ -534,6 +606,7 @@ impl BlancoMcpServer {
     async fn run_sql(
         &self,
         Parameters(params): Parameters<RunSqlParams>,
+        request: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let connection = match self
             .resolve_connection(params.connection_id, params.database, params.tab)
@@ -542,7 +615,7 @@ impl BlancoMcpServer {
             Ok(connection) => connection,
             Err(error) => return tool_error(error),
         };
-        if let Err(error) = self.authorize(&connection, &params.sql).await {
+        if let Err(error) = self.authorize(&connection, &params.sql, &request).await {
             return tool_error(error);
         }
         let max_rows = clamp_max_rows(params.max_rows);
@@ -572,6 +645,7 @@ impl BlancoMcpServer {
     async fn explain_query(
         &self,
         Parameters(params): Parameters<ExplainParams>,
+        request: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let connection = match self
             .resolve_connection(params.connection_id, params.database, params.tab)
@@ -582,7 +656,7 @@ impl BlancoMcpServer {
         };
         // Some backends execute the statement to explain it, so the inner SQL
         // is authorized like a run.
-        if let Err(error) = self.authorize(&connection, &params.sql).await {
+        if let Err(error) = self.authorize(&connection, &params.sql, &request).await {
             return tool_error(error);
         }
         let wrapped = sql_parser::explain::wrap_explain(connection.config.db_type, &params.sql);
@@ -831,7 +905,7 @@ pub(crate) fn router(
 ) -> axum::Router {
     let config = StreamableHttpServerConfig::default().with_cancellation_token(cancellation);
     let service = StreamableHttpService::new(
-        move || Ok(server.clone()),
+        move || Ok(server.for_new_session()),
         Arc::new(LocalSessionManager::default()),
         config,
     );

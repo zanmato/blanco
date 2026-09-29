@@ -105,8 +105,10 @@ The pane you were started from belongs to one editor tab. Its identity is in the
 - `BLANCO_TAB_ID`: pass it as `tab: {\"id\": <value>}` to `read_tab`, `write_tab` and `run_tab`, and\n\
   to connection tools when the user has switched to another tab meanwhile.\n\
 - `BLANCO_CONNECTION_ID`, `BLANCO_CONNECTION_NAME`, `BLANCO_DATABASE`: the connection and database\n\
-  that tab works against. Connection tools default to the active tab's connection when\n\
-  `connection_id` is omitted; pass `BLANCO_CONNECTION_ID` to be explicit.\n\n\
+  that tab works against. Connection tools default to the active tab's connection and database\n\
+  when `connection_id` is omitted. To be explicit, pass `connection_id: BLANCO_CONNECTION_ID`\n\
+  together with `database: BLANCO_DATABASE` (or `tab: {\"id\": BLANCO_TAB_ID}`). A bare\n\
+  `connection_id` takes the database of the active tab, which may not be yours.\n\n\
 ## How to work\n\n\
 - Start by reading the tab (`read_tab`) and, when the task needs schema knowledge, `list_tables`\n\
   or `describe_table` on that connection.\n\

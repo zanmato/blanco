@@ -656,6 +656,7 @@ impl TableDelegate for ResultsTableDelegate {
         // "Set DEFAULT" only makes sense on a pending new row whose column has
         // a server default: it reverts the cell so the INSERT omits the column.
         let compare_kind = self.compare_selection_kind;
+        let is_editable = self.is_editable();
         let can_set_default = self.edit_state.is_new_row(cell.0)
             && self
                 .table_column_info(cell.1)
@@ -720,7 +721,12 @@ impl TableDelegate for ResultsTableDelegate {
         )
         .separator()
         // Row operations
-        .menu_with_icon("Add Row", Icon::new(IconName::Plus), Box::new(AddRow))
+        .menu_with_icon_and_disabled(
+            "Add Row",
+            Icon::new(IconName::Plus),
+            Box::new(AddRow),
+            !is_editable,
+        )
         .menu_with_icon(
             "Duplicate Row",
             Icon::new(IconName::Copy),

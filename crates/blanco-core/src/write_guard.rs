@@ -176,51 +176,74 @@ pub fn classify(driver: DatabaseType, text: &str) -> StatementAccess {
 
 /// Classify a SQL script: the result is `Write` if any statement in it writes.
 pub fn classify_sql(sql: &str) -> StatementAccess {
-    let mut access = StatementAccess::Read;
-    for statement in split_statements(sql) {
-        let words = keywords(&statement);
-        let Some(first) = words.first() else {
-            continue;
-        };
-        let is_read = match first.as_str() {
-            "WITH" => !words
-                .iter()
-                .any(|word| SQL_WRITE_KEYWORDS.contains(&word.as_str())),
-            // `PRAGMA name` and `PRAGMA name(arg)` (table_info, index_list)
-            // read, `PRAGMA name = value` writes. SQLite also accepts the
-            // parenthesised form for setting, but it is rare in practice.
-            "PRAGMA" => !statement.contains('='),
-            keyword => SQL_READ_KEYWORDS.contains(&keyword),
-        };
-        if !is_read {
-            access = StatementAccess::Write;
-        }
+    if split_statements(sql)
+        .iter()
+        .any(|statement| sql_write_kind(statement).is_some())
+    {
+        StatementAccess::Write
+    } else {
+        StatementAccess::Read
     }
-    access
 }
 
 /// Classify a Redis command line (one command per line).
 pub fn classify_redis(text: &str) -> StatementAccess {
-    for line in text.lines() {
-        let mut parts = line.split_whitespace();
-        let Some(command) = parts.next() else {
-            continue;
-        };
-        let command = command.to_ascii_uppercase();
-        if !REDIS_READ_COMMANDS.contains(&command.as_str()) {
-            return StatementAccess::Write;
-        }
-        if let Some(subcommand) = parts.next() {
-            let subcommand = subcommand.to_ascii_uppercase();
-            if REDIS_WRITE_SUBCOMMANDS
-                .iter()
-                .any(|(c, s)| *c == command && *s == subcommand)
-            {
-                return StatementAccess::Write;
-            }
+    if text.lines().any(|line| redis_write_kind(line).is_some()) {
+        StatementAccess::Write
+    } else {
+        StatementAccess::Read
+    }
+}
+
+/// The distinct kinds of write in `text`, in order of appearance: the leading
+/// keyword of each writing SQL statement (`INSERT`, `CREATE`, `DO`, ...), the
+/// write keyword inside a data-modifying CTE, or the Redis command (`SET`,
+/// `CONFIG SET`). Empty when `text` only reads.
+pub fn write_kinds(driver: DatabaseType, text: &str) -> Vec<String> {
+    let kinds: Vec<String> = if driver.dialect().supports_sql() {
+        split_statements(text)
+            .iter()
+            .filter_map(|statement| sql_write_kind(statement))
+            .collect()
+    } else {
+        text.lines().filter_map(redis_write_kind).collect()
+    };
+    let mut distinct = Vec::with_capacity(kinds.len());
+    for kind in kinds {
+        if !distinct.contains(&kind) {
+            distinct.push(kind);
         }
     }
-    StatementAccess::Read
+    distinct
+}
+
+fn sql_write_kind(statement: &str) -> Option<String> {
+    let words = keywords(statement);
+    let first = words.first()?;
+    match first.as_str() {
+        "WITH" => words
+            .iter()
+            .find(|word| SQL_WRITE_KEYWORDS.contains(&word.as_str()))
+            .cloned(),
+        // `PRAGMA name` and `PRAGMA name(arg)` (table_info, index_list)
+        // read, `PRAGMA name = value` writes. SQLite also accepts the
+        // parenthesised form for setting, but it is rare in practice.
+        "PRAGMA" => statement.contains('=').then(|| first.clone()),
+        keyword => (!SQL_READ_KEYWORDS.contains(&keyword)).then(|| first.clone()),
+    }
+}
+
+fn redis_write_kind(line: &str) -> Option<String> {
+    let mut parts = line.split_whitespace();
+    let command = parts.next()?.to_ascii_uppercase();
+    if !REDIS_READ_COMMANDS.contains(&command.as_str()) {
+        return Some(command);
+    }
+    let subcommand = parts.next()?.to_ascii_uppercase();
+    REDIS_WRITE_SUBCOMMANDS
+        .iter()
+        .any(|(c, s)| *c == command && *s == subcommand)
+        .then(|| format!("{command} {subcommand}"))
 }
 
 /// Uppercase bare words of a statement with strings, quoted identifiers and
@@ -377,6 +400,39 @@ mod tests {
         ] {
             assert_eq!(classify_sql(sql), StatementAccess::Write, "{sql}");
         }
+    }
+
+    #[test]
+    fn write_kinds_name_each_distinct_write() {
+        assert_eq!(
+            write_kinds(DatabaseType::PostgreSQL, "SELECT 1"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            write_kinds(
+                DatabaseType::PostgreSQL,
+                "insert into a values (1); SELECT 1; INSERT INTO b VALUES (2); update a set x = 1"
+            ),
+            ["INSERT", "UPDATE"]
+        );
+        assert_eq!(
+            write_kinds(
+                DatabaseType::PostgreSQL,
+                "WITH gone AS (DELETE FROM users RETURNING *) SELECT * FROM gone"
+            ),
+            ["DELETE"]
+        );
+        assert_eq!(
+            write_kinds(DatabaseType::SQLite, "PRAGMA journal_mode = WAL"),
+            ["PRAGMA"]
+        );
+        assert_eq!(
+            write_kinds(
+                DatabaseType::Redis,
+                "GET a\nset a 1\nCONFIG SET maxmemory 1mb"
+            ),
+            ["SET", "CONFIG SET"]
+        );
     }
 
     #[test]

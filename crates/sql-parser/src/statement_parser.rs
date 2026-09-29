@@ -2081,6 +2081,25 @@ DELETE FROM users WHERE id = 1;",
     }
 
     #[test]
+    fn statements_from_the_grammar_fork_parse_cleanly() {
+        for sql in [
+            "DROP TRIGGER product_change_trigger_products ON products;",
+            "DROP TABLE a, b;",
+            "BEGIN;",
+            "ROLLBACK TO SAVEPOINT before_change;",
+            "GRANT SELECT ON products TO reporting;",
+            "INSERT INTO t (a) VALUES (1) ON CONFLICT (a) DO NOTHING;",
+            "SELECT a FROM t ORDER BY a NULLS FIRST FOR UPDATE SKIP LOCKED;",
+        ] {
+            assert_eq!(
+                contains_node_kind(sql, &["ERROR"]),
+                Some(false),
+                "expected a clean parse of {sql}"
+            );
+        }
+    }
+
+    #[test]
     fn test_select_above_cte() {
         let mut parser = create_test_parser();
         let text = Rope::from_str(

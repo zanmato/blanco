@@ -2,6 +2,9 @@
 //! the write-confirmation policy and the JSON shape a query result is reported
 //! in. Nothing here touches GPUI or the network, so all of it is unit tested.
 
+use std::collections::HashSet;
+use std::sync::{Mutex, PoisonError};
+
 use blanco_core::{QueryResult, StatementAccess};
 
 /// Rows a tool result carries before it is cut off. Agents iterate rather than
@@ -34,6 +37,28 @@ pub(crate) fn write_policy(
         StatementAccess::Write if is_prod || destructive_ddl => WritePolicy::Confirm,
         StatementAccess::Write if allow_writes => WritePolicy::Run,
         StatementAccess::Write => WritePolicy::Confirm,
+    }
+}
+
+/// Write kinds (`INSERT`, `UPDATE`, ...) the user chose not to be asked about
+/// again, per connection, for one MCP session.
+#[derive(Debug, Default)]
+pub(crate) struct SessionGrants(Mutex<HashSet<(i64, String)>>);
+
+impl SessionGrants {
+    /// Whether every kind in `kinds` is granted on the connection. A statement
+    /// with no recognised kind is never covered.
+    pub(crate) fn covers(&self, connection_id: i64, kinds: &[String]) -> bool {
+        let grants = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        !kinds.is_empty()
+            && kinds
+                .iter()
+                .all(|kind| grants.contains(&(connection_id, kind.clone())))
+    }
+
+    pub(crate) fn grant(&self, connection_id: i64, kinds: &[String]) {
+        let mut grants = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        grants.extend(kinds.iter().map(|kind| (connection_id, kind.clone())));
     }
 }
 
@@ -158,6 +183,23 @@ mod tests {
             write_policy(StatementAccess::Write, true, false, true),
             WritePolicy::Confirm
         );
+    }
+
+    #[test]
+    fn session_grants_cover_only_granted_kinds_on_that_connection() {
+        let grants = SessionGrants::default();
+        let insert = vec!["INSERT".to_string()];
+        let insert_and_update = vec!["INSERT".to_string(), "UPDATE".to_string()];
+        assert!(!grants.covers(1, &insert));
+
+        grants.grant(1, &insert);
+        assert!(grants.covers(1, &insert));
+        assert!(!grants.covers(1, &insert_and_update));
+        assert!(!grants.covers(2, &insert));
+        assert!(!grants.covers(1, &[]));
+
+        grants.grant(1, &insert_and_update);
+        assert!(grants.covers(1, &insert_and_update));
     }
 
     #[test]
