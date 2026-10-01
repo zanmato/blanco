@@ -71,11 +71,18 @@ pub fn spawn_tab_terminal(
 /// the ANSI slots and its text colors for the greys, so the pane looks like
 /// the rest of the app in both light and dark themes.
 pub fn palette_from_theme(theme: &Theme) -> TerminalPalette {
+    // The pane sits under the editor, so it takes the editor's surface rather
+    // than the window background, which themes like Catppuccin make darker.
+    let background = theme
+        .highlight_theme
+        .style
+        .editor_background
+        .unwrap_or(theme.background);
     let dark = theme.mode.is_dark();
     let (black, white, bright_white) = if dark {
         (theme.muted, theme.secondary_foreground, theme.foreground)
     } else {
-        (theme.foreground, theme.muted, theme.background)
+        (theme.foreground, theme.muted, background)
     };
     TerminalPalette {
         ansi: [
@@ -97,7 +104,7 @@ pub fn palette_from_theme(theme: &Theme) -> TerminalPalette {
             bright_white,
         ],
         foreground: theme.foreground,
-        background: theme.background,
+        background,
         cursor: theme.caret,
         selection: theme.selection,
     }
