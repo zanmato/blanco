@@ -134,6 +134,15 @@ debug = true
 
 [patch.crates-io]
 tree-sitter-sequel = { path = "crates/tree-sitter-sequel" }
+# Run on gpui-fast instead of the gpui-pre snapshots. Its compat crates carry the
+# gpui-pre names and the version gpui-component pins, so they must move with it.
+# See https://github.com/longbridge/gpui-fast/blob/main/compat/README.md
+# Pinned before gpui-fast's sync with zed 0bdc70c, which adds an argument to
+# `LineWrapper::wrap_line` that gpui-base does not pass yet.
+gpui-pre = { git = "https://github.com/longbridge/gpui-fast", rev = "e4aabe752665baabe330464892cfe6882ed3283b" }
+gpui-pre-platform = { git = "https://github.com/longbridge/gpui-fast", rev = "e4aabe752665baabe330464892cfe6882ed3283b" }
+gpui-pre-macros = { git = "https://github.com/longbridge/gpui-fast", rev = "e4aabe752665baabe330464892cfe6882ed3283b" }
+gpui-pre-sum-tree = { git = "https://github.com/longbridge/gpui-fast", rev = "e4aabe752665baabe330464892cfe6882ed3283b" }
 
 # To develop against a local gpui-component clone next to this repository, uncomment:
 # [patch."https://github.com/zanmato/gpui-component"]
