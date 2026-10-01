@@ -632,6 +632,68 @@
           transition: none !important;
         }
       }
+      /* Screenshots open full size in a dialog. */
+      img[width="1600"] {
+        cursor: zoom-in;
+      }
+      .zoom {
+        border: 0;
+        padding: 0;
+        margin: auto;
+        max-width: none;
+        max-height: none;
+        background: transparent;
+        overflow: visible;
+      }
+      .zoom::backdrop {
+        background: rgb(0 0 0 / 0.8);
+      }
+      .zoom img {
+        display: block;
+        width: auto;
+        height: auto;
+        max-width: calc(100vw - 32px);
+        max-height: calc(100vh - 32px);
+        border-radius: 12px;
+        box-shadow:
+          var(--shadow),
+          0 0 0 1px var(--line);
+        cursor: zoom-out;
+      }
+      .zoom-close {
+        position: fixed;
+        top: 16px;
+        right: 16px;
+        display: grid;
+        place-items: center;
+        width: 40px;
+        height: 40px;
+        padding: 0;
+        border: 1px solid var(--line);
+        border-radius: 50%;
+        background: var(--surface);
+        color: var(--ink);
+        cursor: pointer;
+      }
+      .zoom-close svg {
+        width: 20px;
+        height: 20px;
+      }
+      .zoom[open],
+      .zoom[open]::backdrop {
+        animation: zoom-fade 0.18s ease-out;
+      }
+      @keyframes zoom-fade {
+        from {
+          opacity: 0;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .zoom[open],
+        .zoom[open]::backdrop {
+          animation: none;
+        }
+      }
     </style>
   </head>
   <body>
@@ -1219,6 +1281,36 @@
             }
           });
         });
+
+        var zoom = document.createElement("dialog");
+        zoom.className = "zoom";
+        zoom.innerHTML =
+          '<button type="button" class="zoom-close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button><img alt="">';
+        document.body.append(zoom);
+        var zoomImage = zoom.querySelector("img");
+        zoom.addEventListener("click", function () {
+          zoom.close();
+        });
+        document
+          .querySelectorAll('img[width="1600"]')
+          .forEach(function (image) {
+            function open() {
+              // currentSrc is the source the page shows, so the dark theme gets the dark screenshot.
+              zoomImage.src = image.currentSrc || image.src;
+              zoomImage.alt = image.alt;
+              zoom.showModal();
+            }
+            image.tabIndex = 0;
+            image.setAttribute("role", "button");
+            image.setAttribute("aria-haspopup", "dialog");
+            image.addEventListener("click", open);
+            image.addEventListener("keydown", function (event) {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                open();
+              }
+            });
+          });
       })();
     </script>
   </body>
