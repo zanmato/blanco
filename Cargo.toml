@@ -30,8 +30,8 @@ publish = false
 # snapshots of GPUI, so these must resolve to the same packages or cargo builds
 # two copies of gpui. Keep the version requirement in step with the one in
 # gpui-component's workspace Cargo.toml.
-gpui = { package = "gpui-pre", version = "0.3.1" }
-gpui_platform = { package = "gpui-pre-platform", version = "0.3.1", features = [
+gpui = { package = "gpui-pre", version = "0.3.7" }
+gpui_platform = { package = "gpui-pre-platform", version = "0.3.7", features = [
     "font-kit",
     "x11",
     "wayland",

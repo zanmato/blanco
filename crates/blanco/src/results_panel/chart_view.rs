@@ -11,7 +11,8 @@ use gpui_component::{
     checkbox::Checkbox,
     h_flex,
     plot::{
-        AXIS_GAP, AxisText, Grid, IntoPlot, Plot, PlotAxis,
+        AxisText, Grid, IntoPlot, Plot, PlotAxis, axis_gutter,
+        label::TEXT_SIZE,
         scale::{Scale, ScaleBand, ScaleLinear},
         shape::{Bar, Stack},
     },
@@ -233,9 +234,9 @@ impl StackedBar {
 impl Plot for StackedBar {
     fn paint(&mut self, bounds: gpui::Bounds<gpui::Pixels>, window: &mut Window, cx: &mut App) {
         let width = bounds.size.width.as_f32();
-        let height = bounds.size.height.as_f32() - AXIS_GAP;
+        let height = bounds.size.height.as_f32() - axis_gutter(px(TEXT_SIZE));
 
-        let x = ScaleBand::new(self.x_labels.clone(), vec![0., width])
+        let x = ScaleBand::new(self.x_labels.clone(), [0., width])
             .padding_inner(0.4)
             .padding_outer(0.2);
         let band_width = x.band_width();
@@ -246,7 +247,7 @@ impl Plot for StackedBar {
             .flat_map(|s| s.points.iter().map(|p| p.y1))
             .fold(0., f32::max) as f64;
 
-        let y = ScaleLinear::new(vec![0., max], vec![height, 10.]);
+        let y = ScaleLinear::new([0., max], [height, 10.]);
 
         let tick_margin = tick_margin_for(self.x_labels.len());
         let x_label = self
@@ -271,7 +272,7 @@ impl Plot for StackedBar {
             .paint(&bounds, window, cx);
 
         Grid::new()
-            .y((0..=3).map(|i| height * i as f32 / 4.0).collect())
+            .y((0..=3).map(|i| height * i as f32 / 4.0))
             .stroke(cx.theme().border)
             .dash_array(&[gpui::px(4.), gpui::px(2.)])
             .paint(&bounds, window);
