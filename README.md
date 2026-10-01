@@ -1,6 +1,6 @@
 # Blanco
 
-Blanco is a native, cross platform SQL editor and database client built with
+Blanco is a cross platform SQL editor and database client built with
 [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) and
 [gpui-kit](https://github.com/longbridge/gpui-kit).
 
@@ -79,6 +79,18 @@ ssh-keyscan -p 2222 127.0.0.1 >> ~/.ssh/known_hosts
 
 Install the check script as a pre push hook with
 `ln -sf ../../scripts/check.sh .git/hooks/pre-push`.
+
+## Website
+
+The site at <https://zanmato.github.io/blanco> is built from `site/` with
+`scripts/build-site` and published by the release workflow.
+
+Its screenshots in `docs/images/screenshots` come from
+`scripts/screenshots/capture`. The script builds Blanco with the `screenshots`
+feature and runs it on a virtual X display against a throwaway data directory
+and a generated demo database, so nothing from your own profile or keychain
+shows up. It needs Xvfb, ImageMagick, sqlite3, python3 and Mesa's lavapipe
+Vulkan driver.
 
 ## Logs and data
 
