@@ -25,6 +25,8 @@ mod redis_completion;
 mod redis_syntax;
 mod result_ext;
 mod results_panel;
+#[cfg(feature = "screenshots")]
+mod screenshots;
 mod script_completion;
 mod settings;
 mod snippets_panel;
@@ -84,7 +86,13 @@ fn main() {
         });
 
         match db {
-            Ok(database) => cx.set_global(database),
+            Ok(database) => {
+                #[cfg(feature = "screenshots")]
+                if screenshots::Scene::from_env().is_some() {
+                    screenshots::seed(&database, &runtime_handle);
+                }
+                cx.set_global(database)
+            }
             Err(e) => {
                 tracing::error!("Critical: Failed to initialize database: {}", e);
                 return;
@@ -249,6 +257,10 @@ fn main() {
         cx.spawn(async move |cx| {
             cx.open_window(window_options, |window, cx| {
                 let blanco_app = cx.new(|cx| app::BlancoApp::new(window, cx));
+                #[cfg(feature = "screenshots")]
+                if let Some(scene) = screenshots::Scene::from_env() {
+                    screenshots::stage(scene, blanco_app.clone(), window, cx);
+                }
                 cx.new(|cx| gpui_component::Root::new(blanco_app, window, cx))
             })?;
             Ok::<_, anyhow::Error>(())

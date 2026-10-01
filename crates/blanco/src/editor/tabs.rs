@@ -187,7 +187,7 @@ impl TabType {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "screenshots"))]
     pub fn script(&self) -> Option<&ScriptTab> {
         match self {
             TabType::Script(tab) => Some(tab),

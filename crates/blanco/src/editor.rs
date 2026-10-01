@@ -160,17 +160,17 @@ impl EditorPanel {
             .map(|tab| tab.results_panel.clone())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "screenshots"))]
     pub fn active_query_tab(&self) -> Option<&QueryTab> {
         self.tabs.get(self.active_tab_ix).and_then(TabType::query)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "screenshots"))]
     pub fn active_script_tab(&self) -> Option<&ScriptTab> {
         self.tabs.get(self.active_tab_ix).and_then(TabType::script)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "screenshots"))]
     pub fn is_loading(&self) -> bool {
         self.loading
     }
@@ -1112,6 +1112,37 @@ impl EditorPanel {
 
             window.push_notification("Changes rolled back", cx);
         }
+    }
+
+    /// Size the editor and the log under the results in every tab, leaving the
+    /// rest to the results.
+    #[cfg(feature = "screenshots")]
+    pub(crate) fn set_pane_heights(
+        &mut self,
+        editor: gpui::Pixels,
+        log: gpui::Pixels,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.editor_results_resize_state.update(cx, |state, cx| {
+            state.resize_panel(0, editor, window, cx);
+        });
+        self.results_log_resize_state.update(cx, |state, cx| {
+            state.resize_panel(1, log, window, cx);
+        });
+    }
+
+    /// Size the terminal pane docked under the active tab.
+    #[cfg(feature = "screenshots")]
+    pub(crate) fn set_terminal_height(
+        &mut self,
+        height: gpui::Pixels,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.editor_terminal_resize_state.update(cx, |state, cx| {
+            state.resize_panel(1, height, window, cx);
+        });
     }
 
     pub fn toggle_sql_view_for_active_tab(&mut self, _window: &mut Window, cx: &mut Context<Self>) {

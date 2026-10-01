@@ -430,7 +430,7 @@ impl ResultsPanel {
             .unwrap_or_default()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "screenshots"))]
     pub fn table_state(&self) -> &Entity<TableState<ResultsTableDelegate>> {
         &self.table_state
     }

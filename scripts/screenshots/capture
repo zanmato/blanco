@@ -1,0 +1,223 @@
+#!/usr/bin/env bash
+# Takes the website screenshots: runs Blanco on a virtual X display against a
+# throwaway data directory and the demo database, once per scene and theme.
+#
+# Usage: scripts/screenshots/capture [scene...]
+#
+# Scenes: editor inline-edit terminal script snippets (default: all).
+# Writes docs/images/screenshots/<scene>-<theme>.webp.
+#
+# Needs Xvfb, ImageMagick, sqlite3, python3, dbus-run-session and Mesa's
+# lavapipe Vulkan driver. The terminal scene starts Claude Code, which needs
+# `claude` on PATH and copies ~/.claude/.credentials.json (or
+# $CLAUDE_CREDENTIALS) into the throwaway home for that run. Set BLANCO_BIN to capture with an existing build of
+# `cargo build --release -p blanco --features screenshots`.
+set -euo pipefail
+
+cd "$(dirname "$0")/../.."
+root="$(pwd)"
+
+width=1600
+height=1000
+out="$root/docs/images/screenshots"
+
+scenes=("$@")
+if [[ ${#scenes[@]} -eq 0 ]]; then
+  scenes=(editor inline-edit terminal script snippets)
+fi
+
+# The light and dark pair every scene gets, plus extra themes for the editor.
+themes=("latte:Catppuccin Latte" "mocha:Catppuccin Mocha")
+editor_themes=("macchiato:Catppuccin Macchiato")
+
+if [[ -z "${BLANCO_BIN:-}" ]]; then
+  cargo build --release -p blanco --features screenshots
+  BLANCO_BIN="$root/target/release/blanco"
+fi
+
+work="$(mktemp -d)"
+xvfb_pid=""
+app_pid=""
+# Blanco starts the terminal's shell in a session of its own, so stopping the
+# app's process group leaves it, and whatever runs in it, behind. Everything
+# a run starts inherits its throwaway HOME, which finds them.
+# stop_run <home>
+stop_run() {
+  local pid
+  for pid in $(pgrep -u "$(id -u)"); do
+    # A process can exit between the listing and the read.
+    if { tr '\0' '\n' < "/proc/$pid/environ"; } 2>/dev/null | grep -qxF "HOME=$1"; then
+      kill "$pid" 2>/dev/null || true
+    fi
+  done
+}
+
+cleanup() {
+  [[ -n "$app_pid" ]] && kill -- "-$app_pid" 2>/dev/null || true
+  [[ -n "${run_home:-}" ]] && stop_run "$run_home"
+  [[ -n "$xvfb_pid" ]] && kill "$xvfb_pid" 2>/dev/null || true
+  rm -rf "$work"
+}
+trap cleanup EXIT
+
+sqlite3 "$work/groove-records.db" < "$root/scripts/screenshots/demo.sql"
+
+display=":$((90 + RANDOM % 100))"
+Xvfb "$display" -screen 0 "${width}x${height}x24" -nolisten tcp >/dev/null 2>&1 &
+xvfb_pid=$!
+for _ in $(seq 50); do
+  DISPLAY="$display" xdpyinfo >/dev/null 2>&1 && break
+  sleep 0.1
+done
+
+# A session bus that cannot activate services: no portals, gvfs or keyring
+# start, so nothing mounts into the runtime directory or touches the real
+# keyring. The demo connection is SQLite and needs no secrets.
+cat > "$work/dbus.conf" <<'EOF'
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>unix:tmpdir=/tmp</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+EOF
+
+lavapipe=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json 2>/dev/null | head -n1 || true)
+mkdir -p "$out"
+
+# Give the throwaway home just enough Claude Code setup to start straight into
+# a session: the login, onboarding done, the agent workspace trusted and
+# Blanco's MCP server approved.
+# setup_claude <home> <workspace> <light|dark>
+setup_claude() {
+  local home="$1" workspace="$2" mode="$3"
+  local credentials="${CLAUDE_CREDENTIALS:-$HOME/.claude/.credentials.json}"
+  if [[ ! -f "$credentials" ]] || ! command -v claude >/dev/null; then
+    echo "The terminal scene needs claude and $credentials" >&2
+    exit 1
+  fi
+  mkdir -p "$home/.claude"
+  install -m 600 "$credentials" "$home/.claude/.credentials.json"
+  # Only the flags that record which notices and tips were already seen come
+  # from the real config, so the session opens without them. No account or
+  # project data is copied.
+  python3 - "$HOME/.claude.json" "$home/.claude.json" "$workspace" "$mode" "$(claude --version | cut -d' ' -f1)" <<'PY'
+import json, re, sys
+source, target, workspace, mode, version = sys.argv[1:]
+try:
+    with open(source) as file:
+        real = json.load(file)
+except (OSError, ValueError):
+    real = {}
+config = {
+    key: value
+    for key, value in real.items()
+    if re.match(r"^has|Seen|Dismissed|Notice", key) and isinstance(value, (bool, int))
+}
+config.update({
+    "hasCompletedOnboarding": True,
+    "lastOnboardingVersion": version,
+    "lastReleaseNotesSeen": version,
+    "theme": mode,
+    "autoUpdates": False,
+    "projects": {
+        workspace: {
+            "hasTrustDialogAccepted": True,
+            "hasCompletedProjectOnboarding": True,
+            "enabledMcpjsonServers": ["blanco"],
+        }
+    },
+})
+with open(target, "w") as file:
+    json.dump(config, file, indent=2)
+PY
+}
+
+# capture <scene> <slug> <theme name>
+capture() {
+  local scene="$1" slug="$2" theme="$3"
+  local run="$work/$scene-$slug"
+  run_home="$run/home"
+  # The data directories live in the throwaway home where they would on a
+  # real system, so paths show as ~/.local/share/blanco.
+  mkdir -p "$run"/{runtime,home/.local/share,home/.local/state,home/.config}
+  chmod 700 "$run/runtime"
+  # A plain prompt, so the terminal scene shows nothing of this machine.
+  cat > "$run/home/.bashrc" <<'EOF'
+PS1='\[\e[1;34m\]\W\[\e[0m\] \$ '
+EOF
+  if [[ "$scene" == terminal ]]; then
+    local mode=dark
+    [[ "$slug" == latte ]] && mode=light
+    setup_claude "$run/home" "$run/home/.local/share/blanco/agent-workspace" "$mode"
+  fi
+
+  echo "Capturing $scene in $theme"
+  # Its own process group, so stopping it takes down the bus and the app.
+  setsid env -i \
+    PATH="$PATH" \
+    HOME="$run/home" \
+    SHELL=/bin/bash \
+    TERM=xterm-256color \
+    COLORTERM=truecolor \
+    DISABLE_AUTOUPDATER=1 \
+    LANG=en_US.UTF-8 \
+    DISPLAY="$display" \
+    XDG_DATA_HOME="$run/home/.local/share" \
+    XDG_STATE_HOME="$run/home/.local/state" \
+    XDG_CONFIG_HOME="$run/home/.config" \
+    XDG_RUNTIME_DIR="$run/runtime" \
+    ${lavapipe:+VK_ICD_FILENAMES="$lavapipe"} \
+    BLANCO_SCENE="$scene" \
+    BLANCO_THEME="$theme" \
+    BLANCO_DEMO_DB="$work/groove-records.db" \
+    BLANCO_SCENE_READY="$run/ready" \
+    dbus-run-session --config-file="$work/dbus.conf" -- "$BLANCO_BIN" >"$run/app.log" 2>&1 &
+  app_pid=$!
+  DISPLAY="$display" "$root/scripts/screenshots/focus-window" 60
+
+  local waited=0
+  until [[ -f "$run/ready" ]]; do
+    if ! kill -0 "$app_pid" 2>/dev/null || (( waited > 600 )); then
+      echo "Blanco did not stage $scene, its log follows:" >&2
+      cat "$run/app.log" >&2
+      exit 1
+    fi
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  # One more frame for anything the last update scheduled.
+  sleep 0.5
+
+  DISPLAY="$display" import -window root "$run/shot.png"
+  kill -- "-$app_pid" 2>/dev/null || true
+  wait "$app_pid" 2>/dev/null || true
+  stop_run "$run_home"
+  app_pid=""
+
+  magick "$run/shot.png" \
+    \( +clone -alpha extract -draw "fill black polygon 0,0 0,10 10,0 fill white circle 10,10 10,0" \
+       \( +clone -flip \) -compose Multiply -composite \
+       \( +clone -flop \) -compose Multiply -composite \) \
+    -alpha off -compose CopyOpacity -composite \
+    -define webp:lossless=false -quality 90 "$out/$scene-$slug.webp"
+}
+
+for scene in "${scenes[@]}"; do
+  for theme in "${themes[@]}"; do
+    capture "$scene" "${theme%%:*}" "${theme#*:}"
+  done
+  if [[ "$scene" == editor ]]; then
+    for theme in "${editor_themes[@]}"; do
+      capture "$scene" "${theme%%:*}" "${theme#*:}"
+    done
+  fi
+done
+
+echo "Wrote $out"

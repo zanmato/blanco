@@ -68,6 +68,10 @@ tower = "0.5"
 tokio-util = "0.7"
 schemars = "1"
 
+[features]
+# Stages scenes for the website screenshots; see scripts/screenshots/capture.
+screenshots = []
+
 [target.'cfg(target_os = "linux")'.dependencies]
 tikv-jemallocator = { workspace = true }
 

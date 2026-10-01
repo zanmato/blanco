@@ -938,7 +938,7 @@ impl BlancoApp {
         subscriptions
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "screenshots"))]
     pub fn editor_panel(&self) -> &Entity<EditorPanel> {
         &self.editor_panel
     }
