@@ -33,12 +33,7 @@ and Redis.
 
 Prebuilt binaries for Linux (x86_64, plus a `.deb`), macOS (Apple silicon) and
 Windows (x86_64) are attached to each
-[release](https://github.com/zanmato/blanco/releases). On macOS you can use
-Homebrew:
-
-```bash
-brew install --cask zanmato/tap/blanco
-```
+[release](https://github.com/zanmato/blanco/releases).
 
 ## Building
 
