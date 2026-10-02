@@ -16,8 +16,10 @@ use crate::app::{BlancoApp, ConnectToConnection, SidebarTab};
 use crate::editor::EditorPanel;
 use crate::results_panel::CellInput;
 
-const WINDOW_WIDTH: &str = "1600";
-const WINDOW_HEIGHT: &str = "1000";
+// The visible frame is 1600x1000. On Linux the client-side frame adds a 20px
+// shadow inset on every side, which the capture script crops away.
+const WINDOW_WIDTH: &str = "1640";
+const WINDOW_HEIGHT: &str = "1040";
 
 const REVENUE_QUERY: &str = r#"-- Orders waiting to ship
 SELECT COUNT(*) AS pending FROM orders WHERE status = 'pending';
