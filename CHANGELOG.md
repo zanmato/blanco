@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.1] - 2026-10-02
+
+### Fixes
+
+- Fixed a text rendering issue
+
 ## [0.1.0] - 2026-09-29
 
 Initial release. Supported backends: PostgreSQL, MySQL/MariaDB, SQLite, SQL

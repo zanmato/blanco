@@ -304,7 +304,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "app-database"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "blanco-core",
  "chrono",
@@ -915,7 +915,7 @@ dependencies = [
 
 [[package]]
 name = "blanco"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ahash 0.8.11",
  "anyhow",
@@ -986,7 +986,7 @@ dependencies = [
 
 [[package]]
 name = "blanco-terminal"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -7760,7 +7760,7 @@ dependencies = [
 
 [[package]]
 name = "scripting"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "blanco-core",
@@ -8267,7 +8267,7 @@ dependencies = [
 
 [[package]]
 name = "sql-parser"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "blanco-core",
  "once_cell",
@@ -9579,7 +9579,7 @@ dependencies = [
 
 [[package]]
 name = "transformers"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "blanco-core",
  "serde_json",
