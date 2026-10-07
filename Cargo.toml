@@ -30,8 +30,8 @@ publish = false
 # snapshots of GPUI, so these must resolve to the same packages or cargo builds
 # two copies of gpui. Keep the version requirement in step with the one in
 # gpui-component's workspace Cargo.toml.
-gpui = { package = "gpui-pre", version = "0.3.7" }
-gpui_platform = { package = "gpui-pre-platform", version = "0.3.7", features = [
+gpui = { package = "gpui-pre", version = "0.3.8" }
+gpui_platform = { package = "gpui-pre-platform", version = "0.3.8", features = [
     "font-kit",
     "x11",
     "wayland",
@@ -137,12 +137,12 @@ tree-sitter-sequel = { path = "crates/tree-sitter-sequel" }
 # Run on gpui-fast instead of the gpui-pre snapshots. Its compat crates carry the
 # gpui-pre names and the version gpui-component pins, so they must move with it.
 # See https://github.com/longbridge/gpui-fast/blob/main/compat/README.md
-# Pinned before gpui-fast's sync with zed 0bdc70c, which adds an argument to
-# `LineWrapper::wrap_line` that gpui-base does not pass yet.
-gpui-pre = { git = "https://github.com/longbridge/gpui-fast", rev = "e4aabe752665baabe330464892cfe6882ed3283b" }
-gpui-pre-platform = { git = "https://github.com/longbridge/gpui-fast", rev = "e4aabe752665baabe330464892cfe6882ed3283b" }
-gpui-pre-macros = { git = "https://github.com/longbridge/gpui-fast", rev = "e4aabe752665baabe330464892cfe6882ed3283b" }
-gpui-pre-sum-tree = { git = "https://github.com/longbridge/gpui-fast", rev = "e4aabe752665baabe330464892cfe6882ed3283b" }
+# Pinned to the v0.1.2 tag. gpui-component's `gpui-fast` feature would do the
+# same without a patch, but it compiles the gpui-pre snapshots as well.
+gpui-pre = { git = "https://github.com/longbridge/gpui-fast", rev = "8e1e1987fdb512bb8b0ab27261906a598aff2ab8" }
+gpui-pre-platform = { git = "https://github.com/longbridge/gpui-fast", rev = "8e1e1987fdb512bb8b0ab27261906a598aff2ab8" }
+gpui-pre-macros = { git = "https://github.com/longbridge/gpui-fast", rev = "8e1e1987fdb512bb8b0ab27261906a598aff2ab8" }
+gpui-pre-sum-tree = { git = "https://github.com/longbridge/gpui-fast", rev = "8e1e1987fdb512bb8b0ab27261906a598aff2ab8" }
 
 # To develop against a local gpui-component clone next to this repository, uncomment:
 # [patch."https://github.com/zanmato/gpui-component"]
