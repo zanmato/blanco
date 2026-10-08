@@ -99,6 +99,13 @@ impl Dialect {
         !matches!(self.0, DatabaseType::SQLite)
     }
 
+    /// Whether the sidebar lists every database on the server above the
+    /// schema level, which is what "only show the configured database" trims.
+    /// The other backends show a single level that the driver already scopes.
+    pub fn lists_server_databases(&self) -> bool {
+        matches!(self.0, DatabaseType::PostgreSQL | DatabaseType::MsSql)
+    }
+
     /// Whether a leaf object is inspected directly rather than queried. Key/
     /// value stores (Redis) open a key inspector, so their leaf context-menu
     /// action reads "Inspect Key"; relational tables are a starting point for a

@@ -1,8 +1,11 @@
 use gpui::{
-    ClipboardItem, Context, HighlightStyle, InteractiveElement, IntoElement, ParentElement, Render,
-    ScrollHandle, SharedString, StatefulInteractiveElement, Styled, StyledText, Window, div,
-    prelude::FluentBuilder as _, px,
+    App, BorderStyle, Bounds, ClipboardItem, Context, Corners, Edges, Element, ElementId,
+    FocusHandle, GlobalElementId, HighlightStyle, Hitbox, HitboxBehavior, Hsla, InspectorElementId,
+    InteractiveElement, IntoElement, LayoutId, PaintQuad, ParentElement, Pixels, Point, Render,
+    ScrollHandle, SharedString, StatefulInteractiveElement, Styled, StyledText, TextLayout, Window,
+    div, prelude::FluentBuilder as _, px, transparent_black,
 };
+use gpui_base::{TextSelection, TextSelectionHandle, TextSelectionRegistration, TextSelectionRun};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::highlighter::{HighlightTheme, SyntaxHighlighter};
 use gpui_component::scroll::ScrollableElement as _;
@@ -17,8 +20,13 @@ pub enum SqlViewMessage {
 }
 
 struct LogEntry {
+    /// Position in the log, counted from the first entry ever appended. Stays
+    /// put when older entries are trimmed, so it serves as the entry's element
+    /// id and as its place in a selection that spans several entries.
+    sequence: u64,
     text: SharedString,
     highlights: Box<[(Range<usize>, HighlightStyle)]>,
+    selection: TextSelectionHandle,
 }
 
 /// SQL view entity for displaying executed statements (queries, DDL, etc.) with
@@ -27,10 +35,14 @@ struct LogEntry {
 /// and line-comment syntax so logged statements read naturally per backend.
 pub struct SqlView {
     entries: Vec<LogEntry>,
+    next_sequence: u64,
     max_entries: usize,
     theme: Arc<HighlightTheme>,
     language: SharedString,
     scroll_handle: ScrollHandle,
+    /// Takes focus when a selection starts in the log, so the copy shortcut
+    /// reaches the window's selection instead of the editor that had focus.
+    focus_handle: FocusHandle,
     copied: bool,
     show_copy_button: bool,
 }
@@ -42,13 +54,16 @@ impl SqlView {
         max_entries: usize,
         theme: Arc<HighlightTheme>,
         language: impl Into<SharedString>,
+        cx: &mut Context<Self>,
     ) -> Self {
         Self {
             entries: Vec::new(),
+            next_sequence: 0,
             max_entries,
             theme,
             language: language.into(),
             scroll_handle: ScrollHandle::default(),
+            focus_handle: cx.focus_handle(),
             copied: false,
             show_copy_button: true,
         }
@@ -122,10 +137,22 @@ impl SqlView {
             .styles(&(0..new_text.len()), self.theme.as_ref())
             .into_boxed_slice();
 
+        let text = SharedString::from(new_text);
+        let selection = TextSelectionHandle::new(text.clone(), cx);
+        selection.focus_with(
+            {
+                let focus_handle = self.focus_handle.clone();
+                move |window, cx| focus_handle.focus(window, cx)
+            },
+            cx,
+        );
         let entry = LogEntry {
-            text: SharedString::from(new_text),
+            sequence: self.next_sequence,
+            text,
             highlights,
+            selection,
         };
+        self.next_sequence += 1;
 
         // Append the new entry
         self.entries.push(entry);
@@ -182,6 +209,7 @@ impl Render for SqlView {
             .child(
                 div()
                     .id("sql-log")
+                    .track_focus(&self.focus_handle)
                     .size_full()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll_handle)
@@ -190,10 +218,9 @@ impl Render for SqlView {
                     .text_size(px(12.))
                     .text_color(cx.theme().foreground)
                     .children(self.entries.iter().map(|entry| {
-                        div().mb_1().child(
-                            StyledText::new(entry.text.clone())
-                                .with_highlights(entry.highlights.iter().cloned()),
-                        )
+                        div()
+                            .mb_1()
+                            .child(SelectableLogEntry::new(entry, cx.theme().selection))
                     })),
             )
             .vertical_scrollbar(&self.scroll_handle)
@@ -216,6 +243,181 @@ impl Render for SqlView {
                     ),
                 )
             })
+    }
+}
+
+/// One log entry as text that takes part in the window's text selection:
+/// drag to select within or across entries, then copy with the usual shortcut.
+///
+/// gpui-base's `SelectableText` does the same for plain text. It has no way to
+/// pass highlights to the text it lays out, which the log needs for syntax
+/// colors, so this registers with the selection layer itself.
+struct SelectableLogEntry {
+    sequence: u64,
+    text: SharedString,
+    styled_text: StyledText,
+    selection: TextSelectionHandle,
+    selection_color: Hsla,
+}
+
+impl SelectableLogEntry {
+    fn new(entry: &LogEntry, selection_color: Hsla) -> Self {
+        Self {
+            sequence: entry.sequence,
+            text: entry.text.clone(),
+            styled_text: StyledText::new(entry.text.clone())
+                .with_highlights(entry.highlights.iter().cloned()),
+            selection: entry.selection.clone(),
+            selection_color,
+        }
+    }
+
+    fn paint_selection(&self, layout: &TextLayout, range: Range<usize>, window: &mut Window) {
+        let (Some(start), Some(end)) = (
+            layout.position_for_index(range.start),
+            layout.position_for_index(range.end),
+        ) else {
+            return;
+        };
+        for bounds in selection_quads(start, end, layout.bounds(), layout.line_height()) {
+            window.paint_quad(PaintQuad {
+                bounds,
+                background: self.selection_color.into(),
+                corner_radii: Corners::default(),
+                border_widths: Edges::default(),
+                border_color: transparent_black(),
+                border_style: BorderStyle::default(),
+            });
+        }
+    }
+}
+
+/// The rectangles covering a selection from `start` to `end` (the top left
+/// corners of the first and one-past-last selected glyphs): one for a single
+/// line, otherwise the tail of the first line, the full lines between, and the
+/// head of the last line.
+fn selection_quads(
+    start: Point<Pixels>,
+    end: Point<Pixels>,
+    bounds: Bounds<Pixels>,
+    line_height: Pixels,
+) -> Vec<Bounds<Pixels>> {
+    if start.y == end.y {
+        return vec![Bounds::from_corners(
+            start,
+            Point::new(end.x, end.y + line_height),
+        )];
+    }
+
+    let mut quads = vec![Bounds::from_corners(
+        start,
+        Point::new(bounds.right(), start.y + line_height),
+    )];
+    if end.y > start.y + line_height {
+        quads.push(Bounds::from_corners(
+            Point::new(bounds.left(), start.y + line_height),
+            Point::new(bounds.right(), end.y),
+        ));
+    }
+    quads.push(Bounds::from_corners(
+        Point::new(bounds.left(), end.y),
+        Point::new(end.x, end.y + line_height),
+    ));
+    quads
+}
+
+impl IntoElement for SelectableLogEntry {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for SelectableLogEntry {
+    type RequestLayoutState = ();
+    type PrepaintState = Hitbox;
+
+    fn id(&self) -> Option<ElementId> {
+        Some(ElementId::NamedInteger(
+            "sql-log-entry".into(),
+            self.sequence,
+        ))
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        global_id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        self.styled_text
+            .request_layout(global_id, inspector_id, window, cx)
+    }
+
+    fn prepaint(
+        &mut self,
+        global_id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        self.styled_text
+            .prepaint(global_id, inspector_id, bounds, &mut (), window, cx);
+        let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
+        let registration = TextSelectionRegistration::new(hitbox.clone(), bounds)
+            .with_document_order(self.sequence)
+            .with_text_bounds(vec![bounds])
+            .with_rendered_element(&self.selection, window, cx);
+        self.selection.register(registration, window, cx);
+        hitbox
+    }
+
+    fn paint(
+        &mut self,
+        global_id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut Self::RequestLayoutState,
+        _: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let layout = self.styled_text.layout().clone();
+        let selected_text_before = TextSelection::selected_text(window, cx);
+        let projection = self.selection.update_runs(
+            &[TextSelectionRun::new(
+                self.text.clone(),
+                layout.clone(),
+                bounds,
+            )],
+            cx,
+        );
+        // Projecting onto this frame's layout can change what the selection
+        // covers (the log scrolled or reflowed under a held drag), which the
+        // entries painted before this one have not seen yet.
+        if selected_text_before != TextSelection::selected_text(window, cx) {
+            window.refresh();
+        }
+        for range in projection.ranges().iter().flatten().cloned() {
+            self.paint_selection(&layout, range, window);
+        }
+        self.styled_text.paint(
+            global_id,
+            inspector_id,
+            bounds,
+            &mut (),
+            &mut (),
+            window,
+            cx,
+        );
     }
 }
 
@@ -242,7 +444,47 @@ fn comment_lines(prefix: &str, text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::comment_lines;
+    use super::{SqlView, SqlViewMessage, comment_lines};
+    use gpui::{AppContext as _, Modifiers, MouseButton, TestAppContext, VisualTestContext, px};
+    use gpui_base::TextSelection;
+    use gpui_component::ActiveTheme as _;
+
+    /// Dragging across the log selects its text through the window's selection
+    /// layer, which is what the copy shortcut reads.
+    #[gpui::test]
+    fn dragging_over_entries_selects_their_text(cx: &mut TestAppContext) {
+        let window = cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.open_window(Default::default(), |window, cx| {
+                let view = cx.new(|cx| {
+                    let mut view = SqlView::new(10, cx.theme().highlight_theme.clone(), "sql", cx);
+                    view.append_text(&SqlViewMessage::SqlStatement("SELECT 1".into()), cx);
+                    view.append_text(&SqlViewMessage::Comment("1 row".into()), cx);
+                    view
+                });
+                cx.new(|cx| gpui_component::Root::new(view, window, cx))
+            })
+            .expect("failed to open window")
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+
+        // The log pads its content by 16px; 12px text puts the first entry's
+        // line around y = 24 and the second entry a line below it.
+        let start = gpui::point(px(17.), px(24.));
+        let end = gpui::point(px(400.), px(46.));
+        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::default());
+        cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+
+        cx.update(|window, cx| {
+            let _frame = window.draw(cx);
+            assert_eq!(
+                TextSelection::selected_text(window, cx),
+                "SELECT 1;\n-- 1 row"
+            );
+        });
+    }
 
     #[test]
     fn single_line_gets_one_prefix() {

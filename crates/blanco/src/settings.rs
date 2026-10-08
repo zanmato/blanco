@@ -57,6 +57,20 @@ pub fn apply_font_settings(cx: &mut App) {
     }
 }
 
+/// Step the code editor font size by `delta` pixels, as the zoom shortcuts do.
+pub fn adjust_editor_font_size(delta: f32, cx: &mut App) {
+    let current = AppSettings::global(cx).settings.editor.font_size;
+    set_editor_font_size(current + delta, cx);
+}
+
+/// Set the code editor font size, clamped to the supported range, and redraw
+/// the open editors. Persisting is left to the caller, which debounces it.
+pub fn set_editor_font_size(size: f32, cx: &mut App) {
+    AppSettings::global_mut(cx).settings.editor.font_size =
+        size.clamp(EditorSettings::MIN_FONT_SIZE, EditorSettings::MAX_FONT_SIZE);
+    cx.refresh_windows();
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
     pub general: GeneralSettings,
@@ -90,6 +104,12 @@ impl Settings {
                     if settings.appearance.mono_font_family.is_empty() {
                         settings.appearance.mono_font_family = value.clone();
                     }
+                }
+                "editor.font_size" => {
+                    settings.editor.font_size = value
+                        .parse()
+                        .unwrap_or(EditorSettings::DEFAULT_FONT_SIZE)
+                        .clamp(EditorSettings::MIN_FONT_SIZE, EditorSettings::MAX_FONT_SIZE);
                 }
                 "editor.word_wrap" => {
                     settings.editor.word_wrap = value.parse().unwrap_or_default();
@@ -244,6 +264,15 @@ pub struct EditorSettings {
     pub folding: bool,
     pub hard_tabs: bool,
     pub tab_size: u32,
+    /// Font size in pixels of the code editors (query, script and snippet
+    /// tabs).
+    pub font_size: f32,
+}
+
+impl EditorSettings {
+    pub const DEFAULT_FONT_SIZE: f32 = 14.0;
+    pub const MIN_FONT_SIZE: f32 = 8.0;
+    pub const MAX_FONT_SIZE: f32 = 32.0;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -315,7 +344,16 @@ impl Default for EditorSettings {
             folding: true,
             hard_tabs: false,
             tab_size: 2,
+            font_size: Self::DEFAULT_FONT_SIZE,
         }
+    }
+}
+
+impl DatabaseSettings {
+    /// The query timeout as a duration, `None` when it is disabled (0).
+    pub fn query_timeout(&self) -> Option<std::time::Duration> {
+        (self.query_timeout_seconds > 0)
+            .then(|| std::time::Duration::from_secs(u64::from(self.query_timeout_seconds)))
     }
 }
 

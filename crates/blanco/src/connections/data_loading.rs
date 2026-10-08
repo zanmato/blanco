@@ -92,12 +92,16 @@ impl ConnectionsPanel {
 
         let db_service = DatabaseService::global(cx).clone();
 
-        let connection_label = self
+        let connection_data = self
             .connections
             .iter()
-            .find(|connection| connection.id == Some(connection_id))
+            .find(|connection| connection.id == Some(connection_id));
+        let connection_label = connection_data
             .map(|connection| connection.name.clone())
             .unwrap_or_else(|| format!("connection {connection_id}"));
+        let pinned_database = connection_data
+            .and_then(|connection| connection.pinned_database())
+            .map(str::to_string);
         let activity =
             ActivityReporter::global(cx).begin(format!("{connection_label}: listing schema"));
 
@@ -126,10 +130,13 @@ impl ConnectionsPanel {
 
                 if supports_schemas {
                     // For PostgreSQL: Load databases only (schemas loaded lazily)
-                    let databases = connection
-                        .get_databases()
-                        .await
-                        .context("Failed to list databases")?;
+                    let databases = match pinned_database {
+                        Some(database) => vec![database],
+                        None => connection
+                            .get_databases()
+                            .await
+                            .context("Failed to list databases")?,
+                    };
                     tracing::info!(
                         "Connection {} supports schemas. Loaded {} databases: {:?}",
                         connection_id,

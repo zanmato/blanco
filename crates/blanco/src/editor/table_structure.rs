@@ -56,7 +56,7 @@ impl TableStructureTab {
         let title = table_name.clone();
 
         let highlight_theme = cx.theme().highlight_theme.clone();
-        let ddl_log = cx.new(|_| SqlView::new(1, highlight_theme, "sql"));
+        let ddl_log = cx.new(|cx| SqlView::new(1, highlight_theme, "sql", cx));
 
         let tab = cx.entity().downgrade();
         let columns_table_state =

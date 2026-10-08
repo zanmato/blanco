@@ -72,6 +72,9 @@ actions!(
         ClearSelection,
         ToggleRenderWhitespace,
         ToggleWordWrap,
+        IncreaseEditorFontSize,
+        DecreaseEditorFontSize,
+        ResetEditorFontSize,
         RunQuery,
         ExplainQuery,
         ToggleCommandPalette,
@@ -363,6 +366,7 @@ pub struct BlancoApp {
     _action_task: Task<()>,
     _activity_task: Task<()>,
     _save_window_bounds_task: Task<()>,
+    _save_editor_font_size_task: Task<()>,
     /// Drains MCP requests onto the foreground; see `spawn_mcp_listener`.
     _mcp_task: Task<()>,
     /// `run_tab` callers waiting for their query tab's run to end, matched to
@@ -425,6 +429,7 @@ impl BlancoApp {
             _action_task: action_task,
             _activity_task: activity_task,
             _save_window_bounds_task: Task::ready(()),
+            _save_editor_font_size_task: Task::ready(()),
             _mcp_task: mcp_task,
             mcp_run_replies: VecDeque::new(),
             mcp_confirmations,
@@ -665,6 +670,7 @@ impl BlancoApp {
                 usize::MAX,
                 cx.theme().highlight_theme.clone(),
                 confirmation.language,
+                cx,
             )
             .show_copy_button(false);
             view.append_text(&SqlViewMessage::SqlStatement(confirmation.sql), cx);
@@ -2005,7 +2011,7 @@ impl BlancoApp {
         // Save to database
         let db = AppDatabase::global(cx).clone();
         let new_value_str = new_value.to_string();
-        cx.spawn(async move |_, _| async move {
+        cx.spawn(async move |_, _| {
             if let Err(e) = db
                 .save_setting("editor.show_whitespace", &new_value_str, false)
                 .await
@@ -2035,7 +2041,7 @@ impl BlancoApp {
         // Save to database
         let db = AppDatabase::global(cx).clone();
         let new_value_str = new_value.to_string();
-        cx.spawn(async move |_, _| async move {
+        cx.spawn(async move |_, _| {
             if let Err(e) = db
                 .save_setting("editor.word_wrap", &new_value_str, false)
                 .await
@@ -2051,6 +2057,59 @@ impl BlancoApp {
         });
 
         cx.notify();
+    }
+
+    fn on_increase_editor_font_size(
+        &mut self,
+        _: &IncreaseEditorFontSize,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        crate::settings::adjust_editor_font_size(1.0, cx);
+        self.save_editor_font_size(cx);
+    }
+
+    fn on_decrease_editor_font_size(
+        &mut self,
+        _: &DecreaseEditorFontSize,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        crate::settings::adjust_editor_font_size(-1.0, cx);
+        self.save_editor_font_size(cx);
+    }
+
+    fn on_reset_editor_font_size(
+        &mut self,
+        _: &ResetEditorFontSize,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        crate::settings::set_editor_font_size(
+            crate::settings::EditorSettings::DEFAULT_FONT_SIZE,
+            cx,
+        );
+        self.save_editor_font_size(cx);
+    }
+
+    /// Persist the editor font size once the shortcut stops repeating. Each
+    /// call replaces the pending save, so held keys write the final size once
+    /// and never an older one after a newer one.
+    fn save_editor_font_size(&mut self, cx: &mut Context<Self>) {
+        let db = AppDatabase::global(cx).clone();
+        let font_size = AppSettings::global(cx)
+            .settings
+            .editor
+            .font_size
+            .to_string();
+        self._save_editor_font_size_task = cx.spawn(async move |_, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(500))
+                .await;
+            if let Err(error) = db.save_setting("editor.font_size", &font_size, false).await {
+                tracing::error!("Failed to save editor font size: {error}");
+            }
+        });
     }
 
     fn on_run_query(&mut self, _: &RunQuery, window: &mut Window, cx: &mut Context<Self>) {
@@ -2126,6 +2185,9 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_switch_theme))
             .on_action(cx.listener(Self::on_toggle_render_whitespace))
             .on_action(cx.listener(Self::on_toggle_word_wrap))
+            .on_action(cx.listener(Self::on_increase_editor_font_size))
+            .on_action(cx.listener(Self::on_decrease_editor_font_size))
+            .on_action(cx.listener(Self::on_reset_editor_font_size))
             .on_action(cx.listener(Self::on_run_query))
             .on_action(cx.listener(Self::on_explain_query))
             .on_action(cx.listener(Self::on_connect_to_connection))
@@ -2347,6 +2409,10 @@ fn build_menu() -> Vec<Menu> {
             items: vec![
                 MenuItem::action("Render Whitespace", ToggleRenderWhitespace),
                 MenuItem::action("Word Wrap", ToggleWordWrap),
+                MenuItem::separator(),
+                MenuItem::action("Increase Editor Font Size", IncreaseEditorFontSize),
+                MenuItem::action("Decrease Editor Font Size", DecreaseEditorFontSize),
+                MenuItem::action("Reset Editor Font Size", ResetEditorFontSize),
             ],
             disabled: false,
         },
@@ -2406,6 +2472,38 @@ mod tests {
             assert!(!app.sidebar_collapsed());
             assert_eq!(app.sidebar_tab(), SidebarTab::Snippets);
         });
+    }
+
+    #[gpui::test]
+    async fn test_editor_font_size_actions_step_clamp_and_reset(cx: &mut TestAppContext) {
+        use crate::settings::EditorSettings;
+
+        let harness = FullAppHarness::new(cx);
+        let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+        let app = harness.app;
+        let font_size = |cx: &VisualTestContext| {
+            cx.read(|cx| AppSettings::global(cx).settings.editor.font_size)
+        };
+        let dispatch = |action: Box<dyn gpui::Action>, cx: &mut VisualTestContext| {
+            cx.update(|window, cx| {
+                let handle = app.read(cx).focus_handle(cx);
+                window.focus(&handle, cx);
+                window.dispatch_action(action, cx);
+            });
+            cx.run_until_parked();
+        };
+
+        assert_eq!(font_size(&cx), EditorSettings::DEFAULT_FONT_SIZE);
+        dispatch(Box::new(IncreaseEditorFontSize), &mut cx);
+        assert_eq!(font_size(&cx), EditorSettings::DEFAULT_FONT_SIZE + 1.0);
+
+        for _ in 0..40 {
+            dispatch(Box::new(DecreaseEditorFontSize), &mut cx);
+        }
+        assert_eq!(font_size(&cx), EditorSettings::MIN_FONT_SIZE);
+
+        dispatch(Box::new(ResetEditorFontSize), &mut cx);
+        assert_eq!(font_size(&cx), EditorSettings::DEFAULT_FONT_SIZE);
     }
 
     fn request_write_confirmation(

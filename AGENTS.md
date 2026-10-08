@@ -39,6 +39,22 @@ the tree-sitter `invocation` node with a textual fallback for unclosed calls.
 Function completion items insert `name($0)` as an LSP snippet; the fork's
 `insert_completion` places the caret at `$0`, so help opens right after accepting.
 
+## Completion metadata
+
+`SqlCompletionProvider` owns its metadata fetches (`in_flight`, keyed by `MetadataKey`)
+instead of letting a completion request own them. The editor drops a request on the next
+keystroke, so a fetch tied to the request restarts on every key and never finishes on a
+slow connection. Requests join the running fetch, expired cache entries are served while
+a refresh runs behind them, a fetch is bounded by the query timeout setting, and a failed
+fetch caches nothing (`fetch.rs` returns errors, never an empty listing).
+
+## SQL log selection
+
+`blanco_ui::SqlView` entries are `SelectableLogEntry` elements that register with
+gpui-base's window text selection (`TextSelectionHandle`, the `TextSelectionLayer` that
+`Root` mounts). Drag selects within and across entries and `Root`'s copy binding copies
+it. gpui-base's own `SelectableText` cannot carry syntax highlights, hence the element.
+
 ## Dialect, ConnectionContext and tabs
 
 Every per-backend SQL fact lives on `blanco_core::Dialect` (`crates/blanco-core/src/dialect.rs`),

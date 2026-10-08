@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 /// Schema version stored in SQLite's `PRAGMA user_version`. Bump it and append
 /// a step to [`MIGRATIONS`] for every schema change.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 /// The complete schema for a fresh database, at [`SCHEMA_VERSION`]. Keep it in
 /// sync with the migrations: a database created from this must be identical
@@ -32,7 +32,8 @@ const BASELINE: &[&str] = &[
         ssl_cert_path TEXT,
         ssl_ca_cert_path TEXT,
         trust_server_certificate INTEGER NOT NULL DEFAULT 0,
-        read_only INTEGER NOT NULL DEFAULT 0
+        read_only INTEGER NOT NULL DEFAULT 0,
+        only_configured_database INTEGER NOT NULL DEFAULT 0
     )
     "#,
     r#"
@@ -99,7 +100,10 @@ const BASELINE: &[&str] = &[
 /// baseline; its column list must stay in sync with [`BASELINE`].
 type Migration = fn(&SqlitePool) -> futures::future::BoxFuture<'_, Result<(), sqlx::Error>>;
 
-const MIGRATIONS: &[Migration] = &[|pool| Box::pin(migrate_unversioned_to_v1(pool))];
+const MIGRATIONS: &[Migration] = &[
+    |pool| Box::pin(migrate_unversioned_to_v1(pool)),
+    |pool| Box::pin(migrate_v1_to_v2(pool)),
+];
 
 /// Columns that may be missing from an unversioned database, per table, in the
 /// form accepted by `ALTER TABLE ... ADD COLUMN`.
@@ -154,6 +158,15 @@ async fn migrate_unversioned_to_v1(pool: &SqlitePool) -> Result<(), sqlx::Error>
             }
         }
     }
+    Ok(())
+}
+
+async fn migrate_v1_to_v2(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "ALTER TABLE connections ADD COLUMN only_configured_database INTEGER NOT NULL DEFAULT 0",
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -304,11 +317,14 @@ mod tests {
             );
         }
 
-        let row = sqlx::query("SELECT read_only FROM connections WHERE name = 'old'")
-            .fetch_one(&pool)
-            .await
-            .expect("migrated row");
+        let row = sqlx::query(
+            "SELECT read_only, only_configured_database FROM connections WHERE name = 'old'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("migrated row");
         assert_eq!(row.get::<i64, _>(0), 0);
+        assert_eq!(row.get::<i64, _>(1), 0);
     }
 
     #[tokio::test]

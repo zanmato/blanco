@@ -52,6 +52,9 @@ pub struct MetadataCache {
     pub columns: HashMap<String, CacheEntry<Vec<ColumnInfo>>>,
     /// User-defined function signatures keyed by schema name.
     pub functions_by_schema: HashMap<String, CacheEntry<Vec<FunctionSignatureInfo>>>,
+    /// Bumped by every invalidation, so a fetch that started before one can
+    /// tell its result is out of date.
+    pub generation: u64,
 }
 
 impl MetadataCache {
@@ -62,6 +65,7 @@ impl MetadataCache {
             tables_by_schema: HashMap::new(),
             columns: HashMap::new(),
             functions_by_schema: HashMap::new(),
+            generation: 0,
         }
     }
 
@@ -71,5 +75,6 @@ impl MetadataCache {
         self.tables_by_schema.clear();
         self.columns.clear();
         self.functions_by_schema.clear();
+        self.generation += 1;
     }
 }

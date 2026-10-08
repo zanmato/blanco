@@ -19,6 +19,7 @@ use gpui_component::{
 use super::rename_form::RenameTabForm;
 use super::{EditorPanel, QueryTab, ScriptTab, TabType};
 use crate::app::{ExecuteSubstitutedQuery, FormatQuery, RenameTab};
+use crate::app_settings::AppSettings;
 use crate::result_ext::ResultExt;
 use crate::results_panel::ResultsPanel;
 use app_database::EnvironmentType;
@@ -469,7 +470,7 @@ impl EditorPanel {
                 .w_full()
                 .rounded_none()
                 .font_family(cx.theme().mono_font_family.clone())
-                .text_size(px(14.)),
+                .text_size(px(AppSettings::global(cx).settings.editor.font_size)),
         )
     }
 

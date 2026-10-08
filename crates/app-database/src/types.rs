@@ -126,6 +126,9 @@ pub struct ConnectionData {
     /// When set, every statement the classifier does not recognise as a read
     /// is rejected before it reaches the server.
     pub read_only: bool,
+    /// Show only `database_name` in the tree and the command palette instead
+    /// of every database on the server.
+    pub only_configured_database: bool,
 }
 
 impl std::fmt::Debug for ConnectionData {
@@ -162,6 +165,7 @@ impl std::fmt::Debug for ConnectionData {
             .field("ssl_ca_cert_path", &self.ssl_ca_cert_path)
             .field("trust_server_certificate", &self.trust_server_certificate)
             .field("read_only", &self.read_only)
+            .field("only_configured_database", &self.only_configured_database)
             .finish()
     }
 }
@@ -169,6 +173,18 @@ impl std::fmt::Debug for ConnectionData {
 impl ConnectionData {
     pub fn display_name(&self) -> String {
         self.name.clone()
+    }
+
+    /// The one database to list for this connection, when it is restricted to
+    /// the database it was configured with. `None` lists everything on the
+    /// server, which is also what an empty database name falls back to.
+    pub fn pinned_database(&self) -> Option<&str> {
+        if !self.only_configured_database {
+            return None;
+        }
+        self.database_name
+            .as_deref()
+            .filter(|database| !database.is_empty())
     }
 
     pub fn new_sqlite(name: String, database_path: String) -> Self {
@@ -197,6 +213,7 @@ impl ConnectionData {
             ssl_ca_cert_path: None,
             trust_server_certificate: false,
             read_only: false,
+            only_configured_database: false,
         }
     }
 
@@ -236,6 +253,7 @@ impl ConnectionData {
             ssl_ca_cert_path: None,
             trust_server_certificate: false,
             read_only: false,
+            only_configured_database: false,
         }
     }
 

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use blanco_core::{ColumnInfo, FunctionSignatureInfo, QueryableEntity};
 use database::DatabaseServiceTrait;
 
@@ -9,6 +9,20 @@ fn is_system_schema(name: &str) -> bool {
     name == "information_schema" || name.starts_with("pg_")
 }
 
+/// The connection to read metadata over. A failure is an error rather than an
+/// empty result: the caller caches what it gets, and an empty listing cached
+/// after one dropped connection would hide every table for the cache's TTL.
+async fn connection_for(
+    db_service: &dyn DatabaseServiceTrait,
+    connection_id: i64,
+    database_name: &str,
+) -> Result<std::sync::Arc<dyn blanco_core::Connection>> {
+    db_service
+        .get_or_create_connection_by_id(connection_id, Some(database_name))
+        .await
+        .with_context(|| format!("no connection to database '{database_name}'"))
+}
+
 /// Fetch the user schemas for a connection along with whether the backend
 /// supports schemas at all (false for MySQL/SQLite). System schemas are removed.
 pub async fn fetch_schemas(
@@ -16,16 +30,7 @@ pub async fn fetch_schemas(
     connection_id: i64,
     database_name: &str,
 ) -> Result<(Vec<String>, bool)> {
-    let Ok(connection) = db_service
-        .get_or_create_connection_by_id(connection_id, Some(database_name))
-        .await
-    else {
-        tracing::warn!(
-            "Failed to get connection for fetching schemas from database '{}'",
-            database_name
-        );
-        return Ok((Vec::new(), false));
-    };
+    let connection = connection_for(db_service, connection_id, database_name).await?;
 
     if !connection.supports_schemas() {
         return Ok((Vec::new(), false));
@@ -54,25 +59,15 @@ pub async fn fetch_queryable_entities(
         database_name,
         schema
     );
-    if let Ok(connection) = db_service
-        .get_or_create_connection_by_id(connection_id, Some(database_name))
-        .await
-    {
-        let entities = connection.get_queryable_entities(schema).await?;
-        tracing::debug!(
-            "Found {} entities for database '{}', schema {:?}",
-            entities.len(),
-            database_name,
-            schema
-        );
-        Ok(entities)
-    } else {
-        tracing::warn!(
-            "Failed to get connection for fetching entities from database '{}'",
-            database_name
-        );
-        Ok(Vec::new())
-    }
+    let connection = connection_for(db_service, connection_id, database_name).await?;
+    let entities = connection.get_queryable_entities(schema).await?;
+    tracing::debug!(
+        "Found {} entities for database '{}', schema {:?}",
+        entities.len(),
+        database_name,
+        schema
+    );
+    Ok(entities)
 }
 
 /// Fetch full column metadata (including foreign keys) for a specific table (in
@@ -90,21 +85,10 @@ pub async fn fetch_columns(
         database_name,
         schema
     );
-    if let Ok(connection) = db_service
-        .get_or_create_connection_by_id(connection_id, Some(database_name))
-        .await
-    {
-        let columns = connection.get_columns_for_table(table_name, schema).await?;
-        tracing::debug!("Found {} columns for table '{}'", columns.len(), table_name);
-        Ok(columns)
-    } else {
-        tracing::warn!(
-            "Failed to get connection for fetching columns from table '{}', database '{}'",
-            table_name,
-            database_name
-        );
-        Ok(Vec::new())
-    }
+    let connection = connection_for(db_service, connection_id, database_name).await?;
+    let columns = connection.get_columns_for_table(table_name, schema).await?;
+    tracing::debug!("Found {} columns for table '{}'", columns.len(), table_name);
+    Ok(columns)
 }
 
 /// Fetch the user-defined function signatures of a schema using the DbService.
@@ -119,23 +103,13 @@ pub async fn fetch_function_signatures(
         database_name,
         schema
     );
-    if let Ok(connection) = db_service
-        .get_or_create_connection_by_id(connection_id, Some(database_name))
-        .await
-    {
-        let functions = connection.list_function_signatures(schema).await?;
-        tracing::debug!(
-            "Found {} functions for database '{}', schema {:?}",
-            functions.len(),
-            database_name,
-            schema
-        );
-        Ok(functions)
-    } else {
-        tracing::warn!(
-            "Failed to get connection for fetching functions from database '{}'",
-            database_name
-        );
-        Ok(Vec::new())
-    }
+    let connection = connection_for(db_service, connection_id, database_name).await?;
+    let functions = connection.list_function_signatures(schema).await?;
+    tracing::debug!(
+        "Found {} functions for database '{}', schema {:?}",
+        functions.len(),
+        database_name,
+        schema
+    );
+    Ok(functions)
 }

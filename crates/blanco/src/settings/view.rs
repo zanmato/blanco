@@ -1,8 +1,8 @@
 use crate::app_settings::AppSettings;
 use crate::mcp::{McpService, McpStatus};
-use crate::settings::Settings;
 use crate::settings::formatter_page::formatter_page;
 use crate::settings::keybindings_page::keybindings_page;
+use crate::settings::{EditorSettings, Settings};
 use app_database::AppDatabase;
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, FocusHandle, Focusable, IntoElement,
@@ -337,6 +337,41 @@ impl SettingsView {
                         .default_value(default_settings.editor.tab_size as f64),
                     )
                     .description("Number of spaces per tab stop (1-8)."),
+                    SettingItem::new(
+                        "Font Size",
+                        SettingField::number_input(
+                            NumberFieldOptions {
+                                min: EditorSettings::MIN_FONT_SIZE as f64,
+                                max: EditorSettings::MAX_FONT_SIZE as f64,
+                                step: 1.0,
+                            },
+                            move |cx: &App| {
+                                AppSettings::global(cx).settings.editor.font_size as f64
+                            },
+                            {
+                                let view_handle = view_handle.clone();
+                                move |val: f64, cx: &mut App| {
+                                    crate::settings::set_editor_font_size(val as f32, cx);
+
+                                    let key = "editor.font_size".to_string();
+                                    let value = AppSettings::global(cx)
+                                        .settings
+                                        .editor
+                                        .font_size
+                                        .to_string();
+                                    if let Some(view) = view_handle.upgrade() {
+                                        view.update(cx, |view, cx| {
+                                            view.save_setting_debounced(key, value, false, cx);
+                                        });
+                                    }
+                                }
+                            },
+                        )
+                        .default_value(default_settings.editor.font_size as f64),
+                    )
+                    .description(
+                        "Font size in pixels for the query, script and snippet editors (8-32).",
+                    ),
                 ]),
             ]),
             formatter_page(view_handle.clone(), &default_settings),

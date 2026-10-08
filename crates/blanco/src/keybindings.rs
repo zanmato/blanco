@@ -1,6 +1,7 @@
 use crate::app::{
-    CommitChanges, ExplainQuery, FormatQuery, OpenSettings, OpenTerminal, RollbackChanges,
-    RunQuery, ToggleCommandPalette,
+    CommitChanges, DecreaseEditorFontSize, ExplainQuery, FormatQuery, IncreaseEditorFontSize,
+    OpenSettings, OpenTerminal, ResetEditorFontSize, RollbackChanges, RunQuery,
+    ToggleCommandPalette,
 };
 use crate::settings::Settings;
 
@@ -14,7 +15,14 @@ pub struct BindingDef {
     /// Built-in keystroke. An empty string means the action is unbound by
     /// default and only becomes active once the user assigns a shortcut.
     pub default: &'static str,
+    /// Key context the shortcut is limited to, `None` for the whole window.
+    pub context: Option<&'static str>,
 }
+
+/// Key context of every text input, the code editors included. The font size
+/// shortcuts are limited to it so `ctrl--` and `ctrl-0` still reach the shell
+/// while the terminal pane has focus.
+const INPUT_CONTEXT: &str = "Input";
 
 /// The set of actions exposed for rebinding. Platform-fixed bindings such as
 /// Quit are intentionally excluded.
@@ -23,41 +31,67 @@ pub const CUSTOMIZABLE_BINDINGS: &[BindingDef] = &[
         action: "RunQuery",
         label: "Run query",
         default: "secondary-enter",
+        context: None,
     },
     BindingDef {
         action: "ExplainQuery",
         label: "Explain query",
         default: "secondary-e",
+        context: None,
     },
     BindingDef {
         action: "FormatQuery",
         label: "Format SQL",
         default: "shift-alt-f",
+        context: None,
     },
     BindingDef {
         action: "ToggleCommandPalette",
         label: "Toggle command palette",
         default: "secondary-k",
+        context: None,
     },
     BindingDef {
         action: "CommitChanges",
         label: "Commit changes",
         default: "super-shift-c",
+        context: None,
     },
     BindingDef {
         action: "RollbackChanges",
         label: "Rollback changes",
         default: "super-shift-r",
+        context: None,
     },
     BindingDef {
         action: "OpenSettings",
         label: "Open settings",
         default: "super-,",
+        context: None,
     },
     BindingDef {
         action: "OpenTerminal",
         label: "Toggle terminal",
         default: "ctrl-`",
+        context: None,
+    },
+    BindingDef {
+        action: "IncreaseEditorFontSize",
+        label: "Increase editor font size",
+        default: "secondary-=",
+        context: Some(INPUT_CONTEXT),
+    },
+    BindingDef {
+        action: "DecreaseEditorFontSize",
+        label: "Decrease editor font size",
+        default: "secondary--",
+        context: Some(INPUT_CONTEXT),
+    },
+    BindingDef {
+        action: "ResetEditorFontSize",
+        label: "Reset editor font size",
+        default: "secondary-0",
+        context: Some(INPUT_CONTEXT),
     },
 ];
 
@@ -91,20 +125,27 @@ pub fn keystrokes_valid(keystrokes: &str) -> bool {
 /// Resolve an action identifier and keystroke into a concrete `KeyBinding`.
 /// Returns `None` for empty/invalid keystrokes or unknown actions, so callers
 /// never hit `KeyBinding::new`'s internal panic on malformed input.
-fn key_binding(action: &str, keystrokes: &str) -> Option<gpui::KeyBinding> {
+fn key_binding(action: &str, keystrokes: &str, context: Option<&str>) -> Option<gpui::KeyBinding> {
     if keystrokes.trim().is_empty() || !keystrokes_valid(keystrokes) {
         return None;
     }
 
     let binding = match action {
-        "RunQuery" => gpui::KeyBinding::new(keystrokes, RunQuery, None),
-        "ExplainQuery" => gpui::KeyBinding::new(keystrokes, ExplainQuery, None),
-        "FormatQuery" => gpui::KeyBinding::new(keystrokes, FormatQuery, None),
-        "ToggleCommandPalette" => gpui::KeyBinding::new(keystrokes, ToggleCommandPalette, None),
-        "CommitChanges" => gpui::KeyBinding::new(keystrokes, CommitChanges, None),
-        "RollbackChanges" => gpui::KeyBinding::new(keystrokes, RollbackChanges, None),
-        "OpenSettings" => gpui::KeyBinding::new(keystrokes, OpenSettings, None),
-        "OpenTerminal" => gpui::KeyBinding::new(keystrokes, OpenTerminal, None),
+        "RunQuery" => gpui::KeyBinding::new(keystrokes, RunQuery, context),
+        "ExplainQuery" => gpui::KeyBinding::new(keystrokes, ExplainQuery, context),
+        "FormatQuery" => gpui::KeyBinding::new(keystrokes, FormatQuery, context),
+        "ToggleCommandPalette" => gpui::KeyBinding::new(keystrokes, ToggleCommandPalette, context),
+        "CommitChanges" => gpui::KeyBinding::new(keystrokes, CommitChanges, context),
+        "RollbackChanges" => gpui::KeyBinding::new(keystrokes, RollbackChanges, context),
+        "OpenSettings" => gpui::KeyBinding::new(keystrokes, OpenSettings, context),
+        "OpenTerminal" => gpui::KeyBinding::new(keystrokes, OpenTerminal, context),
+        "IncreaseEditorFontSize" => {
+            gpui::KeyBinding::new(keystrokes, IncreaseEditorFontSize, context)
+        }
+        "DecreaseEditorFontSize" => {
+            gpui::KeyBinding::new(keystrokes, DecreaseEditorFontSize, context)
+        }
+        "ResetEditorFontSize" => gpui::KeyBinding::new(keystrokes, ResetEditorFontSize, context),
         _ => return None,
     };
     Some(binding)
@@ -117,9 +158,21 @@ pub fn customizable_key_bindings(settings: &Settings) -> Vec<gpui::KeyBinding> {
         .iter()
         .filter_map(|def| {
             let keystrokes = effective_keystroke(settings, def.action);
-            key_binding(def.action, &keystrokes)
+            key_binding(def.action, &keystrokes, def.context)
         })
+        .chain(increase_font_size_alias(settings))
         .collect()
+}
+
+/// `secondary-+` as a second shortcut for increasing the font size. On a US
+/// layout `+` needs shift, so the default binds the unshifted `=`, but layouts
+/// with a dedicated `+` key (Nordic, German) have no `=` to press. Follows the
+/// primary shortcut: rebinding or unbinding that one drops the alias.
+fn increase_font_size_alias(settings: &Settings) -> Option<gpui::KeyBinding> {
+    let action = "IncreaseEditorFontSize";
+    (effective_keystroke(settings, action) == default_keystroke(action))
+        .then(|| key_binding(action, "secondary-+", Some(INPUT_CONTEXT)))
+        .flatten()
 }
 
 #[cfg(test)]
@@ -171,6 +224,7 @@ mod tests {
             .insert("ExplainQuery".to_string(), "ctrl-a-b".to_string());
 
         let bindings = customizable_key_bindings(&settings);
-        assert_eq!(bindings.len(), CUSTOMIZABLE_BINDINGS.len() - 2);
+        // The font size alias adds one binding on top of the table.
+        assert_eq!(bindings.len(), CUSTOMIZABLE_BINDINGS.len() + 1 - 2);
     }
 }

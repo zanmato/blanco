@@ -28,7 +28,7 @@ impl ObjectDdlTab {
     ) -> Self {
         let title = format!("{}: {}", kind.display_name().to_lowercase(), object_name);
         let highlight_theme = cx.theme().highlight_theme.clone();
-        let sql_view = cx.new(|_| SqlView::new(1, highlight_theme, "sql"));
+        let sql_view = cx.new(|cx| SqlView::new(1, highlight_theme, "sql", cx));
         Self {
             title,
             kind,

@@ -675,6 +675,7 @@ impl EditorPanel {
             params.context.schema_name.clone(),
             params.context.db_type,
             db_service,
+            cx.background_executor().clone(),
         );
 
         // SQL completions and the statement outline only make sense for SQL
@@ -814,11 +815,12 @@ impl EditorPanel {
                     10,
                     cx.theme().highlight_theme.clone(),
                     params.context.db_type.editor_language(),
+                    cx,
                 )
                 .show_copy_button(false)
             }),
             commit_preview: cx
-                .new(|cx| SqlView::new(usize::MAX, cx.theme().highlight_theme.clone(), "sql")),
+                .new(|cx| SqlView::new(usize::MAX, cx.theme().highlight_theme.clone(), "sql", cx)),
             sqruff_service,
             completion_provider: supports_sql.then_some(sql_completion_provider),
             sql_view_visible: true,
@@ -919,6 +921,7 @@ impl EditorPanel {
                     SCRIPT_LOG_MAX_LINES,
                     cx.theme().highlight_theme.clone(),
                     SCRIPT_EDITOR_LANGUAGE,
+                    cx,
                 )
                 .show_copy_button(false)
             }),

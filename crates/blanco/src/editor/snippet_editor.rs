@@ -1,7 +1,7 @@
 use blanco_ui::IconName;
 use gpui::{
     App, AppContext as _, Context, Entity, Focusable, IntoElement, ParentElement, Render, Styled,
-    WeakEntity, Window, div, prelude::FluentBuilder as _,
+    WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     ActiveTheme, Sizable,
@@ -213,6 +213,7 @@ impl Render for SnippetEditor {
                     .bordered(false)
                     .rounded_none()
                     .font_family(cx.theme().mono_font_family.clone())
+                    .text_size(px(AppSettings::global(cx).settings.editor.font_size))
                     .size_full(),
             )
             .child(

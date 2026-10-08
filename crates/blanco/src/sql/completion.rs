@@ -19,13 +19,16 @@ use sql_parser::statement_parser::{
 
 use anyhow::Result;
 use database::DatabaseServiceTrait;
-use gpui::{App, AppContext as _, Task, Window};
+use futures::FutureExt as _;
+use futures::future::Shared;
+use gpui::{App, AppContext as _, BackgroundExecutor, Task, Window};
 use gpui_component::input::{CompletionProvider, Rope, RopeExt};
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
     InsertTextFormat, Range, TextEdit,
 };
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 const CACHE_TTL_SECONDS: u64 = 300; // 5 minutes cache TTL
@@ -95,6 +98,32 @@ enum CompletionPlan {
     Nothing,
 }
 
+/// One piece of metadata the provider caches and fetches as a unit.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum MetadataKey {
+    Schemas,
+    Tables { schema: String },
+    Columns { schema: String, table: String },
+    Functions { schema: String },
+}
+
+impl std::fmt::Display for MetadataKey {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MetadataKey::Schemas => write!(formatter, "schemas"),
+            MetadataKey::Tables { schema } => write!(formatter, "tables of {schema}"),
+            MetadataKey::Columns { schema, table } => {
+                write!(formatter, "columns of {schema}.{table}")
+            }
+            MetadataKey::Functions { schema } => write!(formatter, "functions of {schema}"),
+        }
+    }
+}
+
+/// A running metadata fetch. Every request that needs the same metadata awaits
+/// the same fetch, and the provider keeps it alive when those requests go away.
+type SharedFetch = Shared<Task<Result<(), Arc<anyhow::Error>>>>;
+
 /// SQL Completion Provider that implements gpui-component's CompletionProvider trait
 #[derive(Clone)]
 pub struct SqlCompletionProvider {
@@ -106,7 +135,18 @@ pub struct SqlCompletionProvider {
     /// The connection's backend, which selects the built-in function catalog.
     pub driver: DatabaseType,
     db_service: Arc<dyn DatabaseServiceTrait>,
-    cache: Arc<std::sync::Mutex<MetadataCache>>,
+    cache: Arc<Mutex<MetadataCache>>,
+    /// Fetches that have not finished yet. The editor drops a completion
+    /// request as soon as the next keystroke replaces it, so a fetch owned by
+    /// the request would restart on every key and never finish on a connection
+    /// slower than the typing. Owned here, it runs to completion and fills the
+    /// cache for the requests that follow.
+    in_flight: Arc<Mutex<HashMap<MetadataKey, SharedFetch>>>,
+    executor: BackgroundExecutor,
+    /// Upper bound for one metadata fetch, `None` for unlimited. Without it a
+    /// fetch that hangs on a dead connection would stay in flight forever and
+    /// block every later request for the same metadata.
+    fetch_timeout: Option<Duration>,
 }
 
 impl SqlCompletionProvider {
@@ -116,6 +156,7 @@ impl SqlCompletionProvider {
         schema_name: Option<String>,
         driver: DatabaseType,
         db_service: Arc<dyn DatabaseServiceTrait>,
+        executor: BackgroundExecutor,
     ) -> Self {
         let current_schema = schema_name
             .filter(|s| !s.is_empty())
@@ -126,19 +167,180 @@ impl SqlCompletionProvider {
             current_schema,
             driver,
             db_service,
-            cache: Arc::new(std::sync::Mutex::new(MetadataCache::new())),
+            cache: Arc::new(Mutex::new(MetadataCache::new())),
+            in_flight: Arc::new(Mutex::new(HashMap::new())),
+            executor,
+            fetch_timeout: None,
         }
     }
 
-    /// Return cached (schemas, supports_schemas) only if a fresh entry exists. No IO.
-    pub fn try_get_cached_schemas(&self) -> Option<(Arc<Vec<String>>, bool)> {
-        let cache = self.cache.lock().ok()?;
-        let supports = cache.supports_schemas?;
-        let cached = cache.schemas.as_ref()?;
-        if cached.is_expired(CACHE_TTL_SECONDS) {
-            return None;
+    /// The same provider (sharing its cache and running fetches) with the
+    /// timeout applied to fetches it starts from now on. Callers pass the
+    /// user's query timeout, read where an `App` is at hand.
+    pub fn with_fetch_timeout(&self, fetch_timeout: Option<Duration>) -> Self {
+        Self {
+            fetch_timeout,
+            ..self.clone()
         }
-        Some((Arc::clone(&cached.data), supports))
+    }
+
+    /// Read a cache entry without waiting. An expired entry is still returned,
+    /// with a refresh started behind it, so suggestions do not go blank for the
+    /// length of a round trip every time the TTL runs out.
+    fn lookup<T>(
+        &self,
+        key: MetadataKey,
+        entry: impl FnOnce(&MetadataCache) -> Option<&CacheEntry<T>>,
+    ) -> Option<Arc<T>> {
+        let (data, expired) = {
+            let cache = self.cache.lock().ok()?;
+            let entry = entry(&cache)?;
+            (Arc::clone(&entry.data), entry.is_expired(CACHE_TTL_SECONDS))
+        };
+        if expired {
+            // Not awaited: `in_flight` keeps the refresh running.
+            drop(self.start_fetch(key));
+        }
+        Some(data)
+    }
+
+    /// Join the running fetch for `key`, starting one when there is none.
+    fn start_fetch(&self, key: MetadataKey) -> SharedFetch {
+        let mut in_flight = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(fetch) = in_flight.get(&key) {
+            return fetch.clone();
+        }
+
+        let fetch = self
+            .executor
+            .spawn({
+                let provider = self.clone();
+                let key = key.clone();
+                async move {
+                    let result = provider.fetch_into_cache(&key).await.map_err(Arc::new);
+                    if let Err(error) = &result {
+                        tracing::warn!("Failed to load {key} for completion: {error:#}");
+                    }
+                    provider
+                        .in_flight
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .remove(&key);
+                    result
+                }
+            })
+            .shared();
+        in_flight.insert(key, fetch.clone());
+        fetch
+    }
+
+    /// Wait for `key` to be fetched and cached.
+    async fn load(&self, key: MetadataKey) -> Result<()> {
+        self.start_fetch(key)
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:#}"))
+    }
+
+    async fn fetch_into_cache(&self, key: &MetadataKey) -> Result<()> {
+        let fetch = self.fetch_and_store(key);
+        match self.fetch_timeout {
+            Some(timeout) => {
+                let deadline = async {
+                    self.executor.timer(timeout).await;
+                    Err(anyhow::anyhow!(
+                        "loading {key} exceeded the configured {}s query timeout",
+                        timeout.as_secs()
+                    ))
+                };
+                smol::future::or(fetch, deadline).await
+            }
+            None => fetch.await,
+        }
+    }
+
+    async fn fetch_and_store(&self, key: &MetadataKey) -> Result<()> {
+        let db_service = &*self.db_service;
+        let generation = self.cache_generation();
+        match key {
+            MetadataKey::Schemas => {
+                let (schemas, supports) =
+                    fetch_schemas(db_service, self.connection_id, &self.database_name).await?;
+                self.store(generation, |cache| {
+                    cache.supports_schemas = Some(supports);
+                    cache.schemas = Some(CacheEntry::new(schemas));
+                });
+            }
+            MetadataKey::Tables { schema } => {
+                let entities = fetch_queryable_entities(
+                    db_service,
+                    self.connection_id,
+                    &self.database_name,
+                    Some(schema),
+                )
+                .await?;
+                self.store(generation, |cache| {
+                    cache
+                        .tables_by_schema
+                        .insert(schema.clone(), CacheEntry::new(entities));
+                });
+            }
+            MetadataKey::Columns { schema, table } => {
+                let columns = fetch_columns(
+                    db_service,
+                    self.connection_id,
+                    table,
+                    &self.database_name,
+                    Some(schema),
+                )
+                .await?;
+                self.store(generation, |cache| {
+                    cache
+                        .columns
+                        .insert(columns_key(schema, table), CacheEntry::new(columns));
+                });
+            }
+            MetadataKey::Functions { schema } => {
+                let functions = fetch_function_signatures(
+                    db_service,
+                    self.connection_id,
+                    &self.database_name,
+                    Some(schema),
+                )
+                .await?;
+                self.store(generation, |cache| {
+                    cache
+                        .functions_by_schema
+                        .insert(schema.clone(), CacheEntry::new(functions));
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn cache_generation(&self) -> u64 {
+        self.cache
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .generation
+    }
+
+    /// Write a fetched result, unless the cache was invalidated while the
+    /// fetch ran: what it read may predate the DDL that invalidated it.
+    fn store(&self, generation: u64, write: impl FnOnce(&mut MetadataCache)) {
+        let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
+        if cache.generation == generation {
+            write(&mut cache);
+        }
+    }
+
+    /// Return cached (schemas, supports_schemas) if there is an entry. No waiting.
+    pub fn try_get_cached_schemas(&self) -> Option<(Arc<Vec<String>>, bool)> {
+        let supports = self.cache.lock().ok()?.supports_schemas?;
+        let schemas = self.lookup(MetadataKey::Schemas, |cache| cache.schemas.as_ref())?;
+        Some((schemas, supports))
     }
 
     /// Get cached schemas or fetch them. Returns the user schemas and whether
@@ -147,79 +349,47 @@ impl SqlCompletionProvider {
         if let Some(cached) = self.try_get_cached_schemas() {
             return Ok(cached);
         }
-
-        let (schemas, supports) =
-            fetch_schemas(&*self.db_service, self.connection_id, &self.database_name).await?;
-
-        let arc = if let Ok(mut cache) = self.cache.lock() {
-            cache.supports_schemas = Some(supports);
-            cache.schemas = Some(CacheEntry::new(schemas));
-            Arc::clone(&cache.schemas.as_ref().expect("just inserted").data)
-        } else {
-            Arc::new(schemas)
-        };
-
-        Ok((arc, supports))
+        let key = MetadataKey::Schemas;
+        self.load(key.clone()).await?;
+        self.try_get_cached_schemas()
+            .ok_or_else(|| not_cached(&key))
     }
 
-    /// Return cached tables for a schema only if a fresh entry exists. No IO.
+    /// Return cached tables for a schema if there is an entry. No waiting.
     pub fn try_get_cached_tables(&self, schema: &str) -> Option<Arc<Vec<QueryableEntity>>> {
-        let cache = self.cache.lock().ok()?;
-        let cached = cache.tables_by_schema.get(schema)?;
-        if cached.is_expired(CACHE_TTL_SECONDS) {
-            return None;
-        }
-        Some(Arc::clone(&cached.data))
+        let key = MetadataKey::Tables {
+            schema: schema.to_string(),
+        };
+        self.lookup(key, |cache| cache.tables_by_schema.get(schema))
     }
 
-    /// Return cached columns for `schema.table` only if a fresh entry exists. No IO.
+    /// Return cached columns for `schema.table` if there is an entry. No waiting.
     pub fn try_get_cached_columns(
         &self,
         schema: &str,
         table: &str,
     ) -> Option<Arc<Vec<ColumnInfo>>> {
-        let key = columns_key(schema, table);
-        let cache = self.cache.lock().ok()?;
-        let cached = cache.columns.get(&key)?;
-        if cached.is_expired(CACHE_TTL_SECONDS) {
-            return None;
-        }
-        Some(Arc::clone(&cached.data))
+        let key = MetadataKey::Columns {
+            schema: schema.to_string(),
+            table: table.to_string(),
+        };
+        self.lookup(key, |cache| cache.columns.get(&columns_key(schema, table)))
     }
 
-    /// Get cached tables for a schema or fetch them if not cached/expired
+    /// Get cached tables for a schema or fetch them if not cached
     pub async fn get_cached_tables(&self, schema: &str) -> Result<Arc<Vec<QueryableEntity>>> {
         if let Some(cached) = self.try_get_cached_tables(schema) {
             return Ok(cached);
         }
-
-        let entities = fetch_queryable_entities(
-            &*self.db_service,
-            self.connection_id,
-            &self.database_name,
-            Some(schema),
-        )
-        .await?;
-
-        let arc = if let Ok(mut cache) = self.cache.lock() {
-            cache
-                .tables_by_schema
-                .insert(schema.to_string(), CacheEntry::new(entities));
-            Arc::clone(
-                &cache
-                    .tables_by_schema
-                    .get(schema)
-                    .expect("just inserted")
-                    .data,
-            )
-        } else {
-            Arc::new(entities)
+        let key = MetadataKey::Tables {
+            schema: schema.to_string(),
         };
-
-        Ok(arc)
+        self.load(key.clone()).await?;
+        self.try_get_cached_tables(schema)
+            .ok_or_else(|| not_cached(&key))
     }
 
-    /// Get cached columns for `schema.table` or fetch them if not cached/expired
+    /// Get cached columns for `schema.table` or fetch them if not cached
     pub async fn get_cached_columns(
         &self,
         schema: &str,
@@ -228,43 +398,29 @@ impl SqlCompletionProvider {
         if let Some(cached) = self.try_get_cached_columns(schema, table) {
             return Ok(cached);
         }
-
-        let columns = fetch_columns(
-            &*self.db_service,
-            self.connection_id,
-            table,
-            &self.database_name,
-            Some(schema),
-        )
-        .await?;
-
-        let key = columns_key(schema, table);
-        let arc = if let Ok(mut cache) = self.cache.lock() {
-            cache.columns.insert(key.clone(), CacheEntry::new(columns));
-            Arc::clone(&cache.columns.get(&key).expect("just inserted").data)
-        } else {
-            Arc::new(columns)
+        let key = MetadataKey::Columns {
+            schema: schema.to_string(),
+            table: table.to_string(),
         };
-
-        Ok(arc)
+        self.load(key.clone()).await?;
+        self.try_get_cached_columns(schema, table)
+            .ok_or_else(|| not_cached(&key))
     }
 
-    /// Return cached user-defined functions for a schema only if a fresh entry
-    /// exists. No IO.
+    /// Return cached user-defined functions for a schema if there is an entry.
+    /// No waiting.
     pub fn try_get_cached_functions(
         &self,
         schema: &str,
     ) -> Option<Arc<Vec<FunctionSignatureInfo>>> {
-        let cache = self.cache.lock().ok()?;
-        let cached = cache.functions_by_schema.get(schema)?;
-        if cached.is_expired(CACHE_TTL_SECONDS) {
-            return None;
-        }
-        Some(Arc::clone(&cached.data))
+        let key = MetadataKey::Functions {
+            schema: schema.to_string(),
+        };
+        self.lookup(key, |cache| cache.functions_by_schema.get(schema))
     }
 
     /// Get cached user-defined functions for a schema or fetch them if not
-    /// cached/expired
+    /// cached
     pub async fn get_cached_functions(
         &self,
         schema: &str,
@@ -272,31 +428,12 @@ impl SqlCompletionProvider {
         if let Some(cached) = self.try_get_cached_functions(schema) {
             return Ok(cached);
         }
-
-        let functions = fetch_function_signatures(
-            &*self.db_service,
-            self.connection_id,
-            &self.database_name,
-            Some(schema),
-        )
-        .await?;
-
-        let arc = if let Ok(mut cache) = self.cache.lock() {
-            cache
-                .functions_by_schema
-                .insert(schema.to_string(), CacheEntry::new(functions));
-            Arc::clone(
-                &cache
-                    .functions_by_schema
-                    .get(schema)
-                    .expect("just inserted")
-                    .data,
-            )
-        } else {
-            Arc::new(functions)
+        let key = MetadataKey::Functions {
+            schema: schema.to_string(),
         };
-
-        Ok(arc)
+        self.load(key.clone()).await?;
+        self.try_get_cached_functions(schema)
+            .ok_or_else(|| not_cached(&key))
     }
 
     /// Invalidate all cached metadata (call after DDL statements)
@@ -304,7 +441,20 @@ impl SqlCompletionProvider {
         if let Ok(mut cache) = self.cache.lock() {
             cache.invalidate_all();
         }
+        // Fetches still running read the catalog before the DDL. Their results
+        // are refused by `store`; forgetting them here makes the next request
+        // start a fresh one instead of joining them.
+        self.in_flight
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
     }
+}
+
+/// The cache was invalidated between a fetch finishing and its result being
+/// read back, so there is nothing to return for this request.
+fn not_cached(key: &MetadataKey) -> anyhow::Error {
+    anyhow::anyhow!("{key} were invalidated while loading")
 }
 
 fn is_valid_identifier(word: &str) -> bool {
@@ -812,7 +962,12 @@ impl CompletionProvider for SqlCompletionProvider {
         cx: &mut App,
     ) -> Task<Result<CompletionResponse>> {
         let rope_clone = rope.clone();
-        let provider = self.clone();
+        let provider = self.with_fetch_timeout(
+            crate::app_settings::AppSettings::global(cx)
+                .settings
+                .database
+                .query_timeout(),
+        );
         let background_executor = cx.background_executor().clone();
 
         // Spawn on the foreground thread so the debounce timer is cancelled when
@@ -837,10 +992,10 @@ impl CompletionProvider for SqlCompletionProvider {
                     None => {
                         background_executor.timer(Duration::from_millis(300)).await;
                         debounced = true;
-                        provider
-                            .get_cached_schemas()
-                            .await
-                            .unwrap_or_else(|_| (Arc::new(Vec::new()), false))
+                        provider.get_cached_schemas().await.unwrap_or_else(|error| {
+                            tracing::warn!("Completing without schemas: {error:#}");
+                            (Arc::new(Vec::new()), false)
+                        })
                     }
                 };
 
@@ -880,6 +1035,31 @@ impl CompletionProvider for SqlCompletionProvider {
 
                 let items = match plan {
                     CompletionPlan::Columns { sources } => {
+                        // Column and function fetches go out together: on a
+                        // slow connection the round trips overlap instead of
+                        // adding up.
+                        let column_fetches =
+                            futures::future::join_all(sources.iter().map(|source| async {
+                                match source {
+                                    ColumnSource::Table(table_ref) => provider
+                                        .get_cached_columns(&table_ref.schema, &table_ref.table)
+                                        .await
+                                        .inspect_err(|error| {
+                                            tracing::warn!(
+                                                "Completing without columns of {}.{}: {error:#}",
+                                                table_ref.schema,
+                                                table_ref.table
+                                            );
+                                        })
+                                        .ok(),
+                                    ColumnSource::Static(_) => None,
+                                }
+                            }));
+                        let (fetched_columns, user_functions) = futures::join!(
+                            column_fetches,
+                            provider.get_cached_functions(&provider.current_schema)
+                        );
+
                         // Union columns across all in-scope sources, keeping the
                         // first occurrence so columns from earlier relations win
                         // on name collisions. Keep the full column metadata of
@@ -887,13 +1067,10 @@ impl CompletionProvider for SqlCompletionProvider {
                         let mut all_columns: Vec<ColumnCandidate> = Vec::new();
                         let mut seen = std::collections::HashSet::new();
                         let mut fetched_tables: Vec<(TableRef, Arc<Vec<ColumnInfo>>)> = Vec::new();
-                        for source in &sources {
+                        for (source, fetched) in sources.iter().zip(fetched_columns) {
                             match source {
                                 ColumnSource::Table(table_ref) => {
-                                    if let Ok(columns) = provider
-                                        .get_cached_columns(&table_ref.schema, &table_ref.table)
-                                        .await
-                                    {
+                                    if let Some(columns) = fetched {
                                         for column in columns.iter() {
                                             if seen.insert(column.name.clone()) {
                                                 all_columns.push(ColumnCandidate {
@@ -942,13 +1119,10 @@ impl CompletionProvider for SqlCompletionProvider {
                         ));
                         // Expression clauses also accept function calls, so offer
                         // built-in functions after the columns.
-                        let user_functions = provider
-                            .get_cached_functions(&provider.current_schema)
-                            .await
-                            .unwrap_or_else(|error| {
-                                tracing::warn!("Failed to fetch function signatures: {error}");
-                                Arc::new(Vec::new())
-                            });
+                        let user_functions = user_functions.unwrap_or_else(|error| {
+                            tracing::warn!("Completing without user functions: {error:#}");
+                            Arc::new(Vec::new())
+                        });
                         items.extend(build_function_items(
                             provider.driver,
                             &user_functions,
@@ -1037,6 +1211,139 @@ mod tests {
     fn ctx_end(rope: &str) -> TsCompletionContext {
         let r = Rope::from_str(rope);
         statement_parser::extract_completion_context(&r, r.len()).unwrap()
+    }
+
+    // ---- metadata fetching ----
+
+    /// A database service whose connections never arrive until the test lets
+    /// them fail, standing in for a connection slower than the typing.
+    struct StalledService {
+        attempts: std::sync::atomic::AtomicUsize,
+        release: smol::channel::Receiver<()>,
+    }
+
+    impl StalledService {
+        fn new() -> (Arc<Self>, smol::channel::Sender<()>) {
+            let (sender, release) = smol::channel::unbounded();
+            let service = Arc::new(Self {
+                attempts: std::sync::atomic::AtomicUsize::new(0),
+                release,
+            });
+            (service, sender)
+        }
+
+        fn attempts(&self) -> usize {
+            self.attempts.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl DatabaseServiceTrait for StalledService {
+        async fn get_or_create_connection_by_id(
+            &self,
+            _connection_id: i64,
+            _database: Option<&str>,
+        ) -> Result<Arc<dyn blanco_core::Connection>> {
+            self.attempts
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.release.recv().await?;
+            anyhow::bail!("connection lost")
+        }
+
+        async fn get_connection_status(
+            &self,
+            _connection_id: i64,
+            _database_name: Option<&str>,
+        ) -> Result<blanco_core::ConnectionStatus> {
+            anyhow::bail!("not connected")
+        }
+
+        async fn get_active_connection_statuses(
+            &self,
+        ) -> Result<HashMap<(i64, String), blanco_core::ConnectionStatus>> {
+            Ok(HashMap::new())
+        }
+    }
+
+    fn stalled_provider(
+        cx: &gpui::TestAppContext,
+    ) -> (
+        SqlCompletionProvider,
+        Arc<StalledService>,
+        smol::channel::Sender<()>,
+    ) {
+        let (service, release) = StalledService::new();
+        let provider = SqlCompletionProvider::new(
+            1,
+            "app".to_string(),
+            None,
+            DatabaseType::PostgreSQL,
+            service.clone(),
+            cx.executor(),
+        );
+        (provider, service, release)
+    }
+
+    fn request_tables(
+        provider: &SqlCompletionProvider,
+        cx: &gpui::TestAppContext,
+    ) -> Task<Result<Arc<Vec<QueryableEntity>>>> {
+        let provider = provider.clone();
+        cx.background_spawn(async move { provider.get_cached_tables("public").await })
+    }
+
+    /// The editor drops a completion request on the next keystroke. The fetch
+    /// it started must keep running and serve the request that replaces it,
+    /// instead of starting over.
+    #[gpui::test]
+    async fn metadata_fetch_outlives_the_request_that_started_it(cx: &mut gpui::TestAppContext) {
+        let (provider, service, release) = stalled_provider(cx);
+
+        let first = request_tables(&provider, cx);
+        cx.run_until_parked();
+        assert_eq!(service.attempts(), 1);
+
+        drop(first);
+        cx.run_until_parked();
+        let second = request_tables(&provider, cx);
+        cx.run_until_parked();
+        assert_eq!(
+            service.attempts(),
+            1,
+            "the replacing request should join the running fetch"
+        );
+
+        release.send(()).await.expect("service is waiting");
+        let error = second.await.expect_err("the connection was lost");
+        assert!(
+            format!("{error:#}").contains("connection lost"),
+            "{error:#}"
+        );
+
+        // A failure is not cached: the next request tries again.
+        let _third = request_tables(&provider, cx);
+        cx.run_until_parked();
+        assert_eq!(service.attempts(), 2);
+    }
+
+    #[gpui::test]
+    async fn stalled_metadata_fetch_gives_up_at_the_query_timeout(cx: &mut gpui::TestAppContext) {
+        let (provider, service, _release) = stalled_provider(cx);
+        let provider = provider.with_fetch_timeout(Some(Duration::from_secs(30)));
+
+        let request = request_tables(&provider, cx);
+        cx.run_until_parked();
+        cx.executor().advance_clock(Duration::from_secs(31));
+        let error = request.await.expect_err("the fetch never answered");
+        assert!(
+            format!("{error:#}").contains("30s query timeout"),
+            "{error:#}"
+        );
+
+        // The stalled fetch is gone, so the next request is not stuck behind it.
+        let _retry = request_tables(&provider, cx);
+        cx.run_until_parked();
+        assert_eq!(service.attempts(), 2);
     }
 
     // ---- statement parser context (kept from before) ----

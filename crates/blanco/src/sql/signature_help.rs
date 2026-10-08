@@ -156,7 +156,12 @@ impl SignatureHelpProvider for SqlSignatureHelpProvider {
             match self.completion.try_get_cached_functions(&schema) {
                 Some(cached) => cached,
                 None => {
-                    let provider = self.completion.clone();
+                    let provider = self.completion.with_fetch_timeout(
+                        crate::app_settings::AppSettings::global(cx)
+                            .settings
+                            .database
+                            .query_timeout(),
+                    );
                     cx.spawn(async move |_| {
                         if let Err(error) = provider.get_cached_functions(&schema).await {
                             tracing::warn!("Failed to fetch function signatures: {error}");

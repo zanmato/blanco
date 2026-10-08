@@ -31,6 +31,7 @@ pub struct NewConnectionModal {
     db_type_select: Entity<SelectState<Vec<String>>>,
     environment_type_select: Entity<SelectState<Vec<String>>>,
     read_only: bool,
+    only_configured_database: bool,
     sqlite_form: SqliteForm,
     postgres_form: ServerForm,
     mysql_form: ServerForm,
@@ -103,6 +104,8 @@ impl NewConnectionModal {
 
         let conn_ref = connection_data.as_ref();
         let read_only = conn_ref.is_some_and(|connection| connection.read_only);
+        let only_configured_database =
+            conn_ref.is_some_and(|connection| connection.only_configured_database);
         let sqlite_form = SqliteForm::new(window, cx, conn_ref);
         let postgres_form = ServerForm::new(&POSTGRES_SPEC, window, cx, conn_ref);
         let mysql_form = ServerForm::new(&MYSQL_SPEC, window, cx, conn_ref);
@@ -116,6 +119,7 @@ impl NewConnectionModal {
             db_type_select,
             environment_type_select,
             read_only,
+            only_configured_database,
             sqlite_form,
             postgres_form,
             mysql_form,
@@ -196,6 +200,8 @@ impl NewConnectionModal {
                 .get_connection_data(name, environment_type, cx),
         }?;
         connection.read_only = self.read_only;
+        connection.only_configured_database =
+            self.only_configured_database && connection.db_type.dialect().lists_server_databases();
         Some(connection)
     }
 
@@ -533,6 +539,22 @@ impl Render for NewConnectionModal {
                             modal.read_only = *checked;
                             cx.notify();
                         })),
+                )
+                .when(
+                    database::DatabaseType::from(connector_type.clone())
+                        .dialect()
+                        .lists_server_databases(),
+                    |this| {
+                        this.child(
+                            Switch::new("connection-only-configured-database-switch")
+                                .checked(self.only_configured_database)
+                                .label("Only show the database entered below")
+                                .on_click(cx.listener(|modal, checked, _window, cx| {
+                                    modal.only_configured_database = *checked;
+                                    cx.notify();
+                                })),
+                        )
+                    },
                 )
                 .child(match connector_type {
                     ConnectorType::SQLite => sqlite::render(self, cx),

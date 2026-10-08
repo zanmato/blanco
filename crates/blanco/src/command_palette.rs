@@ -80,6 +80,9 @@ pub struct ConnectionRef {
     /// `ConnectionData.database_name.clone().unwrap_or_default()`; the database
     /// to scope schemaless backends to.
     pub default_database: String,
+    /// `ConnectionData::pinned_database`: the only database to offer, when the
+    /// connection is restricted to the one it was configured with.
+    pub pinned_database: Option<String>,
 }
 
 /// A database within a connection that the palette can scope an action to.
@@ -424,7 +427,10 @@ impl CommandPalette {
                     .await?;
                 conn.ping().await?;
                 if conn.supports_schemas() {
-                    Ok(Some(conn.get_databases().await?))
+                    match connection.pinned_database.clone() {
+                        Some(database) => Ok(Some(vec![database])),
+                        None => Ok(Some(conn.get_databases().await?)),
+                    }
                 } else {
                     Ok(None)
                 }
@@ -1166,6 +1172,7 @@ fn add_connection_commands(
                 db_type: connection.db_type,
                 environment_type: connection.environment_type,
                 default_database: connection.database_name.clone().unwrap_or_default(),
+                pinned_database: connection.pinned_database().map(str::to_string),
             }),
         });
     }
