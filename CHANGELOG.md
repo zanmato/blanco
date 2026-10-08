@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Features
+
+- Editor font size setting for the query, script and snippet editors, with
+  shortcuts to increase, decrease and reset it (rebindable, also in the View
+  menu)
+- Connection option to show only the configured database in the sidebar and
+  the command palette (PostgreSQL and SQL Server)
+- Text in the SQL view and the script log can be selected with the mouse and
+  copied
+
+### Fixes
+
+- Completion on slow or flaky connections: a metadata fetch is no longer
+  restarted on every keystroke, a failed fetch is no longer cached as an empty
+  result, and suggestions stay available while the cache refreshes
+- Metadata fetches for completion now respect the query timeout setting
+- Word Wrap and Render Whitespace toggled from the menu or the command palette
+  are now remembered across restarts
+
 ## [0.1.1] - 2026-10-02
 
 ### Fixes
