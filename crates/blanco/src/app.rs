@@ -350,6 +350,10 @@ impl SidebarTab {
 /// An MCP write waiting for the user, with the channel its tool call awaits.
 type QueuedConfirmation = (WriteConfirmation, channel::Sender<WriteAnswer>);
 
+/// One tag for every write confirmation, so a burst of requests keeps a single
+/// notification instead of stacking one per statement.
+const MCP_CONFIRMATION_NOTIFICATION_TAG: &str = "mcp-write-confirmation";
+
 pub struct BlancoApp {
     focus_handle: FocusHandle,
     sidebar: Entity<ConnectionsPanel>,
@@ -401,7 +405,7 @@ impl BlancoApp {
         });
         let app_menu_bar = (!cfg!(target_os = "macos")).then(|| AppMenuBar::new(cx));
 
-        let subscriptions = Self::wire_subscriptions(
+        let mut subscriptions = Self::wire_subscriptions(
             &sidebar,
             &snippets_panel,
             &history_panel,
@@ -410,6 +414,7 @@ impl BlancoApp {
             window,
             cx,
         );
+        subscriptions.push(Self::wire_mcp_confirmation_notification(window, cx));
 
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
@@ -436,6 +441,30 @@ impl BlancoApp {
             mcp_confirmations,
             _mcp_confirmation_task: mcp_confirmation_task,
         }
+    }
+
+    /// Clicking the write confirmation's system notification brings Blanco's
+    /// window forward, and the notification goes away once the window is in
+    /// front by any route.
+    fn wire_mcp_confirmation_notification(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Subscription {
+        let window_handle = window.window_handle();
+        cx.on_system_notification_response(move |response, cx| {
+            if response.tag != MCP_CONFIRMATION_NOTIFICATION_TAG {
+                return;
+            }
+            cx.activate(true);
+            window_handle
+                .update(cx, |_, window, _| window.activate_window())
+                .log_err();
+        });
+        cx.observe_window_activation(window, |_, window, cx| {
+            if window.is_window_active() {
+                cx.dismiss_system_notification(MCP_CONFIRMATION_NOTIFICATION_TAG);
+            }
+        })
     }
 
     /// Answer MCP requests on the foreground. The receiver is handed over by
@@ -611,6 +640,18 @@ impl BlancoApp {
                 confirmation,
                 reply,
             } => {
+                // The dialog is easy to miss while Blanco sits behind the
+                // agent's window. The notification only brings Blanco forward:
+                // the write is answered in the dialog, where the whole
+                // statement is readable.
+                if !window.is_window_active() {
+                    cx.show_system_notification(gpui::SystemNotification {
+                        tag: MCP_CONFIRMATION_NOTIFICATION_TAG.into(),
+                        title: confirmation.title().into(),
+                        body: confirmation.target().into(),
+                        actions: Vec::new(),
+                    });
+                }
                 if self
                     .mcp_confirmations
                     .try_send((confirmation, reply))
@@ -652,20 +693,8 @@ impl BlancoApp {
         cx: &mut Context<Self>,
     ) {
         let is_prod = confirmation.environment == Some(blanco_core::EnvironmentType::Prod);
-        let title = if is_prod {
-            "An agent wants to write to PROD"
-        } else {
-            "An agent wants to run a write statement"
-        };
-        let target = format!(
-            "{} / {}{}",
-            confirmation.connection_name,
-            confirmation.database_name,
-            confirmation
-                .environment
-                .map(|environment| format!(" ({environment})"))
-                .unwrap_or_default()
-        );
+        let title = confirmation.title();
+        let target = confirmation.target();
         let sql_view = cx.new(|cx| {
             let mut view = SqlView::new(
                 usize::MAX,
@@ -884,6 +913,9 @@ impl BlancoApp {
                     connection_data, ..
                 } => {
                     app.edit_connection_with_secrets(*connection_data.clone(), window, cx);
+                }
+                ConnectionsPanelEvent::DuplicateConnection { connection_data } => {
+                    app.open_new_connection_modal(Some(*connection_data.clone()), window, cx);
                 }
                 // First-run experience: if the initial load found no saved connections,
                 // greet the user with the new connection dialog instead of an empty window.
@@ -1645,8 +1677,20 @@ impl BlancoApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.open_new_connection_modal(None, window, cx);
+    }
+
+    /// Open the new connection dialog, filled in from `prefill` when given.
+    /// `prefill` has no id, so saving creates a connection.
+    fn open_new_connection_modal(
+        &mut self,
+        prefill: Option<ConnectionData>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // Create the modal content outside the builder so we can access it
-        let modal_content = cx.new(|cx| NewConnectionModal::new(window, cx));
+        let modal_content =
+            cx.new(|cx| NewConnectionModal::with_connection_data(window, cx, prefill));
         let content_for_focus = modal_content.clone();
 
         let sidebar = self.sidebar.clone();
@@ -2548,6 +2592,50 @@ mod tests {
 
     fn has_dialog(cx: &mut VisualTestContext) -> bool {
         cx.update(|window, cx| window.has_active_dialog(cx))
+    }
+
+    /// A write confirmation that arrives while Blanco is in the background
+    /// posts a system notification, and clicking it brings the window forward.
+    #[gpui::test]
+    async fn test_mcp_write_confirmation_notifies_when_in_background(cx: &mut TestAppContext) {
+        let harness = FullAppHarness::new(cx);
+        cx.update(|cx| cx.set_app_identity(crate::APP_ID, "Blanco"));
+        let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+        let app = harness.app;
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.close_all_dialogs(cx);
+            window.activate_window();
+        });
+        cx.run_until_parked();
+
+        let focused = request_write_confirmation(&app, "DELETE FROM a", &mut cx);
+        assert!(
+            cx.shown_system_notifications().is_empty(),
+            "the dialog is already in front of the user"
+        );
+        dismiss_dialog(&mut cx);
+        assert_eq!(focused.try_recv(), Ok(WriteAnswer::Refuse));
+
+        cx.deactivate_window();
+        let _background = request_write_confirmation(&app, "DELETE FROM b", &mut cx);
+        let shown = cx.shown_system_notifications();
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].tag, MCP_CONFIRMATION_NOTIFICATION_TAG);
+        assert_eq!(shown[0].body, "test / main");
+        assert!(shown[0].actions.is_empty());
+        assert!(!cx.update(|window, _| window.is_window_active()));
+
+        cx.simulate_system_notification_response(gpui::SystemNotificationResponse {
+            tag: MCP_CONFIRMATION_NOTIFICATION_TAG.into(),
+            action_id: None,
+        });
+        cx.run_until_parked();
+        assert!(cx.update(|window, _| window.is_window_active()));
+        assert!(
+            has_dialog(&mut cx),
+            "the write is still answered in the dialog"
+        );
     }
 
     #[gpui::test]

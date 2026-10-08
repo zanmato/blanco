@@ -33,6 +33,11 @@ pub enum ConnectionsPanelEvent {
     EditConnection {
         connection_data: Box<ConnectionData>,
     },
+    /// Open the new connection dialog filled in from `connection_data`, an
+    /// unsaved copy of an existing connection.
+    DuplicateConnection {
+        connection_data: Box<ConnectionData>,
+    },
     /// The initial async connection load finished. Connections load off the foreground
     /// thread, so anything that depends on whether the user has connections (like the
     /// first-run dialog) must wait for this instead of reading `connections` at startup.
@@ -1047,6 +1052,43 @@ impl ConnectionsPanel {
             tracing::error!("Connection with ID {} not found", connection_id);
         }
     }
+
+    /// Duplicate an existing connection by opening the new connection modal
+    /// pre-populated with everything but its secrets
+    pub fn duplicate_connection(&mut self, connection_id: i64, cx: &mut Context<Self>) {
+        let Some(connection) = self
+            .connections
+            .iter()
+            .find(|connection| connection.id == Some(connection_id))
+        else {
+            tracing::error!("Connection with ID {} not found", connection_id);
+            return;
+        };
+
+        let name = duplicate_name(
+            &connection.name,
+            self.connections
+                .iter()
+                .map(|connection| connection.name.as_str()),
+        );
+        cx.emit(ConnectionsPanelEvent::DuplicateConnection {
+            connection_data: Box::new(connection.duplicate(name)),
+        });
+    }
+}
+
+/// Connection names are unique in the app database, so a duplicate gets the
+/// first free "name copy", "name copy 2", ... name.
+fn duplicate_name<'a>(name: &str, existing_names: impl Iterator<Item = &'a str>) -> String {
+    let existing_names: std::collections::HashSet<&str> = existing_names.collect();
+    let first = format!("{name} copy");
+    if !existing_names.contains(first.as_str()) {
+        return first;
+    }
+    (2usize..)
+        .map(|number| format!("{name} copy {number}"))
+        .find(|candidate| !existing_names.contains(candidate.as_str()))
+        .unwrap_or(first)
 }
 
 impl Render for ConnectionsPanel {
@@ -1151,6 +1193,15 @@ mod tests {
 
     fn item(id: &str, children: Vec<TreeItem<TreeItemMetadata>>) -> TreeItem<TreeItemMetadata> {
         TreeItem::new(id.to_string(), id.to_string(), metadata()).children(children)
+    }
+
+    #[test]
+    fn duplicate_name_skips_names_already_taken() {
+        assert_eq!(duplicate_name("local", ["local"].into_iter()), "local copy");
+        assert_eq!(
+            duplicate_name("local", ["local", "local copy", "local copy 2"].into_iter()),
+            "local copy 3"
+        );
     }
 
     #[test]

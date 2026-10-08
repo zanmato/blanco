@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Features
+
+- Duplicate in the connection context menu opens the new connection dialog
+  filled in from that connection, with its passwords left out
+- A system notification when an agent asks to run a write over MCP while
+  Blanco is in the background. Clicking it brings Blanco forward, where the
+  confirmation dialog is waiting
+
+### Fixes
+
+- Clicking a cell in the results table no longer starts a text selection in
+  the SQL view that follows the pointer with no button held
+
 ## [0.1.2] - 2026-10-08
 
 ### Features

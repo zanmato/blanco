@@ -187,6 +187,21 @@ impl ConnectionData {
             .filter(|database| !database.is_empty())
     }
 
+    /// An unsaved connection with this one's settings under `name`. Secrets
+    /// are left out, so a copy never silently reuses another connection's
+    /// credentials.
+    pub fn duplicate(&self, name: String) -> Self {
+        Self {
+            id: None,
+            name,
+            password: None,
+            ssh_password: None,
+            ssh_private_key_password: None,
+            last_used_at: None,
+            ..self.clone()
+        }
+    }
+
     pub fn new_sqlite(name: String, database_path: String) -> Self {
         Self {
             id: None,

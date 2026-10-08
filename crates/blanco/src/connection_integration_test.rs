@@ -210,7 +210,7 @@ fn build_modal(
     cx: &mut VisualTestContext,
 ) -> Entity<NewConnectionModal> {
     let modal = harness.app.update_in(cx, |_app, window, cx| {
-        cx.new(|cx| NewConnectionModal::new(window, cx))
+        cx.new(|cx| NewConnectionModal::with_connection_data(window, cx, None))
     });
     modal.update_in(cx, |modal, window, cx| {
         modal.set_name(case.name, window, cx);
@@ -462,6 +462,58 @@ async fn run_driver_case(
     true
 }
 
+/// Duplicating fills the new connection dialog from an existing connection.
+/// What it would save is a new connection (no id) with the same settings and
+/// none of the original's secrets.
+#[gpui::test]
+async fn test_duplicate_prefills_everything_but_secrets(cx: &mut TestAppContext) {
+    let harness = FullAppHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+    cx.run_until_parked();
+
+    let mut original = app_database::ConnectionData::new_server(
+        database::DatabaseType::PostgreSQL,
+        "staging".to_string(),
+        "db.internal".to_string(),
+        6543,
+        "orders".to_string(),
+        "reporting".to_string(),
+        "hunter2".to_string(),
+    );
+    original.id = Some(7);
+    original.read_only = true;
+    original.ssh_host = Some("bastion.internal".to_string());
+    original.ssh_user = Some("deploy".to_string());
+    original.ssh_password = Some("ssh-secret".to_string());
+    original.ssh_private_key_password = Some("key-secret".to_string());
+
+    let duplicate = original.duplicate("staging copy".to_string());
+    let modal = harness.app.update_in(&mut cx, |_app, window, cx| {
+        cx.new(|cx| NewConnectionModal::with_connection_data(window, cx, Some(duplicate)))
+    });
+    let saved = modal
+        .read_with(&cx, |modal, cx| modal.get_connection_data(cx))
+        .expect("the prefilled dialog is complete enough to save");
+
+    assert_eq!(saved.id, None);
+    assert_eq!(saved.name, "staging copy");
+    assert_eq!(saved.db_type, database::DatabaseType::PostgreSQL);
+    assert_eq!(saved.host.as_deref(), Some("db.internal"));
+    assert_eq!(saved.port, Some(6543));
+    assert_eq!(saved.database_name.as_deref(), Some("orders"));
+    assert_eq!(saved.username.as_deref(), Some("reporting"));
+    assert_eq!(saved.ssh_host.as_deref(), Some("bastion.internal"));
+    assert_eq!(saved.ssh_user.as_deref(), Some("deploy"));
+    assert!(saved.read_only);
+    for secret in [
+        &saved.password,
+        &saved.ssh_password,
+        &saved.ssh_private_key_password,
+    ] {
+        assert!(secret.as_deref().is_none_or(str::is_empty));
+    }
+}
+
 /// The dialog's close button dispatches `Cancel` along the focused element's
 /// path. The modal takes focus when the dialog opens, so its focus handle has
 /// to be attached to a rendered element or the dialog host never sees the
@@ -505,7 +557,7 @@ async fn test_sqlite_connect_and_query(cx: &mut TestAppContext) {
     let db_path = db_path.to_string_lossy().to_string();
 
     let modal = harness.app.update_in(&mut cx, |_app, window, cx| {
-        cx.new(|cx| NewConnectionModal::new(window, cx))
+        cx.new(|cx| NewConnectionModal::with_connection_data(window, cx, None))
     });
     modal.update_in(&mut cx, |modal, window, cx| {
         modal.set_name("it-sqlite", window, cx);

@@ -271,6 +271,14 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                     },
                 )))
                 .item(
+                    PopupMenuItem::new("Duplicate").on_click(window.listener_for(
+                        &self.parent,
+                        move |this, _event, _window, cx| {
+                            this.duplicate_connection(connection_id, cx);
+                        },
+                    )),
+                )
+                .item(
                     PopupMenuItem::new("Disconnect").on_click(window.listener_for(
                         &self.parent,
                         move |this, _event, _window, cx| {

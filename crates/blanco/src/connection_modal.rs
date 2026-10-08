@@ -46,10 +46,6 @@ pub struct NewConnectionModal {
 }
 
 impl NewConnectionModal {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::with_connection_data(window, cx, None)
-    }
-
     pub fn with_connection_data(
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -68,7 +64,14 @@ impl NewConnectionModal {
             if let Some(conn) = &connection_data {
                 let conn_id = conn.id;
                 let db_type_index = conn.db_type.index();
-                (conn.name.clone(), Some(db_type_index), conn_id, true)
+                // An unsaved connection is a duplicate being filled in: its
+                // type is still free to change.
+                (
+                    conn.name.clone(),
+                    Some(db_type_index),
+                    conn_id,
+                    conn_id.is_some(),
+                )
             } else {
                 (String::new(), Some(0), None, false)
             };

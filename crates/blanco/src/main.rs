@@ -46,6 +46,10 @@ use std::path::PathBuf;
 use crate::{app_settings::AppSettings, settings::Settings};
 use app_database::AppDatabase;
 
+/// Matches `StartupWMClass` in `resources/blanco.desktop`, so the desktop
+/// attributes windows and notifications to the installed launcher.
+const APP_ID: &str = "com.blanco.sql-editor";
+
 fn main() {
     // Honour `RUST_LOG` when set, otherwise default to a useful baseline so
     // plain runs still surface our own info-level lines without drowning in
@@ -199,6 +203,7 @@ fn main() {
         }
 
         cx.set_text_rendering_mode(gpui::TextRenderingMode::Subpixel);
+        cx.set_app_identity(APP_ID, "Blanco");
 
         // Restore the window geometry saved on the last run
         let window_bounds = {
@@ -250,7 +255,7 @@ fn main() {
             tabbing_identifier: None,
             display_id: None,
             window_background: gpui::WindowBackgroundAppearance::Opaque,
-            app_id: Some("com.blanco.sql-editor".into()),
+            app_id: Some(APP_ID.into()),
             icon: None,
         };
 

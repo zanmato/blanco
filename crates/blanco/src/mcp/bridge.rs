@@ -113,6 +113,28 @@ pub(crate) struct WriteConfirmation {
     pub rememberable_kinds: Vec<String>,
 }
 
+impl WriteConfirmation {
+    pub(crate) fn title(&self) -> &'static str {
+        if self.environment == Some(EnvironmentType::Prod) {
+            "An agent wants to write to PROD"
+        } else {
+            "An agent wants to run a write statement"
+        }
+    }
+
+    /// Where the write would run: "connection / database (ENVIRONMENT)".
+    pub(crate) fn target(&self) -> String {
+        format!(
+            "{} / {}{}",
+            self.connection_name,
+            self.database_name,
+            self.environment
+                .map(|environment| format!(" ({environment})"))
+                .unwrap_or_default()
+        )
+    }
+}
+
 /// The user's answer to a write confirmation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WriteAnswer {
