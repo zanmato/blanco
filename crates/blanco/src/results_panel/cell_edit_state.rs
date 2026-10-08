@@ -131,6 +131,13 @@ pub struct CellEditState {
     pub expanded_cell: Option<(usize, usize)>, // (row, col) - cell in expanded multi-line mode
     pub original_values: HashMap<(usize, usize), Option<String>>,
     pub edited_values: HashMap<(usize, usize), Option<String>>,
+    /// Cells whose pending value is SQL for the server to evaluate rather
+    /// than data to quote.
+    pub expression_cells: HashSet<(usize, usize)>,
+    /// The expression toggle of the cell being edited. It only reaches
+    /// `expression_cells` when the edit is committed, so cancelling leaves the
+    /// cell's pending value and its kind in step.
+    pub editing_as_expression: bool,
     pub pending_new_rows: Vec<usize>, // Track rows that are newly added
     pub pending_deleted_rows: HashSet<usize>, // Track rows marked for deletion
     pub editing_input: Option<CellInput>, // Store input state per delegate
@@ -165,6 +172,10 @@ impl CellEditState {
         }
     }
 
+    pub fn is_expression(&self, row: usize, col: usize) -> bool {
+        self.expression_cells.contains(&(row, col))
+    }
+
     pub fn get_edited_value(&self, row: usize, col: usize) -> Option<&Option<String>> {
         self.edited_values.get(&(row, col))
     }
@@ -172,12 +183,14 @@ impl CellEditState {
     pub fn start_editing(&mut self, row: usize, col: usize, input: CellInput) {
         self.editing_cell = Some((row, col));
         self.editing_input = Some(input);
+        self.editing_as_expression = self.is_expression(row, col);
     }
 
     pub fn stop_editing(&mut self) {
         self.editing_cell = None;
         self.editing_input = None;
         self.expanded_cell = None;
+        self.editing_as_expression = false;
     }
 
     pub fn get_editing_input(&self) -> Option<CellInput> {
@@ -191,6 +204,7 @@ impl CellEditState {
     pub fn clear_edits(&mut self) {
         self.changes.clear();
         self.edited_values.clear();
+        self.expression_cells.clear();
         self.original_values.clear();
         self.pending_new_rows.clear();
         self.pending_deleted_rows.clear();
@@ -203,6 +217,7 @@ impl CellEditState {
         self.editing_cell = None;
         self.original_values.clear();
         self.edited_values.clear();
+        self.expression_cells.clear();
         self.pending_new_rows.clear();
         self.pending_deleted_rows.clear();
         self.editing_input = None;
@@ -231,6 +246,7 @@ impl CellEditState {
     pub fn clear_changes(&mut self) {
         self.changes.clear();
         self.edited_values.clear();
+        self.expression_cells.clear();
         self.original_values.clear();
         self.pending_new_rows.clear();
         self.pending_deleted_rows.clear();
@@ -255,6 +271,12 @@ impl CellEditState {
 
         self.edited_values = reindex_row_keys(&self.edited_values, row_index);
         self.original_values = reindex_row_keys(&self.original_values, row_index);
+        self.expression_cells = self
+            .expression_cells
+            .iter()
+            .filter(|(row, _)| *row != row_index)
+            .map(|&(row, col)| (if row > row_index { row - 1 } else { row }, col))
+            .collect();
         self.pending_deleted_rows = reindex_row_set(&self.pending_deleted_rows, row_index);
         self.selected_rows = reindex_row_set(&self.selected_rows, row_index);
 

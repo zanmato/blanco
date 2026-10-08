@@ -34,7 +34,31 @@ pub enum RowIdentifier {
 #[derive(Clone, Debug)]
 pub struct ColumnChange {
     pub column_name: String,
-    pub new_value: Option<String>,
+    pub value: ColumnValue,
+}
+
+/// What a cell contributes to a statement. Grid values are data and get
+/// quoted, unless the user switched the cell to expression input, in which
+/// case the text is SQL for the server to evaluate.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ColumnValue {
+    Null,
+    Literal(String),
+    Expression(String),
+}
+
+impl ColumnValue {
+    /// A blank expression would leave a hole in the statement (`SET x = `),
+    /// so it falls back to the literal the cell would otherwise hold.
+    pub fn from_cell(value: Option<String>, is_expression: bool) -> Self {
+        match value {
+            None => Self::Null,
+            Some(text) if is_expression && !text.trim().is_empty() => {
+                Self::Expression(text.trim().to_string())
+            }
+            Some(text) => Self::Literal(text),
+        }
+    }
 }
 
 impl TableChangeOperation {
@@ -51,56 +75,12 @@ impl TableChangeOperation {
         database_type.dialect().quote_path(identifier)
     }
 
-    /// Values that pass through unquoted so users can type them into a cell and
-    /// have the server evaluate them. Deliberately restricted to bare keywords:
-    /// anything else (JSON documents, text, numbers) is data and gets quoted.
-    const PASSTHROUGH_KEYWORDS: [&'static str; 8] = [
-        "DEFAULT",
-        "NULL",
-        "CURRENT_TIMESTAMP",
-        "CURRENT_DATE",
-        "CURRENT_TIME",
-        "CURRENT_USER",
-        "LOCALTIME",
-        "LOCALTIMESTAMP",
-    ];
-
-    /// Whether a cell value should be emitted verbatim as a SQL expression.
-    ///
-    /// Only a keyword from [`Self::PASSTHROUGH_KEYWORDS`] or an argument-less
-    /// function call such as `NOW()` / `gen_random_uuid()` qualifies. Anything
-    /// with arguments, quotes, whitespace or punctuation is treated as data, so
-    /// a JSON document like `{"a": 1}` can never be mistaken for SQL.
-    fn is_sql_expression(value: &str) -> bool {
-        let value = value.trim();
-        if Self::PASSTHROUGH_KEYWORDS
-            .iter()
-            .any(|keyword| value.eq_ignore_ascii_case(keyword))
-        {
-            return true;
+    fn format_value(value: &ColumnValue, database_type: database::DatabaseType) -> String {
+        match value {
+            ColumnValue::Null => "NULL".to_string(),
+            ColumnValue::Literal(text) => Self::format_literal(text, database_type),
+            ColumnValue::Expression(sql) => sql.clone(),
         }
-
-        let Some(name) = value.strip_suffix("()") else {
-            return false;
-        };
-        !name.is_empty()
-            && name
-                .chars()
-                .all(|character| character.is_ascii_alphanumeric() || character == '_')
-            && !name.starts_with(|character: char| character.is_ascii_digit())
-    }
-
-    /// Render a cell value as a SQL string literal. Grid values are plain data
-    /// (JSON documents, text with quotes) unless they are one of the recognised
-    /// bare expressions, so they are quoted by default. MySQL interprets
-    /// backslashes inside string literals unless `NO_BACKSLASH_ESCAPES` is set,
-    /// so they need doubling there as well.
-    fn format_value(value: &str, database_type: database::DatabaseType) -> String {
-        if Self::is_sql_expression(value) {
-            return value.trim().to_string();
-        }
-
-        Self::format_literal(value, database_type)
     }
 
     /// Always quote, never interpret. Used for primary key values in WHERE
@@ -143,14 +123,10 @@ impl TableChangeOperation {
                             .changes
                             .iter()
                             .map(|change| {
-                                let set_value = match &change.new_value {
-                                    None => "NULL".to_string(),
-                                    Some(value) => Self::format_value(value, database_type),
-                                };
                                 format!(
                                     "{} = {}",
                                     Self::quote_identifier(&change.column_name, database_type),
-                                    set_value
+                                    Self::format_value(&change.value, database_type)
                                 )
                             })
                             .collect();
@@ -179,10 +155,7 @@ impl TableChangeOperation {
                 let values: Vec<String> = self
                     .changes
                     .iter()
-                    .map(|change| match &change.new_value {
-                        None => "NULL".to_string(),
-                        Some(value) => Self::format_value(value, database_type),
-                    })
+                    .map(|change| Self::format_value(&change.value, database_type))
                     .collect();
                 format!(
                     "INSERT INTO {} ({}) VALUES ({})",
@@ -214,7 +187,7 @@ impl TableChangeOperation {
 mod tests {
     use database::DatabaseType;
 
-    use super::{ColumnChange, OperationType, RowIdentifier, TableChangeOperation};
+    use super::{ColumnChange, ColumnValue, OperationType, RowIdentifier, TableChangeOperation};
 
     #[test]
     fn update_quotes_postgres_identifiers_and_escapes_primary_key_values() {
@@ -226,7 +199,7 @@ mod tests {
             },
             changes: vec![ColumnChange {
                 column_name: "when".to_string(),
-                new_value: Some("2026-07-28".to_string()),
+                value: ColumnValue::Literal("2026-07-28".to_string()),
             }],
         };
 
@@ -243,11 +216,13 @@ mod tests {
             vec![
                 ColumnChange {
                     column_name: "select".to_string(),
-                    new_value: Some(r#"{"name": "O'Brien", "path": "a\\b"}"#.to_string()),
+                    value: ColumnValue::Literal(
+                        r#"{"name": "O'Brien", "path": "a\\b"}"#.to_string(),
+                    ),
                 },
                 ColumnChange {
                     column_name: "created_at".to_string(),
-                    new_value: None,
+                    value: ColumnValue::Null,
                 },
             ],
         );
@@ -264,7 +239,7 @@ mod tests {
             "public.event".to_string(),
             vec![ColumnChange {
                 column_name: "payload".to_string(),
-                new_value: Some(r#"{"a": 1, "b": [2, 3]}"#.to_string()),
+                value: ColumnValue::Literal(r#"{"a": 1, "b": [2, 3]}"#.to_string()),
             }],
         );
 
@@ -275,33 +250,56 @@ mod tests {
     }
 
     #[test]
-    fn bare_expressions_pass_through_unquoted() {
+    fn only_expression_values_pass_through_unquoted() {
         let operation = TableChangeOperation::insert_row(
             "public.event".to_string(),
             vec![
                 ColumnChange {
                     column_name: "created_at".to_string(),
-                    new_value: Some("NOW()".to_string()),
-                },
-                ColumnChange {
-                    column_name: "id".to_string(),
-                    new_value: Some("gen_random_uuid()".to_string()),
-                },
-                ColumnChange {
-                    column_name: "updated_at".to_string(),
-                    new_value: Some("current_timestamp".to_string()),
+                    value: ColumnValue::from_cell(
+                        Some(" NOW()+'1 day'::interval ".to_string()),
+                        true,
+                    ),
                 },
                 ColumnChange {
                     column_name: "label".to_string(),
-                    new_value: Some("upper('a')".to_string()),
+                    value: ColumnValue::from_cell(Some("NOW()".to_string()), false),
+                },
+                ColumnChange {
+                    column_name: "note".to_string(),
+                    value: ColumnValue::from_cell(Some("  ".to_string()), true),
+                },
+                ColumnChange {
+                    column_name: "deleted_at".to_string(),
+                    value: ColumnValue::from_cell(None, true),
                 },
             ],
         );
 
         assert_eq!(
             operation.to_sql_query(DatabaseType::PostgreSQL),
-            "INSERT INTO \"public\".\"event\" (\"created_at\", \"id\", \"updated_at\", \"label\") \
-             VALUES (NOW(), gen_random_uuid(), current_timestamp, 'upper(''a'')')"
+            "INSERT INTO \"public\".\"event\" (\"created_at\", \"label\", \"note\", \"deleted_at\") \
+             VALUES (NOW()+'1 day'::interval, 'NOW()', '  ', NULL)"
+        );
+    }
+
+    #[test]
+    fn update_sets_expression_verbatim() {
+        let operation = TableChangeOperation {
+            operation_type: OperationType::Update,
+            table_name: "public.item".to_string(),
+            row_identifier: RowIdentifier::PrimaryKey {
+                columns: vec![("id".to_string(), "7".to_string())],
+            },
+            changes: vec![ColumnChange {
+                column_name: "price".to_string(),
+                value: ColumnValue::Expression("price * 1.1".to_string()),
+            }],
+        };
+
+        assert_eq!(
+            operation.to_sql_query(DatabaseType::PostgreSQL),
+            "UPDATE \"public\".\"item\" SET \"price\" = price * 1.1 WHERE \"id\" = '7'"
         );
     }
 

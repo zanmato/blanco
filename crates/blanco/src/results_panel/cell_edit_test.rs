@@ -870,3 +870,89 @@ async fn test_add_row_after_empty_result(cx: &mut TestAppContext) {
         Some(Some("first".to_string()))
     );
 }
+
+/// A cell is data unless its expression toggle is on: the same text is quoted
+/// without it and sent verbatim with it. Cancelling a later edit must not
+/// change the kind of the value that is still pending.
+#[gpui::test]
+async fn test_expression_toggle_sends_cell_text_as_sql(cx: &mut TestAppContext) {
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    let results_panel = setup_editable_table(&harness, &mut cx).await;
+    let table_state = results_panel.read_with(&cx, |panel, _| panel.table_state().clone());
+
+    let editing_input = |cx: &VisualTestContext| {
+        table_state.read_with(cx, |state, _| {
+            match state
+                .delegate()
+                .edit_state
+                .get_editing_input()
+                .expect("editing input should exist")
+            {
+                CellInput::Inline(input) => input,
+                CellInput::Expanded(_) => panic!("a fresh cell edit is inline"),
+            }
+        })
+    };
+
+    results_panel.update_in(&mut cx, |panel, window, cx| {
+        panel.start_cell_edit(0, 1, window, cx);
+    });
+    cx.run_until_parked();
+    editing_input(&cx).update_in(&mut cx, |input, window, cx| {
+        input.replace_all("upper('a') || 'b'", window, cx);
+    });
+    cx.run_until_parked();
+
+    let statements = results_panel.update(&mut cx, |panel, cx| {
+        panel.finalize_active_cell_edit(cx);
+        panel.preview_pending_sql(cx)
+    });
+    assert_eq!(
+        statements,
+        vec![r#"UPDATE "items" SET "v" = 'upper(''a'') || ''b''' WHERE "id" = '1'"#.to_string()],
+        "without the toggle the text is data"
+    );
+
+    // Toggling alone is an edit: the text is unchanged but now means SQL.
+    results_panel.update_in(&mut cx, |panel, window, cx| {
+        panel.start_cell_edit(0, 1, window, cx);
+    });
+    cx.run_until_parked();
+    cx.dispatch_action(crate::app::ToggleCellExpression);
+    cx.run_until_parked();
+
+    let statements = results_panel.update(&mut cx, |panel, cx| {
+        panel.finalize_active_cell_edit(cx);
+        panel.preview_pending_sql(cx)
+    });
+    assert_eq!(
+        statements,
+        vec![r#"UPDATE "items" SET "v" = upper('a') || 'b' WHERE "id" = '1'"#.to_string()],
+    );
+
+    results_panel.update_in(&mut cx, |panel, window, cx| {
+        panel.start_cell_edit(0, 1, window, cx);
+    });
+    cx.run_until_parked();
+    let starts_as_expression = table_state.read_with(&cx, |state, _| {
+        state.delegate().edit_state.editing_as_expression
+    });
+    assert!(
+        starts_as_expression,
+        "reopening the cell should show its toggle on"
+    );
+    cx.dispatch_action(crate::app::ToggleCellExpression);
+    cx.run_until_parked();
+    results_panel.update(&mut cx, |panel, cx| panel.cancel_current_edit(cx));
+    cx.run_until_parked();
+
+    let is_expression = table_state.read_with(&cx, |state, _| {
+        state.delegate().edit_state.is_expression(0, 1)
+    });
+    assert!(
+        is_expression,
+        "a cancelled edit must leave the pending expression as it was"
+    );
+}

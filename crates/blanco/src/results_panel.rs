@@ -527,6 +527,17 @@ impl ResultsPanel {
         self.move_cell_edit(false, window, cx);
     }
 
+    fn on_toggle_cell_expression(
+        &mut self,
+        _action: &crate::app::ToggleCellExpression,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.table_state.update(cx, |state, cx| {
+            ResultsTableDelegate::toggle_editing_expression(state, cx);
+        });
+    }
+
     /// Commit the current cell edit and start editing the neighbouring cell,
     /// wrapping across row boundaries at either end.
     fn move_cell_edit(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -845,6 +856,7 @@ impl ResultsPanel {
 
             // Clear all edited values
             delegate.edit_state.edited_values.clear();
+            delegate.edit_state.expression_cells.clear();
             delegate.edit_state.original_values.clear();
 
             state.refresh(cx);
@@ -1598,6 +1610,7 @@ impl Render for ResultsPanel {
             .on_action(cx.listener(Self::on_clear_compare_selection))
             .on_action(cx.listener(Self::on_start_cell_edit))
             .on_action(cx.listener(Self::on_edit_next_cell))
+            .on_action(cx.listener(Self::on_toggle_cell_expression))
             .on_action(cx.listener(Self::on_edit_prev_cell))
             .on_action(cx.listener(Self::on_input_enter))
             .on_action(cx.listener(Self::on_input_escape))

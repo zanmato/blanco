@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use super::ResultsTableDelegate;
 use crate::results_panel::cell_edit_state::ChangeType;
 use crate::results_panel::table_operations::{
-    ColumnChange, OperationType, RowIdentifier, TableChangeOperation,
+    ColumnChange, ColumnValue, OperationType, RowIdentifier, TableChangeOperation,
 };
 
 impl ResultsTableDelegate {
@@ -45,77 +45,49 @@ impl ResultsTableDelegate {
         }
     }
 
-    /// Get column names for INSERT operations, excluding primary key (for new
-    /// rows) and untouched columns with a server-side default.
+    /// The columns an INSERT of this row names: every column except the
+    /// primary key (when it is left to the server) and untouched columns with
+    /// a server-side default.
+    fn insert_column_indices(&self, row_index: usize, exclude_primary_key: bool) -> Vec<usize> {
+        let pk_indices = if exclude_primary_key {
+            self.primary_key_column_indices()
+        } else {
+            None
+        };
+
+        (0..self.columns.len())
+            .filter(|data_index| {
+                !pk_indices
+                    .as_ref()
+                    .is_some_and(|pk_indices| pk_indices.contains(data_index))
+                    && !self.cell_uses_default(row_index, *data_index)
+            })
+            .collect()
+    }
+
     pub fn get_insert_column_names(
         &self,
         row_index: usize,
         exclude_primary_key: bool,
     ) -> Vec<String> {
-        let pk_indices = if exclude_primary_key {
-            self.primary_key_column_indices()
-        } else {
-            None
-        };
-
-        self.columns
-            .iter()
-            .enumerate()
-            .filter_map(|(data_index, col)| {
-                if exclude_primary_key
-                    && let Some(ref pk_indices) = pk_indices
-                    && pk_indices.contains(&data_index)
-                {
-                    return None;
-                }
-                if self.cell_uses_default(row_index, data_index) {
-                    return None;
-                }
-                Some(col.name.to_string())
-            })
+        self.insert_column_indices(row_index, exclude_primary_key)
+            .into_iter()
+            .filter_map(|data_index| Some(self.columns.get(data_index)?.name.to_string()))
             .collect()
     }
 
-    /// Get column values for INSERT operations, excluding primary key (for new
-    /// rows) and untouched columns with a server-side default.
     pub fn get_insert_values(
         &self,
         row_index: usize,
         exclude_primary_key: bool,
     ) -> Vec<Option<String>> {
-        let pk_indices = if exclude_primary_key {
-            self.primary_key_column_indices()
-        } else {
-            None
-        };
-
-        if let Some(row) = self.rows.get(row_index) {
-            row.iter()
-                .enumerate()
-                .filter_map(|(data_index, val)| {
-                    if exclude_primary_key
-                        && let Some(ref pk_indices) = pk_indices
-                        && pk_indices.contains(&data_index)
-                    {
-                        return None; // Skip primary key column
-                    }
-                    if self.cell_uses_default(row_index, data_index) {
-                        return None;
-                    }
-
-                    // Check if there's an edited value for this cell
-                    if let Some(edited_value) =
-                        self.edit_state.edited_values.get(&(row_index, data_index))
-                    {
-                        return Some(edited_value.clone());
-                    }
-
-                    Some(val.clone())
-                })
-                .collect()
-        } else {
-            Vec::new()
+        if self.rows.get(row_index).is_none() {
+            return Vec::new();
         }
+        self.insert_column_indices(row_index, exclude_primary_key)
+            .into_iter()
+            .map(|data_index| self.stored_cell_value(row_index, data_index))
+            .collect()
     }
 
     /// Convert table changes to database-agnostic TableChangeOperations
@@ -161,15 +133,20 @@ impl ResultsTableDelegate {
                         continue;
                     }
 
+                    let column_index = change.column_index.unwrap_or(0);
                     let column_name = self
                         .columns
-                        .get(change.column_index.unwrap_or(0))
+                        .get(column_index)
                         .map(|col| col.name.to_string())
                         .unwrap_or_else(|| "unknown".to_string());
 
                     let column_change = ColumnChange {
                         column_name,
-                        new_value: change.new_value.clone(),
+                        value: ColumnValue::from_cell(
+                            change.new_value.clone(),
+                            self.edit_state
+                                .is_expression(change.row_index, column_index),
+                        ),
                     };
 
                     let mut sorted_pk = pk_columns.clone();
@@ -202,16 +179,17 @@ impl ResultsTableDelegate {
                             })
                         });
 
-                    let column_names =
-                        self.get_insert_column_names(change.row_index, exclude_primary_key);
-                    let row_values = self.get_insert_values(change.row_index, exclude_primary_key);
-
-                    let column_changes: Vec<ColumnChange> = column_names
+                    let column_changes: Vec<ColumnChange> = self
+                        .insert_column_indices(change.row_index, exclude_primary_key)
                         .into_iter()
-                        .zip(row_values.iter())
-                        .map(|(column_name, value)| ColumnChange {
-                            column_name,
-                            new_value: value.clone(),
+                        .filter_map(|data_index| {
+                            Some(ColumnChange {
+                                column_name: self.columns.get(data_index)?.name.to_string(),
+                                value: ColumnValue::from_cell(
+                                    self.stored_cell_value(change.row_index, data_index),
+                                    self.edit_state.is_expression(change.row_index, data_index),
+                                ),
+                            })
                         })
                         .collect();
 

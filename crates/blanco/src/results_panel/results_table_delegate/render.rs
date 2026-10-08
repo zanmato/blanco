@@ -27,7 +27,7 @@ use crate::app::{
     AddRow, ClearCompareSelection, CompareCellWithSelected, CompareRowWithSelected, CopyAsCSV,
     CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CopyAsVALUES, DeleteRow, DuplicateRow,
     ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV, SelectCellForCompare,
-    SelectRowForCompare, SetCellDefault, SetCellNull,
+    SelectRowForCompare, SetCellDefault, SetCellNull, ToggleCellExpression,
 };
 use crate::results_panel::cell_edit_state::{CellInput, compare_numeric, format_value_for_display};
 use crate::results_panel::compare::CompareKind;
@@ -85,6 +85,33 @@ fn swallow_boundary_movement<T: InteractiveElement>(element: T) -> T {
 }
 
 impl ResultsTableDelegate {
+    /// Switches the cell being edited between quoted data and SQL the server
+    /// evaluates. Filled in while on, so the mode reads at a glance whatever
+    /// colour the column type gives the text.
+    fn render_expression_toggle(&self, cx: &mut Context<TableState<Self>>) -> impl IntoElement {
+        let is_expression = self.edit_state.editing_as_expression;
+        div()
+            .id("cell-expression-toggle")
+            .cursor_pointer()
+            .rounded(px(2.))
+            .when(is_expression, |this| {
+                this.bg(cx.theme().primary)
+                    .text_color(cx.theme().primary_foreground)
+            })
+            .tooltip(|window, cx| {
+                Tooltip::new("Evaluate as SQL expression")
+                    .action(&ToggleCellExpression, Some("CellEditor"))
+                    .build(window, cx)
+            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|table, _event, _window, cx| {
+                    Self::toggle_editing_expression(table, cx);
+                }),
+            )
+            .child(Icon::new(IconName::SquareFunction).text_xs())
+    }
+
     /// Expanded inline editor: an absolutely-positioned, larger input overlay
     /// with a minimize affordance.
     fn render_expanded_cell(
@@ -120,6 +147,7 @@ impl ResultsTableDelegate {
                         // a turn, and only defer to hitboxes that occlude them.
                         // Without this the table scrolls instead of the editor.
                         .occlude()
+                        .key_context("ExpandedCellEditor")
                         .on_action(cx.listener(
                             move |table, _event: &gpui_component::input::Escape, window, cx| {
                                 Self::handle_minimize(table, (col_ix, row_ix), is_json, window, cx);
@@ -144,24 +172,29 @@ impl ResultsTableDelegate {
                         // The editor takes no suffix, so the minimize
                         // affordance sits over its top-right corner.
                         .child(
-                            div()
+                            h_flex()
                                 .absolute()
                                 .right(editor_size.input_px())
                                 .top(editor_size.input_py())
-                                .cursor_pointer()
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |table, _event, window, cx| {
-                                        Self::handle_minimize(
-                                            table,
-                                            (col_ix, row_ix),
-                                            is_json,
-                                            window,
-                                            cx,
-                                        );
-                                    }),
-                                )
-                                .child(Icon::new(IconName::Minimize).text_xs()),
+                                .gap_1()
+                                .child(self.render_expression_toggle(cx))
+                                .child(
+                                    div()
+                                        .cursor_pointer()
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(move |table, _event, window, cx| {
+                                                Self::handle_minimize(
+                                                    table,
+                                                    (col_ix, row_ix),
+                                                    is_json,
+                                                    window,
+                                                    cx,
+                                                );
+                                            }),
+                                        )
+                                        .child(Icon::new(IconName::Minimize).text_xs()),
+                                ),
                         )
                         // The overlay floats over the table rather than sharing
                         // a container with a sibling, so a resizable panel has
@@ -252,17 +285,22 @@ impl ResultsTableDelegate {
                     .text_size(px(12.))
                     .pl_0()
                     .suffix(
-                        div()
-                            .cursor_pointer()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |table, _event, window, cx| {
-                                    Self::handle_maximize(
-                                        table, row_ix, col_ix, is_json, window, cx,
-                                    );
-                                }),
-                            )
-                            .child(Icon::new(IconName::Maximize).text_xs()),
+                        h_flex()
+                            .gap(px(2.))
+                            .child(self.render_expression_toggle(cx))
+                            .child(
+                                div()
+                                    .cursor_pointer()
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |table, _event, window, cx| {
+                                            Self::handle_maximize(
+                                                table, row_ix, col_ix, is_json, window, cx,
+                                            );
+                                        }),
+                                    )
+                                    .child(Icon::new(IconName::Maximize).text_xs()),
+                            ),
                     ),
             )
     }
@@ -277,6 +315,7 @@ impl ResultsTableDelegate {
     ) -> impl IntoElement {
         let is_edited = self.edit_state.is_edited(row_ix, col_ix);
         let is_editable = self.is_editable();
+        let is_expression = self.edit_state.is_expression(row_ix, col_ix);
 
         let current_value: Option<String> = if is_edited {
             self.edit_state
@@ -315,6 +354,15 @@ impl ResultsTableDelegate {
             .gap_1()
             .flex_1()
             .min_w_0()
+            // Until it is applied, an expression shows as the SQL that was
+            // typed, which would otherwise pass for a string holding that text.
+            .when(is_expression, |this| {
+                this.child(
+                    Icon::new(IconName::SquareFunction)
+                        .size(px(10.))
+                        .text_color(cx.theme().muted_foreground),
+                )
+            })
             .child(
                 div()
                     .flex_1()

@@ -82,6 +82,7 @@ actions!(
         StartCellEdit,
         EditNextCell,
         EditPrevCell,
+        ToggleCellExpression,
         ClearCompareSelection,
     ]
 );
@@ -2295,6 +2296,12 @@ fn init_menus(cx: &mut App) {
         gpui::KeyBinding::new("f2", StartCellEdit, Some("DataTable")),
         gpui::KeyBinding::new("tab", EditNextCell, Some("CellEditor")),
         gpui::KeyBinding::new("shift-tab", EditPrevCell, Some("CellEditor")),
+        gpui::KeyBinding::new("secondary-r", ToggleCellExpression, Some("CellEditor")),
+        gpui::KeyBinding::new(
+            "secondary-r",
+            ToggleCellExpression,
+            Some("ExpandedCellEditor"),
+        ),
     ]);
 
     // Clipboard shortcuts inside a terminal tab. Plain ctrl-c/ctrl-v must reach

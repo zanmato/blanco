@@ -32,6 +32,18 @@ impl ResultsTableDelegate {
         }
 
         if let Some(new_value) = self.edit_state.edited_values.get(&(row, col)).cloned() {
+            // Committing every pending edit walks cells that have no editor
+            // open, and those keep the kind they were committed with.
+            if self.edit_state.is_editing(row, col) {
+                if self.edit_state.editing_as_expression && new_value.is_some() {
+                    self.edit_state.expression_cells.insert((row, col));
+                } else {
+                    self.edit_state.expression_cells.remove(&(row, col));
+                }
+            } else if new_value.is_none() {
+                self.edit_state.expression_cells.remove(&(row, col));
+            }
+
             // Get the original value
             let original_value = self.edit_state.original_values.get(&(row, col)).cloned();
 
@@ -112,6 +124,30 @@ impl ResultsTableDelegate {
         self.edit_state.edited_values.remove(&(row, col));
     }
 
+    /// Switch the cell being edited between data that gets quoted and SQL the
+    /// server evaluates. The switch changes what the same text means, so it
+    /// counts as an edit even when nothing was typed.
+    pub(crate) fn toggle_editing_expression(
+        state: &mut TableState<ResultsTableDelegate>,
+        cx: &mut Context<'_, TableState<ResultsTableDelegate>>,
+    ) {
+        let edit_state = &mut state.delegate_mut().edit_state;
+        let Some(cell) = edit_state.editing_cell else {
+            return;
+        };
+        let Some(text) = edit_state
+            .editing_input
+            .as_ref()
+            .map(|input| input.text(cx))
+        else {
+            return;
+        };
+        edit_state.editing_as_expression = !edit_state.editing_as_expression;
+        edit_state.edited_values.insert(cell, Some(text));
+        state.refresh(cx);
+        cx.notify();
+    }
+
     pub fn is_editable(&self) -> bool {
         if self
             .db_type
@@ -122,9 +158,9 @@ impl ResultsTableDelegate {
         self.table_name.is_some() && self.primary_key_is_complete()
     }
 
-    /// The value a cell edit starts from: the pending edit when there is one,
+    /// The value a cell currently holds: the pending edit when there is one,
     /// otherwise the row data as loaded.
-    fn stored_cell_value(&self, row_ix: usize, col_ix: usize) -> Option<String> {
+    pub(super) fn stored_cell_value(&self, row_ix: usize, col_ix: usize) -> Option<String> {
         match self.edit_state.get_edited_value(row_ix, col_ix) {
             Some(edited) => edited.clone(),
             None => self

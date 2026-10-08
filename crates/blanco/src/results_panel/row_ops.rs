@@ -102,6 +102,19 @@ impl ResultsPanel {
                 // Mark this as a pending new row
                 let new_row_index = delegate.rows.len() - 1;
                 delegate.edit_state.pending_new_rows.push(new_row_index);
+                // The copy holds the same text, so it has to mean the same thing.
+                let expression_columns: Vec<usize> = delegate
+                    .edit_state
+                    .expression_cells
+                    .iter()
+                    .filter(|(row, _)| *row == row_ix)
+                    .map(|&(_, col)| col)
+                    .collect();
+                delegate.edit_state.expression_cells.extend(
+                    expression_columns
+                        .into_iter()
+                        .map(|col| (new_row_index, col)),
+                );
 
                 if let Some(table_name) = &delegate.table_name {
                     let values_vec = delegate.get_insert_values(new_row_index, true); // exclude_primary_key = true
@@ -295,6 +308,10 @@ impl ResultsPanel {
             delegate
                 .edit_state
                 .original_values
+                .remove(&(action.row, action.col));
+            delegate
+                .edit_state
+                .expression_cells
                 .remove(&(action.row, action.col));
             if let Some(cell) = delegate.get_cell_mut(action.row, action.col) {
                 *cell = None;
