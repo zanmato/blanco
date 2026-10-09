@@ -107,6 +107,9 @@ clicking it downloads the platform asset (`Downloading`), and `Ready` turns the 
 into Restart, which swaps the running executable with `self_replace` and calls
 `cx.restart()`. An install whose executable directory is not writable (the `.deb` in
 `/usr/bin`) gets `Manual` instead, where Update opens the release page. Releases are staged under `<data_local_dir>/blanco/updates/<version>/`.
+A download is checked against the release's `SHA256SUMS`, and once `UPDATE_PUBLIC_KEY`
+is set also against the minisign signature `SHA256SUMS.minisig` that the release
+workflow makes with the `MINISIGN_SECRET_KEY` secret (`scripts/generate-update-key.sh`).
 `release_asset()` must name the assets exactly as `build-and-package.yml` uploads them,
 so change both together. Tests build `BlancoApp` without the global, hence `try_global`.
 
