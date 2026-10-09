@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- A search field in the title bar opens the command palette and shows its
+  shortcut
 - Blanco checks for new releases hourly and shows an Update button in the
   title bar when one is out. It downloads the release, then turns into Restart
   to apply it. On a .deb install it opens the release page instead. Check for

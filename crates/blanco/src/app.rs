@@ -9,8 +9,9 @@ use crate::mcp::bridge::{
 };
 use gpui::{
     Action, App, AppContext, BorrowAppContext, Context, Entity, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, Menu, MenuItem, ParentElement, Render, SharedString, Styled,
-    Subscription, Task, Window, actions, div, prelude::FluentBuilder, px, svg,
+    InteractiveElement, IntoElement, Menu, MenuItem, ParentElement, Render, SharedString,
+    StatefulInteractiveElement as _, Styled, Subscription, Task, Window, actions, div,
+    prelude::FluentBuilder, px, svg,
 };
 use gpui_component::{
     ActiveTheme, Disableable as _, Icon, IconName, Sizable as _, TitleBar, WindowExt as _,
@@ -18,6 +19,7 @@ use gpui_component::{
     dialog::{DialogAction, DialogClose, DialogFooter},
     global_state::GlobalState,
     h_flex,
+    kbd::Kbd,
     menu::AppMenuBar,
     notification::{Notification, NotificationType},
     resizable::{ResizablePanel, ResizableState, h_resizable, resizable_panel},
@@ -1112,6 +1114,7 @@ impl BlancoApp {
                         )
                         .children(self.app_menu_bar.clone()),
                 )
+                .child(self.render_palette_trigger(window, cx))
                 .child(
                     h_flex()
                         .items_center()
@@ -1120,6 +1123,39 @@ impl BlancoApp {
                         .child(self.render_sidebar_toggle(cx)),
                 ),
         )
+    }
+
+    /// Looks like a search field but only opens the command palette, so the
+    /// palette can be found without knowing its shortcut.
+    fn render_palette_trigger(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement {
+        let shortcut = Kbd::binding_for_action(&ToggleCommandPalette, None, window);
+        h_flex()
+            .id("palette-trigger")
+            .items_center()
+            .justify_between()
+            .gap_8()
+            .h(px(26.))
+            .w(px(420.))
+            .px_3()
+            .rounded_md()
+            .bg(cx.theme().input_background())
+            .border_1()
+            .border_color(cx.theme().border)
+            .text_color(cx.theme().muted_foreground)
+            .text_sm()
+            .cursor_pointer()
+            .hover(|this| this.border_color(cx.theme().accent_foreground))
+            .on_click(|_, window, cx| {
+                window.dispatch_action(Box::new(ToggleCommandPalette), cx);
+            })
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(Icon::new(IconName::Search).size(px(14.)))
+                    .child("Search commands..."),
+            )
+            .when_some(shortcut, |this, kbd| this.child(kbd))
     }
 
     /// Offers a newer release: "Update" downloads it, then "Restart" swaps the
