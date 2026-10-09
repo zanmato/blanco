@@ -35,6 +35,7 @@ mod status_bar;
 #[cfg(test)]
 mod test_harness;
 mod time_format;
+mod update_manager;
 
 use assets::Assets;
 use database::DatabaseService;
@@ -201,6 +202,10 @@ fn main() {
         if AppSettings::global(cx).settings.mcp.enabled {
             mcp::McpService::start(cx);
         }
+
+        let update_manager = update_manager::UpdateManager::new(cx);
+        cx.set_global(update_manager);
+        update_manager::UpdateManager::start_polling(cx);
 
         cx.set_text_rendering_mode(gpui::TextRenderingMode::Subpixel);
         cx.set_app_identity(APP_ID, "Blanco");

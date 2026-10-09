@@ -217,6 +217,39 @@ impl SettingsView {
         let mono_font_select = self.mono_font_select.clone();
 
         vec![
+            SettingPage::new("General").resettable(true).groups(vec![
+                SettingGroup::new().title("Updates").items(vec![
+                    SettingItem::new(
+                        "Check for Updates",
+                        SettingField::switch(
+                            move |cx: &App| {
+                                AppSettings::global(cx).settings.general.check_for_updates
+                            },
+                            {
+                                let view_handle = view_handle.clone();
+                                move |val: bool, cx: &mut App| {
+                                    AppSettings::global_mut(cx)
+                                        .settings
+                                        .general
+                                        .check_for_updates = val;
+
+                                    let key = "general.check_for_updates".to_string();
+                                    let value = val.to_string();
+                                    if let Some(view) = view_handle.upgrade() {
+                                        view.update(cx, |view, cx| {
+                                            view.save_setting_debounced(key, value, false, cx);
+                                        });
+                                    }
+                                }
+                            },
+                        )
+                        .default_value(default_settings.general.check_for_updates),
+                    )
+                    .description(
+                        "Check for new releases hourly. An Update button appears in the title bar when one is available.",
+                    ),
+                ]),
+            ]),
             // Editor Settings Page
             SettingPage::new("Editor").resettable(true).groups(vec![
                 SettingGroup::new().title("Text").items(vec![

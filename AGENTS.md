@@ -98,6 +98,18 @@ concurrent sessions crashes gnome-keyring-daemon, so keep reads serialized and l
 The edit dialog hydrates the single connection it shows with
 `connection_credentials::hydrate_connection`.
 
+## Updates
+
+`update_manager::UpdateManager` (a global installed in `main.rs`) asks GitHub for the
+latest release hourly while `general.check_for_updates` is on and tracks an
+`UpdateState` entity: `Available` renders an Update button next to the sidebar toggle,
+clicking it downloads the platform asset (`Downloading`), and `Ready` turns the button
+into Restart, which swaps the running executable with `self_replace` and calls
+`cx.restart()`. An install whose executable directory is not writable (the `.deb` in
+`/usr/bin`) gets `Manual` instead, where Update opens the release page. Releases are staged under `<data_local_dir>/blanco/updates/<version>/`.
+`release_asset()` must name the assets exactly as `build-and-package.yml` uploads them,
+so change both together. Tests build `BlancoApp` without the global, hence `try_global`.
+
 ## Architecture
 
 ### File Structure

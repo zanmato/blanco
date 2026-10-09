@@ -68,6 +68,10 @@ tower = "0.5"
 tokio-util = "0.7"
 schemars = "1"
 
+# Update check and in-place replacement of the running executable
+self_update = { version = "0.42", features = ["archive-tar", "compression-flate2"] }
+semver = "1"
+
 [features]
 # Stages scenes for the website screenshots; see scripts/screenshots/capture.
 screenshots = []

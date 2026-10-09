@@ -6,6 +6,10 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- Blanco checks for new releases hourly and shows an Update button in the
+  title bar when one is out. It downloads the release, then turns into Restart
+  to apply it. On a .deb install it opens the release page instead. Check for
+  Updates in the General settings turns the check off
 - Duplicate in the connection context menu opens the new connection dialog
   filled in from that connection, with its passwords left out
 - A system notification when an agent asks to run a write over MCP while

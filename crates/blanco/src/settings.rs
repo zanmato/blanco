@@ -99,6 +99,9 @@ impl Settings {
 
         for (key, value) in values {
             match key.as_str() {
+                "general.check_for_updates" => {
+                    settings.general.check_for_updates = value.parse().unwrap_or(true);
+                }
                 "editor.font_family" => {
                     // Legacy: migrate to appearance.mono_font_family
                     if settings.appearance.mono_font_family.is_empty() {
@@ -254,8 +257,19 @@ impl Settings {
     }
 }
 
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
-pub struct GeneralSettings {}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeneralSettings {
+    /// Check GitHub hourly for a newer release and offer it in the title bar.
+    pub check_for_updates: bool,
+}
+
+impl Default for GeneralSettings {
+    fn default() -> Self {
+        Self {
+            check_for_updates: true,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EditorSettings {

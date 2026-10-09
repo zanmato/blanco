@@ -19,7 +19,7 @@ use gpui_component::{
     global_state::GlobalState,
     h_flex,
     menu::AppMenuBar,
-    notification::NotificationType,
+    notification::{Notification, NotificationType},
     resizable::{ResizablePanel, ResizableState, h_resizable, resizable_panel},
     spinner::Spinner,
     status_bar::StatusBar,
@@ -42,6 +42,7 @@ use crate::{
     result_ext::ResultExt,
     snippets_panel::{RefreshSnippets, SnippetsPanel, SnippetsPanelEvent},
     status_bar::{ActivityMessage, ActivityReporter, ActivityResult, StatusBarState, StatusKind},
+    update_manager::{UpdateManager, UpdateState},
 };
 use app_database::{AppDatabase, ConnectionData};
 use blanco_core::ConnectionContext;
@@ -415,6 +416,14 @@ impl BlancoApp {
             cx,
         );
         subscriptions.push(Self::wire_mcp_confirmation_notification(window, cx));
+        if let Some(update_manager) = UpdateManager::try_global(cx) {
+            let update_state = update_manager.state.clone();
+            let just_updated = update_manager.updated_from.is_some();
+            subscriptions.push(cx.observe(&update_state, |_, _, cx| cx.notify()));
+            if just_updated {
+                Self::notify_updated(window, cx);
+            }
+        }
 
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
@@ -441,6 +450,22 @@ impl BlancoApp {
             mcp_confirmations,
             _mcp_confirmation_task: mcp_confirmation_task,
         }
+    }
+
+    /// Tell the user the update they restarted for is the build now running.
+    fn notify_updated(window: &mut Window, cx: &mut Context<Self>) {
+        let version = env!("CARGO_PKG_VERSION");
+        window.defer(cx, move |window, cx| {
+            window.push_notification(
+                Notification::new()
+                    .message(format!("Updated to v{version}, click to view changelog"))
+                    .with_type(NotificationType::Success)
+                    .on_click(move |_, _, cx| {
+                        cx.open_url(&UpdateManager::changelog_url(&format!("v{version}")));
+                    }),
+                cx,
+            );
+        });
     }
 
     /// Clicking the write confirmation's system notification brings Blanco's
@@ -1087,8 +1112,80 @@ impl BlancoApp {
                         )
                         .children(self.app_menu_bar.clone()),
                 )
-                .child(self.render_sidebar_toggle(cx)),
+                .child(
+                    h_flex()
+                        .items_center()
+                        .gap_x_2()
+                        .children(self.render_update_button(cx))
+                        .child(self.render_sidebar_toggle(cx)),
+                ),
         )
+    }
+
+    /// Offers a newer release: "Update" downloads it, then "Restart" swaps the
+    /// executable and relaunches.
+    fn render_update_button(&self, cx: &Context<Self>) -> Option<impl IntoElement + use<>> {
+        let state = UpdateManager::try_global(cx)?.state.read(cx).clone();
+        let button = Button::new("update").outline().small();
+        match state {
+            UpdateState::UpToDate => None,
+            UpdateState::Available(version) => Some(
+                button
+                    .label("Update")
+                    .tooltip(format!("Download Blanco {version}"))
+                    .on_click(|_, window, cx| {
+                        let download = UpdateManager::download_update(cx);
+                        window
+                            .spawn(cx, async move |cx| {
+                                let Err(error) = download.await else {
+                                    return;
+                                };
+                                tracing::error!("Failed to download update: {error:#}");
+                                cx.update(|window, cx| {
+                                    window.push_notification(
+                                        (
+                                            NotificationType::Error,
+                                            SharedString::from(format!(
+                                                "Failed to download update: {error:#}"
+                                            )),
+                                        ),
+                                        cx,
+                                    );
+                                })
+                                .log_err();
+                            })
+                            .detach();
+                    }),
+            ),
+            UpdateState::Manual(version) => Some(
+                button
+                    .label("Update")
+                    .tooltip(format!("Open the Blanco {version} release page"))
+                    .on_click(move |_, _, cx| {
+                        cx.open_url(&UpdateManager::changelog_url(&format!("v{version}")));
+                    }),
+            ),
+            UpdateState::Downloading(_) => Some(button.label("Downloading").loading(true)),
+            UpdateState::Ready(version) => Some(
+                button
+                    .label("Restart")
+                    .tooltip(format!("Restart to update to Blanco {version}"))
+                    .on_click(|_, window, cx| {
+                        if let Err(error) = UpdateManager::apply_pending_update(cx) {
+                            tracing::error!("Failed to apply update: {error:#}");
+                            window.push_notification(
+                                (
+                                    NotificationType::Error,
+                                    SharedString::from(format!(
+                                        "Failed to apply update: {error:#}"
+                                    )),
+                                ),
+                                cx,
+                            );
+                        }
+                    }),
+            ),
+        }
     }
 
     fn render_sidebar_toggle(&self, _cx: &Context<Self>) -> impl IntoElement {
