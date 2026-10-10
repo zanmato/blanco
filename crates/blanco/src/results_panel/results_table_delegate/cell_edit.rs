@@ -160,7 +160,7 @@ impl ResultsTableDelegate {
 
     /// The value a cell currently holds: the pending edit when there is one,
     /// otherwise the row data as loaded.
-    pub(super) fn stored_cell_value(&self, row_ix: usize, col_ix: usize) -> Option<String> {
+    pub(crate) fn stored_cell_value(&self, row_ix: usize, col_ix: usize) -> Option<String> {
         match self.edit_state.get_edited_value(row_ix, col_ix) {
             Some(edited) => edited.clone(),
             None => self

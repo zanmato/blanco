@@ -87,6 +87,9 @@ actions!(
         EditPrevCell,
         ToggleCellExpression,
         ClearCompareSelection,
+        ToggleRowDetail,
+        RowDetailNextRow,
+        RowDetailPreviousRow,
     ]
 );
 
@@ -2157,6 +2160,17 @@ impl BlancoApp {
         });
     }
 
+    fn on_toggle_row_detail(
+        &mut self,
+        _: &ToggleRowDetail,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.toggle_row_detail(window, cx);
+        });
+    }
+
     fn on_rollback_changes(
         &mut self,
         _: &RollbackChanges,
@@ -2352,6 +2366,7 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_new_connection_modal))
             .on_action(cx.listener(Self::on_new_snippet))
             .on_action(cx.listener(Self::on_commit_changes))
+            .on_action(cx.listener(Self::on_toggle_row_detail))
             .on_action(cx.listener(Self::on_rollback_changes))
             .on_action(cx.listener(Self::on_rename_tab))
             .on_action(cx.listener(Self::on_database_connected))
@@ -2473,6 +2488,18 @@ fn init_menus(cx: &mut App) {
         gpui::KeyBinding::new("f2", StartCellEdit, Some("DataTable")),
         gpui::KeyBinding::new("tab", EditNextCell, Some("CellEditor")),
         gpui::KeyBinding::new("shift-tab", EditPrevCell, Some("CellEditor")),
+        // The row detail panel's fields are text areas, which leave alt-up
+        // and alt-down unbound.
+        gpui::KeyBinding::new(
+            "alt-down",
+            RowDetailNextRow,
+            Some(crate::results_panel::ROW_DETAIL_CONTEXT),
+        ),
+        gpui::KeyBinding::new(
+            "alt-up",
+            RowDetailPreviousRow,
+            Some(crate::results_panel::ROW_DETAIL_CONTEXT),
+        ),
         gpui::KeyBinding::new("secondary-r", ToggleCellExpression, Some("CellEditor")),
         gpui::KeyBinding::new(
             "secondary-r",
@@ -2597,6 +2624,8 @@ fn build_menu() -> Vec<Menu> {
                 MenuItem::action("Increase Editor Font Size", IncreaseEditorFontSize),
                 MenuItem::action("Decrease Editor Font Size", DecreaseEditorFontSize),
                 MenuItem::action("Reset Editor Font Size", ResetEditorFontSize),
+                MenuItem::separator(),
+                MenuItem::action("Row Detail", ToggleRowDetail),
             ],
             disabled: false,
         },

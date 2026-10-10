@@ -17,6 +17,11 @@ All notable changes to this project will be documented in this file.
 - A system notification when an agent asks to run a write over MCP while
   Blanco is in the background. Clicking it brings Blanco forward, where the
   confirmation dialog is waiting
+- A row detail panel beside the results shows the selected row as a form,
+  one field per column with its type, and long text and JSON wrapped across
+  lines. Edits there become pending edits like cell edits. Toggle it with
+  Cmd/Ctrl+Shift+D, the button in the results tab strip or View > Row
+  Detail; Alt+Up and Alt+Down move between rows without leaving the field
 
 ### Fixes
 

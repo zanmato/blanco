@@ -21,7 +21,7 @@ use crate::{
         CreateNewQueryTab, CreateNewScriptTab, ExplainQuery, ExportAsCSV, ExportAsJSON,
         ExportAsMarkdown, ExportAsSQL, ExportAsTSV, FormatQuery, NewSnippet,
         OpenNewConnectionModal, OpenSettings, OpenTerminal, RollbackChanges, RunQuery, SwitchTheme,
-        ToggleRenderWhitespace, ToggleSidebar, ToggleWordWrap,
+        ToggleRenderWhitespace, ToggleRowDetail, ToggleSidebar, ToggleWordWrap,
     },
     connections::ConnectionsPanel,
     editor::EditorPanel,
@@ -108,6 +108,7 @@ pub enum CommandType {
     CommitChanges,
     RollbackChanges,
     ClearCompareSelection,
+    ToggleRowDetail,
     CopyAsCSV,
     CopyAsTSV,
     CopyAsJSON,
@@ -736,6 +737,7 @@ fn keybinding_for_command(cmd: &CommandType, window: &Window) -> Option<gpui_com
         CommandType::OpenTerminal => Box::new(OpenTerminal),
         CommandType::CommitChanges => Box::new(CommitChanges),
         CommandType::RollbackChanges => Box::new(RollbackChanges),
+        CommandType::ToggleRowDetail => Box::new(ToggleRowDetail),
         _ => return None,
     };
     Kbd::binding_for_action(action.as_ref(), None, window)
@@ -758,6 +760,7 @@ fn execute_command(cmd: &CommandType, window: &mut Window, cx: &mut App) {
         CommandType::ClearCompareSelection => {
             window.dispatch_action(Box::new(ClearCompareSelection), cx)
         }
+        CommandType::ToggleRowDetail => window.dispatch_action(Box::new(ToggleRowDetail), cx),
         CommandType::CopyAsCSV => window.dispatch_action(Box::new(CopyAsCSV), cx),
         CommandType::CopyAsTSV => window.dispatch_action(Box::new(CopyAsTSV), cx),
         CommandType::CopyAsJSON => window.dispatch_action(Box::new(CopyAsJSON), cx),
@@ -1083,6 +1086,7 @@ fn build_commands(
         leaf("Toggle Sidebar", "View", CommandType::ToggleSidebar),
         leaf("Commit Changes", "Edit", CommandType::CommitChanges),
         leaf("Rollback Changes", "Edit", CommandType::RollbackChanges),
+        leaf("Toggle Row Detail", "Results", CommandType::ToggleRowDetail),
         leaf(
             "Clear Comparison Selection",
             "Results",

@@ -1,7 +1,7 @@
 use crate::app::{
     CommitChanges, DecreaseEditorFontSize, ExplainQuery, FormatQuery, IncreaseEditorFontSize,
     OpenSettings, OpenTerminal, ResetEditorFontSize, RollbackChanges, RunQuery,
-    ToggleCommandPalette,
+    ToggleCommandPalette, ToggleRowDetail,
 };
 use crate::settings::Settings;
 
@@ -76,6 +76,12 @@ pub const CUSTOMIZABLE_BINDINGS: &[BindingDef] = &[
         context: None,
     },
     BindingDef {
+        action: "ToggleRowDetail",
+        label: "Toggle row detail",
+        default: "secondary-shift-d",
+        context: None,
+    },
+    BindingDef {
         action: "IncreaseEditorFontSize",
         label: "Increase editor font size",
         default: "secondary-=",
@@ -139,6 +145,7 @@ fn key_binding(action: &str, keystrokes: &str, context: Option<&str>) -> Option<
         "RollbackChanges" => gpui::KeyBinding::new(keystrokes, RollbackChanges, context),
         "OpenSettings" => gpui::KeyBinding::new(keystrokes, OpenSettings, context),
         "OpenTerminal" => gpui::KeyBinding::new(keystrokes, OpenTerminal, context),
+        "ToggleRowDetail" => gpui::KeyBinding::new(keystrokes, ToggleRowDetail, context),
         "IncreaseEditorFontSize" => {
             gpui::KeyBinding::new(keystrokes, IncreaseEditorFontSize, context)
         }
