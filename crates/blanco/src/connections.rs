@@ -23,9 +23,11 @@ use gpui::{
 use gpui_component::{
     ActiveTheme as _, Sizable as _, WindowExt,
     button::{Button, ButtonVariants as _},
+    checkbox::Checkbox,
     dialog::{DialogAction, DialogClose, DialogFooter},
     input::{Input, InputEvent, InputState},
     notification::NotificationType,
+    v_flex,
 };
 
 #[derive(Clone, Debug)]
@@ -648,16 +650,50 @@ impl ConnectionsPanel {
         };
         let confirm_label = operation.label();
         let this_handle = cx.entity().downgrade();
+        // Referenced tables can only go with the override, which is off until
+        // the user ticks it.
+        let reference_override = blanco_core::ddl::ReferenceOverride::for_operation(
+            metadata.db_type,
+            entity,
+            &operation,
+        );
+        let override_chosen = cx.new(|_| false);
 
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, _, cx| {
             let metadata = metadata.clone();
             let operation = operation.clone();
             let new_name_input = new_name_input.clone();
             let this_handle = this_handle.clone();
+            let chosen = *override_chosen.read(cx);
             let mut dialog = dialog.title(title.clone()).child(description.clone());
             if let Some(input) = &new_name_input {
                 dialog = dialog.child(Input::new(input));
             }
+            if let Some(reference_override) = reference_override {
+                let override_chosen = override_chosen.clone();
+                dialog = dialog.child(
+                    v_flex()
+                        .gap_1()
+                        .mt_3()
+                        .child(
+                            Checkbox::new("table-op-override")
+                                .label(reference_override.label())
+                                .checked(chosen)
+                                .on_click(move |checked: &bool, window, cx| {
+                                    override_chosen.update(cx, |chosen, _| *chosen = *checked);
+                                    window.refresh();
+                                }),
+                        )
+                        .child(
+                            div()
+                                .pl_6()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(reference_override.description(&operation)),
+                        ),
+                );
+            }
+            let applied_override = reference_override.filter(|_| chosen);
             dialog.footer(
                 DialogFooter::new()
                     .child(
@@ -684,6 +720,7 @@ impl ConnectionsPanel {
                                                 metadata.clone(),
                                                 entity,
                                                 operation,
+                                                applied_override,
                                                 window,
                                                 cx,
                                             );
@@ -701,9 +738,12 @@ impl ConnectionsPanel {
         metadata: TreeItemMetadata,
         entity: blanco_core::EntityType,
         operation: blanco_core::ddl::TableOperation,
+        reference_override: Option<blanco_core::ddl::ReferenceOverride>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        use blanco_core::ddl::ReferenceOverride;
+
         let Some(table_name) = metadata.table_name.clone() else {
             return;
         };
@@ -733,9 +773,30 @@ impl ConnectionsPanel {
                 let connection = db_service
                     .get_or_create_connection(connection_id, database_name.as_deref())
                     .await?;
-                connection
-                    .execute_write(&sql, database_name.as_deref(), &[])
-                    .await?;
+                match reference_override {
+                    Some(ReferenceOverride::SkipForeignKeyChecks) => {
+                        connection
+                            .execute_write_without_foreign_key_checks(
+                                &sql,
+                                database_name.as_deref(),
+                            )
+                            .await?
+                    }
+                    Some(reference_override) => {
+                        connection
+                            .execute_write(
+                                &reference_override.apply(&sql),
+                                database_name.as_deref(),
+                                &[],
+                            )
+                            .await?
+                    }
+                    None => {
+                        connection
+                            .execute_write(&sql, database_name.as_deref(), &[])
+                            .await?
+                    }
+                };
                 Ok(())
             })
             .await;

@@ -261,6 +261,36 @@ impl Connection for MysqlConnection {
         Ok(result.rows_affected())
     }
 
+    async fn execute_write_without_foreign_key_checks(
+        &self,
+        query: &str,
+        database_name: Option<&str>,
+    ) -> Result<u64, anyhow::Error> {
+        let database = database_name
+            .or(self.initial_database.as_deref())
+            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+        let pool = self.get_or_create_pool(database).await?;
+
+        // The switch is per session, so the statement and both switches run
+        // on one connection.
+        let mut connection = pool.acquire().await.map_err(blanco_core::tag_sqlx)?;
+        sqlx::query("SET FOREIGN_KEY_CHECKS = 0")
+            .execute(&mut *connection)
+            .await
+            .map_err(blanco_core::tag_sqlx)?;
+        let result = sqlx::query(query).execute(&mut *connection).await;
+        let restored = sqlx::query("SET FOREIGN_KEY_CHECKS = 1")
+            .execute(&mut *connection)
+            .await;
+        if restored.is_err() {
+            // Never hand a session without checks back to the pool.
+            drop(connection.detach());
+        }
+        let rows_affected = result.map_err(blanco_core::tag_sqlx)?.rows_affected();
+        restored.map_err(blanco_core::tag_sqlx)?;
+        Ok(rows_affected)
+    }
+
     async fn execute_operations_transactional(
         &self,
         operations: &[blanco_core::WriteOperation],

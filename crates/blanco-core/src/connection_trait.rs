@@ -411,6 +411,20 @@ pub trait Connection: Send + Sync {
         parameters: &[Option<String>],
     ) -> Result<u64, anyhow::Error>;
 
+    /// Execute one write statement with foreign key checks turned off for it,
+    /// on a single session, turning them back on afterwards whether or not the
+    /// statement succeeded. Only MySQL and MariaDB have the switch; other
+    /// backends return an error.
+    async fn execute_write_without_foreign_key_checks(
+        &self,
+        _query: &str,
+        _database_name: Option<&str>,
+    ) -> Result<u64, anyhow::Error> {
+        Err(anyhow::anyhow!(
+            "this connection type cannot turn off foreign key checks"
+        ))
+    }
+
     /// Execute a batch of write statements as a single atomic unit.
     ///
     /// Used by the results-panel table editor to commit a set of
