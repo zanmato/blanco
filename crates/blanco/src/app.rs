@@ -219,6 +219,8 @@ pub struct ExecuteSubstitutedQuery {
 pub struct CreateNewQueryTab {
     pub context: ConnectionContext,
     pub table_name: Option<String>,
+    /// SQL to open the tab with instead of the `SELECT *` scaffold.
+    pub content: Option<String>,
     /// When set, the new tab immediately inspects `table_name` as a key (used by
     /// the "Inspect Key" action on key/value backends). Plain "New Query" leaves
     /// this false and just opens an editor tab.
@@ -1542,7 +1544,9 @@ impl BlancoApp {
 
         // Non-SQL backends (Redis) don't get a SELECT scaffold; a clicked key
         // opens the key inspector instead (handled below).
-        let content = if context.dialect().supports_sql() {
+        let content = if action.content.is_some() {
+            action.content.clone()
+        } else if context.dialect().supports_sql() {
             action.table_name.as_ref().map(|table| {
                 context
                     .dialect()

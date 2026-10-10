@@ -2,9 +2,9 @@ use std::{cell::RefCell, ops::Range, rc::Rc};
 
 use gpui::{
     App, Context, ElementId, Entity, FocusHandle, InteractiveElement as _, IntoElement, KeyBinding,
-    ListSizingBehavior, MouseButton, ParentElement, Render, RenderOnce, SharedString,
-    StyleRefinement, Styled, UniformListScrollHandle, Window, div, prelude::FluentBuilder as _, px,
-    uniform_list,
+    ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, Render, RenderOnce,
+    SharedString, StyleRefinement, Styled, UniformListScrollHandle, Window, div,
+    prelude::FluentBuilder as _, px, uniform_list,
 };
 
 use gpui_component::{
@@ -42,10 +42,13 @@ pub trait TreeDelegate: Sized + 'static {
     ) -> ListItem;
 
     /// Render the context menu for the tree item at the given index.
+    /// `selection` holds every selected entry that is showing, the clicked one
+    /// included: right-clicking outside the selection selects that item alone.
     fn context_menu(
         &self,
         _ix: usize,
         _entry: &TreeEntry<Self::Metadata>,
+        _selection: &[&TreeEntry<Self::Metadata>],
         menu: PopupMenu,
         _window: &mut Window,
         _cx: &mut App,
@@ -194,6 +197,9 @@ pub struct TreeState<D: TreeDelegate> {
     /// rebuilt, so the selection is kept by id and looked up again; an item
     /// hidden by a collapsed parent is selected again once it shows.
     selected_id: Option<SharedString>,
+    /// Items selected along with the selected one by secondary- or
+    /// Shift-clicking, kept by id like it.
+    extra_selected: Vec<SharedString>,
     right_clicked_index: Option<usize>,
     delegate: D,
 }
@@ -204,6 +210,7 @@ impl<D: TreeDelegate> TreeState<D> {
         Self {
             selected_ix: None,
             selected_id: None,
+            extra_selected: Vec::new(),
             right_clicked_index: None,
             focus_handle: cx.focus_handle(),
             scroll_handle: UniformListScrollHandle::default(),
@@ -296,7 +303,58 @@ impl<D: TreeDelegate> TreeState<D> {
         self.selected_ix
     }
 
+    /// Whether the entry at `ix` is selected, alone or with others.
+    pub fn is_selected(&self, ix: usize) -> bool {
+        Some(ix) == self.selected_ix
+            || self
+                .entries
+                .get(ix)
+                .is_some_and(|entry| self.extra_selected.contains(&entry.item.id))
+    }
+
+    /// Every selected entry that is showing, in tree order.
+    pub fn selected_entries(&self) -> Vec<&TreeEntry<D::Metadata>> {
+        (0..self.entries.len())
+            .filter(|&ix| self.is_selected(ix))
+            .map(|ix| &self.entries[ix])
+            .collect()
+    }
+
+    /// Add the entry at `ix` to the selection, or take it out.
+    fn toggle_selected(&mut self, ix: usize) {
+        let Some(id) = self.entries.get(ix).map(|entry| entry.item.id.clone()) else {
+            return;
+        };
+        if self.selected_id.as_ref() == Some(&id) {
+            self.selected_id = self.extra_selected.pop();
+            self.reselect();
+        } else if let Some(position) = self.extra_selected.iter().position(|other| *other == id) {
+            self.extra_selected.remove(position);
+        } else {
+            self.extra_selected.extend(self.selected_id.take());
+            self.selected_id = Some(id);
+            self.selected_ix = Some(ix);
+        }
+    }
+
+    /// Select every entry from the selected one to `ix`.
+    fn select_range(&mut self, ix: usize) {
+        let Some(anchor) = self.selected_ix else {
+            self.select(Some(ix));
+            return;
+        };
+        let range = anchor.min(ix)..=anchor.max(ix);
+        self.extra_selected = range
+            .filter(|&other| other != ix)
+            .filter_map(|other| self.entries.get(other))
+            .map(|entry| entry.item.id.clone())
+            .collect();
+        self.selected_ix = Some(ix);
+        self.selected_id = self.entries.get(ix).map(|entry| entry.item.id.clone());
+    }
+
     fn select(&mut self, ix: Option<usize>) {
+        self.extra_selected.clear();
         self.selected_ix = ix;
         self.selected_id = ix
             .and_then(|ix| self.entries.get(ix))
@@ -425,9 +483,21 @@ impl<D: TreeDelegate> TreeState<D> {
         cx.notify();
     }
 
-    fn on_entry_click(&mut self, ix: usize, _: &mut Window, cx: &mut Context<Self>) {
-        self.select(Some(ix));
-        self.toggle_expand(ix);
+    fn on_entry_click(
+        &mut self,
+        ix: usize,
+        modifiers: gpui::Modifiers,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if modifiers.secondary() {
+            self.toggle_selected(ix);
+        } else if modifiers.shift {
+            self.select_range(ix);
+        } else {
+            self.select(Some(ix));
+            self.toggle_expand(ix);
+        }
         cx.notify();
     }
 }
@@ -449,7 +519,10 @@ impl<D: TreeDelegate> Render for TreeState<D> {
                             let Some(entry) = state.entries.get(ix) else {
                                 return this;
                             };
-                            state.delegate().context_menu(ix, entry, this, window, cx)
+                            let selection = state.selected_entries();
+                            state
+                                .delegate()
+                                .context_menu(ix, entry, &selection, this, window, cx)
                         })
                     } else {
                         this
@@ -462,7 +535,7 @@ impl<D: TreeDelegate> Render for TreeState<D> {
                         let mut items = Vec::with_capacity(visible_range.len());
                         for ix in visible_range {
                             let entry = &state.entries[ix];
-                            let selected = Some(ix) == state.selected_ix;
+                            let selected = state.is_selected(ix);
 
                             let item = state.delegate.render_item(ix, entry, selected, window, cx);
 
@@ -473,8 +546,13 @@ impl<D: TreeDelegate> Render for TreeState<D> {
                                     this.on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener({
-                                            move |this, _, window, cx| {
-                                                this.on_entry_click(ix, window, cx);
+                                            move |this, event: &MouseDownEvent, window, cx| {
+                                                this.on_entry_click(
+                                                    ix,
+                                                    event.modifiers,
+                                                    window,
+                                                    cx,
+                                                );
                                             }
                                         }),
                                     )
@@ -482,6 +560,9 @@ impl<D: TreeDelegate> Render for TreeState<D> {
                                         MouseButton::Right,
                                         cx.listener({
                                             move |this, _, _window, cx| {
+                                                if !this.is_selected(ix) {
+                                                    this.select(Some(ix));
+                                                }
                                                 this.right_clicked_index = Some(ix);
                                                 cx.notify();
                                             }
@@ -611,6 +692,39 @@ mod tests {
             assert_eq!(tree.select_id("leaf", cx), None);
             tree.set_items(items(true), cx);
             assert_eq!(tree.selected_index(), Some(2));
+        });
+    }
+
+    #[gpui::test]
+    fn secondary_and_shift_clicks_select_several(cx: &mut TestAppContext) {
+        let tree = cx.new(|cx| TreeState::new(Plain, cx));
+        tree.update(cx, |tree, cx| {
+            tree.set_items(items(true), cx);
+            let ids = |tree: &TreeState<Plain>| {
+                tree.selected_entries()
+                    .iter()
+                    .map(|entry| entry.item().id.to_string())
+                    .collect::<Vec<_>>()
+            };
+
+            tree.select(Some(0));
+            tree.toggle_selected(2);
+            assert_eq!(ids(tree), ["a", "leaf"]);
+
+            // Taking the selected item out leaves the other one selected.
+            tree.toggle_selected(2);
+            assert_eq!(ids(tree), ["a"]);
+
+            tree.select_range(2);
+            assert_eq!(ids(tree), ["a", "group", "leaf"]);
+
+            // The selection is kept by id across a rebuild.
+            tree.set_items(items(true), cx);
+            assert_eq!(ids(tree), ["a", "group", "leaf"]);
+
+            // A plain selection drops the others.
+            tree.select(Some(1));
+            assert_eq!(ids(tree), ["group"]);
         });
     }
 }

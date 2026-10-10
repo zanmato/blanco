@@ -400,6 +400,50 @@ impl Dialect {
         )
     }
 
+    /// A `SELECT` of `schema.table` listing every column, one per line, with
+    /// every name quoted.
+    pub fn select_columns(&self, schema: Option<&str>, table: &str, columns: &[String]) -> String {
+        let columns = columns
+            .iter()
+            .map(|column| format!("    {}", self.quote_identifier(column)))
+            .collect::<Vec<_>>()
+            .join(",\n");
+        format!(
+            "SELECT\n{columns}\nFROM {};",
+            self.quote_qualified(schema, table)
+        )
+    }
+
+    /// An `INSERT` into `schema.table` naming every column, with a parameter
+    /// placeholder for each value to fill in.
+    pub fn insert_template(&self, schema: Option<&str>, table: &str, columns: &[String]) -> String {
+        let names = columns
+            .iter()
+            .map(|column| self.quote_identifier(column))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let values = columns
+            .iter()
+            .enumerate()
+            .map(|(index, column)| match self.0 {
+                // T-SQL binds by name, so name each value after its column.
+                DatabaseType::MsSql => format!(
+                    "@{}",
+                    column
+                        .chars()
+                        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+                        .collect::<String>()
+                ),
+                _ => self.placeholder(index),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "INSERT INTO {} ({names})\nVALUES ({values});",
+            self.quote_qualified(schema, table)
+        )
+    }
+
     /// Wrap `sql` in this backend's EXPLAIN. `EXPLAIN ANALYZE` is only used
     /// for plain selects on Postgres because `ANALYZE` executes the statement
     /// and would mutate data otherwise.
@@ -634,6 +678,32 @@ mod tests {
         assert_eq!(
             dialect(DatabaseType::SQLite).insert_defaults_sql("\"t\""),
             "INSERT INTO \"t\" DEFAULT VALUES"
+        );
+    }
+
+    #[test]
+    fn select_columns_and_insert_template_quote_every_name() {
+        let columns = vec!["id".to_string(), "full name".to_string()];
+        let pg = DatabaseType::PostgreSQL.dialect();
+        assert_eq!(
+            pg.select_columns(Some("public"), "users", &columns),
+            "SELECT\n    \"id\",\n    \"full name\"\nFROM \"public\".\"users\";"
+        );
+        assert_eq!(
+            pg.insert_template(Some("public"), "users", &columns),
+            "INSERT INTO \"public\".\"users\" (\"id\", \"full name\")\nVALUES ($1, $2);"
+        );
+        assert_eq!(
+            DatabaseType::MySQL
+                .dialect()
+                .insert_template(None, "users", &columns),
+            "INSERT INTO `users` (`id`, `full name`)\nVALUES (?, ?);"
+        );
+        assert_eq!(
+            DatabaseType::MsSql
+                .dialect()
+                .insert_template(Some("dbo"), "users", &columns),
+            "INSERT INTO [dbo].[users] ([id], [full name])\nVALUES (@id, @full_name);"
         );
     }
 }

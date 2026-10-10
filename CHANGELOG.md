@@ -6,6 +6,11 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- A Copy submenu on tables, views and routines in the sidebar copies the
+  name or qualified name, quoted for the database, the CREATE statement, a
+  SELECT listing every column, or an INSERT template. New Query with Columns
+  opens that SELECT in a new tab. Ctrl-click (Cmd-click on macOS) and
+  Shift-click select several objects, and the copies then cover all of them
 - The sidebar follows the active tab: switching tabs, or opening a table
   from the command palette, selects that tab's table, view or routine,
   loading and opening the groups above it and scrolling it into view. Follow

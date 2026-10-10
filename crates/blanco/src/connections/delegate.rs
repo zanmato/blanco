@@ -14,6 +14,7 @@ use gpui_component::{
 use crate::app::CreateNewQueryTab;
 use crate::app::OpenSchemaGraph;
 use crate::app::OpenTableStructure;
+use crate::connections::copy_actions::ObjectCopy;
 use crate::connections::{
     ConnectionsPanel, CreateNewQueryTabParams, TreeItemIcon, TreeItemKind, TreeItemMetadata,
 };
@@ -32,6 +33,52 @@ impl ConnectionsTreeDelegate {
     /// "New Script" menu entry for a tree node. Available on every backend:
     /// scripts drive the connection through the `db` object, which is
     /// driver-agnostic.
+    /// The Copy submenu for `entry`, covering every selected object of its
+    /// kind when it is part of a selection. `None` for nodes without copies.
+    fn copy_menu(
+        &self,
+        entry: &TreeEntry<TreeItemMetadata>,
+        selection: &[&TreeEntry<TreeItemMetadata>],
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<Entity<PopupMenu>> {
+        let copies = ObjectCopy::offered_for(&entry.item().metadata.kind);
+        if copies.is_empty() || !entry.item().metadata.db_type.supports_sql() {
+            return None;
+        }
+        // Objects that offer the same copies go together: tables with views,
+        // routines with routines.
+        let in_selection = selection
+            .iter()
+            .any(|selected| selected.item().id == entry.item().id);
+        let objects: Vec<TreeItemMetadata> = if in_selection {
+            selection
+                .iter()
+                .map(|selected| &selected.item().metadata)
+                .filter(|object| ObjectCopy::offered_for(&object.kind) == copies)
+                .cloned()
+                .collect()
+        } else {
+            vec![entry.item().metadata.clone()]
+        };
+
+        let parent = self.parent.clone();
+        Some(PopupMenu::build(window, cx, move |mut menu, window, _| {
+            for &copy in copies {
+                let objects = objects.clone();
+                menu = menu.item(
+                    PopupMenuItem::new(copy.label()).on_click(window.listener_for(
+                        &parent,
+                        move |this, _event, window, cx| {
+                            this.copy_objects(objects.clone(), copy, window, cx);
+                        },
+                    )),
+                );
+            }
+            menu
+        }))
+    }
+
     fn new_script_item(&self, metadata: &TreeItemMetadata, window: &mut Window) -> PopupMenuItem {
         let action = metadata.create_new_script_tab_action();
         PopupMenuItem::new("New Script").on_click(window.listener_for(
@@ -248,11 +295,13 @@ impl TreeDelegate for ConnectionsTreeDelegate {
         &self,
         _ix: usize,
         entry: &TreeEntry<TreeItemMetadata>,
+        selection: &[&TreeEntry<TreeItemMetadata>],
         menu: PopupMenu,
         window: &mut Window,
-        _cx: &mut App,
+        cx: &mut App,
     ) -> PopupMenu {
         let metadata = &entry.item().metadata;
+        let copy_menu = self.copy_menu(entry, selection, window, cx);
 
         match metadata.kind {
             TreeItemKind::Connection => {
@@ -353,9 +402,12 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                 menu
             }
             TreeItemKind::Procedure | TreeItemKind::Function | TreeItemKind::Trigger => {
-                // Routine items have no contextual operations yet; double-
-                // click handling (DDL tab) is wired separately in the panel.
-                menu
+                // Double-click handling (DDL tab) is wired separately in the
+                // panel.
+                match copy_menu {
+                    Some(copy_menu) => menu.item(PopupMenuItem::submenu("Copy", copy_menu)),
+                    None => menu,
+                }
             }
             TreeItemKind::Category => {
                 // Grouping folders have no object operations, but on key/value
@@ -364,6 +416,7 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                 if metadata.db_type.inspects_objects() {
                     let action = CreateNewQueryTab {
                         table_name: None,
+                        content: None,
 
                         inspect_key: false,
 
@@ -427,12 +480,15 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                     let new_query_action = if db_type.inspects_objects() {
                         CreateNewQueryTab {
                             table_name: None,
+                            content: None,
                             ..action
                         }
                     } else {
                         action
                     };
 
+                    let select_object = metadata.clone();
+                    let select_action = new_query_action.clone();
                     let mut menu = menu
                         .item(
                             PopupMenuItem::new("New Query").on_click(window.listener_for(
@@ -442,7 +498,29 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                                 },
                             )),
                         )
+                        .when(
+                            supports_table_ops && metadata.kind != TreeItemKind::Schema,
+                            |menu| {
+                                menu.item(PopupMenuItem::new("New Query with Columns").on_click(
+                                    window.listener_for(
+                                        &self.parent,
+                                        move |this, _event, window, cx| {
+                                            this.open_select_with_columns(
+                                                select_object.clone(),
+                                                select_action.clone(),
+                                                window,
+                                                cx,
+                                            );
+                                        },
+                                    ),
+                                ))
+                            },
+                        )
                         .item(self.new_script_item(metadata, window));
+
+                    if supports_table_ops && let Some(copy_menu) = copy_menu {
+                        menu = menu.item(PopupMenuItem::submenu("Copy", copy_menu));
+                    }
 
                     if let Some(inspect_action) = inspect_action {
                         menu = menu.item(PopupMenuItem::new("Inspect Key").on_click(

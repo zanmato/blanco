@@ -782,6 +782,7 @@ fn execute_command(cmd: &CommandType, window: &mut Window, cx: &mut App) {
         CommandType::NewQueryForDatabase(database) => window.dispatch_action(
             Box::new(CreateNewQueryTab {
                 table_name: None,
+                content: None,
 
                 inspect_key: false,
 

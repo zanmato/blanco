@@ -1,3 +1,4 @@
+mod copy_actions;
 mod data_loading;
 mod delegate;
 mod reveal;
@@ -162,6 +163,7 @@ impl CreateNewQueryTabParams for TreeItemMetadata {
             | TreeItemKind::View
             | TreeItemKind::MaterializedView => Some(CreateNewQueryTab {
                 table_name: self.table_name.clone(),
+                content: None,
 
                 inspect_key: false,
 
