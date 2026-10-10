@@ -6,6 +6,7 @@ use gpui::{
     MouseButton, ParentElement, PathBuilder, Pixels, RenderOnce, SharedString,
     StatefulInteractiveElement, Styled, Window, canvas, div, point, px, relative,
 };
+use gpui_component::menu::{ContextMenuExt as _, PopupMenu};
 use gpui_component::{ActiveTheme, Icon, IconName, Selectable, Sizable, Size, StyledExt, h_flex};
 
 /// Tab variants.
@@ -476,7 +477,11 @@ pub struct Tab {
     pub(super) menu_detail: Option<SharedString>,
     pub(super) on_close: Option<Rc<dyn Fn(&usize, &ClickEvent, &mut Window, &mut App) + 'static>>,
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
+    context_menu: Option<TabContextMenu>,
 }
+
+type TabContextMenu =
+    Rc<dyn Fn(PopupMenu, &mut Window, &mut gpui::Context<PopupMenu>) -> PopupMenu + 'static>;
 
 impl From<&'static str> for Tab {
     fn from(label: &'static str) -> Self {
@@ -528,6 +533,7 @@ impl Default for Tab {
             variant: TabVariant::default(),
             size: Size::default(),
             on_click: None,
+            context_menu: None,
         }
     }
 }
@@ -650,6 +656,15 @@ impl Tab {
         self
     }
 
+    /// The menu shown when the tab is right-clicked.
+    pub fn context_menu(
+        mut self,
+        f: impl Fn(PopupMenu, &mut Window, &mut gpui::Context<PopupMenu>) -> PopupMenu + 'static,
+    ) -> Self {
+        self.context_menu = Some(Rc::new(f));
+        self
+    }
+
     /// Set index to the tab.
     pub(crate) fn ix(mut self, ix: usize) -> Self {
         self.ix = ix;
@@ -702,7 +717,20 @@ impl Sizable for Tab {
 }
 
 impl RenderOnce for Tab {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(mut self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let context_menu = self.context_menu.take();
+        let tab = self.render_tab(window, cx);
+        match context_menu {
+            Some(menu) => tab
+                .context_menu(move |popup, window, cx| menu(popup, window, cx))
+                .into_any_element(),
+            None => tab.into_any_element(),
+        }
+    }
+}
+
+impl Tab {
+    fn render_tab(self, _: &mut Window, cx: &mut App) -> gpui::Stateful<gpui::Div> {
         let mut tab_style = if self.selected {
             self.variant.selected(cx)
         } else {

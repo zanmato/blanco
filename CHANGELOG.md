@@ -42,6 +42,12 @@ All notable changes to this project will be documented in this file.
   and column suggestions in the editor, and in a Comment column on the
   structure tab. PostgreSQL, MySQL, SQL Server and ClickHouse; SQLite has no
   comments
+- Tab strip handling: drag a tab to reorder it within its connection's
+  group, and the order is kept across restarts. Right-click a tab to
+  Duplicate it (same text and connection), Pin it so it stays at the start
+  and survives Close Others and Close to the Right, or close it and its
+  neighbours. Middle-click closes a tab, and the tooltip shows the
+  connection, database, schema and, for structure tabs, the table
 - A search field in the title bar opens the command palette and shows its
   shortcut
 - Blanco checks for new releases hourly and shows an Update button in the
