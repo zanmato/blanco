@@ -79,6 +79,7 @@ actions!(
         ToggleFilterBar,
         SaveTab,
         SaveTabAs,
+        ReopenClosedTab,
         ClearSelection,
         ToggleRenderWhitespace,
         ToggleWordWrap,
@@ -1926,6 +1927,16 @@ impl BlancoApp {
         });
     }
 
+    fn on_reopen_closed_tab(
+        &mut self,
+        _: &ReopenClosedTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.editor_panel
+            .update(cx, |panel, cx| panel.reopen_closed_tab(window, cx));
+    }
+
     fn on_database_connected(
         &mut self,
         action: &DatabaseConnected,
@@ -2918,6 +2929,7 @@ impl Render for BlancoApp {
                     });
                 }
             }))
+            .on_action(cx.listener(Self::on_reopen_closed_tab))
             .size_full()
             .overflow_hidden()
             .bg(cx.theme().background)
