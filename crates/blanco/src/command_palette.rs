@@ -19,7 +19,7 @@ use crate::{
         ActivateEditorTab, ClearCompareSelection, CloseActiveTab, CommitChanges,
         ConnectToConnection, CopyAsCSV, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV,
         CreateNewQueryTab, CreateNewScriptTab, ExplainQuery, ExportAsCSV, ExportAsJSON,
-        ExportAsMarkdown, ExportAsSQL, ExportAsTSV, FormatQuery, NewSnippet,
+        ExportAsMarkdown, ExportAsSQL, ExportAsTSV, FormatQuery, JumpToColumn, NewSnippet,
         OpenNewConnectionModal, OpenSettings, OpenTerminal, RollbackChanges, RunQuery, SwitchTheme,
         ToggleRenderWhitespace, ToggleSidebar, ToggleWordWrap,
     },
@@ -118,6 +118,7 @@ pub enum CommandType {
     ExportAsJSON,
     ExportAsSQL,
     ExportAsMarkdown,
+    JumpToColumn,
     ToggleRenderWhitespace,
     ToggleWordWrap,
     CloseActiveTab,
@@ -768,6 +769,7 @@ fn execute_command(cmd: &CommandType, window: &mut Window, cx: &mut App) {
         CommandType::ExportAsJSON => window.dispatch_action(Box::new(ExportAsJSON), cx),
         CommandType::ExportAsSQL => window.dispatch_action(Box::new(ExportAsSQL), cx),
         CommandType::ExportAsMarkdown => window.dispatch_action(Box::new(ExportAsMarkdown), cx),
+        CommandType::JumpToColumn => window.dispatch_action(Box::new(JumpToColumn), cx),
         CommandType::ToggleRenderWhitespace => {
             window.dispatch_action(Box::new(ToggleRenderWhitespace), cx)
         }
@@ -976,7 +978,7 @@ impl CommandPaletteDelegate {
     }
 }
 
-fn fuzzy_score(text: &str, query: &str) -> Option<i64> {
+pub(crate) fn fuzzy_score(text: &str, query: &str) -> Option<i64> {
     let text_chars: Vec<char> = text.chars().collect();
     let query_chars: Vec<char> = query.chars().collect();
 
@@ -1102,6 +1104,7 @@ fn build_commands(
             "Results",
             CommandType::ExportAsMarkdown,
         ),
+        leaf("Jump to Column…", "Results", CommandType::JumpToColumn),
         leaf(
             "Render Whitespace",
             "View",

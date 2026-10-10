@@ -33,6 +33,7 @@ mod cell_edit_state;
 mod cell_edit_test;
 mod chart_view;
 mod clipboard;
+mod column_picker;
 mod commit;
 mod compare;
 mod export_actions;
@@ -1598,6 +1599,7 @@ impl Render for ResultsPanel {
             .on_action(cx.listener(Self::on_export_as_json))
             .on_action(cx.listener(Self::on_export_as_sql))
             .on_action(cx.listener(Self::on_export_as_markdown))
+            .on_action(cx.listener(Self::on_jump_to_column))
             .on_action(cx.listener(Self::on_add_row))
             .on_action(cx.listener(Self::on_duplicate_row))
             .on_action(cx.listener(Self::on_delete_row))

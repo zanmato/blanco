@@ -72,6 +72,7 @@ actions!(
         ExportAsJSON,
         ExportAsSQL,
         ExportAsMarkdown,
+        JumpToColumn,
         ClearSelection,
         ToggleRenderWhitespace,
         ToggleWordWrap,
@@ -1464,6 +1465,15 @@ impl BlancoApp {
         });
     }
 
+    /// Jump to Column from anywhere in the window: the results panel handles it
+    /// itself when it has focus, this reaches the active tab's results from
+    /// the editor.
+    fn on_jump_to_column(&mut self, _: &JumpToColumn, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(results_panel) = self.editor_panel.read(cx).active_results_panel() {
+            results_panel.update(cx, |panel, cx| panel.open_column_picker(window, cx));
+        }
+    }
+
     fn on_database_connected(
         &mut self,
         action: &DatabaseConnected,
@@ -2370,6 +2380,7 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_explain_query))
             .on_action(cx.listener(Self::on_connect_to_connection))
             .on_action(cx.listener(Self::on_toggle_command_palette))
+            .on_action(cx.listener(Self::on_jump_to_column))
             .size_full()
             .overflow_hidden()
             .bg(cx.theme().background)

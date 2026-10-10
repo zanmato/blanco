@@ -17,6 +17,10 @@ All notable changes to this project will be documented in this file.
 - A system notification when an agent asks to run a write over MCP while
   Blanco is in the background. Clicking it brings Blanco forward, where the
   confirmation dialog is waiting
+- Jump to Column (Ctrl+Shift+J, Cmd+Shift+J on macOS, rebindable, also in
+  the command palette) lists the columns of the active result with fuzzy
+  search. Picking one selects its cell on the current row and scrolls it into
+  view
 
 ### Fixes
 
