@@ -478,9 +478,12 @@ impl EditorPanel {
                 // the cursor; the rest is the editor's own menu.
                 .when(navigable, |editor| {
                     editor.context_menu(|menu, _, _| {
-                        use gpui_component::input::{Copy, Cut, Paste, SelectAll};
+                        use gpui_component::input::{
+                            Copy, Cut, Paste, SelectAll, ToggleCodeActions,
+                        };
                         menu.menu("Open Data", Box::new(OpenDataAtCursor))
                             .menu("Open Structure", Box::new(OpenStructureAtCursor))
+                            .menu("Show Code Actions", Box::new(ToggleCodeActions))
                             .separator()
                             .menu("Cut", Box::new(Cut))
                             .menu("Copy", Box::new(Copy))
