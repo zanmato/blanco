@@ -1,5 +1,6 @@
 mod data_loading;
 mod delegate;
+mod key_filter;
 mod reveal;
 mod tree_builder;
 
@@ -146,6 +147,8 @@ pub struct ConnectionsPanel {
     /// Tables with partitions or inheritance children that the user expanded,
     /// keyed by tree item id. They default to collapsed.
     expanded_tables: std::collections::HashSet<String>,
+    /// The key pattern and page count per key/value connection.
+    key_filters: std::collections::HashMap<i64, data_loading::KeyFilter>,
     // Live per-database connection status, keyed by connection id. This is the
     // single source of truth for the "connected" icon color: it is read while
     // *building* tree items so that a rebuild (or the tree widget
@@ -335,6 +338,7 @@ impl ConnectionsPanel {
             expanded_categories,
             pending_reveal: None,
             expanded_tables,
+            key_filters: std::collections::HashMap::new(),
             connected_databases,
             initial_load_completed: false,
             tag_filter: None,

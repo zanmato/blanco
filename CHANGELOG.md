@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- Redis: Filter Keys on a connection lists only keys matching a pattern,
+  matched on the server, and Load More Keys lists the next 1000 when there
+  are more. The key inspector can set or remove a key's TTL. Connections
+  name themselves with CLIENT SETNAME (Blanco, or a Client Name set in the
+  connection dialog). String values stored compressed with gzip, zstd or lz4
+  are shown decompressed and marked read only
 - PostgreSQL and CockroachDB schemas list their enums, composite types,
   domains and sequences in folders of their own in the sidebar, and each
   opens its DDL in a read only tab. The labels of an enum column are offered

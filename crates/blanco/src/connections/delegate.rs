@@ -441,6 +441,14 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                             .and_then(|connection| connection.database_name.clone())
                     })
                     .flatten();
+                // Key/value stores list a filtered page of keys.
+                let key_listing = metadata.db_type.inspects_objects().then(|| {
+                    let panel = self.parent.read(cx);
+                    (
+                        panel.key_filter(connection_id).pattern,
+                        panel.keys_truncated(connection_id),
+                    )
+                });
                 let backup_context = configured_database.map(|database_name| ConnectionContext {
                     connection_id,
                     connection_name: connection_name.clone(),
@@ -456,6 +464,35 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                             this.refresh_connection(connection_id, cx);
                         },
                     )))
+                    .when_some(key_listing, |menu, (pattern, truncated)| {
+                        let filter_label = if pattern == "*" {
+                            "Filter Keys…".to_string()
+                        } else {
+                            format!("Filter Keys ({pattern})…")
+                        };
+                        menu.item(
+                            PopupMenuItem::new(filter_label).on_click(window.listener_for(
+                                &self.parent,
+                                move |this, _event, window, cx| {
+                                    this.open_key_filter_dialog(connection_id, window, cx);
+                                },
+                            )),
+                        )
+                        .when(pattern != "*", |menu| {
+                            menu.item(PopupMenuItem::new("Show All Keys").on_click(
+                                window.listener_for(&self.parent, move |this, _event, _, cx| {
+                                    this.set_key_pattern(connection_id, String::new(), cx);
+                                }),
+                            ))
+                        })
+                        .when(truncated, |menu| {
+                            menu.item(PopupMenuItem::new("Load More Keys").on_click(
+                                window.listener_for(&self.parent, move |this, _event, _, cx| {
+                                    this.load_more_keys(connection_id, cx);
+                                }),
+                            ))
+                        })
+                    })
                     .item(PopupMenuItem::new("Edit").on_click(window.listener_for(
                         &self.parent,
                         move |this, _event, _window, cx| {

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 /// Schema version stored in SQLite's `PRAGMA user_version`. Bump it and append
 /// a step to [`MIGRATIONS`] for every schema change.
-pub const SCHEMA_VERSION: i64 = 12;
+pub const SCHEMA_VERSION: i64 = 13;
 
 /// The complete schema for a fresh database, at [`SCHEMA_VERSION`]. Keep it in
 /// sync with the migrations: a database created from this must be identical
@@ -38,7 +38,8 @@ const BASELINE: &[&str] = &[
         idle_timeout_minutes INTEGER,
         ask_secrets TEXT,
         ssh_jump_hosts TEXT,
-        open_default_schema INTEGER NOT NULL DEFAULT 1
+        open_default_schema INTEGER NOT NULL DEFAULT 1,
+        client_name TEXT
     )
     "#,
     r#"
@@ -167,6 +168,7 @@ const MIGRATIONS: &[Migration] = &[
     |pool| Box::pin(migrate_v9_to_v10(pool)),
     |pool| Box::pin(migrate_v10_to_v11(pool)),
     |pool| Box::pin(migrate_v11_to_v12(pool)),
+    |pool| Box::pin(migrate_v12_to_v13(pool)),
 ];
 
 /// Columns that may be missing from an unversioned database, per table, in the
@@ -347,6 +349,13 @@ async fn migrate_v10_to_v11(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 
 async fn migrate_v11_to_v12(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(VIRTUAL_FOREIGN_KEYS_TABLE)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+async fn migrate_v12_to_v13(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query("ALTER TABLE connections ADD COLUMN client_name TEXT")
         .execute(pool)
         .await?;
     Ok(())

@@ -315,6 +315,17 @@ pub struct KeyValueResult {
     pub key_type: RedisType,
     pub ttl: Option<i64>,
     pub value: RedisValue,
+    /// The compression a string value was stored with (`gzip`, `zstd`,
+    /// `lz4`). The value shown is decompressed and cannot be edited.
+    pub compression: Option<String>,
+}
+
+/// One page of keys from a key/value store.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KeyListing {
+    pub keys: Vec<String>,
+    /// More keys match than `keys` holds.
+    pub truncated: bool,
 }
 
 /// A result produced by a backend, either a relational/tabular query result or a
@@ -1046,6 +1057,23 @@ pub trait Connection: Send + Sync {
     ) -> Result<QueryResult, anyhow::Error> {
         Err(anyhow::anyhow!(
             "foreign_key_lookup is not supported by this connection type"
+        ))
+    }
+
+    /// List up to `limit` keys matching the glob `pattern`, filtered on the
+    /// server. Defaults to `get_tables` for stores without a pattern match.
+    async fn list_keys(&self, pattern: &str, limit: usize) -> Result<KeyListing, anyhow::Error> {
+        let _ = pattern;
+        let mut keys = self.get_tables(None).await?;
+        let truncated = keys.len() > limit;
+        keys.truncate(limit);
+        Ok(KeyListing { keys, truncated })
+    }
+
+    /// Give `key` a time to live in seconds, or with `None` remove it.
+    async fn set_key_ttl(&self, _key: &str, _ttl: Option<i64>) -> Result<(), anyhow::Error> {
+        Err(anyhow::anyhow!(
+            "set_key_ttl is not supported by this connection type"
         ))
     }
 

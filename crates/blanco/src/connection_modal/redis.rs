@@ -21,6 +21,7 @@ pub(super) struct RedisForm {
     pub database_input: Entity<InputState>,
     pub username_input: Entity<InputState>,
     pub password_input: Entity<InputState>,
+    pub client_name_input: Entity<InputState>,
     pub ssh_enabled: bool,
     pub ssh_host_input: Entity<InputState>,
     pub ssh_port_input: Entity<InputState>,
@@ -76,6 +77,14 @@ impl RedisForm {
             conn.and_then(|c| c.password.as_deref()),
         );
 
+        let client_name_input = make_input(
+            window,
+            cx,
+            "Blanco",
+            false,
+            conn.and_then(|c| c.client_name.as_deref()),
+        );
+
         let ssh_host_input = make_input(
             window,
             cx,
@@ -128,6 +137,7 @@ impl RedisForm {
             database_input,
             username_input,
             password_input,
+            client_name_input,
             ssh_enabled,
             ssh_host_input,
             ssh_port_input,
@@ -232,6 +242,7 @@ impl RedisForm {
             )
             .filter(|hosts| !hosts.is_empty());
         }
+        connection.client_name = optional_path(&self.client_name_input, cx);
         Some(connection)
     }
 }
@@ -291,10 +302,22 @@ pub(super) fn render(
                 )),
         )
         .child(
-            v_flex()
-                .gap_2()
-                .child(div().text_sm().child("Database (index)"))
-                .child(Input::new(&form.database_input)),
+            h_flex()
+                .gap_3()
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .gap_2()
+                        .child(div().text_sm().child("Database (index)"))
+                        .child(Input::new(&form.database_input)),
+                )
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .gap_2()
+                        .child(div().text_sm().child("Client Name"))
+                        .child(Input::new(&form.client_name_input)),
+                ),
         )
         .child(
             div().child(
