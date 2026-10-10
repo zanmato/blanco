@@ -20,7 +20,7 @@ use crate::factories::{
 use crate::secret_prompt::{
     rejected_secret, NoSecretPrompt, SecretPrompt, SecretPromptCancelled, SecretPromptRequest,
 };
-use crate::ssh_tunnel::{SshTunnel, SshTunnelConfig, TunnelInfo};
+use crate::ssh_tunnel::{SshTunnel, TunnelInfo};
 use crate::tokio_connection::TokioConnection;
 
 // Message types for channel-based action dispatch
@@ -802,27 +802,7 @@ impl DatabaseService {
         tracing::info!("Creating SSH tunnel for connection config {}", config.id);
 
         let local_port = self.assign_local_port();
-        let ssh_host = config
-            .ssh_host
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("SSH host is required to build an SSH tunnel"))?
-            .clone();
-        let ssh_user = config
-            .ssh_user
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("SSH user is required to build an SSH tunnel"))?
-            .clone();
-        let ssh_config = SshTunnelConfig {
-            ssh_host,
-            ssh_port: config.ssh_port(),
-            ssh_user,
-            ssh_password: config.ssh_password.clone(),
-            ssh_private_key_path: config.ssh_private_key_path.clone(),
-            ssh_private_key_password: config.ssh_private_key_password.clone(),
-            remote_host: remote_host.to_string(),
-            remote_port,
-            local_port,
-        };
+        let ssh_config = config.ssh_tunnel_config(remote_host, remote_port, local_port)?;
 
         // Create tunnel using the tokio runtime handle
         let runtime_handle = self.runtime_handle.clone();
@@ -887,25 +867,7 @@ impl DatabaseService {
             let remote_port = config.port;
             let local_port = self.assign_local_port();
 
-            let ssh_config = SshTunnelConfig {
-                ssh_host: config
-                    .ssh_host
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("SSH host is required"))?
-                    .clone(),
-                ssh_port: config.ssh_port(),
-                ssh_user: config
-                    .ssh_user
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("SSH user is required"))?
-                    .clone(),
-                ssh_password: config.ssh_password.clone(),
-                ssh_private_key_path: config.ssh_private_key_path.clone(),
-                ssh_private_key_password: config.ssh_private_key_password.clone(),
-                remote_host: remote_host.to_string(),
-                remote_port,
-                local_port,
-            };
+            let ssh_config = config.ssh_tunnel_config(remote_host, remote_port, local_port)?;
 
             let runtime_handle = self.runtime_handle.clone();
             let runtime_handle_inner = runtime_handle.clone();

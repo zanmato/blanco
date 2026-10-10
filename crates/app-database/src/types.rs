@@ -122,6 +122,8 @@ pub struct ConnectionData {
     pub ssh_password: Option<String>,
     pub ssh_private_key_path: Option<String>,
     pub ssh_private_key_password: Option<String>,
+    /// Jump hosts in `ProxyJump` form, or `None` to use `~/.ssh/config`.
+    pub ssh_jump_hosts: Option<String>,
     // SSL/TLS configuration
     pub ssl_mode: Option<String>,
     pub ssl_key_path: Option<String>,
@@ -241,6 +243,7 @@ impl ConnectionData {
             ssh_password: None,
             ssh_private_key_path: None,
             ssh_private_key_password: None,
+            ssh_jump_hosts: None,
             ssl_mode: None,
             ssl_key_path: None,
             ssl_cert_path: None,
@@ -283,6 +286,7 @@ impl ConnectionData {
             ssh_password: None,
             ssh_private_key_path: None,
             ssh_private_key_password: None,
+            ssh_jump_hosts: None,
             ssl_mode: None,
             ssl_key_path: None,
             ssl_cert_path: None,
@@ -414,6 +418,7 @@ impl ConnectionData {
                     );
                 }
 
+                config = config.with_ssh_jump_hosts(self.ssh_jump_hosts.clone());
                 config = config.with_ssl_config(
                     self.ssl_mode.clone(),
                     self.ssl_key_path.clone(),

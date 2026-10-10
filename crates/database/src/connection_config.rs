@@ -85,6 +85,9 @@ pub struct ConnectionConfig {
     pub ssh_password: Option<String>,
     pub ssh_private_key_path: Option<String>,
     pub ssh_private_key_password: Option<String>,
+    /// Jump hosts in `ProxyJump` form, `none`, or `None` to take them from
+    /// `~/.ssh/config`.
+    pub ssh_jump_hosts: Option<String>,
     pub is_active: bool,
     // SSL/TLS configuration
     pub ssl_mode: Option<String>,
@@ -127,6 +130,7 @@ impl std::fmt::Debug for ConnectionConfig {
                 "ssh_private_key_password",
                 &self.ssh_private_key_password.as_ref().map(|_| "[REDACTED]"),
             )
+            .field("ssh_jump_hosts", &self.ssh_jump_hosts)
             .field("is_active", &self.is_active)
             .field("ssl_mode", &self.ssl_mode)
             .field("ssl_key_path", &self.ssl_key_path)
@@ -169,6 +173,7 @@ impl ConnectionConfig {
             ssh_password: None,
             ssh_private_key_path: None,
             ssh_private_key_password: None,
+            ssh_jump_hosts: None,
             is_active: true,
             ssl_mode: None,
             ssl_key_path: None,
@@ -199,6 +204,7 @@ impl ConnectionConfig {
             ssh_password: None,
             ssh_private_key_path: None,
             ssh_private_key_password: None,
+            ssh_jump_hosts: None,
             is_active: true,
             ssl_mode: None,
             ssl_key_path: None,
@@ -243,6 +249,38 @@ impl ConnectionConfig {
         self.ssl_cert_path = ssl_cert_path;
         self.ssl_ca_cert_path = ssl_ca_cert_path;
         self
+    }
+
+    pub fn with_ssh_jump_hosts(mut self, jump_hosts: Option<String>) -> Self {
+        self.ssh_jump_hosts = jump_hosts.filter(|hosts| !hosts.trim().is_empty());
+        self
+    }
+
+    /// The tunnel to `remote_host:remote_port` through this connection's
+    /// SSH host, listening on `local_port`.
+    pub fn ssh_tunnel_config(
+        &self,
+        remote_host: &str,
+        remote_port: u16,
+        local_port: u16,
+    ) -> anyhow::Result<crate::SshTunnelConfig> {
+        Ok(crate::SshTunnelConfig {
+            ssh_host: self
+                .ssh_host
+                .clone()
+                .filter(|host| !host.trim().is_empty())
+                .ok_or_else(|| anyhow::anyhow!("SSH host is required"))?,
+            ssh_port: self.ssh_port(),
+            // An empty user is taken from ~/.ssh/config or the local user.
+            ssh_user: self.ssh_user.clone().unwrap_or_default(),
+            ssh_password: self.ssh_password.clone(),
+            ssh_private_key_path: self.ssh_private_key_path.clone(),
+            ssh_private_key_password: self.ssh_private_key_password.clone(),
+            jump_hosts: self.ssh_jump_hosts.clone(),
+            remote_host: remote_host.to_string(),
+            remote_port,
+            local_port,
+        })
     }
 
     pub fn with_trust_server_certificate(mut self, trust: bool) -> Self {

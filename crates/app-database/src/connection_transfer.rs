@@ -45,6 +45,8 @@ struct ExportedConnection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     ssh_private_key_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    ssh_jump_hosts: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     ssl_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     ssl_key_path: Option<String>,
@@ -79,6 +81,7 @@ impl From<&ConnectionData> for ExportedConnection {
             ssh_port: connection.ssh_port,
             ssh_user: connection.ssh_user.clone(),
             ssh_private_key_path: connection.ssh_private_key_path.clone(),
+            ssh_jump_hosts: connection.ssh_jump_hosts.clone(),
             ssl_mode: connection.ssl_mode.clone(),
             ssl_key_path: connection.ssl_key_path.clone(),
             ssl_cert_path: connection.ssl_cert_path.clone(),
@@ -128,6 +131,7 @@ impl ExportedConnection {
         connection.ssh_port = self.ssh_port;
         connection.ssh_user = self.ssh_user;
         connection.ssh_private_key_path = self.ssh_private_key_path;
+        connection.ssh_jump_hosts = self.ssh_jump_hosts;
         connection.ssl_mode = self.ssl_mode;
         connection.ssl_key_path = self.ssl_key_path;
         connection.ssl_cert_path = self.ssl_cert_path;
@@ -285,6 +289,7 @@ mod tests {
     fn test_export_carries_which_secrets_are_asked_for() {
         let mut prod = postgres("Prod");
         prod.ask_secrets = vec![SecretKind::Password, SecretKind::SshPrivateKeyPassword];
+        prod.ssh_jump_hosts = Some("deploy@bastion:2222, inner".to_string());
 
         let document = export_connections(&[prod.clone()]);
         assert!(!document.contains("secret"), "{document}");

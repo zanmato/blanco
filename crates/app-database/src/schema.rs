@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 /// Schema version stored in SQLite's `PRAGMA user_version`. Bump it and append
 /// a step to [`MIGRATIONS`] for every schema change.
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 /// The complete schema for a fresh database, at [`SCHEMA_VERSION`]. Keep it in
 /// sync with the migrations: a database created from this must be identical
@@ -35,7 +35,8 @@ const BASELINE: &[&str] = &[
         read_only INTEGER NOT NULL DEFAULT 0,
         only_configured_database INTEGER NOT NULL DEFAULT 0,
         idle_timeout_minutes INTEGER,
-        ask_secrets TEXT
+        ask_secrets TEXT,
+        ssh_jump_hosts TEXT
     )
     "#,
     r#"
@@ -111,6 +112,7 @@ const MIGRATIONS: &[Migration] = &[
     |pool| Box::pin(migrate_v3_to_v4(pool)),
     |pool| Box::pin(migrate_v4_to_v5(pool)),
     |pool| Box::pin(migrate_v5_to_v6(pool)),
+    |pool| Box::pin(migrate_v6_to_v7(pool)),
 ];
 
 /// Columns that may be missing from an unversioned database, per table, in the
@@ -201,6 +203,13 @@ async fn migrate_v4_to_v5(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 
 async fn migrate_v5_to_v6(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query("ALTER TABLE snippets ADD COLUMN trigger_word TEXT")
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+async fn migrate_v6_to_v7(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query("ALTER TABLE connections ADD COLUMN ssh_jump_hosts TEXT")
         .execute(pool)
         .await?;
     Ok(())

@@ -2,7 +2,7 @@ use gpui::{
     AppContext, Context, ElementId, Entity, IntoElement, ParentElement, Styled, Window, div,
 };
 use gpui_component::{
-    IconName, Sizable,
+    ActiveTheme as _, IconName, Sizable,
     button::{Button, ButtonVariants},
     checkbox::Checkbox,
     h_flex,
@@ -164,6 +164,7 @@ pub(super) fn render_ssh_section(
     ssh_private_key_input: &Entity<InputState>,
     ssh_private_key_password_input: &Entity<InputState>,
     ask_secrets: &[SecretKind],
+    ssh_jump_hosts_input: &Entity<InputState>,
     cx: &mut Context<NewConnectionModal>,
 ) -> impl IntoElement {
     v_flex()
@@ -222,5 +223,21 @@ pub(super) fn render_ssh_section(
                     ask_secrets,
                     cx,
                 )),
+        )
+        .child(
+            v_flex()
+                .gap_2()
+                .child(div().text_sm().child("Jump hosts"))
+                .child(Input::new(ssh_jump_hosts_input)),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(
+                    "Host, user, port, keys and jump hosts left empty are taken from \
+                     ~/.ssh/config. Without a key or password, the SSH agent and the \
+                     default keys in ~/.ssh are tried.",
+                ),
         )
 }
