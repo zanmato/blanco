@@ -326,6 +326,16 @@ impl Connection for TokioConnection {
             .await
     }
 
+    async fn get_estimated_row_counts(
+        &self,
+        schema: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, u64>> {
+        let inner = Arc::clone(&self.inner);
+        let schema = schema.map(str::to_string);
+        self.run(async move { inner.get_estimated_row_counts(schema.as_deref()).await })
+            .await
+    }
+
     async fn object_ddl(
         &self,
         kind: RoutineKind,

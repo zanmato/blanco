@@ -46,6 +46,9 @@ pub struct DatabaseTable {
     /// Size normalized against siblings within the same schema, on a `log2`
     /// scale in `[0.0, 1.0]`. `None` when no siblings reported a size.
     pub relative_size: Option<f32>,
+    /// Row count estimated from catalog statistics, for tables and
+    /// materialized views.
+    pub estimated_rows: Option<u64>,
 }
 
 /// Type of database item (table, view, materialized view, or stored
@@ -179,6 +182,10 @@ impl ConnectionsPanel {
                             .get_object_sizes(Some(schema_name))
                             .await
                             .unwrap_or_default();
+                        let row_counts = connection
+                            .get_estimated_row_counts(Some(schema_name))
+                            .await
+                            .unwrap_or_default();
                         let push = |items: &mut Vec<DatabaseTable>,
                                     v: Vec<String>,
                                     kind: DatabaseItemType,
@@ -193,6 +200,7 @@ impl ConnectionsPanel {
                                     None
                                 };
                                 items.push(DatabaseTable {
+                                    estimated_rows: row_counts.get(&n).copied(),
                                     name: n,
                                     _schema: Some(schema_name.clone()),
                                     item_type: kind,
@@ -456,6 +464,10 @@ impl ConnectionsPanel {
                         .get_object_sizes(Some(&schema_name))
                         .await
                         .unwrap_or_default();
+                    let row_counts = connection
+                        .get_estimated_row_counts(Some(&schema_name))
+                        .await
+                        .unwrap_or_default();
 
                     let mut all_items: Vec<DatabaseTable> = Vec::new();
                     let push_named = |items: &mut Vec<DatabaseTable>,
@@ -472,6 +484,7 @@ impl ConnectionsPanel {
                                 None
                             };
                             items.push(DatabaseTable {
+                                estimated_rows: row_counts.get(&n).copied(),
                                 name: n,
                                 _schema: Some(schema_name.clone()),
                                 item_type: kind,

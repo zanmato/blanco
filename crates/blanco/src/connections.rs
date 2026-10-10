@@ -132,6 +132,8 @@ pub struct TreeItemMetadata {
     pub size_bytes: Option<u64>,
     /// Log-normalized size against schema siblings in `[0.0, 1.0]`.
     pub relative_size: Option<f32>,
+    /// Row count estimated from catalog statistics.
+    pub estimated_rows: Option<u64>,
 }
 
 /// Trait to convert metadata into CreateNewQueryTab actions
@@ -1188,6 +1190,7 @@ mod tests {
             loading: false,
             size_bytes: None,
             relative_size: None,
+            estimated_rows: None,
         }
     }
 

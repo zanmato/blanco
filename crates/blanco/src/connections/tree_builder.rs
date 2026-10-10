@@ -40,6 +40,7 @@ impl ConnectionsPanel {
             loading: false,
             size_bytes: None,
             relative_size: None,
+            estimated_rows: None,
         };
 
         let base_item = TreeItem::new(
@@ -86,6 +87,7 @@ impl ConnectionsPanel {
                         loading: false,
                         size_bytes: None,
                         relative_size: None,
+                        estimated_rows: None,
                     };
 
                     let schema_items: Vec<TreeItem<TreeItemMetadata>> = database
@@ -113,6 +115,7 @@ impl ConnectionsPanel {
                                 loading: false,
                                 size_bytes: None,
                                 relative_size: None,
+                                estimated_rows: None,
                             };
 
                             let category_items: Vec<TreeItem<TreeItemMetadata>> = if schema
@@ -269,6 +272,7 @@ impl ConnectionsPanel {
                     loading: false,
                     size_bytes: None,
                     relative_size: None,
+                    estimated_rows: None,
                 };
 
                 // Backends that namespace object names with a separator (e.g.
@@ -342,6 +346,7 @@ fn build_object_item(
         loading: false,
         size_bytes: table.size_bytes,
         relative_size: table.relative_size,
+        estimated_rows: table.estimated_rows,
     };
 
     (

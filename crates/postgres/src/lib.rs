@@ -486,4 +486,44 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_estimated_row_counts() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::PostgresConnection;
+        use blanco_core::Connection as _;
+
+        let test_name = "test_estimated_row_counts";
+        let pool = match PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&default_connection_string())
+            .await
+        {
+            Ok(pool) => pool,
+            Err(e) => return handle_unreachable(test_name, &e),
+        };
+        for statement in [
+            "DROP TABLE IF EXISTS estimated_rows",
+            "DROP TABLE IF EXISTS never_analyzed",
+            "CREATE TABLE estimated_rows AS SELECT generate_series(1, 1000) AS id",
+            "CREATE TABLE never_analyzed (id INT)",
+            "ANALYZE estimated_rows",
+        ] {
+            sqlx::query(statement).execute(&pool).await?;
+        }
+
+        let mut conn = PostgresConnection::from_connection_string(&default_connection_string())?;
+        conn.connect(&default_connection_string()).await?;
+        let counts = conn.get_estimated_row_counts(Some("public")).await?;
+        assert_eq!(counts.get("estimated_rows"), Some(&1000));
+        assert_eq!(
+            counts.get("never_analyzed"),
+            None,
+            "a table without statistics has no estimate"
+        );
+
+        for statement in ["DROP TABLE estimated_rows", "DROP TABLE never_analyzed"] {
+            sqlx::query(statement).execute(&pool).await?;
+        }
+        Ok(())
+    }
 }

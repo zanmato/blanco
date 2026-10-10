@@ -114,3 +114,22 @@ OFFSET {offset} ROWS FETCH NEXT {fetch} ROWS ONLY
         fetch = limit + 1,
     )
 }
+
+/// `(table name, rows)` from partition statistics: the heap or clustered
+/// index partitions of each user table, in `schema` or in every schema.
+pub fn estimated_row_counts_sql(schema: Option<&str>) -> String {
+    let schema_filter = match schema {
+        Some(s) => format!("AND s.name = '{}'", s.replace('\'', "''")),
+        None => String::new(),
+    };
+    format!(
+        r#"
+SELECT t.name, CAST(SUM(p.rows) AS BIGINT)
+FROM sys.tables t
+JOIN sys.schemas s ON s.schema_id = t.schema_id
+JOIN sys.partitions p ON p.object_id = t.object_id AND p.index_id IN (0, 1)
+WHERE 1 = 1 {schema_filter}
+GROUP BY t.name
+"#
+    )
+}

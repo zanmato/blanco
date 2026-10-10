@@ -81,6 +81,21 @@ fn format_size_short(bytes: u64) -> String {
     format!("{}{}", formatted, UNITS[unit])
 }
 
+/// An estimated row count, compact: `~840 rows`, `~12.3K rows`, `~1.2M rows`.
+fn format_row_estimate(rows: u64) -> String {
+    let compact = match rows {
+        0..1_000 => rows.to_string(),
+        1_000..1_000_000 => format!("{:.1}K", rows as f64 / 1e3),
+        1_000_000..1_000_000_000 => format!("{:.1}M", rows as f64 / 1e6),
+        _ => format!("{:.1}B", rows as f64 / 1e9),
+    };
+    let compact = compact
+        .replace(".0K", "K")
+        .replace(".0M", "M")
+        .replace(".0B", "B");
+    format!("~{compact} {}", if rows == 1 { "row" } else { "rows" })
+}
+
 /// Format a byte count with thousands separators for the dot tooltip.
 fn format_bytes_exact(bytes: u64) -> String {
     let s = bytes.to_string();
@@ -156,18 +171,28 @@ impl TreeDelegate for ConnectionsTreeDelegate {
         }
 
         let item_id: gpui::SharedString = item.id.clone();
-        let tooltip_label = item.label.clone();
+        // Without a size bar the estimate goes in the name's tooltip.
+        let tooltip_label: SharedString = match metadata.estimated_rows {
+            Some(rows) if metadata.relative_size.is_none() => {
+                format!("{} · {}", item.label, format_row_estimate(rows)).into()
+            }
+            _ => item.label.clone(),
+        };
 
         let size_indicator = metadata.relative_size.map(|relative| {
             let size_text = metadata
                 .size_bytes
                 .map(format_size_short)
                 .unwrap_or_default();
-            let tooltip_text: SharedString = metadata
+            let size = metadata
                 .size_bytes
                 .map(|b| format!("{} bytes", format_bytes_exact(b)))
-                .unwrap_or_else(|| "unknown size".to_string())
-                .into();
+                .unwrap_or_else(|| "unknown size".to_string());
+            let tooltip_text: SharedString = match metadata.estimated_rows {
+                Some(rows) => format!("{size} · {}", format_row_estimate(rows)),
+                None => size,
+            }
+            .into();
             let theme = cx.theme();
             let bar = SizeIndicator::new(("tree-item-size", ix), size_text, relative)
                 .size(px(SIZE_BAR_WIDTH_PX), px(SIZE_BAR_HEIGHT_PX))
@@ -567,5 +592,19 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod row_estimate_tests {
+    use super::format_row_estimate;
+
+    #[test]
+    fn row_estimates_are_compact() {
+        assert_eq!(format_row_estimate(1), "~1 row");
+        assert_eq!(format_row_estimate(840), "~840 rows");
+        assert_eq!(format_row_estimate(12_345), "~12.3K rows");
+        assert_eq!(format_row_estimate(2_000_000), "~2M rows");
+        assert_eq!(format_row_estimate(3_450_000_000), "~3.5B rows");
     }
 }

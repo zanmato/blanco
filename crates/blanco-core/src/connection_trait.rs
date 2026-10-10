@@ -553,6 +553,16 @@ pub trait Connection: Send + Sync {
         Ok(std::collections::HashMap::new())
     }
 
+    /// Return estimated row counts for the tables and materialized views of
+    /// a schema, keyed by object name, from catalog statistics. Never runs
+    /// `COUNT(*)`. Names without statistics are left out. Defaults to empty.
+    async fn get_estimated_row_counts(
+        &self,
+        _schema: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, u64>, anyhow::Error> {
+        Ok(std::collections::HashMap::new())
+    }
+
     /// Return the SQL DDL source for a routine/trigger object. Used by the
     /// "Show DDL" tab. Drivers without source-stored objects return an error.
     async fn object_ddl(

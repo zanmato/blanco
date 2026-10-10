@@ -871,6 +871,29 @@ impl Connection for MssqlConnection {
         Ok(Vec::new())
     }
 
+    async fn get_estimated_row_counts(
+        &self,
+        schema: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, u64>> {
+        let result = self
+            .execute_query(
+                &schema::estimated_row_counts_sql(schema),
+                self.initial_database.as_deref(),
+                None,
+            )
+            .await?;
+        Ok(result
+            .rows
+            .into_iter()
+            .filter_map(|row| {
+                let mut cells = row.into_iter();
+                let name = cells.next().flatten()?;
+                let count = cells.next().flatten()?.parse::<u64>().ok()?;
+                Some((name, count))
+            })
+            .collect())
+    }
+
     async fn get_queryable_entities(&self, schema: Option<&str>) -> Result<Vec<QueryableEntity>> {
         let mut entities = Vec::new();
         for table in self.get_tables(schema).await? {

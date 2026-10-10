@@ -437,6 +437,61 @@ impl Connection for PostgresConnection {
         Ok(sizes)
     }
 
+    async fn get_estimated_row_counts(
+        &self,
+        schema: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, u64>> {
+        let schema = schema.unwrap_or("public").to_string();
+        // reltuples is -1 for a table that was never vacuumed or analyzed.
+        let query = "
+            SELECT c.relname, c.reltuples::bigint
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = $1 AND c.relkind IN ('r', 'm', 'p') AND c.reltuples >= 0
+        ";
+        let result = self
+            .execute_query(
+                query,
+                self.initial_database.as_deref(),
+                Some(std::slice::from_ref(&schema)),
+            )
+            .await?;
+        let mut counts = parse_counts(result.rows);
+
+        // A TimescaleDB hypertable keeps its rows in chunks, so its own
+        // reltuples says nothing; ask the extension instead.
+        let hypertables = "
+            SELECT h.hypertable_name,
+                   approximate_row_count(
+                       format('%I.%I', h.hypertable_schema, h.hypertable_name)::regclass
+                   )
+            FROM timescaledb_information.hypertables h
+            WHERE h.hypertable_schema = $1
+        ";
+        let has_timescale = self
+            .execute_query(
+                "SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'",
+                self.initial_database.as_deref(),
+                None,
+            )
+            .await
+            .is_ok_and(|result| !result.rows.is_empty());
+        if has_timescale {
+            match self
+                .execute_query(
+                    hypertables,
+                    self.initial_database.as_deref(),
+                    Some(&[schema]),
+                )
+                .await
+            {
+                Ok(result) => counts.extend(parse_counts(result.rows)),
+                Err(error) => tracing::warn!("Hypertable row estimates failed: {error:#}"),
+            }
+        }
+        Ok(counts)
+    }
+
     async fn object_ddl(
         &self,
         kind: RoutineKind,
@@ -1116,4 +1171,16 @@ mod function_argument_tests {
         );
         assert!(split_function_arguments("").is_empty());
     }
+}
+
+/// `(name, count)` rows into a map, skipping rows without a usable count.
+fn parse_counts(rows: Vec<Vec<Option<String>>>) -> std::collections::HashMap<String, u64> {
+    rows.into_iter()
+        .filter_map(|row| {
+            let mut cells = row.into_iter();
+            let name = cells.next().flatten()?;
+            let count = cells.next().flatten()?.parse::<i64>().ok()?;
+            u64::try_from(count).ok().map(|count| (name, count))
+        })
+        .collect()
 }

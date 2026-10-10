@@ -213,6 +213,29 @@ impl Connection for ClickhouseConnection {
             .collect())
     }
 
+    async fn get_estimated_row_counts(
+        &self,
+        schema: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, u64>> {
+        let db = schema.unwrap_or(&self.database);
+        // total_rows comes from part metadata for MergeTree tables and is
+        // NULL where the engine cannot tell cheaply.
+        let sql = format!(
+            "SELECT name, total_rows FROM system.tables WHERE database = '{}' AND total_rows IS NOT NULL",
+            db.replace('\'', "''")
+        );
+        let tsv = self.raw_query_tsv(&sql, None).await?;
+        Ok(tsv
+            .rows
+            .into_iter()
+            .filter_map(|mut row| {
+                let count = row.pop().flatten()?.parse::<u64>().ok()?;
+                let name = row.pop().flatten()?;
+                Some((name, count))
+            })
+            .collect())
+    }
+
     async fn get_queryable_entities(&self, schema: Option<&str>) -> Result<Vec<QueryableEntity>> {
         let db = schema.unwrap_or(&self.database);
         let sql = format!(

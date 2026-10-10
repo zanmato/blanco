@@ -6,6 +6,11 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- The sidebar shows an estimated row count, such as ~1.2M rows, next to a
+  table's size in its tooltip. It comes from catalog statistics, never from
+  COUNT(*): PostgreSQL's reltuples (approximate_row_count for TimescaleDB
+  hypertables), MySQL's information_schema, SQL Server's partition stats and
+  ClickHouse's system.tables
 - A search field in the title bar opens the command palette and shows its
   shortcut
 - Blanco checks for new releases hourly and shows an Update button in the

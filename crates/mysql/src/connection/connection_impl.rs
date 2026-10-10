@@ -532,6 +532,35 @@ impl Connection for MysqlConnection {
             .collect())
     }
 
+    async fn get_estimated_row_counts(
+        &self,
+        _schema: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, u64>, anyhow::Error> {
+        let database = self
+            .initial_database
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+        let pool = self.get_or_create_pool(database).await?;
+        // TABLE_ROWS is an estimate for InnoDB, from the same statistics the
+        // optimizer uses. It is BIGINT UNSIGNED; cast to read it as i64.
+        let rows = sqlx::query(
+            "SELECT TABLE_NAME, CAST(TABLE_ROWS AS SIGNED)
+             FROM information_schema.TABLES
+             WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE' AND TABLE_ROWS IS NOT NULL",
+        )
+        .bind(database)
+        .fetch_all(&pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .filter_map(|row| {
+                let name: String = row.try_get(0).ok()?;
+                let count: i64 = row.try_get(1).ok()?;
+                u64::try_from(count).ok().map(|count| (name, count))
+            })
+            .collect())
+    }
+
     async fn get_object_sizes(
         &self,
         _schema: Option<&str>,
