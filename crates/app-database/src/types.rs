@@ -129,6 +129,9 @@ pub struct ConnectionData {
     /// Show only `database_name` in the tree and the command palette instead
     /// of every database on the server.
     pub only_configured_database: bool,
+    /// The name Redis connections give themselves with `CLIENT SETNAME`.
+    /// `None` uses `Blanco`.
+    pub client_name: Option<String>,
 }
 
 impl std::fmt::Debug for ConnectionData {
@@ -166,6 +169,7 @@ impl std::fmt::Debug for ConnectionData {
             .field("trust_server_certificate", &self.trust_server_certificate)
             .field("read_only", &self.read_only)
             .field("only_configured_database", &self.only_configured_database)
+            .field("client_name", &self.client_name)
             .finish()
     }
 }
@@ -229,6 +233,7 @@ impl ConnectionData {
             trust_server_certificate: false,
             read_only: false,
             only_configured_database: false,
+            client_name: None,
         }
     }
 
@@ -269,6 +274,7 @@ impl ConnectionData {
             trust_server_certificate: false,
             read_only: false,
             only_configured_database: false,
+            client_name: None,
         }
     }
 
@@ -403,6 +409,10 @@ impl ConnectionData {
             }
         };
 
-        Some(config.with_read_only(self.read_only))
+        Some(
+            config
+                .with_read_only(self.read_only)
+                .with_client_name(self.client_name.clone()),
+        )
     }
 }
