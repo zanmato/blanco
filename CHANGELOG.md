@@ -22,6 +22,13 @@ All notable changes to this project will be documented in this file.
   pending grid edit. The next action reconnects. A connection can set its own
   value under Show Advanced Options in the connection dialog, where 0 keeps it
   open. A connection with a query running is never closed
+- Keep-Alive Interval in the Database settings sends the cheapest statement
+  (`SELECT 1`, or `PING` on Redis) over a connection that has been unused for
+  that many seconds, for servers and firewalls that drop silent connections.
+  It never shows in the query history or the SQL log and does not count as
+  activity for the idle timeout. A failed keep-alive marks the connection as
+  disconnected so the next action reconnects. A connection can set its own
+  interval under Show Advanced Options
 
 ### Fixes
 

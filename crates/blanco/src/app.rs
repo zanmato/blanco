@@ -874,31 +874,36 @@ impl BlancoApp {
         })
     }
 
-    /// Close connections that have sat unused past their idle timeout. A
-    /// connection with uncommitted grid edits is kept open, and the service
-    /// itself skips one with a query running.
+    /// Close connections that have sat unused past their idle timeout, then
+    /// keep the remaining unused ones alive. A connection with uncommitted
+    /// grid edits is kept open, and the service itself skips one with a query
+    /// running. Both run in this one loop, one after the other, so a
+    /// keep-alive in flight is never mistaken for activity.
     fn spawn_idle_disconnect(cx: &mut Context<Self>) -> Task<()> {
-        const SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+        const SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
         cx.spawn(async move |app, cx| {
             loop {
                 cx.background_executor().timer(SWEEP_INTERVAL).await;
-                let Ok((db_service, default_timeout, keep)) = app.update(cx, |app, cx| {
-                    let default_timeout = AppSettings::global(cx)
-                        .settings
-                        .database
-                        .idle_disconnect_timeout();
-                    let keep = app.editor_panel.read(cx).connections_with_pending_edits(cx);
-                    (
-                        database::DatabaseService::global(cx).clone(),
-                        default_timeout,
-                        keep,
-                    )
-                }) else {
+                let Ok((db_service, default_timeout, keep_alive, keep)) =
+                    app.update(cx, |app, cx| {
+                        let database_settings = &AppSettings::global(cx).settings.database;
+                        let default_timeout = database_settings.idle_disconnect_timeout();
+                        let keep_alive = database_settings.keep_alive_interval();
+                        let keep = app.editor_panel.read(cx).connections_with_pending_edits(cx);
+                        (
+                            database::DatabaseService::global(cx).clone(),
+                            default_timeout,
+                            keep_alive,
+                            keep,
+                        )
+                    })
+                else {
                     break;
                 };
                 db_service
                     .disconnect_idle_connections(default_timeout, &keep)
                     .await;
+                db_service.keep_alive_connections(keep_alive).await;
             }
         })
     }

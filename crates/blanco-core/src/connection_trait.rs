@@ -376,6 +376,13 @@ pub trait Connection: Send + Sync {
         self.get_schemas().await.map(|_| ())
     }
 
+    /// Keep the open session alive with the cheapest round trip the backend
+    /// has. Unlike [`Connection::ping`], which may open a fresh connection to
+    /// check credentials, this goes over the connection already in use.
+    async fn keep_alive(&self) -> Result<(), anyhow::Error> {
+        self.execute_query("SELECT 1", None, None).await.map(|_| ())
+    }
+
     // === Query Execution ===
 
     /// Execute a SQL query and return the results

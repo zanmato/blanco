@@ -55,6 +55,9 @@ pub struct DatabaseService {
     active_connections: Arc<RwLock<HashMap<ConnectionId, Arc<dyn Connection>>>>,
     // When each active connection was last handed out or seen busy
     last_used: Arc<StdMutex<HashMap<ConnectionId, Instant>>>,
+    // When each active connection last had a keep-alive round trip. Kept
+    // apart from `last_used` so a keep-alive never counts as activity.
+    last_keep_alive: Arc<StdMutex<HashMap<ConnectionId, Instant>>>,
 
     // Connection factories
     connection_factories: Arc<HashMap<DatabaseType, Arc<dyn ConnectionFactory>>>,
@@ -97,6 +100,7 @@ impl DatabaseService {
             connection_configs: Arc::new(RwLock::new(HashMap::new())),
             active_connections: Arc::new(RwLock::new(HashMap::new())),
             last_used: Arc::new(StdMutex::new(HashMap::new())),
+            last_keep_alive: Arc::new(StdMutex::new(HashMap::new())),
             connection_factories: Arc::new(factories),
             ssh_tunnels: Arc::new(RwLock::new(HashMap::new())),
             tunnel_connections: Arc::new(RwLock::new(HashMap::new())),
@@ -362,6 +366,11 @@ impl DatabaseService {
                 last_used.remove(connection_id);
             }
         }
+        if let Ok(mut last_keep_alive) = self.last_keep_alive.lock() {
+            for connection_id in &disconnected_connections {
+                last_keep_alive.remove(connection_id);
+            }
+        }
 
         // First, remove from tunnel_connections tracking to get accurate tunnel usage
         let tunnels_to_check: std::collections::HashSet<DatabaseConfigId> = {
@@ -493,6 +502,87 @@ impl DatabaseService {
             }
         }
         idle
+    }
+
+    /// Send a keep-alive round trip over every connection that has been
+    /// unused for its keep-alive interval, so servers and firewalls that drop
+    /// silent sessions keep it open. `default_interval` applies to
+    /// connections without their own.
+    ///
+    /// The round trip goes straight to the driver, so it never reaches the
+    /// query history or the SQL log, and it does not count as activity for
+    /// the idle timeout. A connection that fails it is closed and reported as
+    /// lost, so the next action reconnects. Busy connections are skipped.
+    /// Returns the connection ids that failed.
+    pub async fn keep_alive_connections(
+        &self,
+        default_interval: Option<Duration>,
+    ) -> Vec<DatabaseConfigId> {
+        let now = Instant::now();
+        let due: Vec<(ConnectionId, Arc<dyn Connection>)> = {
+            let connections = self.active_connections.read().await;
+            let configs = self.connection_configs.read().await;
+            let (Ok(last_used), Ok(last_keep_alive)) =
+                (self.last_used.lock(), self.last_keep_alive.lock())
+            else {
+                return Vec::new();
+            };
+            connections
+                .iter()
+                .filter(|(_, connection)| Arc::strong_count(connection) == 1)
+                .filter(|(connection_id, _)| {
+                    let Some(interval) = configs
+                        .get(&connection_id.0)
+                        .and_then(|config| config.keep_alive_interval(default_interval))
+                    else {
+                        return false;
+                    };
+                    let last_round_trip = [
+                        last_used.get(*connection_id),
+                        last_keep_alive.get(*connection_id),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .max()
+                    .copied();
+                    last_round_trip.is_none_or(|last| now.duration_since(last) >= interval)
+                })
+                .map(|(connection_id, connection)| (connection_id.clone(), Arc::clone(connection)))
+                .collect()
+        };
+
+        let mut failed = Vec::new();
+        for (connection_id, connection) in due {
+            if failed.contains(&connection_id.0) {
+                continue;
+            }
+            if let Ok(mut last_keep_alive) = self.last_keep_alive.lock() {
+                last_keep_alive.insert(connection_id.clone(), Instant::now());
+            }
+            let result = connection.keep_alive().await;
+            drop(connection);
+            let Err(error) = result else {
+                continue;
+            };
+            let (config_id, database) = connection_id;
+            tracing::info!("Keep-alive failed on connection {config_id}: {error:#}");
+            failed.push(config_id);
+            if let Err(error) = self.disconnect(config_id, None).await {
+                tracing::error!("Failed to close connection {config_id}: {error}");
+            }
+            let sender = self.action_sender.lock().ok().and_then(|s| s.clone());
+            if let Some(sender) = sender {
+                let message = DatabaseServiceMessage::Disconnected(DatabaseDisconnectedMessage {
+                    connection_id: config_id,
+                    database_name: database,
+                    idle: false,
+                });
+                if let Err(error) = sender.send(message).await {
+                    tracing::error!("Failed to send disconnect notification: {error}");
+                }
+            }
+        }
+        failed
     }
 
     /// Get active connections reference
@@ -896,6 +986,7 @@ impl Clone for DatabaseService {
             connection_configs: Arc::clone(&self.connection_configs),
             active_connections: Arc::clone(&self.active_connections),
             last_used: Arc::clone(&self.last_used),
+            last_keep_alive: Arc::clone(&self.last_keep_alive),
             connection_factories: Arc::clone(&self.connection_factories),
             ssh_tunnels: Arc::clone(&self.ssh_tunnels),
             tunnel_connections: Arc::clone(&self.tunnel_connections),
@@ -1123,6 +1214,48 @@ mod tests {
         );
         let remaining = service.get_active_connections().await;
         assert_eq!(remaining.keys().map(|(id, _)| *id).collect::<Vec<_>>(), [2]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_keep_alive_is_not_activity() {
+        let service = DatabaseService::new(tokio::runtime::Handle::current());
+        let dir = tempfile::tempdir().expect("temp dir");
+        service
+            .add_connection_config(sqlite_config(1, &dir.path().join("alive.db")))
+            .await;
+        service.get_or_create_connection(1, None).await.unwrap();
+        let used = service.last_used.lock().unwrap()[&(1, "default".to_string())];
+
+        assert!(service.keep_alive_connections(None).await.is_empty());
+        assert!(
+            service.last_keep_alive.lock().unwrap().is_empty(),
+            "off by default"
+        );
+
+        assert!(
+            service
+                .keep_alive_connections(Some(Duration::ZERO))
+                .await
+                .is_empty(),
+            "SELECT 1 succeeds on SQLite"
+        );
+        assert!(service
+            .last_keep_alive
+            .lock()
+            .unwrap()
+            .contains_key(&(1, "default".to_string())));
+        assert_eq!(
+            service.last_used.lock().unwrap()[&(1, "default".to_string())],
+            used,
+            "a keep-alive is not activity"
+        );
+        assert_eq!(
+            service
+                .disconnect_idle_connections(Some(Duration::ZERO), &HashSet::new())
+                .await,
+            [1]
+        );
+        assert!(service.last_keep_alive.lock().unwrap().is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

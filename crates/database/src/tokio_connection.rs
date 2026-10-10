@@ -246,6 +246,19 @@ impl Connection for TokioConnection {
         self.run(async move { inner.ping().await }).await
     }
 
+    // Forwarded so a backend's own keep-alive runs: the default would send
+    // `SELECT 1` through this wrapper, which Redis reads as a database switch.
+    async fn keep_alive(&self) -> Result<()> {
+        let inner = Arc::clone(&self.inner);
+        let timeout = blanco_core::connect_timeout();
+        self.run(async move {
+            tokio::time::timeout(timeout, inner.keep_alive())
+                .await
+                .map_err(|_| anyhow!("keep-alive timed out after {}s", timeout.as_secs()))?
+        })
+        .await
+    }
+
     async fn get_databases(&self) -> Result<Vec<String>> {
         let inner = Arc::clone(&self.inner);
         self.run(async move { inner.get_databases().await }).await

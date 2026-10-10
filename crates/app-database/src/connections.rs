@@ -30,7 +30,8 @@ impl AppDatabase {
                         ssh_private_key_path = ?,
                         ssl_mode = ?, ssl_key_path = ?, ssl_cert_path = ?, ssl_ca_cert_path = ?,
                         trust_server_certificate = ?, read_only = ?,
-                        only_configured_database = ?, idle_timeout_minutes = ?
+                        only_configured_database = ?, idle_timeout_minutes = ?,
+                        keep_alive_seconds = ?
                     WHERE id = ?
                     "#,
                 )
@@ -56,6 +57,7 @@ impl AppDatabase {
                 .bind(if conn.read_only { 1 } else { 0 })
                 .bind(if conn.only_configured_database { 1 } else { 0 })
                 .bind(conn.idle_timeout_minutes.map(i64::from))
+                .bind(conn.keep_alive_seconds.map(i64::from))
                 .bind(id)
                 .execute(&pool)
                 .await?;
@@ -64,8 +66,8 @@ impl AppDatabase {
                 // Insert new connection
                 let result = sqlx::query(
                     r#"
-                    INSERT INTO connections (name, db_type, host, port, database_name, username, database_path, last_used_at, created_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate, read_only, only_configured_database, idle_timeout_minutes)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO connections (name, db_type, host, port, database_name, username, database_path, last_used_at, created_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate, read_only, only_configured_database, idle_timeout_minutes, keep_alive_seconds)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     "#,
                 )
                 .bind(&conn.name)
@@ -91,6 +93,7 @@ impl AppDatabase {
                 .bind(if conn.read_only { 1 } else { 0 })
                 .bind(if conn.only_configured_database { 1 } else { 0 })
                 .bind(conn.idle_timeout_minutes.map(i64::from))
+                .bind(conn.keep_alive_seconds.map(i64::from))
                 .execute(&pool)
                 .await?;
 
@@ -107,7 +110,7 @@ impl AppDatabase {
             .run(async move {
             let rows = sqlx::query(
                 r#"
-                SELECT id, name, db_type, host, port, database_name, username, database_path, last_used_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate, read_only, only_configured_database, idle_timeout_minutes
+                SELECT id, name, db_type, host, port, database_name, username, database_path, last_used_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate, read_only, only_configured_database, idle_timeout_minutes, keep_alive_seconds
                 FROM connections
                 ORDER BY name
                 "#,
@@ -157,6 +160,9 @@ impl AppDatabase {
                         idle_timeout_minutes: row
                             .get::<Option<i64>, _>("idle_timeout_minutes")
                             .and_then(|minutes| u32::try_from(minutes).ok()),
+                        keep_alive_seconds: row
+                            .get::<Option<i64>, _>("keep_alive_seconds")
+                            .and_then(|seconds| u32::try_from(seconds).ok()),
                     }
                 })
                 .collect();
@@ -298,6 +304,7 @@ mod tests {
         connection.ssl_mode = Some("disabled".to_string());
         connection.environment_type = EnvironmentType::Prod;
         connection.idle_timeout_minutes = Some(15);
+        connection.keep_alive_seconds = Some(0);
 
         let saved_id = db
             .save_connection(&connection)
@@ -322,6 +329,7 @@ mod tests {
         assert_eq!(loaded.password, None);
         assert_eq!(loaded.environment_type, EnvironmentType::Prod);
         assert_eq!(loaded.idle_timeout_minutes, Some(15));
+        assert_eq!(loaded.keep_alive_seconds, Some(0));
 
         // SSH fields
         assert_eq!(loaded.ssh_host.as_deref(), Some("bastion.example.com"));

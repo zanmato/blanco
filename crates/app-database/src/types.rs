@@ -132,6 +132,9 @@ pub struct ConnectionData {
     /// Minutes without activity after which the connection is closed. `None`
     /// follows the global setting, `Some(0)` keeps it open.
     pub idle_timeout_minutes: Option<u32>,
+    /// Seconds between keep-alive round trips. `None` follows the global
+    /// setting, `Some(0)` sends none.
+    pub keep_alive_seconds: Option<u32>,
 }
 
 impl std::fmt::Debug for ConnectionData {
@@ -170,6 +173,7 @@ impl std::fmt::Debug for ConnectionData {
             .field("read_only", &self.read_only)
             .field("only_configured_database", &self.only_configured_database)
             .field("idle_timeout_minutes", &self.idle_timeout_minutes)
+            .field("keep_alive_seconds", &self.keep_alive_seconds)
             .finish()
     }
 }
@@ -234,6 +238,7 @@ impl ConnectionData {
             read_only: false,
             only_configured_database: false,
             idle_timeout_minutes: None,
+            keep_alive_seconds: None,
         }
     }
 
@@ -275,6 +280,7 @@ impl ConnectionData {
             read_only: false,
             only_configured_database: false,
             idle_timeout_minutes: None,
+            keep_alive_seconds: None,
         }
     }
 
@@ -412,7 +418,8 @@ impl ConnectionData {
         Some(
             config
                 .with_read_only(self.read_only)
-                .with_idle_timeout_minutes(self.idle_timeout_minutes),
+                .with_idle_timeout_minutes(self.idle_timeout_minutes)
+                .with_keep_alive_seconds(self.keep_alive_seconds),
         )
     }
 }

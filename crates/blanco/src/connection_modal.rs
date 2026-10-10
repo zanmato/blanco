@@ -38,6 +38,9 @@ pub struct NewConnectionModal {
     /// Minutes of inactivity before the connection is closed. Empty follows
     /// the global setting.
     idle_timeout_input: Entity<InputState>,
+    /// Seconds between keep-alive round trips. Empty follows the global
+    /// setting.
+    keep_alive_input: Entity<InputState>,
     sqlite_form: SqliteForm,
     postgres_form: ServerForm,
     mysql_form: ServerForm,
@@ -134,6 +137,25 @@ impl NewConnectionModal {
                 .map(|minutes| minutes.to_string())
                 .as_deref(),
         );
+        let keep_alive_seconds = conn_ref.and_then(|connection| connection.keep_alive_seconds);
+        let global_keep_alive_seconds = crate::app_settings::AppSettings::global(cx)
+            .settings
+            .database
+            .keep_alive_seconds;
+        let keep_alive_placeholder = if global_keep_alive_seconds == 0 {
+            "Default (none)".to_string()
+        } else {
+            format!("Default ({global_keep_alive_seconds})")
+        };
+        let keep_alive_input = shared::make_input(
+            window,
+            cx,
+            &keep_alive_placeholder,
+            false,
+            keep_alive_seconds
+                .map(|seconds| seconds.to_string())
+                .as_deref(),
+        );
         let sqlite_form = SqliteForm::new(window, cx, conn_ref);
         let postgres_form = ServerForm::new(&POSTGRES_SPEC, window, cx, conn_ref);
         let mysql_form = ServerForm::new(&MYSQL_SPEC, window, cx, conn_ref);
@@ -149,8 +171,9 @@ impl NewConnectionModal {
             read_only,
             only_configured_database,
             // Open on a connection that already overrides a default.
-            advanced_expanded: idle_timeout_minutes.is_some(),
+            advanced_expanded: idle_timeout_minutes.is_some() || keep_alive_seconds.is_some(),
             idle_timeout_input,
+            keep_alive_input,
             sqlite_form,
             postgres_form,
             mysql_form,
@@ -190,8 +213,11 @@ impl NewConnectionModal {
     }
 
     fn validate(&self, connector_type: &ConnectorType, cx: &App) -> Option<String> {
-        if self.idle_timeout_minutes(cx).is_err() {
+        if optional_whole_number(&self.idle_timeout_input, cx).is_err() {
             return Some("Disconnect when idle must be a whole number of minutes.".to_string());
+        }
+        if optional_whole_number(&self.keep_alive_input, cx).is_err() {
+            return Some("Keep-alive interval must be a whole number of seconds.".to_string());
         }
         match connector_type {
             ConnectorType::SQLite => self.sqlite_form.validate(cx),
@@ -234,20 +260,15 @@ impl NewConnectionModal {
                 .get_connection_data(name, environment_type, cx),
         }?;
         connection.read_only = self.read_only;
-        connection.idle_timeout_minutes = self.idle_timeout_minutes(cx).ok().flatten();
+        connection.idle_timeout_minutes = optional_whole_number(&self.idle_timeout_input, cx)
+            .ok()
+            .flatten();
+        connection.keep_alive_seconds = optional_whole_number(&self.keep_alive_input, cx)
+            .ok()
+            .flatten();
         connection.only_configured_database =
             self.only_configured_database && connection.db_type.dialect().lists_server_databases();
         Some(connection)
-    }
-
-    /// The idle timeout override, `None` when the field is empty.
-    fn idle_timeout_minutes(&self, cx: &App) -> Result<Option<u32>, std::num::ParseIntError> {
-        let value = self.idle_timeout_input.read(cx).value();
-        let value = value.trim();
-        if value.is_empty() {
-            return Ok(None);
-        }
-        value.parse().map(Some)
     }
 
     pub fn test_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -534,6 +555,19 @@ impl NewConnectionModal {
     }
 }
 
+/// The number in an optional override field, `None` when it is empty.
+fn optional_whole_number(
+    input: &Entity<InputState>,
+    cx: &App,
+) -> Result<Option<u32>, std::num::ParseIntError> {
+    let value = input.read(cx).value();
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    value.parse().map(Some)
+}
+
 impl Focusable for NewConnectionModal {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -649,6 +683,14 @@ impl Render for NewConnectionModal {
                                     .text_xs()
                                     .text_color(cx.theme().muted_foreground)
                                     .child("Empty follows the Database setting. 0 keeps this connection open."),
+                            )
+                            .child(div().text_sm().child("Keep-Alive Interval (seconds)"))
+                            .child(Input::new(&self.keep_alive_input))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("Empty follows the Database setting. 0 sends no keep-alive."),
                             ),
                     )
                 })

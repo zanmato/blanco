@@ -245,6 +245,10 @@ impl Connection for RedisConnection {
         self.run_command(&["PING".to_string()]).await.map(|_| ())
     }
 
+    async fn keep_alive(&self) -> Result<()> {
+        self.ping().await
+    }
+
     async fn execute_query(
         &self,
         query: &str,

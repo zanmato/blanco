@@ -143,6 +143,9 @@ impl Settings {
                     settings.database.show_connection_notifications =
                         value.parse().unwrap_or_default();
                 }
+                "database.keep_alive_seconds" => {
+                    settings.database.keep_alive_seconds = value.parse().unwrap_or_default();
+                }
                 "database.idle_disconnect_minutes" => {
                     settings.database.idle_disconnect_minutes = value.parse().unwrap_or_default();
                 }
@@ -307,6 +310,10 @@ pub struct DatabaseSettings {
     /// connections open. A connection can override it.
     #[serde(default)]
     pub idle_disconnect_minutes: u32,
+    /// Seconds between keep-alive round trips on an unused connection, 0 for
+    /// none. A connection can override it.
+    #[serde(default)]
+    pub keep_alive_seconds: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -377,6 +384,12 @@ impl DatabaseSettings {
             .then(|| std::time::Duration::from_secs(u64::from(self.query_timeout_seconds)))
     }
 
+    /// The global keep-alive interval, `None` when it is off (0).
+    pub fn keep_alive_interval(&self) -> Option<std::time::Duration> {
+        (self.keep_alive_seconds > 0)
+            .then(|| std::time::Duration::from_secs(u64::from(self.keep_alive_seconds)))
+    }
+
     /// The global idle timeout, `None` when it is off (0).
     pub fn idle_disconnect_timeout(&self) -> Option<std::time::Duration> {
         (self.idle_disconnect_minutes > 0)
@@ -393,6 +406,7 @@ impl Default for DatabaseSettings {
             show_connection_notifications: true,
             max_history_items: 1000,
             idle_disconnect_minutes: 0,
+            keep_alive_seconds: 0,
         }
     }
 }

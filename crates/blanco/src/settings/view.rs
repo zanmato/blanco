@@ -564,6 +564,40 @@ impl SettingsView {
                         "Close a connection after this many minutes without a query, metadata fetch or pending edit. The next action reconnects. 0 keeps connections open. A connection can set its own value.",
                     ),
                     SettingItem::new(
+                        "Keep-Alive Interval",
+                        SettingField::number_input(
+                            NumberFieldOptions {
+                                min: 0.0,
+                                max: 3600.0,
+                                step: 10.0,
+                            },
+                            move |cx: &App| {
+                                AppSettings::global(cx).settings.database.keep_alive_seconds as f64
+                            },
+                            {
+                                let view_handle = view_handle.clone();
+                                move |val: f64, cx: &mut App| {
+                                    AppSettings::global_mut(cx)
+                                        .settings
+                                        .database
+                                        .keep_alive_seconds = val as u32;
+
+                                    let key = "database.keep_alive_seconds".to_string();
+                                    let value = (val as u32).to_string();
+                                    if let Some(view) = view_handle.upgrade() {
+                                        view.update(cx, |view, cx| {
+                                            view.save_setting_debounced(key, value, false, cx);
+                                        });
+                                    }
+                                }
+                            },
+                        )
+                        .default_value(default_settings.database.keep_alive_seconds as f64),
+                    )
+                    .description(
+                        "Send the cheapest statement over an open connection after this many seconds without use, for servers and firewalls that drop silent connections. 0 sends none. A connection can set its own value.",
+                    ),
+                    SettingItem::new(
                         "Show Connection Notifications",
                         SettingField::switch(
                             move |cx: &App| {

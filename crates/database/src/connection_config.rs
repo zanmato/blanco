@@ -83,6 +83,9 @@ pub struct ConnectionConfig {
     /// Minutes without activity after which the connection is closed. `None`
     /// follows the global setting, `Some(0)` never closes it.
     pub idle_timeout_minutes: Option<u32>,
+    /// Seconds between keep-alive round trips on an unused connection.
+    /// `None` follows the global setting, `Some(0)` sends none.
+    pub keep_alive_seconds: Option<u32>,
 }
 
 impl std::fmt::Debug for ConnectionConfig {
@@ -118,6 +121,7 @@ impl std::fmt::Debug for ConnectionConfig {
             .field("trust_server_certificate", &self.trust_server_certificate)
             .field("read_only", &self.read_only)
             .field("idle_timeout_minutes", &self.idle_timeout_minutes)
+            .field("keep_alive_seconds", &self.keep_alive_seconds)
             .finish()
     }
 }
@@ -159,6 +163,7 @@ impl ConnectionConfig {
             trust_server_certificate: false,
             read_only: false,
             idle_timeout_minutes: None,
+            keep_alive_seconds: None,
         }
     }
 
@@ -188,6 +193,7 @@ impl ConnectionConfig {
             trust_server_certificate: false,
             read_only: false,
             idle_timeout_minutes: None,
+            keep_alive_seconds: None,
         }
     }
 
@@ -238,6 +244,21 @@ impl ConnectionConfig {
     pub fn with_idle_timeout_minutes(mut self, minutes: Option<u32>) -> Self {
         self.idle_timeout_minutes = minutes;
         self
+    }
+
+    pub fn with_keep_alive_seconds(mut self, seconds: Option<u32>) -> Self {
+        self.keep_alive_seconds = seconds;
+        self
+    }
+
+    /// How often an unused connection is kept alive, given the global
+    /// default. `None` sends no keep-alive.
+    pub fn keep_alive_interval(&self, default: Option<Duration>) -> Option<Duration> {
+        match self.keep_alive_seconds {
+            None => default,
+            Some(0) => None,
+            Some(seconds) => Some(Duration::from_secs(u64::from(seconds))),
+        }
     }
 
     /// How long the connection may sit unused before it is closed, given the
