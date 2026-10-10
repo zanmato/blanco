@@ -128,6 +128,7 @@ impl PostgresConnection {
                                 default_value,
                                 character_maximum_length,
                                 foreign_key,
+                                comment: None,
                             });
                         }
                     }

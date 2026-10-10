@@ -9,6 +9,7 @@ use gpui_component::{
     menu::{PopupMenu, PopupMenuItem},
     spinner::Spinner,
     tooltip::Tooltip,
+    v_flex,
 };
 
 use crate::app::CreateNewQueryTab;
@@ -195,6 +196,7 @@ impl TreeDelegate for ConnectionsTreeDelegate {
 
         let item_id: gpui::SharedString = item.id.clone();
         let tooltip_label = item.label.clone();
+        let tooltip_comment: Option<SharedString> = metadata.comment.clone().map(Into::into);
 
         let size_indicator = metadata.relative_size.map(|relative| {
             let size_text = metadata
@@ -233,8 +235,19 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                     .id(("tree-item", ix))
                     .gap_2()
                     .items_center()
-                    .tooltip(move |window, cx| {
-                        Tooltip::new(tooltip_label.clone()).build(window, cx)
+                    .tooltip(move |window, cx| match tooltip_comment.clone() {
+                        Some(comment) => Tooltip::element({
+                            let label = tooltip_label.clone();
+                            move |_, cx| {
+                                v_flex().gap_1().max_w(px(360.)).child(label.clone()).child(
+                                    div()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(comment.clone()),
+                                )
+                            }
+                        })
+                        .build(window, cx),
+                        None => Tooltip::new(tooltip_label.clone()).build(window, cx),
                     })
                     .child(Icon::new(tree_item_icon.icon).text_color(tree_item_icon.color))
                     .child(

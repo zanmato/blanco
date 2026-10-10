@@ -754,12 +754,14 @@ impl TableDelegate for ResultsTableDelegate {
                 let is_nullable = col_info.is_nullable;
                 let default_value = col_info.default_value.clone();
                 let max_length = col_info.character_maximum_length;
+                let comment = col_info.comment.clone();
                 this.tooltip(move |window, cx| {
                     Tooltip::element({
                         let col_name = col_name.clone();
                         let data_type = data_type.clone();
                         let default_value = default_value.clone();
-                        move |_window, _cx| {
+                        let comment = comment.clone();
+                        move |_window, cx| {
                             v_flex()
                                 .gap_1()
                                 .child(div().font_weight(FontWeight::BOLD).child(col_name.clone()))
@@ -779,6 +781,14 @@ impl TableDelegate for ResultsTableDelegate {
                                 }))
                                 .when_some(default_value.clone(), |this, default| {
                                     this.child(h_flex().gap_2().child("Default:").child(default))
+                                })
+                                .when_some(comment.clone(), |this, comment| {
+                                    this.child(
+                                        div()
+                                            .max_w(px(360.))
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(comment),
+                                    )
                                 })
                         }
                     })

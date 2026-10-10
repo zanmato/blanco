@@ -390,6 +390,7 @@ mod tests {
                 default_value: Some("nextval".into()),
                 character_maximum_length: None,
                 foreign_key: None,
+                comment: None,
             },
             ColumnInfo {
                 name: "name".into(),
@@ -399,6 +400,7 @@ mod tests {
                 default_value: None,
                 character_maximum_length: None,
                 foreign_key: None,
+                comment: None,
             },
             ColumnInfo {
                 name: "email".into(),
@@ -408,6 +410,7 @@ mod tests {
                 default_value: None,
                 character_maximum_length: None,
                 foreign_key: None,
+                comment: None,
             },
             ColumnInfo {
                 name: "tenant_id".into(),
@@ -417,6 +420,7 @@ mod tests {
                 default_value: None,
                 character_maximum_length: None,
                 foreign_key: None,
+                comment: None,
             },
         ]
     }

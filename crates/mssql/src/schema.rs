@@ -17,8 +17,14 @@ SELECT
     c.CHARACTER_MAXIMUM_LENGTH,
     fk.foreign_table,
     fk.foreign_column,
-    fk.constraint_name
+    fk.constraint_name,
+    CAST(ep.value AS NVARCHAR(4000))
 FROM INFORMATION_SCHEMA.COLUMNS c
+LEFT JOIN sys.extended_properties ep
+    ON ep.class = 1
+    AND ep.name = 'MS_Description'
+    AND ep.major_id = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME))
+    AND ep.minor_id = COLUMNPROPERTY(ep.major_id, c.COLUMN_NAME, 'ColumnId')
 LEFT JOIN (
     -- KEY_COLUMN_USAGE has no `column_id`; `ordinal_position` is the valid
     -- column and serves equally as the non-null PK-membership marker below.
@@ -56,6 +62,32 @@ ORDER BY c.ORDINAL_POSITION
 "#,
         table = table_name.replace('\'', "''"),
         schema_filter = schema_filter,
+    )
+}
+
+/// `(kind, object name, comment)` for the tables, views and routines
+/// carrying an `MS_Description`, in `schema` or in every schema. `kind` is
+/// `r` for tables and views and `f` for routines.
+pub fn object_comments_sql(schema: Option<&str>) -> String {
+    let schema_filter = match schema {
+        Some(s) => format!("AND s.name = '{}'", s.replace('\'', "''")),
+        None => String::new(),
+    };
+    format!(
+        r#"
+SELECT
+    CASE WHEN o.type IN ('U', 'V') THEN 'r' ELSE 'f' END,
+    o.name,
+    CAST(ep.value AS NVARCHAR(4000))
+FROM sys.extended_properties ep
+JOIN sys.objects o ON o.object_id = ep.major_id
+JOIN sys.schemas s ON s.schema_id = o.schema_id
+WHERE ep.class = 1
+    AND ep.minor_id = 0
+    AND ep.name = 'MS_Description'
+    AND o.type IN ('U', 'V', 'P', 'FN', 'IF', 'TF')
+    {schema_filter}
+"#
     )
 }
 

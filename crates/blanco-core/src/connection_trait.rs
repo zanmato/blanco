@@ -52,11 +52,39 @@ impl RoutineKind {
     }
 }
 
+/// Comments stored on the objects of a schema, keyed by object name.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ObjectComments {
+    /// Tables, views and materialized views.
+    pub relations: std::collections::HashMap<String, String>,
+    /// Functions and procedures.
+    pub routines: std::collections::HashMap<String, String>,
+}
+
+impl ObjectComments {
+    /// File a `(kind, name, comment)` row, `kind` being `r` for a relation
+    /// and anything else for a routine. Empty comments are skipped.
+    pub fn insert_row(&mut self, kind: &str, name: String, comment: String) {
+        if comment.is_empty() {
+            return;
+        }
+        let map = if kind == "r" {
+            &mut self.relations
+        } else {
+            &mut self.routines
+        };
+        map.insert(name, comment);
+    }
+}
+
 /// A queryable database entity with its type
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct QueryableEntity {
     pub name: String,
     pub entity_type: EntityType,
+    /// The comment stored on the table or view, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
 }
 
 /// Represents the semantic type of a database column
@@ -266,6 +294,9 @@ pub struct ColumnInfo {
     pub default_value: Option<String>,
     pub character_maximum_length: Option<i32>,
     pub foreign_key: Option<ForeignKeyInfo>,
+    /// The comment stored on the column, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
 }
 
 /// Information about a table in the database schema
@@ -551,6 +582,15 @@ pub trait Connection: Send + Sync {
         _schema: Option<&str>,
     ) -> Result<std::collections::HashMap<String, u64>, anyhow::Error> {
         Ok(std::collections::HashMap::new())
+    }
+
+    /// Return the comments on the tables, views and routines of a schema.
+    /// Defaults to none; drivers whose database stores comments override.
+    async fn get_object_comments(
+        &self,
+        _schema: Option<&str>,
+    ) -> Result<ObjectComments, anyhow::Error> {
+        Ok(ObjectComments::default())
     }
 
     /// Return the SQL DDL source for a routine/trigger object. Used by the

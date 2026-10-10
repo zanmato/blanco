@@ -437,6 +437,40 @@ impl Connection for PostgresConnection {
         Ok(sizes)
     }
 
+    async fn get_object_comments(
+        &self,
+        schema: Option<&str>,
+    ) -> Result<blanco_core::ObjectComments> {
+        let query = "
+            SELECT 'r', c.relname, d.description
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            JOIN pg_description d
+                ON d.objoid = c.oid AND d.classoid = 'pg_class'::regclass AND d.objsubid = 0
+            WHERE n.nspname = $1 AND c.relkind IN ('r', 'v', 'm', 'p', 'f')
+            UNION ALL
+            SELECT 'f', p.proname, d.description
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            JOIN pg_description d ON d.objoid = p.oid AND d.classoid = 'pg_proc'::regclass
+            WHERE n.nspname = $1
+        ";
+        let result = self
+            .execute_query(
+                query,
+                self.initial_database.as_deref(),
+                Some(&[schema.unwrap_or("public").to_string()]),
+            )
+            .await?;
+        let mut comments = blanco_core::ObjectComments::default();
+        for row in result.rows {
+            if let [Some(kind), Some(name), Some(comment)] = row.as_slice() {
+                comments.insert_row(kind, name.clone(), comment.clone());
+            }
+        }
+        Ok(comments)
+    }
+
     async fn object_ddl(
         &self,
         kind: RoutineKind,
@@ -603,7 +637,13 @@ impl Connection for PostgresConnection {
     ) -> Result<Vec<blanco_core::QueryableEntity>, anyhow::Error> {
         let schema_filter = schema.unwrap_or("public");
         let query = "
-            SELECT table_name, entity_type
+            SELECT
+                table_name,
+                entity_type,
+                obj_description(
+                    to_regclass(quote_ident($1) || '.' || quote_ident(table_name)),
+                    'pg_class'
+                ) AS comment
             FROM (
                 SELECT table_name, 'TABLE' as entity_type
                 FROM information_schema.tables
@@ -641,7 +681,12 @@ impl Connection for PostgresConnection {
                         "MATERIALIZED_VIEW" => EntityType::MaterializedView,
                         _ => return None,
                     };
-                    Some(QueryableEntity { name, entity_type })
+                    let comment = row.get(2).cloned().flatten();
+                    Some(QueryableEntity {
+                        name,
+                        entity_type,
+                        comment,
+                    })
                 } else {
                     None
                 }
@@ -677,7 +722,7 @@ impl Connection for PostgresConnection {
                     unnest(conkey)  AS conkey,
                     unnest(confkey) AS confkey
                 FROM pg_constraint
-                WHERE contype = 'f' AND conrelid::regclass = $1::regclass
+                WHERE contype = 'f' AND conrelid = to_regclass(quote_ident($2) || '.' || quote_ident($1))
             )
             SELECT
                 c.column_name,
@@ -688,13 +733,24 @@ impl Connection for PostgresConnection {
                 COALESCE(pk.column_name, '') AS is_primary_key,
                 COALESCE(fk.foreign_table_name::text, '') AS fk_table,
                 COALESCE(fk.foreign_column_name::text, '') AS fk_column,
-                fk.constraint_name
+                fk.constraint_name,
+                (
+                    SELECT d.description
+                    FROM pg_description d
+                    JOIN pg_attribute a
+                        ON a.attrelid = d.objoid AND a.attnum = d.objsubid
+                    WHERE d.classoid = 'pg_class'::regclass
+                    AND d.objoid = to_regclass(
+                        quote_ident(c.table_schema) || '.' || quote_ident(c.table_name)
+                    )
+                    AND a.attname = c.column_name
+                ) AS column_comment
             FROM information_schema.columns c
             LEFT JOIN (
                 SELECT a.attname AS column_name
                 FROM   pg_index i
                 JOIN   pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
-                WHERE  i.indrelid = $1::regclass
+                WHERE  i.indrelid = to_regclass(quote_ident($2) || '.' || quote_ident($1))
                 AND    i.indisprimary
             ) pk ON pk.column_name = c.column_name
             LEFT JOIN (
@@ -731,6 +787,7 @@ impl Connection for PostgresConnection {
                 let fk_table = row[6].as_deref().unwrap_or("");
                 let fk_column = row[7].as_deref().unwrap_or("");
                 let fk_constraint = row[8].as_deref().unwrap_or("");
+                let comment = row.get(9).cloned().flatten();
 
                 // Only create ForeignKeyInfo if we have actual FK values
                 let foreign_key = match (fk_table, fk_column) {
@@ -754,6 +811,7 @@ impl Connection for PostgresConnection {
                     default_value: default_value.clone().filter(|s| !s.is_empty()),
                     character_maximum_length: max_length.parse().ok(),
                     foreign_key,
+                    comment,
                 });
             }
         }

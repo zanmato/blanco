@@ -76,6 +76,17 @@ struct TableRef {
 struct ColumnCandidate {
     name: String,
     data_type: Option<String>,
+    comment: Option<String>,
+}
+
+/// A stored comment as the documentation shown beside a completion item.
+fn comment_documentation(comment: Option<&str>) -> Option<lsp_types::Documentation> {
+    comment.filter(|c| !c.is_empty()).map(|comment| {
+        lsp_types::Documentation::MarkupContent(lsp_types::MarkupContent {
+            kind: lsp_types::MarkupKind::Markdown,
+            value: comment.to_string(),
+        })
+    })
 }
 
 /// What a completion item offers. Items are listed in this order, so where a
@@ -734,6 +745,7 @@ fn build_column_items(
                     column_name.clone(),
                 ))),
                 detail: Some(detail),
+                documentation: comment_documentation(column.comment.as_deref()),
                 insert_text: Some(column_name),
                 ..Default::default()
             }
@@ -772,6 +784,7 @@ fn build_table_items(
                     insert_text.clone(),
                 ))),
                 detail: Some(entity.entity_type.display_name().to_string()),
+                documentation: comment_documentation(entity.comment.as_deref()),
                 insert_text: Some(insert_text),
                 ..Default::default()
             }
@@ -878,16 +891,7 @@ fn build_function_items(
         if overloads > 1 {
             detail.push_str(&format!(" (+{} overloads)", overloads - 1));
         }
-        let documentation = function
-            .comment
-            .as_deref()
-            .filter(|c| !c.is_empty())
-            .map(|comment| {
-                lsp_types::Documentation::MarkupContent(lsp_types::MarkupContent {
-                    kind: lsp_types::MarkupKind::Markdown,
-                    value: comment.to_string(),
-                })
-            });
+        let documentation = comment_documentation(function.comment.as_deref());
         items.push(make_item(&function.name, detail, documentation));
     }
 
@@ -1210,6 +1214,7 @@ impl CompletionProvider for SqlCompletionProvider {
                                                 all_columns.push(ColumnCandidate {
                                                     name: column.name.clone(),
                                                     data_type: Some(column.data_type.clone()),
+                                                    comment: column.comment.clone(),
                                                 });
                                             }
                                         }
@@ -1222,6 +1227,7 @@ impl CompletionProvider for SqlCompletionProvider {
                                             all_columns.push(ColumnCandidate {
                                                 name: column.clone(),
                                                 data_type: None,
+                                                comment: None,
                                             });
                                         }
                                     }
@@ -2019,6 +2025,7 @@ mod tests {
         let entities = vec![QueryableEntity {
             name: "orders".to_string(),
             entity_type: blanco_core::EntityType::Table,
+            comment: None,
         }];
         let items = build_table_items(&entities, "", dummy_range());
         assert_eq!(items.len(), 1);
@@ -2051,6 +2058,7 @@ mod tests {
         ColumnCandidate {
             name: name.to_string(),
             data_type: Some(data_type.to_string()),
+            comment: None,
         }
     }
 
@@ -2070,11 +2078,39 @@ mod tests {
     }
 
     #[test]
+    fn test_comments_are_shown_beside_tables_and_columns() {
+        let documentation = |item: &CompletionItem| match &item.documentation {
+            Some(lsp_types::Documentation::MarkupContent(content)) => Some(content.value.clone()),
+            _ => None,
+        };
+
+        let mut column = typed_candidate("email", "text");
+        column.comment = Some("Where receipts go".to_string());
+        let items = build_column_items(&[column], "", dummy_range(), "customers");
+        assert_eq!(
+            documentation(&items[0]).as_deref(),
+            Some("Where receipts go")
+        );
+
+        let entities = vec![QueryableEntity {
+            name: "orders".to_string(),
+            entity_type: blanco_core::EntityType::Table,
+            comment: Some("One row per checkout".to_string()),
+        }];
+        let items = build_table_items(&entities, "", dummy_range());
+        assert_eq!(
+            documentation(&items[0]).as_deref(),
+            Some("One row per checkout")
+        );
+    }
+
+    #[test]
     fn test_build_column_items_type_hint_falls_back_to_table() {
         // Columns without a known type (CTE / derived) fall back to the table.
         let cols = vec![ColumnCandidate {
             name: "total".to_string(),
             data_type: None,
+            comment: None,
         }];
         let items = build_column_items(&cols, "", dummy_range(), "summary");
         assert_eq!(items.len(), 1);
@@ -2251,6 +2287,7 @@ mod tests {
         let columns = vec![ColumnCandidate {
             name: name.to_string(),
             data_type: Some("text".to_string()),
+            comment: None,
         }];
         let items = rank_items(
             vec![(
@@ -2274,6 +2311,7 @@ mod tests {
             default_value: None,
             character_maximum_length: None,
             foreign_key: None,
+            comment: None,
         }
     }
 

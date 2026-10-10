@@ -532,6 +532,42 @@ impl Connection for MysqlConnection {
             .collect())
     }
 
+    async fn get_object_comments(
+        &self,
+        _schema: Option<&str>,
+    ) -> Result<blanco_core::ObjectComments, anyhow::Error> {
+        let database = self
+            .initial_database
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+        let pool = self.get_or_create_pool(database).await?;
+        // A view's TABLE_COMMENT is the word VIEW, not a comment.
+        let rows = sqlx::query(
+            "SELECT 'r', TABLE_NAME, TABLE_COMMENT
+             FROM information_schema.TABLES
+             WHERE TABLE_SCHEMA = ? AND TABLE_TYPE <> 'VIEW' AND TABLE_COMMENT <> ''
+             UNION ALL
+             SELECT 'f', ROUTINE_NAME, ROUTINE_COMMENT
+             FROM information_schema.ROUTINES
+             WHERE ROUTINE_SCHEMA = ? AND ROUTINE_COMMENT <> ''",
+        )
+        .bind(database)
+        .bind(database)
+        .fetch_all(&pool)
+        .await?;
+        let mut comments = blanco_core::ObjectComments::default();
+        for row in rows {
+            if let (Ok(kind), Ok(name), Ok(comment)) = (
+                row.try_get::<String, _>(0),
+                row.try_get::<String, _>(1),
+                row.try_get::<String, _>(2),
+            ) {
+                comments.insert_row(&kind, name, comment);
+            }
+        }
+        Ok(comments)
+    }
+
     async fn get_object_sizes(
         &self,
         _schema: Option<&str>,
@@ -654,7 +690,9 @@ impl Connection for MysqlConnection {
 
         let query = "
             SELECT TABLE_NAME as name,
-                   CASE WHEN TABLE_TYPE = 'VIEW' THEN 'VIEW' ELSE 'TABLE' END as entity_type
+                   CASE WHEN TABLE_TYPE = 'VIEW' THEN 'VIEW' ELSE 'TABLE' END as entity_type,
+                   CASE WHEN TABLE_TYPE = 'VIEW' THEN NULL ELSE NULLIF(TABLE_COMMENT, '') END
+                       as table_comment
             FROM information_schema.tables
             WHERE TABLE_SCHEMA = ?
             ORDER BY TABLE_NAME
@@ -672,7 +710,12 @@ impl Connection for MysqlConnection {
                     "VIEW" => EntityType::View,
                     _ => EntityType::Table,
                 };
-                Some(QueryableEntity { name, entity_type })
+                let comment = row.try_get::<Option<String>, _>(2).ok().flatten();
+                Some(QueryableEntity {
+                    name,
+                    entity_type,
+                    comment,
+                })
             })
             .collect();
 
@@ -708,7 +751,8 @@ impl Connection for MysqlConnection {
                 c.COLUMN_KEY = 'PRI' AS is_primary_key,
                 fk.REFERENCED_TABLE_NAME AS fk_table,
                 fk.REFERENCED_COLUMN_NAME AS fk_column,
-                fk.CONSTRAINT_NAME AS fk_constraint
+                fk.CONSTRAINT_NAME AS fk_constraint,
+                NULLIF(c.COLUMN_COMMENT, '') AS column_comment
             FROM INFORMATION_SCHEMA.COLUMNS c
             LEFT JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE fk
                 ON fk.TABLE_SCHEMA = c.TABLE_SCHEMA
@@ -737,6 +781,7 @@ impl Connection for MysqlConnection {
             let fk_table: Option<String> = row.try_get(6).ok();
             let fk_column: Option<String> = row.try_get(7).ok();
             let fk_constraint: Option<String> = row.try_get(8).ok();
+            let comment: Option<String> = row.try_get(9).ok().flatten();
 
             let foreign_key = ForeignKeyInfo::from_parts(fk_table, fk_column, fk_constraint);
 
@@ -750,6 +795,7 @@ impl Connection for MysqlConnection {
                 default_value,
                 character_maximum_length: max_length,
                 foreign_key,
+                comment,
             });
         }
 

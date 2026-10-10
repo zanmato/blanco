@@ -871,16 +871,40 @@ impl Connection for MssqlConnection {
         Ok(Vec::new())
     }
 
+    async fn get_object_comments(
+        &self,
+        schema: Option<&str>,
+    ) -> Result<blanco_core::ObjectComments> {
+        let result = self
+            .execute_query(
+                &schema::object_comments_sql(schema),
+                self.initial_database.as_deref(),
+                None,
+            )
+            .await?;
+        let mut comments = blanco_core::ObjectComments::default();
+        for row in result.rows {
+            if let [Some(kind), Some(name), Some(comment)] = row.as_slice() {
+                comments.insert_row(kind, name.clone(), comment.clone());
+            }
+        }
+        Ok(comments)
+    }
+
     async fn get_queryable_entities(&self, schema: Option<&str>) -> Result<Vec<QueryableEntity>> {
+        let comments = self.get_object_comments(schema).await?.relations;
+
         let mut entities = Vec::new();
         for table in self.get_tables(schema).await? {
             entities.push(QueryableEntity {
+                comment: comments.get(&table).cloned(),
                 name: table,
                 entity_type: EntityType::Table,
             });
         }
         for view in self.get_views(schema).await? {
             entities.push(QueryableEntity {
+                comment: comments.get(&view).cloned(),
                 name: view,
                 entity_type: EntityType::View,
             });
@@ -912,6 +936,7 @@ impl Connection for MssqlConnection {
                     default_value: get(4).filter(|v| !v.is_empty()),
                     character_maximum_length: get(5).and_then(|v| v.parse().ok()),
                     foreign_key,
+                    comment: get(9).filter(|v| !v.is_empty()),
                 }
             })
             .collect())
