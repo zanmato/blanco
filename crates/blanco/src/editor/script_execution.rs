@@ -78,34 +78,40 @@ impl EditorPanel {
         };
 
         let app_database = AppDatabase::global(cx).clone();
-        cx.spawn(async move |entity_handle, cx| {
-            let tab_db_id = match app_database.save_query_tab(&tab_data).await {
-                Ok(db_id) => {
-                    debug!("Script tab saved successfully with db_id: {}", db_id);
-                    db_id
-                }
-                Err(e) => {
-                    error!("Failed to save script tab: {}", e);
-                    return;
-                }
-            };
-
-            app_database
-                .touch_query_tab_last_run(tab_db_id, run_timestamp)
-                .await
-                .map_err(anyhow::Error::from)
-                .log_err();
-
-            entity_handle
-                .update(cx, |editor_panel: &mut EditorPanel, _| {
-                    if let Some(TabType::Script(script_tab)) = editor_panel.tabs.get_mut(tab_index)
-                    {
-                        script_tab.db_id = Some(tab_db_id);
+        // A tab on a temporary connection has no connection row to refer to,
+        // so it is not persisted.
+        let persist = !script_tab.context.is_temporary();
+        if persist {
+            cx.spawn(async move |entity_handle, cx| {
+                let tab_db_id = match app_database.save_query_tab(&tab_data).await {
+                    Ok(db_id) => {
+                        debug!("Script tab saved successfully with db_id: {}", db_id);
+                        db_id
                     }
-                })
-                .log_err();
-        })
-        .detach();
+                    Err(e) => {
+                        error!("Failed to save script tab: {}", e);
+                        return;
+                    }
+                };
+
+                app_database
+                    .touch_query_tab_last_run(tab_db_id, run_timestamp)
+                    .await
+                    .map_err(anyhow::Error::from)
+                    .log_err();
+
+                entity_handle
+                    .update(cx, |editor_panel: &mut EditorPanel, _| {
+                        if let Some(TabType::Script(script_tab)) =
+                            editor_panel.tabs.get_mut(tab_index)
+                        {
+                            script_tab.db_id = Some(tab_db_id);
+                        }
+                    })
+                    .log_err();
+            })
+            .detach();
+        }
 
         let activity_label = script_tab.context.connection_name.clone();
         let activity =

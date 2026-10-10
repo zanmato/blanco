@@ -42,9 +42,14 @@ impl ConnectionsPanel {
             relative_size: None,
         };
 
+        let label = if connection.is_temporary() {
+            format!("{} (unsaved)", connection.display_name())
+        } else {
+            connection.display_name()
+        };
         let base_item = TreeItem::new(
             format!("connection:{}", connection_id),
-            connection.display_name(),
+            label,
             connection_metadata,
         )
         .expanded(should_expand);

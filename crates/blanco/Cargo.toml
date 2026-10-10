@@ -33,6 +33,7 @@ database = { path = "../database" }
 
 # Additional dependencies
 smol = { workspace = true }
+url = { workspace = true }
 dirs = { workspace = true }
 rust-embed = { workspace = true }
 async-trait = { workspace = true }

@@ -940,6 +940,7 @@ dependencies = [
  "tree-sitter-javascript",
  "tree-sitter-redis",
  "tree-sitter-sequel",
+ "url",
  "uuid",
 ]
 

@@ -195,6 +195,53 @@ impl EditorPanel {
             .collect()
     }
 
+    /// Move the query and script tabs of connection `from` to `to`, keeping
+    /// their titles, text, database and schema. Used when a temporary
+    /// connection is saved and gets its permanent id; temporary tabs are never
+    /// persisted, so there is nothing in the app database to update.
+    pub fn move_tabs_to_connection(
+        &mut self,
+        from: i64,
+        to: &ConnectionContext,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut moved = Vec::new();
+        for index in (0..self.tabs.len()).rev() {
+            let tab = &self.tabs[index];
+            let Some(connection_tab) = tab.connection_tab() else {
+                continue;
+            };
+            if connection_tab.context.connection_id != from {
+                continue;
+            }
+            moved.push((
+                matches!(tab, TabType::Script(_)),
+                TabCreationParams {
+                    title: connection_tab.title.clone(),
+                    content: Some(connection_tab.editor.read(cx).value().to_string()),
+                    db_id: None,
+                    last_run_at: None,
+                    context: ConnectionContext {
+                        database_name: connection_tab.context.database_name.clone(),
+                        schema_name: connection_tab.context.schema_name.clone(),
+                        ..to.clone()
+                    },
+                },
+            ));
+            self.tabs.remove(index);
+        }
+        self.active_tab_ix = self.active_tab_ix.min(self.tabs.len().saturating_sub(1));
+        for (is_script, params) in moved.into_iter().rev() {
+            if is_script {
+                self.create_and_add_script_tab(window, params, cx);
+            } else {
+                self.create_and_add_tab_with_connection(window, params, cx);
+            }
+        }
+        cx.notify();
+    }
+
     pub fn set_all_editors_show_whitespace(
         &mut self,
         show: bool,

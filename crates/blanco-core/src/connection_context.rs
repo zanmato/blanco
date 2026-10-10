@@ -62,6 +62,13 @@ impl ConnectionContext {
         self.environment_type == Some(EnvironmentType::Prod)
     }
 
+    /// A connection opened for this session only, such as a SQLite file
+    /// opened directly. It has no row in the app database, so tabs on it are
+    /// not persisted.
+    pub fn is_temporary(&self) -> bool {
+        self.connection_id < 0
+    }
+
     pub fn with_schema(mut self, schema_name: Option<String>) -> Self {
         self.schema_name = schema_name;
         self
