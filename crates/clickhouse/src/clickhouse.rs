@@ -50,6 +50,9 @@ pub struct ClickhouseConnection {
     username: String,
     password: Option<String>,
     database: String,
+    /// ClickHouse settings from the connection's driver parameters, sent with
+    /// every query.
+    settings: Vec<(String, String)>,
     display_name: String,
     connected: bool,
 }
@@ -81,6 +84,7 @@ impl ClickhouseConnection {
         let mut ssl_root_cert: Option<String> = None;
         let mut ssl_client_cert: Option<String> = None;
         let mut ssl_client_key: Option<String> = None;
+        let mut settings = Vec::new();
         for (k, v) in parsed.query_pairs() {
             match k.as_ref() {
                 "database" => database = v.to_string(),
@@ -88,7 +92,8 @@ impl ClickhouseConnection {
                 "sslrootcert" => ssl_root_cert = Some(v.to_string()),
                 "sslcert" => ssl_client_cert = Some(v.to_string()),
                 "sslkey" => ssl_client_key = Some(v.to_string()),
-                _ => {}
+                // Any other HTTP parameter is a setting.
+                _ => settings.push((k.to_string(), v.to_string())),
             }
         }
 
@@ -147,6 +152,7 @@ impl ClickhouseConnection {
             username,
             password,
             database,
+            settings,
             display_name,
             connected: false,
         })
@@ -163,6 +169,10 @@ impl ClickhouseConnection {
         }
         for (k, v) in extra_params {
             url.push_str(&format!("&{}={}", k, v));
+        }
+        for (k, v) in &self.settings {
+            let v: String = url::form_urlencoded::byte_serialize(v.as_bytes()).collect();
+            url.push_str(&format!("&{k}={v}"));
         }
         url
     }
@@ -513,6 +523,26 @@ mod tests {
         assert_eq!(conn.username, "admin");
         assert_eq!(conn.password, Some("secret".to_string()));
         assert_eq!(conn.database, "analytics");
+        assert!(conn.settings.is_empty());
+    }
+
+    #[test]
+    fn test_connection_string_settings_are_sent_with_queries() {
+        let conn = ClickhouseConnection::from_connection_string(
+            "http://localhost:8123/?database=default&ssl_mode=disabled&max_execution_time=30&log_comment=a%20b",
+        )
+        .unwrap();
+        assert_eq!(
+            conn.settings,
+            [
+                ("max_execution_time".to_string(), "30".to_string()),
+                ("log_comment".to_string(), "a b".to_string()),
+            ]
+        );
+        assert_eq!(
+            conn.build_query_url(None, &[]),
+            "http://localhost:8123?database=default&max_execution_time=30&log_comment=a+b"
+        );
     }
 
     #[test]

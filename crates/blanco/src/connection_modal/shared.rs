@@ -1,4 +1,4 @@
-use gpui::{AppContext, Context, Entity, IntoElement, ParentElement, Styled, Window, div};
+use gpui::{App, AppContext, Context, Entity, IntoElement, ParentElement, Styled, Window, div};
 use gpui_component::{
     IconName, Sizable,
     button::{Button, ButtonVariants},
@@ -30,6 +30,24 @@ pub(super) fn make_input(
         }
         input
     })
+}
+
+/// An input's text without surrounding whitespace, which is never meant to be
+/// part of a host, port, name or path.
+pub(super) fn trimmed_value(input: &Entity<InputState>, cx: &App) -> String {
+    input.read(cx).value().trim().to_string()
+}
+
+/// [`trimmed_value`], or `None` when nothing is left.
+pub(super) fn optional_trimmed(input: &Entity<InputState>, cx: &App) -> Option<String> {
+    Some(trimmed_value(input, cx)).filter(|value| !value.is_empty())
+}
+
+/// A secret exactly as typed, since spaces may be part of a password; `None`
+/// when empty.
+pub(super) fn optional_secret(input: &Entity<InputState>, cx: &App) -> Option<String> {
+    let value = input.read(cx).value();
+    (!value.is_empty()).then(|| value.to_string())
 }
 
 pub(super) fn pick_file_for_input(

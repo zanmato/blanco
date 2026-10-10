@@ -220,7 +220,7 @@ impl NewConnectionModal {
             return;
         }
 
-        let name = self.name_input.read(cx).value().to_string();
+        let name = self.name_input.read(cx).value().trim().to_string();
         let name = if name.is_empty() {
             "test".to_string()
         } else {
@@ -304,7 +304,7 @@ impl NewConnectionModal {
     }
 
     pub fn get_connection_data(&self, cx: &App) -> Option<ConnectionData> {
-        let name = self.name_input.read(cx).value().to_string();
+        let name = self.name_input.read(cx).value().trim().to_string();
         if name.is_empty() {
             return None;
         }

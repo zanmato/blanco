@@ -4,7 +4,7 @@ use gpui_component::{input::InputState, v_flex};
 use app_database::{ConnectionData, EnvironmentType};
 
 use super::NewConnectionModal;
-use super::shared::{file_picker_input, make_input};
+use super::shared::{file_picker_input, make_input, trimmed_value};
 
 pub(super) struct SqliteForm {
     pub file_path_input: Entity<InputState>,
@@ -27,7 +27,7 @@ impl SqliteForm {
     }
 
     pub fn validate(&self, cx: &App) -> Option<String> {
-        if self.file_path_input.read(cx).value().is_empty() {
+        if trimmed_value(&self.file_path_input, cx).is_empty() {
             Some("Please enter a file path".to_string())
         } else {
             None
@@ -40,7 +40,7 @@ impl SqliteForm {
         environment_type: EnvironmentType,
         cx: &App,
     ) -> Option<ConnectionData> {
-        let file_path = self.file_path_input.read(cx).value().to_string();
+        let file_path = trimmed_value(&self.file_path_input, cx);
         if file_path.is_empty() {
             return None;
         }

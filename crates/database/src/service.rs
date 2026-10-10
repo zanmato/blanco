@@ -159,6 +159,8 @@ impl DatabaseService {
             })?
             .clone();
         drop(configs);
+        crate::validate_driver_params(config.db_type, &config.driver_params)
+            .map_err(anyhow::Error::msg)?;
 
         // For SSH connections, check tunnel health before returning cached connection
         if config.requires_ssh_tunnel() {
@@ -548,6 +550,8 @@ impl DatabaseService {
     /// Test a connection without caching it. Creates a temporary connection
     /// (and SSH tunnel if needed), verifies it works, then drops everything.
     pub async fn test_connection(&self, config: &ConnectionConfig) -> Result<()> {
+        crate::validate_driver_params(config.db_type, &config.driver_params)
+            .map_err(anyhow::Error::msg)?;
         let mut connection_host = None;
         let mut connection_port = None;
         let mut temp_tunnel: Option<SshTunnel> = None;
