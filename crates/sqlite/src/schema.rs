@@ -129,6 +129,8 @@ impl SqliteConnection {
                                         character_maximum_length: None, // SQLite doesn't specify this in pragma_table_info
                                         foreign_key,
                                         comment: None,
+                                        numeric_precision: None,
+                                        numeric_scale: None,
                                     })
                                 } else {
                                     None

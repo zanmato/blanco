@@ -937,6 +937,8 @@ impl Connection for MssqlConnection {
                     character_maximum_length: get(5).and_then(|v| v.parse().ok()),
                     foreign_key,
                     comment: get(9).filter(|v| !v.is_empty()),
+                    numeric_precision: get(10).and_then(|v| v.parse().ok()),
+                    numeric_scale: get(11).and_then(|v| v.parse().ok()),
                 }
             })
             .collect())

@@ -391,6 +391,8 @@ mod tests {
                 character_maximum_length: None,
                 foreign_key: None,
                 comment: None,
+                numeric_precision: None,
+                numeric_scale: None,
             },
             ColumnInfo {
                 name: "name".into(),
@@ -401,6 +403,8 @@ mod tests {
                 character_maximum_length: None,
                 foreign_key: None,
                 comment: None,
+                numeric_precision: None,
+                numeric_scale: None,
             },
             ColumnInfo {
                 name: "email".into(),
@@ -411,6 +415,8 @@ mod tests {
                 character_maximum_length: None,
                 foreign_key: None,
                 comment: None,
+                numeric_precision: None,
+                numeric_scale: None,
             },
             ColumnInfo {
                 name: "tenant_id".into(),
@@ -421,6 +427,8 @@ mod tests {
                 character_maximum_length: None,
                 foreign_key: None,
                 comment: None,
+                numeric_precision: None,
+                numeric_scale: None,
             },
         ]
     }

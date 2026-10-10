@@ -744,7 +744,9 @@ impl Connection for PostgresConnection {
                         quote_ident(c.table_schema) || '.' || quote_ident(c.table_name)
                     )
                     AND a.attname = c.column_name
-                ) AS column_comment
+                ) AS column_comment,
+                c.numeric_precision,
+                c.numeric_scale
             FROM information_schema.columns c
             LEFT JOIN (
                 SELECT a.attname AS column_name
@@ -788,6 +790,8 @@ impl Connection for PostgresConnection {
                 let fk_column = row[7].as_deref().unwrap_or("");
                 let fk_constraint = row[8].as_deref().unwrap_or("");
                 let comment = row.get(9).cloned().flatten();
+                let numeric_precision = row.get(10).cloned().flatten().and_then(|v| v.parse().ok());
+                let numeric_scale = row.get(11).cloned().flatten().and_then(|v| v.parse().ok());
 
                 // Only create ForeignKeyInfo if we have actual FK values
                 let foreign_key = match (fk_table, fk_column) {
@@ -812,6 +816,8 @@ impl Connection for PostgresConnection {
                     character_maximum_length: max_length.parse().ok(),
                     foreign_key,
                     comment,
+                    numeric_precision,
+                    numeric_scale,
                 });
             }
         }

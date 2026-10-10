@@ -18,7 +18,9 @@ SELECT
     fk.foreign_table,
     fk.foreign_column,
     fk.constraint_name,
-    CAST(ep.value AS NVARCHAR(4000))
+    CAST(ep.value AS NVARCHAR(4000)),
+    c.NUMERIC_PRECISION,
+    c.NUMERIC_SCALE
 FROM INFORMATION_SCHEMA.COLUMNS c
 LEFT JOIN sys.extended_properties ep
     ON ep.class = 1

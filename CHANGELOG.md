@@ -48,6 +48,10 @@ All notable changes to this project will be documented in this file.
   and survives Close Others and Close to the Right, or close it and its
   neighbours. Middle-click closes a tab, and the tooltip shows the
   connection, database, schema and, for structure tabs, the table
+- The structure tab sorts columns by any header, with a third click
+  restoring the table order, and a search field filters them by name. Types
+  show their length, precision and scale, and indexes list the primary key
+  first, then the rest by name
 - A search field in the title bar opens the command palette and shows its
   shortcut
 - Blanco checks for new releases hourly and shows an Update button in the
