@@ -15,7 +15,9 @@ use gpui::{
     ParentElement, Render, Styled, Window, div, prelude::FluentBuilder,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, IndexPath, WindowExt as _, h_flex,
+    ActiveTheme, Icon, IconName, IndexPath, Sizable as _, WindowExt as _,
+    button::{Button, ButtonVariants as _},
+    h_flex,
     input::{Input, InputState},
     notification::NotificationType,
     select::{Select, SelectState},
@@ -32,6 +34,10 @@ pub struct NewConnectionModal {
     environment_type_select: Entity<SelectState<Vec<String>>>,
     read_only: bool,
     only_configured_database: bool,
+    advanced_expanded: bool,
+    /// Minutes of inactivity before the connection is closed. Empty follows
+    /// the global setting.
+    idle_timeout_input: Entity<InputState>,
     sqlite_form: SqliteForm,
     postgres_form: ServerForm,
     mysql_form: ServerForm,
@@ -109,6 +115,25 @@ impl NewConnectionModal {
         let read_only = conn_ref.is_some_and(|connection| connection.read_only);
         let only_configured_database =
             conn_ref.is_some_and(|connection| connection.only_configured_database);
+        let idle_timeout_minutes = conn_ref.and_then(|connection| connection.idle_timeout_minutes);
+        let global_idle_minutes = crate::app_settings::AppSettings::global(cx)
+            .settings
+            .database
+            .idle_disconnect_minutes;
+        let idle_placeholder = if global_idle_minutes == 0 {
+            "Default (never)".to_string()
+        } else {
+            format!("Default ({global_idle_minutes})")
+        };
+        let idle_timeout_input = shared::make_input(
+            window,
+            cx,
+            &idle_placeholder,
+            false,
+            idle_timeout_minutes
+                .map(|minutes| minutes.to_string())
+                .as_deref(),
+        );
         let sqlite_form = SqliteForm::new(window, cx, conn_ref);
         let postgres_form = ServerForm::new(&POSTGRES_SPEC, window, cx, conn_ref);
         let mysql_form = ServerForm::new(&MYSQL_SPEC, window, cx, conn_ref);
@@ -123,6 +148,9 @@ impl NewConnectionModal {
             environment_type_select,
             read_only,
             only_configured_database,
+            // Open on a connection that already overrides a default.
+            advanced_expanded: idle_timeout_minutes.is_some(),
+            idle_timeout_input,
             sqlite_form,
             postgres_form,
             mysql_form,
@@ -162,6 +190,9 @@ impl NewConnectionModal {
     }
 
     fn validate(&self, connector_type: &ConnectorType, cx: &App) -> Option<String> {
+        if self.idle_timeout_minutes(cx).is_err() {
+            return Some("Disconnect when idle must be a whole number of minutes.".to_string());
+        }
         match connector_type {
             ConnectorType::SQLite => self.sqlite_form.validate(cx),
             ConnectorType::PostgreSQL => self.postgres_form.validate(cx),
@@ -203,9 +234,20 @@ impl NewConnectionModal {
                 .get_connection_data(name, environment_type, cx),
         }?;
         connection.read_only = self.read_only;
+        connection.idle_timeout_minutes = self.idle_timeout_minutes(cx).ok().flatten();
         connection.only_configured_database =
             self.only_configured_database && connection.db_type.dialect().lists_server_databases();
         Some(connection)
+    }
+
+    /// The idle timeout override, `None` when the field is empty.
+    fn idle_timeout_minutes(&self, cx: &App) -> Result<Option<u32>, std::num::ParseIntError> {
+        let value = self.idle_timeout_input.read(cx).value();
+        let value = value.trim();
+        if value.is_empty() {
+            return Ok(None);
+        }
+        value.parse().map(Some)
     }
 
     pub fn test_connection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -576,6 +618,39 @@ impl Render for NewConnectionModal {
                     ),
                     ConnectorType::MsSql => mssql::render(self, cx),
                     ConnectorType::Redis => redis::render(self, cx),
+                })
+                .child(
+                    Button::new("connection-advanced-toggle")
+                        .ghost()
+                        .xsmall()
+                        .child(if self.advanced_expanded {
+                            "Hide Advanced Options"
+                        } else {
+                            "Show Advanced Options"
+                        })
+                        .icon(if self.advanced_expanded {
+                            IconName::ChevronUp
+                        } else {
+                            IconName::ChevronDown
+                        })
+                        .on_click(cx.listener(|modal, _event, _window, cx| {
+                            modal.advanced_expanded = !modal.advanced_expanded;
+                            cx.notify();
+                        })),
+                )
+                .when(self.advanced_expanded, |this| {
+                    this.child(
+                        v_flex()
+                            .gap_2()
+                            .child(div().text_sm().child("Disconnect When Idle (minutes)"))
+                            .child(Input::new(&self.idle_timeout_input))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("Empty follows the Database setting. 0 keeps this connection open."),
+                            ),
+                    )
                 })
                 .when(self.is_testing, |this| {
                     this.child(

@@ -371,6 +371,13 @@ impl ResultsPanel {
         cx.notify();
     }
 
+    /// Whether any result tab has uncommitted edits.
+    pub fn has_pending_changes(&self, cx: &App) -> bool {
+        self.result_tabs
+            .iter()
+            .any(|tab| tab.table_state.read(cx).delegate().has_pending_changes())
+    }
+
     pub fn activate_tab(&mut self, index: usize, cx: &mut Context<Self>) {
         if index >= self.result_tabs.len() || index == self.active_tab {
             return;

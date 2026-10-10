@@ -298,6 +298,8 @@ impl From<database::DatabaseConnectedMessage> for DatabaseConnected {
 pub struct DatabaseDisconnected {
     pub connection_id: i64,
     pub database_name: String,
+    /// Closed after its idle timeout rather than lost.
+    pub idle: bool,
 }
 
 impl From<database::DatabaseDisconnectedMessage> for DatabaseDisconnected {
@@ -305,6 +307,7 @@ impl From<database::DatabaseDisconnectedMessage> for DatabaseDisconnected {
         Self {
             connection_id: msg.connection_id,
             database_name: msg.database_name,
+            idle: msg.idle,
         }
     }
 }
@@ -373,6 +376,7 @@ pub struct BlancoApp {
     _subscriptions: Vec<Subscription>,
     _action_task: Task<()>,
     _activity_task: Task<()>,
+    _idle_disconnect_task: Task<()>,
     _save_window_bounds_task: Task<()>,
     _save_editor_font_size_task: Task<()>,
     /// Drains MCP requests onto the foreground; see `spawn_mcp_listener`.
@@ -391,6 +395,7 @@ impl BlancoApp {
         init_menus(cx);
 
         let action_task = Self::spawn_service_listener(cx);
+        let idle_disconnect_task = Self::spawn_idle_disconnect(cx);
         let (status_bar, activity_task) = Self::spawn_activity_status(cx);
         let mcp_task = Self::spawn_mcp_listener(window, cx);
         let (mcp_confirmations, mcp_confirmation_task) =
@@ -445,6 +450,7 @@ impl BlancoApp {
             _subscriptions: subscriptions,
             _action_task: action_task,
             _activity_task: activity_task,
+            _idle_disconnect_task: idle_disconnect_task,
             _save_window_bounds_task: Task::ready(()),
             _save_editor_font_size_task: Task::ready(()),
             _mcp_task: mcp_task,
@@ -865,6 +871,35 @@ impl BlancoApp {
                 }
             }
             info!("DatabaseServiceMessage listener task ended");
+        })
+    }
+
+    /// Close connections that have sat unused past their idle timeout. A
+    /// connection with uncommitted grid edits is kept open, and the service
+    /// itself skips one with a query running.
+    fn spawn_idle_disconnect(cx: &mut Context<Self>) -> Task<()> {
+        const SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+        cx.spawn(async move |app, cx| {
+            loop {
+                cx.background_executor().timer(SWEEP_INTERVAL).await;
+                let Ok((db_service, default_timeout, keep)) = app.update(cx, |app, cx| {
+                    let default_timeout = AppSettings::global(cx)
+                        .settings
+                        .database
+                        .idle_disconnect_timeout();
+                    let keep = app.editor_panel.read(cx).connections_with_pending_edits(cx);
+                    (
+                        database::DatabaseService::global(cx).clone(),
+                        default_timeout,
+                        keep,
+                    )
+                }) else {
+                    break;
+                };
+                db_service
+                    .disconnect_idle_connections(default_timeout, &keep)
+                    .await;
+            }
         })
     }
 
@@ -1492,10 +1527,14 @@ impl BlancoApp {
             sidebar.mark_connection_disconnected(action.connection_id, cx);
         });
         self.status_bar.update(cx, |state, cx| {
-            state.flash(
-                ActivityResult::Err(format!("disconnected from {}", action.database_name).into()),
-                cx,
-            );
+            let result = if action.idle {
+                ActivityResult::Ok(
+                    format!("closed idle connection {}", action.database_name).into(),
+                )
+            } else {
+                ActivityResult::Err(format!("disconnected from {}", action.database_name).into())
+            };
+            state.flash(result, cx);
         });
     }
 

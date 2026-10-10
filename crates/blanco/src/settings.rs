@@ -143,6 +143,9 @@ impl Settings {
                     settings.database.show_connection_notifications =
                         value.parse().unwrap_or_default();
                 }
+                "database.idle_disconnect_minutes" => {
+                    settings.database.idle_disconnect_minutes = value.parse().unwrap_or_default();
+                }
                 "database.max_history_items" => {
                     settings.database.max_history_items = value.parse().unwrap_or(1000);
                 }
@@ -300,6 +303,10 @@ pub struct DatabaseSettings {
     /// Maximum number of query-history entries to retain. Older entries beyond
     /// this count are pruned after each execution.
     pub max_history_items: u32,
+    /// Minutes without activity after which a connection is closed, 0 to keep
+    /// connections open. A connection can override it.
+    #[serde(default)]
+    pub idle_disconnect_minutes: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -369,6 +376,12 @@ impl DatabaseSettings {
         (self.query_timeout_seconds > 0)
             .then(|| std::time::Duration::from_secs(u64::from(self.query_timeout_seconds)))
     }
+
+    /// The global idle timeout, `None` when it is off (0).
+    pub fn idle_disconnect_timeout(&self) -> Option<std::time::Duration> {
+        (self.idle_disconnect_minutes > 0)
+            .then(|| std::time::Duration::from_secs(u64::from(self.idle_disconnect_minutes) * 60))
+    }
 }
 
 impl Default for DatabaseSettings {
@@ -379,6 +392,7 @@ impl Default for DatabaseSettings {
             script_timeout_seconds: 0,
             show_connection_notifications: true,
             max_history_items: 1000,
+            idle_disconnect_minutes: 0,
         }
     }
 }
