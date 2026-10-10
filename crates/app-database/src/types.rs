@@ -135,6 +135,8 @@ pub struct ConnectionData {
     /// Seconds between keep-alive round trips. `None` follows the global
     /// setting, `Some(0)` sends none.
     pub keep_alive_seconds: Option<u32>,
+    /// SQL run on every new session before it is used.
+    pub startup_sql: Option<String>,
 }
 
 impl std::fmt::Debug for ConnectionData {
@@ -174,6 +176,7 @@ impl std::fmt::Debug for ConnectionData {
             .field("only_configured_database", &self.only_configured_database)
             .field("idle_timeout_minutes", &self.idle_timeout_minutes)
             .field("keep_alive_seconds", &self.keep_alive_seconds)
+            .field("startup_sql", &self.startup_sql)
             .finish()
     }
 }
@@ -239,6 +242,7 @@ impl ConnectionData {
             only_configured_database: false,
             idle_timeout_minutes: None,
             keep_alive_seconds: None,
+            startup_sql: None,
         }
     }
 
@@ -281,6 +285,7 @@ impl ConnectionData {
             only_configured_database: false,
             idle_timeout_minutes: None,
             keep_alive_seconds: None,
+            startup_sql: None,
         }
     }
 
@@ -419,7 +424,8 @@ impl ConnectionData {
             config
                 .with_read_only(self.read_only)
                 .with_idle_timeout_minutes(self.idle_timeout_minutes)
-                .with_keep_alive_seconds(self.keep_alive_seconds),
+                .with_keep_alive_seconds(self.keep_alive_seconds)
+                .with_startup_sql(self.startup_sql.clone()),
         )
     }
 }

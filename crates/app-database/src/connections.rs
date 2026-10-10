@@ -31,7 +31,7 @@ impl AppDatabase {
                         ssl_mode = ?, ssl_key_path = ?, ssl_cert_path = ?, ssl_ca_cert_path = ?,
                         trust_server_certificate = ?, read_only = ?,
                         only_configured_database = ?, idle_timeout_minutes = ?,
-                        keep_alive_seconds = ?
+                        keep_alive_seconds = ?, startup_sql = ?
                     WHERE id = ?
                     "#,
                 )
@@ -58,6 +58,7 @@ impl AppDatabase {
                 .bind(if conn.only_configured_database { 1 } else { 0 })
                 .bind(conn.idle_timeout_minutes.map(i64::from))
                 .bind(conn.keep_alive_seconds.map(i64::from))
+                .bind(&conn.startup_sql)
                 .bind(id)
                 .execute(&pool)
                 .await?;
@@ -66,8 +67,8 @@ impl AppDatabase {
                 // Insert new connection
                 let result = sqlx::query(
                     r#"
-                    INSERT INTO connections (name, db_type, host, port, database_name, username, database_path, last_used_at, created_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate, read_only, only_configured_database, idle_timeout_minutes, keep_alive_seconds)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO connections (name, db_type, host, port, database_name, username, database_path, last_used_at, created_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate, read_only, only_configured_database, idle_timeout_minutes, keep_alive_seconds, startup_sql)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     "#,
                 )
                 .bind(&conn.name)
@@ -94,6 +95,7 @@ impl AppDatabase {
                 .bind(if conn.only_configured_database { 1 } else { 0 })
                 .bind(conn.idle_timeout_minutes.map(i64::from))
                 .bind(conn.keep_alive_seconds.map(i64::from))
+                .bind(&conn.startup_sql)
                 .execute(&pool)
                 .await?;
 
@@ -110,7 +112,7 @@ impl AppDatabase {
             .run(async move {
             let rows = sqlx::query(
                 r#"
-                SELECT id, name, db_type, host, port, database_name, username, database_path, last_used_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate, read_only, only_configured_database, idle_timeout_minutes, keep_alive_seconds
+                SELECT id, name, db_type, host, port, database_name, username, database_path, last_used_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate, read_only, only_configured_database, idle_timeout_minutes, keep_alive_seconds, startup_sql
                 FROM connections
                 ORDER BY name
                 "#,
@@ -163,6 +165,7 @@ impl AppDatabase {
                         keep_alive_seconds: row
                             .get::<Option<i64>, _>("keep_alive_seconds")
                             .and_then(|seconds| u32::try_from(seconds).ok()),
+                        startup_sql: row.get("startup_sql"),
                     }
                 })
                 .collect();
@@ -305,6 +308,7 @@ mod tests {
         connection.environment_type = EnvironmentType::Prod;
         connection.idle_timeout_minutes = Some(15);
         connection.keep_alive_seconds = Some(0);
+        connection.startup_sql = Some("SET TIME ZONE 'UTC';".to_string());
 
         let saved_id = db
             .save_connection(&connection)
@@ -330,6 +334,7 @@ mod tests {
         assert_eq!(loaded.environment_type, EnvironmentType::Prod);
         assert_eq!(loaded.idle_timeout_minutes, Some(15));
         assert_eq!(loaded.keep_alive_seconds, Some(0));
+        assert_eq!(loaded.startup_sql.as_deref(), Some("SET TIME ZONE 'UTC';"));
 
         // SSH fields
         assert_eq!(loaded.ssh_host.as_deref(), Some("bastion.example.com"));

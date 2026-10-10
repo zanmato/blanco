@@ -3,8 +3,8 @@ mod connection_impl;
 use anyhow::Result;
 use blanco_core::connection_trait::ColumnType;
 use smol::lock::RwLock;
-use sqlx::Row;
 use sqlx::mysql::MySqlPoolOptions;
+use sqlx::{Executor as _, Row};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -19,6 +19,7 @@ pub struct MysqlConnection {
     display_name: String,
     server_connection_string: String, // Connection string without database
     initial_database: Option<String>, // Original database from connection string
+    session_setup: Arc<Vec<String>>,  // Startup SQL run on every new session
 }
 
 /// Connection key for MySQL connections
@@ -180,7 +181,16 @@ impl MysqlConnection {
             display_name,
             server_connection_string,
             initial_database: Some(connection_key.database),
+            session_setup: Arc::default(),
         })
+    }
+
+    pub(crate) fn session_setup(&self) -> &[String] {
+        &self.session_setup
+    }
+
+    pub(crate) fn set_session_setup_statements(&mut self, statements: Vec<String>) {
+        self.session_setup = Arc::new(statements);
     }
 
     fn generate_server_display_name(username: &str, host: &str, port: u16) -> String {
@@ -221,11 +231,30 @@ impl MysqlConnection {
         }
 
         let connection_string = self.generate_database_connection_string(database_name);
+        if !self.session_setup.is_empty() {
+            // The pool retries a session whose setup fails until its acquire
+            // timeout and then reports only that it timed out, so check the
+            // startup SQL on one connection first to name a failing statement.
+            use sqlx::Connection as _;
+            let mut connection = sqlx::MySqlConnection::connect(&connection_string)
+                .await
+                .map_err(blanco_core::tag_sqlx)?;
+            let setup = run_session_setup(&mut connection, &self.session_setup).await;
+            let _ = connection.close().await;
+            setup?;
+        }
+        let session_setup = Arc::clone(&self.session_setup);
         let pool = MySqlPoolOptions::new()
             .max_connections(5)
             // Bound how long acquiring (and therefore establishing) a connection
             // may take so an unreachable host fails fast instead of hanging.
             .acquire_timeout(blanco_core::connect_timeout())
+            // Every physical connection the pool opens, reconnects included,
+            // runs the startup SQL first. A failure discards that connection.
+            .after_connect(move |connection, _| {
+                let session_setup = Arc::clone(&session_setup);
+                Box::pin(async move { run_session_setup(connection, &session_setup).await })
+            })
             .connect(&connection_string)
             .await
             .map_err(blanco_core::tag_sqlx)?;
@@ -518,4 +547,23 @@ impl MysqlConnection {
             _ => None,
         }
     }
+}
+
+/// Run the startup SQL on a freshly opened session, naming the statement that
+/// failed.
+pub(crate) async fn run_session_setup(
+    connection: &mut sqlx::MySqlConnection,
+    statements: &[String],
+) -> Result<(), sqlx::Error> {
+    for statement in statements {
+        connection
+            .execute(statement.as_str())
+            .await
+            .map_err(|error| {
+                sqlx::Error::Configuration(
+                    blanco_core::session_setup::session_setup_failure(statement, error).into(),
+                )
+            })?;
+    }
+    Ok(())
 }

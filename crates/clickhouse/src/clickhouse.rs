@@ -52,6 +52,8 @@ pub struct ClickhouseConnection {
     database: String,
     display_name: String,
     connected: bool,
+    /// Settings from the startup SQL, sent with every query.
+    settings: Vec<(String, String)>,
 }
 
 impl ClickhouseConnection {
@@ -149,7 +151,29 @@ impl ClickhouseConnection {
             database,
             display_name,
             connected: false,
+            settings: Vec::new(),
         })
+    }
+
+    /// Take the startup SQL. ClickHouse over HTTP keeps no session between
+    /// queries, so only `SET name = value` statements are supported, and they
+    /// are sent as settings with every query instead of run once.
+    pub(crate) fn set_session_setup_statements(&mut self, statements: &[String]) -> Result<()> {
+        self.settings = statements
+            .iter()
+            .map(|statement| {
+                settings_from_set_statement(statement).ok_or_else(|| {
+                    anyhow::anyhow!(blanco_core::session_setup::session_setup_failure(
+                        statement,
+                        "ClickHouse startup SQL can only hold SET name = value statements"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect();
+        Ok(())
     }
 
     fn build_query_url(&self, database: Option<&str>, extra_params: &[(&str, &str)]) -> String {
@@ -163,6 +187,12 @@ impl ClickhouseConnection {
         }
         for (k, v) in extra_params {
             url.push_str(&format!("&{}={}", k, v));
+        }
+        for (name, value) in &self.settings {
+            url.push('&');
+            url.extend(url::form_urlencoded::byte_serialize(name.as_bytes()));
+            url.push('=');
+            url.extend(url::form_urlencoded::byte_serialize(value.as_bytes()));
         }
         url
     }
@@ -370,12 +400,74 @@ fn unescape_tsv_cell(cell: &str) -> String {
     result
 }
 
+/// The settings of a `SET a = 1, b = 'x'` statement, or `None` when the
+/// statement is not a SET.
+fn settings_from_set_statement(statement: &str) -> Option<Vec<(String, String)>> {
+    let statement = statement.trim().trim_end_matches(';').trim();
+    let (keyword, assignments) = statement.split_once(char::is_whitespace)?;
+    if !keyword.eq_ignore_ascii_case("SET") {
+        return None;
+    }
+    let mut settings = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut parts = Vec::new();
+    for c in assignments.chars() {
+        match c {
+            '\'' => {
+                in_quotes = !in_quotes;
+                current.push(c);
+            }
+            ',' if !in_quotes => parts.push(std::mem::take(&mut current)),
+            _ => current.push(c),
+        }
+    }
+    parts.push(current);
+    for part in parts {
+        let (name, value) = part.split_once('=')?;
+        let name = name.trim();
+        let value = value.trim();
+        if name.is_empty() || value.is_empty() {
+            return None;
+        }
+        let value = value
+            .strip_prefix('\'')
+            .and_then(|value| value.strip_suffix('\''))
+            .map(|value| value.replace("''", "'"))
+            .unwrap_or_else(|| value.to_string());
+        settings.push((name.to_string(), value));
+    }
+    Some(settings)
+}
+
 #[cfg(test)]
 #[allow(clippy::print_stdout, clippy::print_stderr)]
 mod tests {
     use super::*;
     use blanco_core::Connection;
     use std::env;
+
+    #[test]
+    fn test_settings_from_set_statement() {
+        assert_eq!(
+            settings_from_set_statement(
+                "SET max_threads = 4, session_timezone = 'Europe/Stockholm';"
+            ),
+            Some(vec![
+                ("max_threads".to_string(), "4".to_string()),
+                (
+                    "session_timezone".to_string(),
+                    "Europe/Stockholm".to_string()
+                ),
+            ])
+        );
+        assert_eq!(
+            settings_from_set_statement("set format_csv_delimiter = ','"),
+            Some(vec![("format_csv_delimiter".to_string(), ",".to_string())])
+        );
+        assert_eq!(settings_from_set_statement("SELECT 1"), None);
+        assert_eq!(settings_from_set_statement("SET"), None);
+    }
 
     #[test]
     fn test_map_clickhouse_types() {

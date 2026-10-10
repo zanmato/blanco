@@ -18,7 +18,7 @@ use gpui_component::{
     ActiveTheme, Icon, IconName, IndexPath, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     h_flex,
-    input::{Input, InputState},
+    input::{Input, InputState, Textarea, TextareaState},
     notification::NotificationType,
     select::{Select, SelectState},
     switch::Switch,
@@ -41,6 +41,8 @@ pub struct NewConnectionModal {
     /// Seconds between keep-alive round trips. Empty follows the global
     /// setting.
     keep_alive_input: Entity<InputState>,
+    /// SQL run on every new session. SQL connections only.
+    startup_sql_input: Entity<TextareaState>,
     sqlite_form: SqliteForm,
     postgres_form: ServerForm,
     mysql_form: ServerForm,
@@ -156,6 +158,17 @@ impl NewConnectionModal {
                 .map(|seconds| seconds.to_string())
                 .as_deref(),
         );
+        let startup_sql = conn_ref
+            .and_then(|connection| connection.startup_sql.clone())
+            .unwrap_or_default();
+        let has_startup_sql = !startup_sql.trim().is_empty();
+        let startup_sql_input = cx.new(|cx| {
+            let mut input = TextareaState::new(window, cx)
+                .auto_grow(3, 8)
+                .placeholder("SET TIME ZONE 'UTC';");
+            input.set_value(startup_sql, window, cx);
+            input
+        });
         let sqlite_form = SqliteForm::new(window, cx, conn_ref);
         let postgres_form = ServerForm::new(&POSTGRES_SPEC, window, cx, conn_ref);
         let mysql_form = ServerForm::new(&MYSQL_SPEC, window, cx, conn_ref);
@@ -171,9 +184,12 @@ impl NewConnectionModal {
             read_only,
             only_configured_database,
             // Open on a connection that already overrides a default.
-            advanced_expanded: idle_timeout_minutes.is_some() || keep_alive_seconds.is_some(),
+            advanced_expanded: idle_timeout_minutes.is_some()
+                || keep_alive_seconds.is_some()
+                || has_startup_sql,
             idle_timeout_input,
             keep_alive_input,
+            startup_sql_input,
             sqlite_form,
             postgres_form,
             mysql_form,
@@ -266,6 +282,10 @@ impl NewConnectionModal {
         connection.keep_alive_seconds = optional_whole_number(&self.keep_alive_input, cx)
             .ok()
             .flatten();
+        let startup_sql = self.startup_sql_input.read(cx).value().trim().to_string();
+        connection.startup_sql = (connection.db_type.dialect().supports_sql()
+            && !startup_sql.is_empty())
+        .then_some(startup_sql);
         connection.only_configured_database =
             self.only_configured_database && connection.db_type.dialect().lists_server_databases();
         Some(connection)
@@ -691,6 +711,25 @@ impl Render for NewConnectionModal {
                                     .text_xs()
                                     .text_color(cx.theme().muted_foreground)
                                     .child("Empty follows the Database setting. 0 sends no keep-alive."),
+                            )
+                            .when(
+                                database::DatabaseType::from(connector_type.clone())
+                                    .dialect()
+                                    .supports_sql(),
+                                |this| {
+                                    this.child(div().text_sm().child("Startup SQL"))
+                                        .child(Textarea::new(&self.startup_sql_input))
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child(if connector_type == ConnectorType::ClickHouse {
+                                                    "SET statements, sent as settings with every query."
+                                                } else {
+                                                    "Runs on every new session, reconnects included. A failing statement stops the connection."
+                                                }),
+                                        )
+                                },
                             ),
                     )
                 })

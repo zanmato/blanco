@@ -86,6 +86,9 @@ pub struct ConnectionConfig {
     /// Seconds between keep-alive round trips on an unused connection.
     /// `None` follows the global setting, `Some(0)` sends none.
     pub keep_alive_seconds: Option<u32>,
+    /// SQL run on every new session before it is used (see
+    /// `blanco_core::session_setup`).
+    pub startup_sql: Option<String>,
 }
 
 impl std::fmt::Debug for ConnectionConfig {
@@ -122,6 +125,7 @@ impl std::fmt::Debug for ConnectionConfig {
             .field("read_only", &self.read_only)
             .field("idle_timeout_minutes", &self.idle_timeout_minutes)
             .field("keep_alive_seconds", &self.keep_alive_seconds)
+            .field("startup_sql", &self.startup_sql)
             .finish()
     }
 }
@@ -164,6 +168,7 @@ impl ConnectionConfig {
             read_only: false,
             idle_timeout_minutes: None,
             keep_alive_seconds: None,
+            startup_sql: None,
         }
     }
 
@@ -194,6 +199,7 @@ impl ConnectionConfig {
             read_only: false,
             idle_timeout_minutes: None,
             keep_alive_seconds: None,
+            startup_sql: None,
         }
     }
 
@@ -244,6 +250,19 @@ impl ConnectionConfig {
     pub fn with_idle_timeout_minutes(mut self, minutes: Option<u32>) -> Self {
         self.idle_timeout_minutes = minutes;
         self
+    }
+
+    pub fn with_startup_sql(mut self, startup_sql: Option<String>) -> Self {
+        self.startup_sql = startup_sql;
+        self
+    }
+
+    /// The statements every new session runs first.
+    pub fn session_setup(&self) -> Vec<String> {
+        self.startup_sql
+            .as_deref()
+            .map(blanco_core::session_setup::session_setup_statements)
+            .unwrap_or_default()
     }
 
     pub fn with_keep_alive_seconds(mut self, seconds: Option<u32>) -> Self {

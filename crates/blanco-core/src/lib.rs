@@ -11,6 +11,7 @@ pub mod database_type;
 pub mod ddl;
 pub mod dialect;
 pub mod explain_plan;
+pub mod session_setup;
 pub mod table_extractor;
 pub mod write_guard;
 

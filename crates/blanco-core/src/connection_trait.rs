@@ -366,6 +366,17 @@ pub trait Connection: Send + Sync {
     /// Connect to the database using the provided connection string
     async fn connect(&mut self, connection_string: &str) -> Result<(), anyhow::Error>;
 
+    /// Statements to run on every new session before it is used (see
+    /// [`crate::session_setup`]). Set before [`Connection::connect`]. A backend
+    /// without SQL sessions accepts only an empty list.
+    fn set_session_setup(&mut self, statements: Vec<String>) -> Result<(), anyhow::Error> {
+        if statements.is_empty() {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("This connection type has no startup SQL"))
+        }
+    }
+
     /// Validate that the connection is actually usable by performing a minimal
     /// round-trip to the server. Lazy backends (PostgreSQL/MySQL create their
     /// pool on first use, so `connect` alone never authenticates) surface bad
@@ -759,10 +770,12 @@ impl BatchFailure {
 /// Factory trait for creating connections of different types
 #[async_trait]
 pub trait ConnectionFactory: Send + Sync {
-    /// Create a new connection instance
+    /// Create a new connection instance whose sessions run `session_setup`
+    /// first (see [`Connection::set_session_setup`]).
     async fn create_connection(
         &self,
         connection_string: &str,
+        session_setup: &[String],
     ) -> Result<Box<dyn Connection>, anyhow::Error>;
 }
 
