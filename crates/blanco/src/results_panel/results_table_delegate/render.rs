@@ -543,6 +543,52 @@ impl ResultsTableDelegate {
     }
 }
 
+impl ResultsTableDelegate {
+    /// Sort the rows by `keys`, the first key sorting first. An empty list
+    /// leaves the order as it is.
+    pub(crate) fn sort_rows(&mut self, keys: &[(usize, ColumnSort)]) {
+        if keys.is_empty() {
+            return;
+        }
+        let keys: Vec<_> = keys
+            .iter()
+            .map(|&(col_ix, sort)| {
+                let is_numeric = self
+                    .column_types
+                    .get(col_ix)
+                    .is_some_and(|col_type| col_type.is_numeric());
+                (col_ix, sort, is_numeric)
+            })
+            .collect();
+
+        let compare = |a: &Vec<Option<String>>, b: &Vec<Option<String>>| {
+            keys.iter()
+                .map(|&(col_ix, sort, is_numeric)| {
+                    let a_val = a.get(col_ix).and_then(|s| s.as_deref()).unwrap_or("");
+                    let b_val = b.get(col_ix).and_then(|s| s.as_deref()).unwrap_or("");
+                    let ordering = if is_numeric {
+                        compare_numeric(a_val, b_val)
+                    } else {
+                        a_val.cmp(b_val)
+                    };
+                    match sort {
+                        ColumnSort::Descending => ordering.reverse(),
+                        _ => ordering,
+                    }
+                })
+                .find(|ordering| ordering.is_ne())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        };
+
+        self.rows.sort_by(compare);
+        // Keep the hidden rows in the same order so clearing the filter does
+        // not silently undo the sort.
+        if let Some(unfiltered_rows) = self.unfiltered_rows.as_mut() {
+            unfiltered_rows.sort_by(compare);
+        }
+    }
+}
+
 impl TableDelegate for ResultsTableDelegate {
     fn columns_count(&self, _: &App) -> usize {
         self.columns.len()
@@ -682,36 +728,20 @@ impl TableDelegate for ResultsTableDelegate {
         _: &mut Window,
         _: &mut Context<TableState<Self>>,
     ) {
-        // Get the column type
-        let col_type = self
-            .column_types
-            .get(col_ix)
-            .copied()
-            .unwrap_or(ColumnType::Unknown);
-        let is_numeric = col_type.is_numeric();
+        self.sort_rows(&[(col_ix, sort)]);
+    }
 
-        let compare = |a: &Vec<Option<String>>, b: &Vec<Option<String>>| {
-            let a_val = a.get(col_ix).and_then(|s| s.as_deref()).unwrap_or("");
-            let b_val = b.get(col_ix).and_then(|s| s.as_deref()).unwrap_or("");
+    fn multi_sortable(&self) -> bool {
+        true
+    }
 
-            let ordering = if is_numeric {
-                compare_numeric(a_val, b_val)
-            } else {
-                a_val.cmp(b_val)
-            };
-
-            match sort {
-                ColumnSort::Descending => ordering.reverse(),
-                _ => ordering,
-            }
-        };
-
-        self.rows.sort_by(compare);
-        // Keep the hidden rows in the same order so clearing the filter does
-        // not silently undo the sort.
-        if let Some(unfiltered_rows) = self.unfiltered_rows.as_mut() {
-            unfiltered_rows.sort_by(compare);
-        }
+    fn perform_multi_sort(
+        &mut self,
+        keys: &[(usize, ColumnSort)],
+        _: &mut Window,
+        _: &mut Context<TableState<Self>>,
+    ) {
+        self.sort_rows(keys);
     }
 
     fn visible_rows_changed(

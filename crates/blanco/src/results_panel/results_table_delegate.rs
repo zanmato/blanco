@@ -440,6 +440,31 @@ mod tests {
     }
 
     #[test]
+    fn sort_rows_orders_by_each_key_in_turn() {
+        use gpui_component::table::ColumnSort::{Ascending, Descending};
+
+        let row = |team: &str, score: &str| vec![Some(team.to_string()), Some(score.to_string())];
+        let mut delegate = ResultsTableDelegate {
+            rows: vec![row("b", "2"), row("a", "10"), row("b", "10"), row("a", "9")],
+            column_types: vec![ColumnType::Text, ColumnType::Integer],
+            ..Default::default()
+        };
+
+        delegate.sort_rows(&[(0, Ascending), (1, Descending)]);
+        assert_eq!(
+            delegate.rows,
+            [row("a", "10"), row("a", "9"), row("b", "10"), row("b", "2")],
+            "ties on the first key are broken numerically by the second"
+        );
+
+        delegate.sort_rows(&[(1, Ascending), (0, Descending)]);
+        assert_eq!(
+            delegate.rows,
+            [row("b", "2"), row("a", "9"), row("b", "10"), row("a", "10")]
+        );
+    }
+
+    #[test]
     fn apply_filter_narrows_and_restores_rows() {
         let mut delegate = ResultsTableDelegate {
             rows: rows(&["Alice", "Bob", "alina"]),
