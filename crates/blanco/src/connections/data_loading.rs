@@ -76,6 +76,30 @@ pub struct DatabaseMetadata {
     pub databases: Vec<Database>, // For PostgreSQL: database -> schema -> table
     pub schemas: Vec<DatabaseSchema>, // For SQLite: direct schema -> table
     pub supports_schemas: bool,
+    /// A key/value store has more keys matching the filter than are listed.
+    pub keys_truncated: bool,
+}
+
+/// Which keys of a key/value store the tree lists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyFilter {
+    /// Glob pattern matched on the server (SCAN's MATCH).
+    pub pattern: String,
+    pub limit: usize,
+}
+
+impl KeyFilter {
+    /// Keys listed per page; Load More Keys adds another page.
+    pub const PAGE: usize = 1000;
+}
+
+impl Default for KeyFilter {
+    fn default() -> Self {
+        Self {
+            pattern: "*".to_string(),
+            limit: Self::PAGE,
+        }
+    }
 }
 
 impl ConnectionsPanel {
@@ -104,6 +128,11 @@ impl ConnectionsPanel {
             .map(str::to_string);
         let activity =
             ActivityReporter::global(cx).begin(format!("{connection_label}: listing schema"));
+        let key_filter = self
+            .key_filters
+            .get(&connection_id)
+            .cloned()
+            .unwrap_or_default();
 
         cx.spawn(async move |this_handle, cx| {
             let activity = activity;
@@ -156,6 +185,7 @@ impl ConnectionsPanel {
                             .collect(),
                         schemas: Vec::new(), // Not used for PostgreSQL
                         supports_schemas,
+                        keys_truncated: false,
                     })
                 } else {
                     // For SQLite: Load schemas and their tables (no databases level)
@@ -173,6 +203,7 @@ impl ConnectionsPanel {
                     // Load tables, views, and routines for all schemas
                     // (SQLite/MySQL need this for proper tree display).
                     let mut schema_tables: Vec<(String, Vec<DatabaseTable>)> = Vec::new();
+                    let mut keys_truncated = false;
                     for schema_name in &schemas {
                         let mut all_items: Vec<DatabaseTable> = Vec::new();
                         let sizes = connection
@@ -201,7 +232,20 @@ impl ConnectionsPanel {
                                 });
                             }
                         };
-                        if let Ok(v) = connection.get_tables(Some(schema_name)).await {
+                        // Key/value stores list their keys filtered and paged on
+                        // the server.
+                        let tables = if connection.database_type().inspects_objects() {
+                            connection
+                                .list_keys(&key_filter.pattern, key_filter.limit)
+                                .await
+                                .map(|listing| {
+                                    keys_truncated |= listing.truncated;
+                                    listing.keys
+                                })
+                        } else {
+                            connection.get_tables(Some(schema_name)).await
+                        };
+                        if let Ok(v) = tables {
                             push(&mut all_items, v, DatabaseItemType::Table, &sizes);
                         }
                         if let Ok(v) = connection.get_views(Some(schema_name)).await {
@@ -237,6 +281,7 @@ impl ConnectionsPanel {
                             })
                             .collect(),
                         supports_schemas,
+                        keys_truncated,
                     })
                 }
             }

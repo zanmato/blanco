@@ -1,5 +1,6 @@
 mod data_loading;
 mod delegate;
+mod key_filter;
 mod tree_builder;
 
 pub use data_loading::DatabaseMetadata;
@@ -75,6 +76,8 @@ pub struct ConnectionsPanel {
     // Track which object-type category folders (Tables, Views, ...) are
     // expanded, keyed by the category tree item id.
     expanded_categories: std::collections::HashSet<String>,
+    /// The key pattern and page count per key/value connection.
+    key_filters: std::collections::HashMap<i64, data_loading::KeyFilter>,
     // Live per-database connection status, keyed by connection id. This is the
     // single source of truth for the "connected" icon color: it is read while
     // *building* tree items so that a rebuild (or the tree widget
@@ -218,6 +221,7 @@ impl ConnectionsPanel {
             loaded_connections,
             expanded_connections,
             expanded_categories,
+            key_filters: std::collections::HashMap::new(),
             connected_databases,
             initial_load_completed: false,
         };

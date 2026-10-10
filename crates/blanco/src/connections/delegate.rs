@@ -250,7 +250,7 @@ impl TreeDelegate for ConnectionsTreeDelegate {
         entry: &TreeEntry<TreeItemMetadata>,
         menu: PopupMenu,
         window: &mut Window,
-        _cx: &mut App,
+        cx: &mut App,
     ) -> PopupMenu {
         let metadata = &entry.item().metadata;
 
@@ -258,12 +258,49 @@ impl TreeDelegate for ConnectionsTreeDelegate {
             TreeItemKind::Connection => {
                 let connection_id = metadata.connection_id;
                 let connection_name = metadata.connection_name.clone();
+                // Key/value stores list a filtered page of keys.
+                let key_listing = metadata.db_type.inspects_objects().then(|| {
+                    let panel = self.parent.read(cx);
+                    (
+                        panel.key_filter(connection_id).pattern,
+                        panel.keys_truncated(connection_id),
+                    )
+                });
                 menu.item(PopupMenuItem::new("Refresh").on_click(window.listener_for(
                     &self.parent,
                     move |this, _event, _window, cx| {
                         this.refresh_connection(connection_id, cx);
                     },
                 )))
+                .when_some(key_listing, |menu, (pattern, truncated)| {
+                    let filter_label = if pattern == "*" {
+                        "Filter Keys…".to_string()
+                    } else {
+                        format!("Filter Keys ({pattern})…")
+                    };
+                    menu.item(
+                        PopupMenuItem::new(filter_label).on_click(window.listener_for(
+                            &self.parent,
+                            move |this, _event, window, cx| {
+                                this.open_key_filter_dialog(connection_id, window, cx);
+                            },
+                        )),
+                    )
+                    .when(pattern != "*", |menu| {
+                        menu.item(PopupMenuItem::new("Show All Keys").on_click(
+                            window.listener_for(&self.parent, move |this, _event, _, cx| {
+                                this.set_key_pattern(connection_id, String::new(), cx);
+                            }),
+                        ))
+                    })
+                    .when(truncated, |menu| {
+                        menu.item(PopupMenuItem::new("Load More Keys").on_click(
+                            window.listener_for(&self.parent, move |this, _event, _, cx| {
+                                this.load_more_keys(connection_id, cx);
+                            }),
+                        ))
+                    })
+                })
                 .item(PopupMenuItem::new("Edit").on_click(window.listener_for(
                     &self.parent,
                     move |this, _event, _window, cx| {

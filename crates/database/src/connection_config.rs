@@ -79,6 +79,8 @@ pub struct ConnectionConfig {
     pub trust_server_certificate: bool,
     /// Reject statements not recognised as reads before they reach the server.
     pub read_only: bool,
+    /// The name a Redis connection gives itself with `CLIENT SETNAME`.
+    pub client_name: Option<String>,
 }
 
 impl std::fmt::Debug for ConnectionConfig {
@@ -113,6 +115,7 @@ impl std::fmt::Debug for ConnectionConfig {
             .field("ssl_ca_cert_path", &self.ssl_ca_cert_path)
             .field("trust_server_certificate", &self.trust_server_certificate)
             .field("read_only", &self.read_only)
+            .field("client_name", &self.client_name)
             .finish()
     }
 }
@@ -153,6 +156,7 @@ impl ConnectionConfig {
             ssl_ca_cert_path: None,
             trust_server_certificate: false,
             read_only: false,
+            client_name: None,
         }
     }
 
@@ -181,6 +185,7 @@ impl ConnectionConfig {
             ssl_ca_cert_path: None,
             trust_server_certificate: false,
             read_only: false,
+            client_name: None,
         }
     }
 
@@ -220,6 +225,11 @@ impl ConnectionConfig {
 
     pub fn with_trust_server_certificate(mut self, trust: bool) -> Self {
         self.trust_server_certificate = trust;
+        self
+    }
+
+    pub fn with_client_name(mut self, client_name: Option<String>) -> Self {
+        self.client_name = client_name;
         self
     }
 
@@ -453,30 +463,43 @@ impl ConnectionConfig {
                 conn_str
             }
             DatabaseType::Redis => {
-                // redis://[:password@]host:port/db-number. The database name is
-                // a numeric DB index (e.g. "0"); default to 0 when not numeric.
+                // redis://[:password@]host:port/db-number?client_name=…. The
+                // database name is a numeric DB index (e.g. "0"); default to 0
+                // when not numeric. client_name is Blanco's parameter, which
+                // the driver takes off and sends with CLIENT SETNAME.
                 let db_index = db_name.parse::<u8>().unwrap_or(0);
-                let scheme = match self.ssl_mode.as_deref() {
-                    Some("disabled") | None => "redis",
-                    _ => "rediss",
-                };
-                if let Some(password) = &self.password {
-                    if password.is_empty() {
-                        format!("{}://{}:{}/{}", scheme, conn_host, conn_port, db_index)
-                    } else if self.username.is_empty() {
-                        format!(
-                            "{}://:{}@{}:{}/{}",
-                            scheme, password, conn_host, conn_port, db_index
-                        )
+                let client_name = self
+                    .client_name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or("Blanco");
+                let client_name: String =
+                    url::form_urlencoded::byte_serialize(client_name.as_bytes()).collect();
+                let url = {
+                    let scheme = match self.ssl_mode.as_deref() {
+                        Some("disabled") | None => "redis",
+                        _ => "rediss",
+                    };
+                    if let Some(password) = &self.password {
+                        if password.is_empty() {
+                            format!("{}://{}:{}/{}", scheme, conn_host, conn_port, db_index)
+                        } else if self.username.is_empty() {
+                            format!(
+                                "{}://:{}@{}:{}/{}",
+                                scheme, password, conn_host, conn_port, db_index
+                            )
+                        } else {
+                            format!(
+                                "{}://{}:{}@{}:{}/{}",
+                                scheme, self.username, password, conn_host, conn_port, db_index
+                            )
+                        }
                     } else {
-                        format!(
-                            "{}://{}:{}@{}:{}/{}",
-                            scheme, self.username, password, conn_host, conn_port, db_index
-                        )
+                        format!("{}://{}:{}/{}", scheme, conn_host, conn_port, db_index)
                     }
-                } else {
-                    format!("{}://{}:{}/{}", scheme, conn_host, conn_port, db_index)
-                }
+                };
+                format!("{url}?client_name={client_name}")
             }
         }
     }
@@ -538,6 +561,29 @@ impl ConnectionConfig {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn redis_urls_carry_the_client_name() {
+        let config = super::ConnectionConfig::new(
+            1,
+            "cache".into(),
+            super::DatabaseType::Redis,
+            "localhost".into(),
+            6379,
+            "2".into(),
+            String::new(),
+            None,
+        );
+        assert_eq!(
+            config.connection_string(None, None, None),
+            "redis://localhost:6379/2?client_name=Blanco"
+        );
+        let named = config.with_client_name(Some("report worker".into()));
+        assert_eq!(
+            named.connection_string(None, None, None),
+            "redis://localhost:6379/2?client_name=report+worker"
+        );
+    }
+
     use super::*;
 
     #[test]

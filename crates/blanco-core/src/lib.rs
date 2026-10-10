@@ -18,8 +18,8 @@ pub mod write_guard;
 pub use connection_trait::{
     BatchFailure, BatchOutcome, ColumnInfo, ColumnType, Connection, ConnectionFactory,
     DatabaseSchemaResult, EntityType, ForeignKeyInfo, FunctionSignatureInfo, InboundForeignKey,
-    IndexInfo, KeyValueResult, PaginationInfo, QueryResult, QueryableEntity, RedisType, RedisValue,
-    ResultPayload, RoutineKind, TableMetadata, TableSchemaInfo, WriteOperation,
+    IndexInfo, KeyListing, KeyValueResult, PaginationInfo, QueryResult, QueryableEntity, RedisType,
+    RedisValue, ResultPayload, RoutineKind, TableMetadata, TableSchemaInfo, WriteOperation,
 };
 
 pub use connection_context::{ConnectionContext, EnvironmentType};

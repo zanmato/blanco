@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- Redis: Filter Keys on a connection lists only keys matching a pattern,
+  matched on the server, and Load More Keys lists the next 1000 when there
+  are more. The key inspector can set or remove a key's TTL. Connections
+  name themselves with CLIENT SETNAME (Blanco, or a Client Name set in the
+  connection dialog). String values stored compressed with gzip, zstd or lz4
+  are shown decompressed and marked read only
 - A search field in the title bar opens the command palette and shows its
   shortcut
 - Blanco checks for new releases hourly and shows an Update button in the

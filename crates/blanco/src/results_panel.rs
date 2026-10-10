@@ -37,6 +37,7 @@ mod commit;
 mod compare;
 mod export_actions;
 mod foreign_key_popover;
+mod key_ttl;
 mod results_table_delegate;
 mod row_ops;
 mod table_operations;
@@ -1436,6 +1437,8 @@ impl ResultsPanel {
             None => "none".to_string(),
         };
 
+        let key = kv.key.clone();
+        let ttl = kv.ttl;
         let header = h_flex()
             .gap_4()
             .items_center()
@@ -1446,7 +1449,37 @@ impl ResultsPanel {
             .font_family(mono.clone())
             .text_size(px(12.))
             .child(badge("type:", kv.key_type.as_str().to_string()))
-            .child(badge("ttl:", ttl_value));
+            .child(badge("ttl:", ttl_value))
+            .when_some(kv.compression.clone(), |this, compression| {
+                this.child(badge(
+                    "compressed:",
+                    format!("{compression}, shown read only"),
+                ))
+            })
+            .child(div().flex_1())
+            .child(
+                Button::new("key-set-ttl")
+                    .ghost()
+                    .xsmall()
+                    .label("Set TTL…")
+                    .on_click(cx.listener({
+                        let key = key.clone();
+                        move |panel, _, window, cx| {
+                            panel.open_ttl_dialog(key.clone(), ttl, window, cx)
+                        }
+                    })),
+            )
+            .when(ttl.is_some(), |this| {
+                this.child(
+                    Button::new("key-remove-ttl")
+                        .ghost()
+                        .xsmall()
+                        .label("Remove TTL")
+                        .on_click(cx.listener(move |panel, _, window, cx| {
+                            panel.set_key_ttl(key.clone(), None, window, cx)
+                        })),
+                )
+            });
 
         v_flex().size_full().child(header).child(
             div()
