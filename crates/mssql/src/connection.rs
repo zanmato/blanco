@@ -944,6 +944,20 @@ impl Connection for MssqlConnection {
             .collect())
     }
 
+    async fn get_foreign_keys_for_table(
+        &self,
+        table_name: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<blanco_core::ForeignKeyConstraint>> {
+        let sql = schema::foreign_keys_for_table_sql(table_name, schema);
+        let result = self
+            .execute_query(&sql, self.initial_database.as_deref(), None)
+            .await?;
+        Ok(blanco_core::ForeignKeyConstraint::from_column_rows(
+            &result.rows,
+        ))
+    }
+
     async fn get_indexes_for_table(
         &self,
         table_name: &str,

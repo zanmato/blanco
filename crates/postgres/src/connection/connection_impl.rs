@@ -1,8 +1,8 @@
 use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use blanco_core::{
-    ColumnInfo, ColumnType, Connection, ForeignKeyInfo, FunctionSignatureInfo, IndexInfo,
-    QueryResult, RoutineKind,
+    ColumnInfo, ColumnType, Connection, ForeignKeyConstraint, ForeignKeyInfo,
+    FunctionSignatureInfo, IndexInfo, QueryResult, RoutineKind,
 };
 use futures::{Stream, StreamExt};
 use sqlx::{Column, Executor, Row, TypeInfo};
@@ -1010,6 +1010,45 @@ impl Connection for PostgresConnection {
         );
         self.execute_query(&query, self.initial_database.as_deref(), None)
             .await
+    }
+
+    async fn get_foreign_keys_for_table(
+        &self,
+        table_name: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<ForeignKeyConstraint>, anyhow::Error> {
+        let schema_name = schema.unwrap_or("public");
+        // One row per key column; unnest pairs conkey with confkey by position.
+        let query = "
+            SELECT
+                c.conname,
+                rn.nspname,
+                rt.relname,
+                a.attname,
+                ra.attname,
+                CASE c.confupdtype WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE'
+                    WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' ELSE 'NO ACTION' END,
+                CASE c.confdeltype WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE'
+                    WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' ELSE 'NO ACTION' END
+            FROM pg_constraint c
+            JOIN pg_class t ON t.oid = c.conrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+            JOIN pg_class rt ON rt.oid = c.confrelid
+            JOIN pg_namespace rn ON rn.oid = rt.relnamespace
+            CROSS JOIN LATERAL unnest(c.conkey, c.confkey) WITH ORDINALITY AS k(attnum, refnum, ord)
+            JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+            JOIN pg_attribute ra ON ra.attrelid = c.confrelid AND ra.attnum = k.refnum
+            WHERE c.contype = 'f' AND t.relname = $1 AND n.nspname = $2
+            ORDER BY c.conname, k.ord
+        ";
+        let result = self
+            .execute_query(
+                query,
+                self.initial_database.as_deref(),
+                Some(&[table_name.to_string(), schema_name.to_string()]),
+            )
+            .await?;
+        Ok(ForeignKeyConstraint::from_column_rows(&result.rows))
     }
 
     async fn get_indexes_for_table(

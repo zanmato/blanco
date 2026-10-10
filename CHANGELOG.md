@@ -159,6 +159,17 @@ All notable changes to this project will be documented in this file.
 - PostgreSQL tables whose names need quoting (mixed case, spaces) listed no
   columns, and a table name shared by two schemas could pick up the other
   schema's keys
+- The structure tab lists a table's foreign keys with their columns,
+  referenced table and ON UPDATE and ON DELETE actions. Add Foreign Key picks
+  the referenced table and pairs each column with a referenced one, prefilled
+  from its primary key; Drop Foreign Key is in the row's context menu.
+  SQLite lists its foreign keys but reports changes as unsupported
+
+### Fixes
+
+- SQLite tables with a composite primary key report every key column, not
+  only the first, so editing or deleting a row in the results matches that
+  row alone
 - Clicking a cell in the results table no longer starts a text selection in
   the SQL view that follows the pointer with no button held
 

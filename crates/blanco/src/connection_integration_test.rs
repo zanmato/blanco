@@ -820,8 +820,8 @@ async fn test_redis_inspect_key(cx: &mut TestAppContext) {
 #[test]
 fn test_column_and_index_ddl_round_trip() {
     use blanco_core::ddl::{
-        ColumnOperation, ColumnSpec, DdlError, IndexOperation, column_operation_sql,
-        index_operation_sql,
+        ColumnOperation, ColumnSpec, DdlError, ForeignKeyOperation, IndexOperation,
+        ReferentialAction, column_operation_sql, foreign_key_operation_sql, index_operation_sql,
     };
     use blanco_core::{ColumnInfo, IndexInfo, WriteOperation};
     use database::ConnectionConfig;
@@ -1081,6 +1081,119 @@ fn test_column_and_index_ddl_round_trip() {
                 .all(|column| column.name != "score" && column.name != "points"),
             "{label}: column should be gone"
         );
+
+        if db_type.dialect().supports_foreign_keys() {
+            let foreign_keys = |table: &str| {
+                runtime
+                    .block_on(connection.get_foreign_keys_for_table(table, case.schema))
+                    .unwrap_or_else(|error| panic!("{label}: foreign keys: {error:#}"))
+            };
+            runtime
+                .block_on(connection.execute_write(
+                    "DROP TABLE IF EXISTS blanco_ddl_child",
+                    database,
+                    &[],
+                ))
+                .unwrap_or_else(|error| panic!("{label}: drop leftover child: {error:#}"));
+            runtime
+                .block_on(connection.execute_write(
+                    "DROP TABLE IF EXISTS blanco_ddl_parent",
+                    database,
+                    &[],
+                ))
+                .unwrap_or_else(|error| panic!("{label}: drop leftover parent: {error:#}"));
+            runtime
+                .block_on(connection.execute_write(
+                    "CREATE TABLE blanco_ddl_parent (id integer NOT NULL, region integer NOT NULL, PRIMARY KEY (id, region))",
+                    database,
+                    &[],
+                ))
+                .unwrap_or_else(|error| panic!("{label}: create parent: {error:#}"));
+
+            let create_fk = ForeignKeyOperation::Create {
+                name: Some("blanco_ddl_child_parent_fk".to_string()),
+                columns: vec!["parent_id".to_string(), "parent_region".to_string()],
+                referenced_schema: None,
+                referenced_table: "blanco_ddl_parent".to_string(),
+                referenced_columns: vec!["id".to_string(), "region".to_string()],
+                on_update: ReferentialAction::NoAction,
+                on_delete: ReferentialAction::Cascade,
+            };
+            match foreign_key_operation_sql(db_type, case.schema, "blanco_ddl_child", &create_fk) {
+                Ok(statements) => {
+                    runtime
+                        .block_on(connection.execute_write(
+                            "CREATE TABLE blanco_ddl_child (parent_id integer, parent_region integer)",
+                            database,
+                            &[],
+                        ))
+                        .unwrap_or_else(|error| panic!("{label}: create child: {error:#}"));
+                    run(statements)
+                        .unwrap_or_else(|error| panic!("{label}: create foreign key: {error:#}"));
+                    let created = foreign_keys("blanco_ddl_child");
+                    assert_eq!(created.len(), 1, "{label}: {created:?}");
+                    let fk = &created[0];
+                    assert_eq!(fk.name, "blanco_ddl_child_parent_fk", "{label}");
+                    assert_eq!(fk.columns, vec!["parent_id", "parent_region"], "{label}");
+                    assert_eq!(fk.referenced_table, "blanco_ddl_parent", "{label}");
+                    assert_eq!(fk.referenced_columns, vec!["id", "region"], "{label}");
+                    assert_eq!(fk.on_delete, "CASCADE", "{label}");
+                    // MySQL treats NO ACTION as RESTRICT, and MariaDB reports
+                    // the omitted clause that way.
+                    assert!(
+                        fk.on_update == "NO ACTION"
+                            || (db_type == DatabaseType::MySQL && fk.on_update == "RESTRICT"),
+                        "{label}: on update was {}",
+                        fk.on_update
+                    );
+
+                    let drop_fk = ForeignKeyOperation::Drop {
+                        name: fk.name.clone(),
+                    };
+                    run(foreign_key_operation_sql(
+                        db_type,
+                        case.schema,
+                        "blanco_ddl_child",
+                        &drop_fk,
+                    )
+                    .unwrap_or_else(|error| panic!("{label}: {error}")))
+                    .unwrap_or_else(|error| panic!("{label}: drop foreign key: {error:#}"));
+                    assert!(
+                        foreign_keys("blanco_ddl_child").is_empty(),
+                        "{label}: foreign key should be gone"
+                    );
+                }
+                Err(DdlError::Unsupported(_)) => {
+                    assert!(
+                        !db_type.dialect().supports_foreign_key_ddl(),
+                        "{label}: foreign key DDL should be supported"
+                    );
+                    // The list still reads keys declared in CREATE TABLE.
+                    runtime
+                        .block_on(connection.execute_write(
+                            "CREATE TABLE blanco_ddl_child (parent_id integer, parent_region integer, FOREIGN KEY (parent_id, parent_region) REFERENCES blanco_ddl_parent (id, region) ON DELETE CASCADE)",
+                            database,
+                            &[],
+                        ))
+                        .unwrap_or_else(|error| panic!("{label}: create child: {error:#}"));
+                    let declared = foreign_keys("blanco_ddl_child");
+                    assert_eq!(declared.len(), 1, "{label}: {declared:?}");
+                    assert_eq!(declared[0].columns, vec!["parent_id", "parent_region"]);
+                    assert_eq!(declared[0].referenced_columns, vec!["id", "region"]);
+                    assert_eq!(declared[0].on_delete, "CASCADE");
+                }
+                Err(error) => panic!("{label}: {error}"),
+            }
+            for table in ["blanco_ddl_child", "blanco_ddl_parent"] {
+                runtime
+                    .block_on(connection.execute_write(
+                        &format!("DROP TABLE {table}"),
+                        database,
+                        &[],
+                    ))
+                    .unwrap_or_else(|error| panic!("{label}: drop {table}: {error:#}"));
+            }
+        }
 
         runtime
             .block_on(connection.execute_write("DROP TABLE blanco_ddl_test", database, &[]))

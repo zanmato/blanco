@@ -314,13 +314,15 @@ impl Connection for SqliteConnection {
                 let data_type = row[2].clone().unwrap_or_default();
                 let not_null = row[3].as_deref().unwrap_or(""); // 1 for NOT NULL, 0 for nullable
                 let default_value = row[4].clone(); // Default value or None
-                let is_primary_key = row[5].as_deref().unwrap_or(""); // 1 for PK, 0 for not PK
+                // 0 outside the primary key, else the column's 1-based
+                // position in it, so composite keys report 2, 3, ...
+                let is_primary_key = row[5].as_deref().unwrap_or("0");
 
                 let column_info = ColumnInfo {
                     name: column_name.clone(),
                     data_type,
                     is_nullable: not_null != "1", // Reverse logic: notnull=1 means NOT NULL
-                    is_primary_key: is_primary_key == "1",
+                    is_primary_key: !matches!(is_primary_key, "" | "0"),
                     default_value: default_value.filter(|v| !v.is_empty()),
                     character_maximum_length: None, // SQLite doesn't provide this info in PRAGMA
                     foreign_key: foreign_keys.get(&column_name).cloned(),
@@ -508,6 +510,49 @@ impl Connection for SqliteConnection {
             reference_value.replace('\'', "''")
         );
         self.execute_query(&query, None, None).await
+    }
+
+    async fn get_foreign_keys_for_table(
+        &self,
+        table_name: &str,
+        _schema: Option<&str>,
+    ) -> Result<Vec<blanco_core::ForeignKeyConstraint>, anyhow::Error> {
+        // SQLite keeps no constraint names in the catalog, so the pragma's id
+        // stands in as the grouping key and the name is left empty.
+        let query = format!(
+            "SELECT id, \"table\", \"from\", \"to\", on_update, on_delete FROM pragma_foreign_key_list('{}') ORDER BY id, seq",
+            table_name.replace('\'', "''")
+        );
+        let result = self.execute_query(&query, None, None).await?;
+        let mut constraints: Vec<(String, blanco_core::ForeignKeyConstraint)> = Vec::new();
+        for row in result.rows {
+            let get = |i: usize| row.get(i).cloned().flatten();
+            let (Some(id), Some(table), Some(column)) = (get(0), get(1), get(2)) else {
+                continue;
+            };
+            // `to` is NULL when the reference names only the table, meaning
+            // its primary key.
+            let referenced_column = get(3).unwrap_or_default();
+            match constraints.last_mut() {
+                Some((last_id, last)) if *last_id == id => {
+                    last.columns.push(column);
+                    last.referenced_columns.push(referenced_column);
+                }
+                _ => constraints.push((
+                    id,
+                    blanco_core::ForeignKeyConstraint {
+                        name: String::new(),
+                        columns: vec![column],
+                        referenced_schema: None,
+                        referenced_table: table,
+                        referenced_columns: vec![referenced_column],
+                        on_update: get(4).unwrap_or_else(|| "NO ACTION".to_string()),
+                        on_delete: get(5).unwrap_or_else(|| "NO ACTION".to_string()),
+                    },
+                )),
+            }
+        }
+        Ok(constraints.into_iter().map(|(_, fk)| fk).collect())
     }
 
     async fn get_indexes_for_table(

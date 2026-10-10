@@ -77,10 +77,13 @@ it, so `tab.title`, `tab.editor`, `tab.context`, `tab.db_id` work on both. Prefe
 over matching on the enum; the tab strip groups every connection-bound tab under its
 connection using `context(cx)`.
 
-Column and index DDL is built by `blanco_core::ddl::{column_operation_sql, index_operation_sql}`
-and driven from the structure tab (`editor/table_structure.rs`: toolbar buttons, row context
-menus, transactional execution, `reload()`). SQLite cannot change a column's type, nullability
-or default in place and reports `DdlError::Unsupported` instead of a lossy table rebuild.
+Column, index and foreign key DDL is built by `blanco_core::ddl::{column_operation_sql,
+index_operation_sql, foreign_key_operation_sql}` and driven from the structure tab
+(`editor/table_structure.rs`: toolbar buttons, row context menus, transactional execution,
+`reload()`). SQLite cannot change a column's type, nullability or default in place, nor add or
+drop a foreign key, and reports `DdlError::Unsupported` instead of a lossy table rebuild. The
+foreign keys list reads `Connection::get_foreign_keys_for_table`; drivers return one catalog row
+per key column and fold them with `ForeignKeyConstraint::from_column_rows`.
 `test_column_and_index_ddl_round_trip` exercises the builders against every compose backend.
 
 ## Connection secrets

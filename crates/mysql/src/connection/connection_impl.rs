@@ -903,6 +903,60 @@ impl Connection for MysqlConnection {
         self.execute_query(&query, None, None).await
     }
 
+    async fn get_foreign_keys_for_table(
+        &self,
+        table_name: &str,
+        _schema: Option<&str>,
+    ) -> Result<Vec<blanco_core::ForeignKeyConstraint>, anyhow::Error> {
+        let database = self
+            .initial_database
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No database specified"))?;
+        let pool = self.get_or_create_pool(database).await?;
+        let query = "
+            SELECT
+                k.CONSTRAINT_NAME,
+                k.REFERENCED_TABLE_SCHEMA,
+                k.REFERENCED_TABLE_NAME,
+                k.COLUMN_NAME,
+                k.REFERENCED_COLUMN_NAME,
+                r.UPDATE_RULE,
+                r.DELETE_RULE
+            FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
+            JOIN INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS r
+                ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA
+                AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME
+                AND r.TABLE_NAME = k.TABLE_NAME
+            WHERE k.TABLE_SCHEMA = ?
+                AND k.TABLE_NAME = ?
+                AND k.REFERENCED_TABLE_NAME IS NOT NULL
+            ORDER BY k.CONSTRAINT_NAME, k.ORDINAL_POSITION
+        ";
+        let rows = sqlx::query(query)
+            .bind(database)
+            .bind(table_name)
+            .fetch_all(&pool)
+            .await?;
+        // information_schema columns come back as VARCHAR or VARBINARY
+        // depending on the server version, so read both.
+        let text = |row: &sqlx::mysql::MySqlRow, i: usize| -> Option<String> {
+            row.try_get::<Option<String>, _>(i)
+                .ok()
+                .flatten()
+                .or_else(|| {
+                    row.try_get::<Option<Vec<u8>>, _>(i)
+                        .ok()
+                        .flatten()
+                        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                })
+        };
+        let rows: Vec<Vec<Option<String>>> = rows
+            .iter()
+            .map(|row| (0..7).map(|i| text(row, i)).collect())
+            .collect();
+        Ok(blanco_core::ForeignKeyConstraint::from_column_rows(&rows))
+    }
+
     async fn get_indexes_for_table(
         &self,
         table_name: &str,
