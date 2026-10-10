@@ -78,6 +78,9 @@ pub struct Settings {
     pub formatter: FormatterSettings,
     pub database: DatabaseSettings,
     pub appearance: AppearanceSettings,
+    /// How the results grid behaves.
+    #[serde(default)]
+    pub results: ResultsSettings,
     /// The built-in MCP server external agents connect to.
     #[serde(default)]
     pub mcp: McpSettings,
@@ -148,6 +151,9 @@ impl Settings {
                 }
                 "database.max_history_items" => {
                     settings.database.max_history_items = value.parse().unwrap_or(1000);
+                }
+                "results.copy_format" => {
+                    settings.results.copy_format = CopyFormat::from_stored(value);
                 }
                 "appearance.theme" => {
                     settings.appearance.theme = value.clone();
@@ -381,6 +387,66 @@ impl DatabaseSettings {
         (self.query_timeout_seconds > 0)
             .then(|| std::time::Duration::from_secs(u64::from(self.query_timeout_seconds)))
     }
+}
+
+/// A format the results grid copies rows in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum CopyFormat {
+    Csv,
+    #[default]
+    Tsv,
+    Json,
+    Sql,
+    Values,
+    Markdown,
+}
+
+impl CopyFormat {
+    pub const ALL: [CopyFormat; 6] = [
+        CopyFormat::Csv,
+        CopyFormat::Tsv,
+        CopyFormat::Json,
+        CopyFormat::Sql,
+        CopyFormat::Values,
+        CopyFormat::Markdown,
+    ];
+
+    /// The stored setting value, which is also the transformer's name.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CopyFormat::Csv => "csv",
+            CopyFormat::Tsv => "tsv",
+            CopyFormat::Json => "json",
+            CopyFormat::Sql => "sql",
+            CopyFormat::Values => "values",
+            CopyFormat::Markdown => "markdown",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            CopyFormat::Csv => "CSV",
+            CopyFormat::Tsv => "TSV",
+            CopyFormat::Json => "JSON",
+            CopyFormat::Sql => "SQL",
+            CopyFormat::Values => "VALUES",
+            CopyFormat::Markdown => "Markdown",
+        }
+    }
+
+    /// Parse a stored value, falling back to the default for anything unknown.
+    pub fn from_stored(value: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|format| format.as_str() == value)
+            .unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ResultsSettings {
+    /// The format the plain copy shortcut writes selected rows in.
+    pub copy_format: CopyFormat,
 }
 
 impl Default for DatabaseSettings {

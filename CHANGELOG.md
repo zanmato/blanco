@@ -6,6 +6,10 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- The copy shortcut in the results grid copies the selected rows, in the
+  format chosen under Copy Format in the Database settings (TSV by default).
+  Each Copy as format can be given its own shortcut in the Keybindings
+  settings, and Copy as VALUES is in the command palette
 - A search field in the title bar opens the command palette and shows its
   shortcut
 - Blanco checks for new releases hourly and shows an Update button in the

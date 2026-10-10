@@ -2,7 +2,7 @@ use crate::app_settings::AppSettings;
 use crate::mcp::{McpService, McpStatus};
 use crate::settings::formatter_page::formatter_page;
 use crate::settings::keybindings_page::keybindings_page;
-use crate::settings::{EditorSettings, Settings};
+use crate::settings::{CopyFormat, EditorSettings, Settings};
 use app_database::AppDatabase;
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, FocusHandle, Focusable, IntoElement,
@@ -621,6 +621,51 @@ impl SettingsView {
                     .description(
                         "Maximum number of query-history entries to keep. Older entries are \
                          pruned after each query. Set to 0 to keep an unlimited history.",
+                    ),
+                ]),
+                SettingGroup::new().title("Results").items(vec![
+                    SettingItem::new(
+                        "Copy Format",
+                        SettingField::dropdown(
+                            CopyFormat::ALL
+                                .into_iter()
+                                .map(|format| (format.as_str().into(), format.label().into()))
+                                .collect(),
+                            move |cx: &App| {
+                                SharedString::from(
+                                    AppSettings::global(cx)
+                                        .settings
+                                        .results
+                                        .copy_format
+                                        .as_str(),
+                                )
+                            },
+                            {
+                                let view_handle = view_handle.clone();
+                                move |val: SharedString, cx: &mut App| {
+                                    let format = CopyFormat::from_stored(&val);
+                                    AppSettings::global_mut(cx).settings.results.copy_format =
+                                        format;
+                                    if let Some(view) = view_handle.upgrade() {
+                                        view.update(cx, |view, cx| {
+                                            view.save_setting_debounced(
+                                                "results.copy_format".into(),
+                                                format.as_str().to_string(),
+                                                false,
+                                                cx,
+                                            );
+                                        });
+                                    }
+                                }
+                            },
+                        )
+                        .default_value(SharedString::from(
+                            default_settings.results.copy_format.as_str(),
+                        )),
+                    )
+                    .description(
+                        "Format the copy shortcut uses for selected rows. The other formats \
+                         are in the context menu and can be given their own shortcuts.",
                     ),
                 ]),
             ]),

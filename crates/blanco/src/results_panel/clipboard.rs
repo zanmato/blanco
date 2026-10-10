@@ -3,6 +3,7 @@
 use gpui::{Context, Window};
 
 use crate::app::{CopyAsCSV, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CopyAsVALUES};
+use crate::app_settings::AppSettings;
 
 use super::ResultsPanel;
 
@@ -23,6 +24,24 @@ impl ResultsPanel {
 
         let selected_data = self.get_selected_data_for_rows(&selected_rows, delegate);
         self.copy_handler.copy_as_format(&selected_data, format, cx);
+    }
+
+    /// The plain copy shortcut. Rows are copied in the format chosen in
+    /// settings; without a grid selection the keystroke goes on to the window,
+    /// which copies selected text.
+    pub(super) fn on_copy(
+        &mut self,
+        _action: &gpui_component::input::Copy,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let table_state = self.table_state.read(cx);
+        if table_state.selected_rows().is_empty() && table_state.selected_cell().is_none() {
+            cx.propagate();
+            return;
+        }
+        let format = AppSettings::global(cx).settings.results.copy_format;
+        self.copy_selected_as(format.as_str(), cx);
     }
 
     pub(super) fn on_copy_as_csv(

@@ -35,6 +35,8 @@ mod chart_view;
 mod clipboard;
 mod commit;
 mod compare;
+#[cfg(test)]
+mod copy_format_test;
 mod export_actions;
 mod foreign_key_popover;
 mod results_table_delegate;
@@ -1587,6 +1589,7 @@ impl Render for ResultsPanel {
             .border_t_1()
             .border_color(border_color)
             // Handle copy and selection actions
+            .on_action(cx.listener(Self::on_copy))
             .on_action(cx.listener(Self::on_copy_as_csv))
             .on_action(cx.listener(Self::on_copy_as_tsv))
             .on_action(cx.listener(Self::on_copy_as_json))
