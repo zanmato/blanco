@@ -126,6 +126,9 @@ impl Settings {
                 "editor.hard_tabs" => {
                     settings.editor.hard_tabs = value.parse().unwrap_or_default();
                 }
+                "editor.tab_navigation_wraps" => {
+                    settings.editor.tab_navigation_wraps = value.parse().unwrap_or(true);
+                }
                 "editor.tab_size" => {
                     settings.editor.tab_size = value.parse().unwrap_or(2);
                 }
@@ -281,6 +284,14 @@ pub struct EditorSettings {
     /// Font size in pixels of the code editors (query, script and snippet
     /// tabs).
     pub font_size: f32,
+    /// Next and Previous Tab go around from the last tab to the first and
+    /// back, rather than stopping at the ends.
+    #[serde(default = "default_true")]
+    pub tab_navigation_wraps: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl EditorSettings {
@@ -359,6 +370,7 @@ impl Default for EditorSettings {
             hard_tabs: false,
             tab_size: 2,
             font_size: Self::DEFAULT_FONT_SIZE,
+            tab_navigation_wraps: true,
         }
     }
 }

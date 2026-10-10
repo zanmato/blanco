@@ -82,6 +82,14 @@ actions!(
         ExplainQuery,
         ToggleCommandPalette,
         CloseActiveTab,
+        NewQueryTab,
+        ActivateNextTab,
+        ActivatePreviousTab,
+        ToggleResults,
+        CancelQuery,
+        ImportTableData,
+        ExportTableData,
+        RefreshConnections,
         StartCellEdit,
         EditNextCell,
         EditPrevCell,
@@ -1464,6 +1472,126 @@ impl BlancoApp {
         });
     }
 
+    /// A new query tab on the active tab's connection and database.
+    fn on_new_query_tab(&mut self, _: &NewQueryTab, window: &mut Window, cx: &mut Context<Self>) {
+        let context = self.editor_panel.read(cx).active_context(cx).or_else(|| {
+            self.sidebar
+                .read(cx)
+                .selected_table_context(cx)
+                .map(|(context, _)| context)
+        });
+        if let Some(context) = context {
+            let action = CreateNewQueryTab {
+                context,
+                table_name: None,
+                inspect_key: false,
+            };
+            self.on_create_new_query_tab(&action, window, cx);
+        }
+    }
+
+    fn on_activate_next_tab(
+        &mut self,
+        _: &ActivateNextTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let wrap = AppSettings::global(cx).settings.editor.tab_navigation_wraps;
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.activate_adjacent_tab(1, wrap, window, cx)
+        });
+    }
+
+    fn on_activate_previous_tab(
+        &mut self,
+        _: &ActivatePreviousTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let wrap = AppSettings::global(cx).settings.editor.tab_navigation_wraps;
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.activate_adjacent_tab(-1, wrap, window, cx)
+        });
+    }
+
+    fn on_toggle_results(&mut self, _: &ToggleResults, _: &mut Window, cx: &mut Context<Self>) {
+        self.editor_panel
+            .update(cx, |panel, cx| panel.toggle_results(cx));
+    }
+
+    fn on_cancel_query(&mut self, _: &CancelQuery, _: &mut Window, cx: &mut Context<Self>) {
+        self.editor_panel
+            .update(cx, |panel, cx| panel.abort_running_query(cx));
+    }
+
+    /// Import into the table selected in the sidebar.
+    fn on_import_table_data(
+        &mut self,
+        _: &ImportTableData,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.sidebar
+            .update(cx, |sidebar, cx| match sidebar.selected_table_context(cx) {
+                Some((context, table)) => {
+                    sidebar.import_table_data(context, Some(table), window, cx)
+                }
+                None => window.push_notification(
+                    (
+                        NotificationType::Info,
+                        "Select a table in the sidebar to import into.",
+                    ),
+                    cx,
+                ),
+            });
+    }
+
+    /// Export the table selected in the sidebar.
+    fn on_export_table_data(
+        &mut self,
+        _: &ExportTableData,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.sidebar
+            .update(cx, |sidebar, cx| match sidebar.selected_table_context(cx) {
+                Some((context, table)) => {
+                    sidebar.export_table_data(context, Some(table), window, cx)
+                }
+                None => window.push_notification(
+                    (
+                        NotificationType::Info,
+                        "Select a table in the sidebar to export.",
+                    ),
+                    cx,
+                ),
+            });
+    }
+
+    /// Refresh the connection selected in the sidebar, else the active tab's.
+    fn on_refresh_connections(
+        &mut self,
+        _: &RefreshConnections,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let connection_id = self
+            .sidebar
+            .read(cx)
+            .selected_connection_id(cx)
+            .or_else(|| {
+                self.editor_panel
+                    .read(cx)
+                    .active_context(cx)
+                    .map(|context| context.connection_id)
+            });
+        if let Some(connection_id) = connection_id {
+            self.sidebar.update(cx, |sidebar, cx| {
+                sidebar.refresh_connection(connection_id, cx)
+            });
+        }
+    }
+
     fn on_database_connected(
         &mut self,
         action: &DatabaseConnected,
@@ -2370,6 +2498,14 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_explain_query))
             .on_action(cx.listener(Self::on_connect_to_connection))
             .on_action(cx.listener(Self::on_toggle_command_palette))
+            .on_action(cx.listener(Self::on_new_query_tab))
+            .on_action(cx.listener(Self::on_activate_next_tab))
+            .on_action(cx.listener(Self::on_activate_previous_tab))
+            .on_action(cx.listener(Self::on_toggle_results))
+            .on_action(cx.listener(Self::on_cancel_query))
+            .on_action(cx.listener(Self::on_import_table_data))
+            .on_action(cx.listener(Self::on_export_table_data))
+            .on_action(cx.listener(Self::on_refresh_connections))
             .size_full()
             .overflow_hidden()
             .bg(cx.theme().background)

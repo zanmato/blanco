@@ -253,6 +253,23 @@ impl ConnectionsPanel {
         .detach();
     }
 
+    /// The table selected in the tree, with the context to open it in.
+    pub fn selected_table_context(&self, cx: &App) -> Option<(ConnectionContext, String)> {
+        let entry = self.tree_state.read(cx).selected_entry()?;
+        let metadata = &entry.item().metadata;
+        if !matches!(metadata.kind, TreeItemKind::Table) {
+            return None;
+        }
+        let action = metadata.create_new_query_tab_action()?;
+        Some((action.context, metadata.table_name.clone()?))
+    }
+
+    /// The connection of whatever is selected in the tree.
+    pub fn selected_connection_id(&self, cx: &App) -> Option<i64> {
+        let entry = self.tree_state.read(cx).selected_entry()?;
+        Some(entry.item().metadata.connection_id)
+    }
+
     /// Refresh the live connection statuses, then rebuild the tree from them.
     ///
     /// Statuses have to be fetched asynchronously, so they are cached on the

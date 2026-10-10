@@ -16,12 +16,14 @@ use database::{DatabaseService, DatabaseType};
 
 use crate::{
     app::{
-        ActivateEditorTab, ClearCompareSelection, CloseActiveTab, CommitChanges,
-        ConnectToConnection, CopyAsCSV, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV,
-        CreateNewQueryTab, CreateNewScriptTab, ExplainQuery, ExportAsCSV, ExportAsJSON,
-        ExportAsMarkdown, ExportAsSQL, ExportAsTSV, FormatQuery, NewSnippet,
-        OpenNewConnectionModal, OpenSettings, OpenTerminal, RollbackChanges, RunQuery, SwitchTheme,
-        ToggleRenderWhitespace, ToggleSidebar, ToggleWordWrap,
+        ActivateEditorTab, ActivateNextTab, ActivatePreviousTab, CancelQuery,
+        ClearCompareSelection, CloseActiveTab, CommitChanges, ConnectToConnection, CopyAsCSV,
+        CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CreateNewQueryTab, CreateNewScriptTab,
+        ExplainQuery, ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV,
+        ExportTableData, FormatQuery, ImportTableData, NewQueryTab, NewSnippet,
+        OpenNewConnectionModal, OpenSettings, OpenTerminal, RefreshConnections, RollbackChanges,
+        RunQuery, SwitchTheme, ToggleRenderWhitespace, ToggleResults, ToggleSidebar,
+        ToggleWordWrap,
     },
     connections::ConnectionsPanel,
     editor::EditorPanel,
@@ -121,6 +123,14 @@ pub enum CommandType {
     ToggleRenderWhitespace,
     ToggleWordWrap,
     CloseActiveTab,
+    NewQueryTab,
+    ActivateNextTab,
+    ActivatePreviousTab,
+    ToggleResults,
+    CancelQuery,
+    ImportTableData,
+    ExportTableData,
+    RefreshConnections,
     ActivateEditorTab(usize),
     SwitchTheme(String),
     NewQueryForDatabase(DatabaseRef),
@@ -736,6 +746,16 @@ fn keybinding_for_command(cmd: &CommandType, window: &Window) -> Option<gpui_com
         CommandType::OpenTerminal => Box::new(OpenTerminal),
         CommandType::CommitChanges => Box::new(CommitChanges),
         CommandType::RollbackChanges => Box::new(RollbackChanges),
+        CommandType::ToggleSidebar => Box::new(ToggleSidebar),
+        CommandType::CloseActiveTab => Box::new(CloseActiveTab),
+        CommandType::NewQueryTab => Box::new(NewQueryTab),
+        CommandType::ActivateNextTab => Box::new(ActivateNextTab),
+        CommandType::ActivatePreviousTab => Box::new(ActivatePreviousTab),
+        CommandType::ToggleResults => Box::new(ToggleResults),
+        CommandType::CancelQuery => Box::new(CancelQuery),
+        CommandType::ImportTableData => Box::new(ImportTableData),
+        CommandType::ExportTableData => Box::new(ExportTableData),
+        CommandType::RefreshConnections => Box::new(RefreshConnections),
         _ => return None,
     };
     Kbd::binding_for_action(action.as_ref(), None, window)
@@ -773,6 +793,16 @@ fn execute_command(cmd: &CommandType, window: &mut Window, cx: &mut App) {
         }
         CommandType::ToggleWordWrap => window.dispatch_action(Box::new(ToggleWordWrap), cx),
         CommandType::CloseActiveTab => window.dispatch_action(Box::new(CloseActiveTab), cx),
+        CommandType::NewQueryTab => window.dispatch_action(Box::new(NewQueryTab), cx),
+        CommandType::ActivateNextTab => window.dispatch_action(Box::new(ActivateNextTab), cx),
+        CommandType::ActivatePreviousTab => {
+            window.dispatch_action(Box::new(ActivatePreviousTab), cx)
+        }
+        CommandType::ToggleResults => window.dispatch_action(Box::new(ToggleResults), cx),
+        CommandType::CancelQuery => window.dispatch_action(Box::new(CancelQuery), cx),
+        CommandType::ImportTableData => window.dispatch_action(Box::new(ImportTableData), cx),
+        CommandType::ExportTableData => window.dispatch_action(Box::new(ExportTableData), cx),
+        CommandType::RefreshConnections => window.dispatch_action(Box::new(RefreshConnections), cx),
         CommandType::ActivateEditorTab(index) => {
             window.dispatch_action(Box::new(ActivateEditorTab { index: *index }), cx)
         }
@@ -1109,6 +1139,26 @@ fn build_commands(
         ),
         leaf("Word Wrap", "View", CommandType::ToggleWordWrap),
         leaf("Close Tab", "Tab", CommandType::CloseActiveTab),
+        leaf("New Query Tab", "Tab", CommandType::NewQueryTab),
+        leaf("Next Tab", "Tab", CommandType::ActivateNextTab),
+        leaf("Previous Tab", "Tab", CommandType::ActivatePreviousTab),
+        leaf("Toggle Results Pane", "View", CommandType::ToggleResults),
+        leaf("Cancel Query", "Query", CommandType::CancelQuery),
+        leaf(
+            "Import into Selected Table…",
+            "Connection",
+            CommandType::ImportTableData,
+        ),
+        leaf(
+            "Export Selected Table…",
+            "Connection",
+            CommandType::ExportTableData,
+        ),
+        leaf(
+            "Refresh Connection",
+            "Connection",
+            CommandType::RefreshConnections,
+        ),
     ];
 
     add_tab_commands(&mut commands, editor_panel, cx);

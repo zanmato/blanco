@@ -17,6 +17,15 @@ All notable changes to this project will be documented in this file.
 - A system notification when an agent asks to run a write over MCP while
   Blanco is in the background. Clicking it brings Blanco forward, where the
   confirmation dialog is waiting
+- More actions can be rebound in the Keybindings settings, now listed by
+  group with search: cancel the running query, new query tab, close tab,
+  next and previous tab (Ctrl+Tab and Ctrl+Shift+Tab), toggle the sidebar,
+  toggle the results pane, import into or export the selected table, and
+  refresh the connection. A shortcut that is also used by another action is
+  flagged. Wrap Tab Navigation in the Editor settings decides whether next
+  and previous tab go around or stop at the ends
+- Toggle Results Pane hides the results under the editor and keeps the
+  toolbar with Run
 
 ### Fixes
 
