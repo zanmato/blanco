@@ -328,6 +328,7 @@ impl DatabaseService {
             let from_user = self
                 .resolve_secrets_asking(&mut attempt_config, rejected.take())
                 .await?;
+            apply_password_file(&mut attempt_config, database);
             match self
                 .open_connection(&attempt_config, database, &from_user)
                 .await
@@ -857,6 +858,7 @@ impl DatabaseService {
                 }
             }
         }
+        apply_password_file(&mut asked, None);
         let config = &asked;
         let mut connection_host = None;
         let mut connection_port = None;
@@ -1127,6 +1129,28 @@ impl DatabaseService {
     }
 }
 
+/// For a PostgreSQL connection without a password, take one from the
+/// password file (`~/.pgpass`), matched against the configured host and port
+/// rather than an SSH tunnel's local end, and the database being opened.
+fn apply_password_file(config: &mut ConnectionConfig, database: Option<&str>) {
+    if config.db_type != DatabaseType::PostgreSQL
+        || config
+            .password
+            .as_deref()
+            .is_some_and(|password| !password.is_empty())
+    {
+        return;
+    }
+    let database = database.unwrap_or(&config.database);
+    if let Some(password) =
+        crate::pgpass::lookup(&config.host, config.port, database, &config.username)
+            .filter(|password| !password.is_empty())
+    {
+        tracing::debug!("Using the password file's password for {}", config.name);
+        config.password = Some(password);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1189,6 +1213,76 @@ mod tests {
         assert!(sqlite_config(2, &dir.path().join("x.db"))
             .missing_secret_kinds()
             .is_empty());
+    }
+
+    #[test]
+    fn password_file_fills_a_missing_postgres_password() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let file = dir.path().join("pgpass");
+        std::fs::write(
+            &file,
+            "db.internal:5432:app:alice:from-file\ndb.internal:5432:reports:alice:reports-pw\n",
+        )
+        .expect("write");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        }
+        // No other test in this crate reads PGPASSFILE.
+        std::env::set_var("PGPASSFILE", &file);
+
+        let postgres = |password: Option<&str>| {
+            ConnectionConfig::new(
+                1,
+                "pg".into(),
+                DatabaseType::PostgreSQL,
+                "db.internal".into(),
+                5432,
+                "app".into(),
+                "alice".into(),
+                password.map(String::from),
+            )
+        };
+
+        let mut config = postgres(None);
+        apply_password_file(&mut config, None);
+        assert_eq!(config.password.as_deref(), Some("from-file"));
+
+        // An empty password is no password; the database being opened counts.
+        let mut config = postgres(Some(""));
+        apply_password_file(&mut config, Some("reports"));
+        assert_eq!(config.password.as_deref(), Some("reports-pw"));
+
+        // A stored password wins, and other backends are left alone.
+        let mut config = postgres(Some("stored"));
+        apply_password_file(&mut config, None);
+        assert_eq!(config.password.as_deref(), Some("stored"));
+        let mut mysql = postgres(None);
+        mysql.db_type = DatabaseType::MySQL;
+        apply_password_file(&mut mysql, None);
+        assert_eq!(mysql.password, None);
+
+        // The tunnel's local end is not what is matched: the configured host
+        // is, so a tunnelled connection still finds its line.
+        let mut tunnelled = postgres(None).with_ssh_config(
+            "bastion".into(),
+            "ssh-user".into(),
+            None,
+            None,
+            None,
+            None,
+        );
+        apply_password_file(&mut tunnelled, None);
+        assert_eq!(tunnelled.password.as_deref(), Some("from-file"));
+
+        // Read on every call: an edit applies to the next connect.
+        std::fs::write(&file, "*:*:*:*:edited\n").expect("rewrite");
+        let mut config = postgres(None);
+        apply_password_file(&mut config, None);
+        assert_eq!(config.password.as_deref(), Some("edited"));
+
+        std::env::remove_var("PGPASSFILE");
     }
 
     fn sqlite_config(id: i64, path: &std::path::Path) -> ConnectionConfig {

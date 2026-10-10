@@ -5,6 +5,7 @@
 
 mod connection_config;
 mod factories;
+mod pgpass;
 mod secret_prompt;
 mod service;
 pub mod ssh_config;
