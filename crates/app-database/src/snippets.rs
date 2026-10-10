@@ -12,7 +12,7 @@ impl AppDatabase {
                 sqlx::query(
                     r#"
                     UPDATE snippets
-                    SET name = ?, content = ?, kind = ?, parent_id = ?, is_group = ?, position = ?, updated_at = ?
+                    SET name = ?, content = ?, kind = ?, parent_id = ?, is_group = ?, position = ?, trigger_word = ?, updated_at = ?
                     WHERE id = ?
                     "#,
                 )
@@ -22,6 +22,7 @@ impl AppDatabase {
                 .bind(snippet.parent_id)
                 .bind(snippet.is_group as i64)
                 .bind(snippet.position)
+                .bind(&snippet.trigger)
                 .bind(now)
                 .bind(id)
                 .execute(&pool)
@@ -30,8 +31,8 @@ impl AppDatabase {
             } else {
                 let result = sqlx::query(
                     r#"
-                    INSERT INTO snippets (name, content, kind, parent_id, is_group, position, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO snippets (name, content, kind, parent_id, is_group, position, trigger_word, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     "#,
                 )
                 .bind(&snippet.name)
@@ -40,6 +41,7 @@ impl AppDatabase {
                 .bind(snippet.parent_id)
                 .bind(snippet.is_group as i64)
                 .bind(snippet.position)
+                .bind(&snippet.trigger)
                 .bind(now)
                 .bind(now)
                 .execute(&pool)
@@ -56,7 +58,7 @@ impl AppDatabase {
         self.run(async move {
             let rows = sqlx::query(
                 r#"
-                SELECT id, name, content, parent_id, is_group, position, kind
+                SELECT id, name, content, parent_id, is_group, position, kind, trigger_word
                 FROM snippets
                 ORDER BY position, name
                 "#,
@@ -74,6 +76,7 @@ impl AppDatabase {
                     is_group: row.get::<i64, _>(4) != 0,
                     position: row.get(5),
                     kind: EditorKind::from_stored(&row.get::<String, _>(6)),
+                    trigger: row.get(7),
                 })
                 .collect();
 
@@ -87,7 +90,7 @@ impl AppDatabase {
         self.run(async move {
             let row = sqlx::query(
                 r#"
-                SELECT id, name, content, parent_id, is_group, position, kind
+                SELECT id, name, content, parent_id, is_group, position, kind, trigger_word
                 FROM snippets
                 WHERE id = ?
                 "#,
@@ -105,6 +108,7 @@ impl AppDatabase {
                     is_group: row.get::<i64, _>(4) != 0,
                     position: row.get(5),
                     kind: EditorKind::from_stored(&row.get::<String, _>(6)),
+                    trigger: row.get(7),
                 }))
             } else {
                 Ok(None)
@@ -176,6 +180,7 @@ mod tests {
             parent_id: None,
             is_group: false,
             position: 0,
+            trigger: None,
         }
     }
 

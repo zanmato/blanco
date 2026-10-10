@@ -167,6 +167,11 @@ All notable changes to this project will be documented in this file.
   disconnect. A connection saved without a password also asks when the
   server wants one, and asks again when it refuses what was typed. An
   exported connection keeps the setting
+- A snippet can have a trigger word. Completion offers the SQL snippets in
+  query tabs and the script snippets in script tabs whose trigger starts with
+  the word being typed. Snippet text may hold tab stops such as `$1`,
+  `${1:default}` and `$0`; the caret lands on the first one, with its default
+  selected. Write `\$` for a literal dollar sign before a digit
 
 ### Fixes
 
@@ -196,6 +201,8 @@ All notable changes to this project will be documented in this file.
 - SQLite tables with a composite primary key report every key column, not
   only the first, so editing or deleting a row in the results matches that
   row alone
+- Choosing a function in completion inserts `name()` with the caret between
+  the parentheses again, instead of a literal `name($0)`
 - Clicking a cell in the results table no longer starts a text selection in
   the SQL view that follows the pointer with no button held
 - Format SQL replaced the wrong range when text before the statement held

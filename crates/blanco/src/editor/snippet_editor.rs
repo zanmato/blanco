@@ -4,10 +4,11 @@ use gpui::{
     WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme, Sizable,
+    ActiveTheme, Sizable, WindowExt as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{Editor, EditorState, Input, InputState, TabSize},
+    notification::NotificationType,
     v_flex,
 };
 use std::rc::Rc;
@@ -24,12 +25,15 @@ pub struct SnippetEditor {
     pub name: String,
     pub kind: EditorKind,
     pub name_input: Entity<InputState>,
+    /// The word that offers the snippet in completion, optional.
+    pub trigger_input: Entity<InputState>,
     pub editor: Entity<EditorState>,
 }
 
 impl SnippetEditor {
     pub fn new(kind: EditorKind, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Snippet name..."));
+        let trigger_input = cx.new(|cx| InputState::new(window, cx).placeholder("Trigger word"));
         let editor = Self::build_editor(kind, window, cx);
 
         Self {
@@ -37,6 +41,7 @@ impl SnippetEditor {
             name: String::new(),
             kind,
             name_input,
+            trigger_input,
             editor,
         }
     }
@@ -105,6 +110,9 @@ impl SnippetEditor {
         self.name_input.update(cx, |input, cx| {
             input.replace_all(&snippet.name, window, cx);
         });
+        self.trigger_input.update(cx, |input, cx| {
+            input.replace_all(snippet.trigger.as_deref().unwrap_or_default(), window, cx);
+        });
 
         // Update editor content
         self.editor.update(cx, |editor, cx| {
@@ -122,6 +130,17 @@ impl SnippetEditor {
             cx.notify();
             return;
         }
+        let trigger = self.trigger_input.read(cx).value().trim().to_string();
+        if trigger.chars().any(char::is_whitespace) {
+            window.push_notification(
+                (
+                    NotificationType::Error,
+                    "A trigger is a single word, without spaces.",
+                ),
+                cx,
+            );
+            return;
+        }
 
         let snippet = SnippetData {
             id: self.snippet_id,
@@ -131,6 +150,7 @@ impl SnippetEditor {
             parent_id: None,
             is_group: false,
             position: 0,
+            trigger: (!trigger.is_empty()).then_some(trigger),
         };
 
         let snippet_id = self.snippet_id;
@@ -232,6 +252,11 @@ impl Render for SnippetEditor {
                     .items_center()
                     .child(self.render_kind_toggle(cx))
                     .child(div().flex_1().child(Input::new(&self.name_input).small()))
+                    .child(
+                        div()
+                            .w(px(160.))
+                            .child(Input::new(&self.trigger_input).small()),
+                    )
                     .child(
                         Button::new("save-snippet")
                             .small()

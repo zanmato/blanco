@@ -82,6 +82,7 @@ impl SnippetsPanel {
                 return;
             };
             this.update(cx, |this, cx| {
+                crate::snippet_completion::SnippetTriggers::set(&snippets, cx);
                 this.snippets = snippets;
                 this.loaded = true;
                 this.refresh_tree(cx);
@@ -262,6 +263,7 @@ impl SnippetsPanel {
             parent_id: None,
             is_group: true,
             position: 0,
+            trigger: None,
         };
 
         self.creating_group = false;
@@ -439,6 +441,7 @@ mod tests {
                 parent_id,
                 is_group,
                 position,
+                trigger: None,
             };
 
         vec![

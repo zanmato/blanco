@@ -95,6 +95,9 @@ pub struct SnippetData {
     pub parent_id: Option<i64>,
     pub is_group: bool,
     pub position: i32,
+    /// A word that offers the snippet in completion. Snippet text may hold
+    /// tab stops (`$1`, `${1:default}`, `$0`) for where the caret lands.
+    pub trigger: Option<String>,
 }
 
 /// Data for a database connection
