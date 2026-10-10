@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- Generate UUID and Generate UUID v7 in a cell's context menu fill a new
+  UUID into UUID columns and text columns long enough to hold one
 - A search field in the title bar opens the command palette and shows its
   shortcut
 - Blanco checks for new releases hourly and shows an Update button in the

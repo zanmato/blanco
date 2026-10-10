@@ -22,12 +22,13 @@ use gpui_component::{
 
 use blanco_core::connection_trait::ColumnType;
 
-use super::ResultsTableDelegate;
+use super::{ResultsTableDelegate, column_accepts_uuid};
 use crate::app::{
     AddRow, ClearCompareSelection, CompareCellWithSelected, CompareRowWithSelected, CopyAsCSV,
     CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CopyAsVALUES, DeleteRow, DuplicateRow,
-    ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV, SelectCellForCompare,
-    SelectRowForCompare, SetCellDefault, SetCellNull, ToggleCellExpression,
+    ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV, GenerateCellUuid,
+    SelectCellForCompare, SelectRowForCompare, SetCellDefault, SetCellNull, ToggleCellExpression,
+    UuidVersion,
 };
 use crate::results_panel::cell_edit_state::{CellInput, compare_numeric, format_value_for_display};
 use crate::results_panel::compare::CompareKind;
@@ -705,6 +706,10 @@ impl TableDelegate for ResultsTableDelegate {
         // a server default: it reverts the cell so the INSERT omits the column.
         let compare_kind = self.compare_selection_kind;
         let is_editable = self.is_editable();
+        let can_generate_uuid = is_editable
+            && self
+                .table_column_info(cell.1)
+                .is_some_and(column_accepts_uuid);
         let can_set_default = self.edit_state.is_new_row(cell.0)
             && self
                 .table_column_info(cell.1)
@@ -803,6 +808,25 @@ impl TableDelegate for ResultsTableDelegate {
                     row: cell.0,
                     col: cell.1,
                 }),
+            )
+        })
+        .when(can_generate_uuid, |this| {
+            let generate = |version| {
+                Box::new(GenerateCellUuid {
+                    row: cell.0,
+                    col: cell.1,
+                    version,
+                })
+            };
+            this.menu_with_icon(
+                "Generate UUID",
+                Icon::new(IconName::WandSparkles),
+                generate(UuidVersion::V4),
+            )
+            .menu_with_icon(
+                "Generate UUID v7",
+                Icon::new(IconName::WandSparkles),
+                generate(UuidVersion::V7),
             )
         })
         .separator()

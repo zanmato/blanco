@@ -1603,6 +1603,7 @@ impl Render for ResultsPanel {
             .on_action(cx.listener(Self::on_delete_row))
             .on_action(cx.listener(Self::on_set_cell_null))
             .on_action(cx.listener(Self::on_set_cell_default))
+            .on_action(cx.listener(Self::on_generate_cell_uuid))
             .on_action(cx.listener(Self::on_select_cell_for_compare))
             .on_action(cx.listener(Self::on_compare_cell_with_selected))
             .on_action(cx.listener(Self::on_select_row_for_compare))

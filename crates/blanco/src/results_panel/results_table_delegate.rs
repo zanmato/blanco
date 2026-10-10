@@ -33,6 +33,23 @@ pub struct ResultsTableDelegate {
     unfiltered_rows: Option<Vec<Vec<Option<String>>>>,
 }
 
+/// Whether Generate UUID is offered for a column: UUID types, and text
+/// columns long enough for one (36 characters) or of unbounded length.
+pub(crate) fn column_accepts_uuid(column: &blanco_core::ColumnInfo) -> bool {
+    let data_type = column.data_type.to_ascii_lowercase();
+    if data_type.contains("uuid") || data_type == "uniqueidentifier" {
+        return true;
+    }
+    let is_text = ["char", "text", "string", "clob"]
+        .iter()
+        .any(|text| data_type.contains(text))
+        && !data_type.contains("fixedstring");
+    is_text
+        && column
+            .character_maximum_length
+            .is_none_or(|length| length >= 36)
+}
+
 impl ResultsTableDelegate {
     /// Whether the grid currently shows a filtered subset of the result.
     pub fn is_filtered(&self) -> bool {
@@ -353,6 +370,58 @@ mod tests {
     };
     use crate::results_panel::{ChangeType, TableChange};
     use blanco_core::ColumnInfo;
+
+    #[test]
+    fn column_accepts_uuid_for_uuid_and_long_enough_text() {
+        let column = |data_type: &str, length: Option<i32>| ColumnInfo {
+            name: "c".to_string(),
+            data_type: data_type.to_string(),
+            is_nullable: true,
+            is_primary_key: false,
+            default_value: None,
+            character_maximum_length: length,
+            foreign_key: None,
+        };
+        for (data_type, length) in [
+            ("uuid", None),
+            ("UNIQUEIDENTIFIER", None),
+            ("Nullable(UUID)", None),
+            ("text", None),
+            ("character varying", None),
+            ("varchar", Some(36)),
+            ("char", Some(36)),
+            ("nvarchar", Some(255)),
+            ("String", None),
+        ] {
+            assert!(
+                column_accepts_uuid(&column(data_type, length)),
+                "{data_type} {length:?}"
+            );
+        }
+        for (data_type, length) in [
+            ("integer", None),
+            ("varchar", Some(20)),
+            ("bytea", None),
+            ("binary", Some(16)),
+            ("FixedString(16)", None),
+            ("jsonb", None),
+        ] {
+            assert!(
+                !column_accepts_uuid(&column(data_type, length)),
+                "{data_type} {length:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn uuid_versions_generate_the_requested_version() {
+        use crate::app::UuidVersion;
+        let v4 = uuid::Uuid::parse_str(&UuidVersion::V4.generate()).unwrap();
+        assert_eq!(v4.get_version_num(), 4);
+        assert_ne!(UuidVersion::V4.generate(), UuidVersion::V4.generate());
+        let v7 = uuid::Uuid::parse_str(&UuidVersion::V7.generate()).unwrap();
+        assert_eq!(v7.get_version_num(), 7);
+    }
 
     #[test]
     fn test_cell_edit_state() {

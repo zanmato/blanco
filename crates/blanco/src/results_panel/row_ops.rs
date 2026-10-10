@@ -1,7 +1,7 @@
 use gpui::{App, Context, Window};
 
 use super::{ChangeType, ResultsPanel, TableChange};
-use crate::app::{AddRow, DeleteRow, DuplicateRow, SetCellDefault, SetCellNull};
+use crate::app::{AddRow, DeleteRow, DuplicateRow, GenerateCellUuid, SetCellDefault, SetCellNull};
 
 impl ResultsPanel {
     pub fn add_new_row(&mut self, cx: &mut Context<Self>) {
@@ -254,6 +254,27 @@ impl ResultsPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.set_cell_value(action.row, action.col, None, cx);
+    }
+
+    pub(super) fn on_generate_cell_uuid(
+        &mut self,
+        action: &GenerateCellUuid,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let value = action.version.generate();
+        self.set_cell_value(action.row, action.col, Some(value), cx);
+    }
+
+    /// Stage `value` as the cell's edit, as if typed in.
+    fn set_cell_value(
+        &mut self,
+        row: usize,
+        col: usize,
+        value: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
         if self.commit_in_progress {
             return;
         }
@@ -262,21 +283,16 @@ impl ResultsPanel {
             let delegate = state.delegate_mut();
 
             // Store original value before editing
-            if let Some(cell_value) = delegate
-                .rows
-                .get(action.row)
-                .and_then(|r| r.get(action.col))
-            {
+            if let Some(cell_value) = delegate.rows.get(row).and_then(|r| r.get(col)) {
                 delegate
                     .edit_state
                     .original_values
-                    .entry((action.row, action.col))
+                    .entry((row, col))
                     .or_insert_with(|| cell_value.clone());
             }
 
-            // Set the cell to NULL
-            delegate.update_cell_value(action.row, action.col, None);
-            delegate.commit_cell_edit(action.row, action.col);
+            delegate.update_cell_value(row, col, value);
+            delegate.commit_cell_edit(row, col);
             state.refresh(cx);
         });
 

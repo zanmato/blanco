@@ -160,6 +160,34 @@ pub struct SetCellDefault {
     pub col: usize,
 }
 
+/// Fill a cell with a new random UUID, generated in the app.
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct GenerateCellUuid {
+    pub row: usize,
+    pub col: usize,
+    pub version: UuidVersion,
+}
+
+/// Which UUID [`GenerateCellUuid`] fills in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UuidVersion {
+    /// Random.
+    V4,
+    /// Time-ordered, so new keys sort after older ones.
+    V7,
+}
+
+impl UuidVersion {
+    pub fn generate(self) -> String {
+        match self {
+            Self::V4 => uuid::Uuid::new_v4(),
+            Self::V7 => uuid::Uuid::now_v7(),
+        }
+        .to_string()
+    }
+}
+
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
 pub struct SelectCellForCompare {
