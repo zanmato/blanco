@@ -1,6 +1,6 @@
 use crate::app::{
     CommitChanges, DecreaseEditorFontSize, ExplainQuery, FormatQuery, IncreaseEditorFontSize,
-    OpenSettings, OpenTerminal, ResetEditorFontSize, RollbackChanges, RunQuery,
+    JumpToColumn, OpenSettings, OpenTerminal, ResetEditorFontSize, RollbackChanges, RunQuery,
     ToggleCommandPalette,
 };
 use crate::settings::Settings;
@@ -76,6 +76,12 @@ pub const CUSTOMIZABLE_BINDINGS: &[BindingDef] = &[
         context: None,
     },
     BindingDef {
+        action: "JumpToColumn",
+        label: "Jump to column",
+        default: "secondary-shift-j",
+        context: None,
+    },
+    BindingDef {
         action: "IncreaseEditorFontSize",
         label: "Increase editor font size",
         default: "secondary-=",
@@ -139,6 +145,7 @@ fn key_binding(action: &str, keystrokes: &str, context: Option<&str>) -> Option<
         "RollbackChanges" => gpui::KeyBinding::new(keystrokes, RollbackChanges, context),
         "OpenSettings" => gpui::KeyBinding::new(keystrokes, OpenSettings, context),
         "OpenTerminal" => gpui::KeyBinding::new(keystrokes, OpenTerminal, context),
+        "JumpToColumn" => gpui::KeyBinding::new(keystrokes, JumpToColumn, context),
         "IncreaseEditorFontSize" => {
             gpui::KeyBinding::new(keystrokes, IncreaseEditorFontSize, context)
         }
