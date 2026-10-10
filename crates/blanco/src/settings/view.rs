@@ -594,6 +594,80 @@ impl SettingsView {
                          pruned after each query. Set to 0 to keep an unlimited history.",
                     ),
                 ]),
+                SettingGroup::new().title("Notifications").items(vec![
+                    SettingItem::new(
+                        "Notify When a Long Query Finishes",
+                        SettingField::switch(
+                            move |cx: &App| {
+                                AppSettings::global(cx)
+                                    .settings
+                                    .database
+                                    .notify_finished_queries
+                            },
+                            {
+                                let view_handle = view_handle.clone();
+                                move |val: bool, cx: &mut App| {
+                                    AppSettings::global_mut(cx)
+                                        .settings
+                                        .database
+                                        .notify_finished_queries = val;
+                                    let key = "database.notify_finished_queries".to_string();
+                                    if let Some(view) = view_handle.upgrade() {
+                                        view.update(cx, |view, cx| {
+                                            view.save_setting_debounced(
+                                                key,
+                                                val.to_string(),
+                                                false,
+                                                cx,
+                                            );
+                                        });
+                                    }
+                                }
+                            },
+                        )
+                        .default_value(default_settings.database.notify_finished_queries),
+                    )
+                    .description(
+                        "Post a system notification when a query ends while Blanco is in the \
+                         background. Clicking it brings Blanco forward on that tab.",
+                    ),
+                    SettingItem::new(
+                        "Long Query Threshold",
+                        SettingField::number_input(
+                            NumberFieldOptions {
+                                min: 0.0,
+                                max: 3600.0,
+                                step: 5.0,
+                            },
+                            move |cx: &App| {
+                                AppSettings::global(cx).settings.database.notify_after_seconds
+                                    as f64
+                            },
+                            {
+                                let view_handle = view_handle.clone();
+                                move |val: f64, cx: &mut App| {
+                                    AppSettings::global_mut(cx)
+                                        .settings
+                                        .database
+                                        .notify_after_seconds = val as u32;
+                                    let key = "database.notify_after_seconds".to_string();
+                                    if let Some(view) = view_handle.upgrade() {
+                                        view.update(cx, |view, cx| {
+                                            view.save_setting_debounced(
+                                                key,
+                                                (val as u32).to_string(),
+                                                false,
+                                                cx,
+                                            );
+                                        });
+                                    }
+                                }
+                            },
+                        )
+                        .default_value(default_settings.database.notify_after_seconds as f64),
+                    )
+                    .description("Seconds a query has to run before its end is notified."),
+                ]),
             ]),
             // Appearance Settings Page
             SettingPage::new("Appearance").resettable(true).groups(vec![

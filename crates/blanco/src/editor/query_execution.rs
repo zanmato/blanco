@@ -89,6 +89,7 @@ impl EditorPanel {
                     cx.emit(super::EditorPanelEvent::QueryRunEnded {
                         tab_index,
                         outcome: Err("No command to run".to_string()),
+                        duration: None,
                     });
                     return;
                 }
@@ -126,6 +127,7 @@ impl EditorPanel {
                 cx.emit(super::EditorPanelEvent::QueryRunEnded {
                     tab_index,
                     outcome: Err("No query to execute".to_string()),
+                    duration: None,
                 });
                 return;
             }
@@ -224,6 +226,7 @@ impl EditorPanel {
                 cx.emit(super::EditorPanelEvent::QueryRunEnded {
                     tab_index,
                     outcome: Err("The user did not confirm the write on PROD.".to_string()),
+                    duration: None,
                 });
             })),
             window,
@@ -439,6 +442,7 @@ impl EditorPanel {
                                     cx.emit(super::EditorPanelEvent::QueryRunEnded {
                                         tab_index,
                                         outcome: Err("Query cancelled by the user.".to_string()),
+                                        duration: None,
                                     });
                                     cx.notify();
                                 })
@@ -626,6 +630,7 @@ impl EditorPanel {
                                         cx.emit(super::EditorPanelEvent::QueryRunEnded {
                                             tab_index,
                                             outcome: Ok(run_outcome),
+                                            duration: Some(query_duration),
                                         });
                                         cx.notify();
                                     })
@@ -677,6 +682,7 @@ impl EditorPanel {
                                         cx.emit(super::EditorPanelEvent::QueryRunEnded {
                                             tab_index,
                                             outcome: Err(error_message.clone()),
+                                            duration: Some(query_duration),
                                         });
                                         cx.notify();
                                     })
@@ -813,6 +819,7 @@ impl EditorPanel {
                                     "The statement has bind parameters and the user cancelled the parameter form."
                                         .to_string(),
                                 ),
+                                duration: None,
                             });
                         })
                         .log_err();

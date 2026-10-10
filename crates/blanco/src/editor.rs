@@ -100,6 +100,8 @@ pub enum EditorPanelEvent {
     QueryRunEnded {
         tab_index: usize,
         outcome: Result<serde_json::Value, String>,
+        /// How long the database took, for runs that reached it.
+        duration: Option<std::time::Duration>,
     },
 }
 
