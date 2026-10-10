@@ -580,3 +580,31 @@ async fn test_explain_produces_plan_tree(cx: &mut TestAppContext) {
         "raw rows stay available"
     );
 }
+
+/// Run All runs every statement wherever the cursor is, and a statement that
+/// is only a comment makes no result tab.
+#[gpui::test]
+async fn test_run_all_skips_comment_only_statements(cx: &mut TestAppContext) {
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    set_editor_text(
+        &harness,
+        "SELECT 1 AS a;\n-- nothing to run here\n;\n/* nor here */;\nSELECT 2 AS b",
+        &mut cx,
+    );
+    harness
+        .editor_panel
+        .update_in(&mut cx, |panel, window, cx| panel.on_run_all(window, cx));
+    wait_for_query(&harness, &mut cx).await;
+
+    let titles = harness.editor_panel.read_with(&cx, |panel, cx| {
+        panel
+            .active_query_tab()
+            .expect("query tab")
+            .results_panel
+            .read(cx)
+            .result_titles()
+    });
+    assert_eq!(titles, ["Result 1", "Result 2"]);
+}

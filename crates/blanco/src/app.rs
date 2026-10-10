@@ -79,6 +79,7 @@ actions!(
         DecreaseEditorFontSize,
         ResetEditorFontSize,
         RunQuery,
+        RunAll,
         ExplainQuery,
         ToggleCommandPalette,
         CloseActiveTab,
@@ -2418,6 +2419,12 @@ impl BlancoApp {
         });
     }
 
+    fn on_run_all(&mut self, _: &RunAll, window: &mut Window, cx: &mut Context<Self>) {
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.on_run_all(window, cx);
+        });
+    }
+
     fn on_run_query(&mut self, _: &RunQuery, window: &mut Window, cx: &mut Context<Self>) {
         self.editor_panel.update(cx, |panel, cx| {
             panel.on_run_query(window, cx);
@@ -2495,6 +2502,7 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_decrease_editor_font_size))
             .on_action(cx.listener(Self::on_reset_editor_font_size))
             .on_action(cx.listener(Self::on_run_query))
+            .on_action(cx.listener(Self::on_run_all))
             .on_action(cx.listener(Self::on_explain_query))
             .on_action(cx.listener(Self::on_connect_to_connection))
             .on_action(cx.listener(Self::on_toggle_command_palette))

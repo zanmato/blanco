@@ -588,6 +588,19 @@ impl EditorPanel {
                                 )
                             })
                             .child(
+                                Button::new("run-all")
+                                    .outline()
+                                    .small()
+                                    .label("Run All")
+                                    .tooltip(match &self.run_all_keystroke {
+                                        Some(keystroke) => format!("Run All ({keystroke})"),
+                                        None => "Run All".to_string(),
+                                    })
+                                    .on_click(cx.listener(|panel, _, window, cx| {
+                                        panel.on_run_all(window, cx)
+                                    })),
+                            )
+                            .child(
                                 Button::new("run-query")
                                     .outline()
                                     .small()

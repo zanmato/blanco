@@ -26,6 +26,11 @@ All notable changes to this project will be documented in this file.
   and previous tab go around or stop at the ends
 - Toggle Results Pane hides the results under the editor and keeps the
   toolbar with Run
+- Run All, next to Run Current and on Ctrl+Shift+Enter (Cmd+Shift+Enter on
+  macOS, rebindable or unbindable), runs every statement in the tab whatever
+  the cursor or selection. A statement that is only a comment is skipped and
+  makes no result tab. On a PROD connection it asks first and says how many
+  statements will run
 
 ### Fixes
 

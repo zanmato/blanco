@@ -22,7 +22,7 @@ use crate::{
         ExplainQuery, ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV,
         ExportTableData, FormatQuery, ImportTableData, NewQueryTab, NewSnippet,
         OpenNewConnectionModal, OpenSettings, OpenTerminal, RefreshConnections, RollbackChanges,
-        RunQuery, SwitchTheme, ToggleRenderWhitespace, ToggleResults, ToggleSidebar,
+        RunAll, RunQuery, SwitchTheme, ToggleRenderWhitespace, ToggleResults, ToggleSidebar,
         ToggleWordWrap,
     },
     connections::ConnectionsPanel,
@@ -100,6 +100,7 @@ pub struct DatabaseRef {
 #[derive(Clone, Debug)]
 pub enum CommandType {
     RunQuery,
+    RunAll,
     ExplainQuery,
     FormatQuery,
     NewSnippet,
@@ -742,6 +743,7 @@ fn keybinding_for_command(cmd: &CommandType, window: &Window) -> Option<gpui_com
     use gpui_component::kbd::Kbd;
     let action: Box<dyn gpui::Action> = match cmd {
         CommandType::FormatQuery => Box::new(FormatQuery),
+        CommandType::RunAll => Box::new(RunAll),
         CommandType::OpenSettings => Box::new(OpenSettings),
         CommandType::OpenTerminal => Box::new(OpenTerminal),
         CommandType::CommitChanges => Box::new(CommitChanges),
@@ -764,6 +766,7 @@ fn keybinding_for_command(cmd: &CommandType, window: &Window) -> Option<gpui_com
 fn execute_command(cmd: &CommandType, window: &mut Window, cx: &mut App) {
     match cmd {
         CommandType::RunQuery => window.dispatch_action(Box::new(RunQuery), cx),
+        CommandType::RunAll => window.dispatch_action(Box::new(RunAll), cx),
         CommandType::ExplainQuery => window.dispatch_action(Box::new(ExplainQuery), cx),
         CommandType::FormatQuery => window.dispatch_action(Box::new(FormatQuery), cx),
         CommandType::NewSnippet => window.dispatch_action(Box::new(NewSnippet), cx),
@@ -1100,6 +1103,7 @@ fn build_commands(
 ) -> Vec<CommandItem> {
     let mut commands = vec![
         leaf("Run Query", "Query", CommandType::RunQuery),
+        leaf("Run All", "Query", CommandType::RunAll),
         leaf("Explain Query", "Query", CommandType::ExplainQuery),
         leaf("Format Query", "Query", CommandType::FormatQuery),
         leaf("New Snippet", "Tab", CommandType::NewSnippet),

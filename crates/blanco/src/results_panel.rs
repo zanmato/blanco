@@ -416,6 +416,14 @@ impl ResultsPanel {
     }
 
     #[cfg(test)]
+    pub fn result_titles(&self) -> Vec<SharedString> {
+        self.result_tabs
+            .iter()
+            .map(|tab| tab.title.clone())
+            .collect()
+    }
+
+    #[cfg(test)]
     pub fn active_plan(&self) -> Option<Arc<PlanTree>> {
         self.result_tabs
             .get(self.active_tab)

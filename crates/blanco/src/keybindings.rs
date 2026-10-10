@@ -2,7 +2,7 @@ use crate::app::{
     ActivateNextTab, ActivatePreviousTab, CancelQuery, CloseActiveTab, CommitChanges,
     DecreaseEditorFontSize, ExplainQuery, ExportTableData, FormatQuery, ImportTableData,
     IncreaseEditorFontSize, NewQueryTab, OpenSettings, OpenTerminal, RefreshConnections,
-    ResetEditorFontSize, RollbackChanges, RunQuery, ToggleCommandPalette, ToggleResults,
+    ResetEditorFontSize, RollbackChanges, RunAll, RunQuery, ToggleCommandPalette, ToggleResults,
     ToggleSidebar,
 };
 use crate::settings::Settings;
@@ -43,6 +43,13 @@ pub const CUSTOMIZABLE_BINDINGS: &[BindingDef] = &[
         label: "Run current statement",
         group: "Query",
         default: "secondary-enter",
+        context: None,
+    },
+    BindingDef {
+        action: "RunAll",
+        label: "Run all statements",
+        group: "Query",
+        default: "secondary-shift-enter",
         context: None,
     },
     BindingDef {
@@ -224,6 +231,7 @@ fn key_binding(action: &str, keystrokes: &str, context: Option<&str>) -> Option<
 
     let binding = match action {
         "RunQuery" => gpui::KeyBinding::new(keystrokes, RunQuery, context),
+        "RunAll" => gpui::KeyBinding::new(keystrokes, RunAll, context),
         "ExplainQuery" => gpui::KeyBinding::new(keystrokes, ExplainQuery, context),
         "FormatQuery" => gpui::KeyBinding::new(keystrokes, FormatQuery, context),
         "ToggleCommandPalette" => gpui::KeyBinding::new(keystrokes, ToggleCommandPalette, context),

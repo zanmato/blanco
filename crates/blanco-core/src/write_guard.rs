@@ -258,9 +258,9 @@ fn keywords(statement: &str) -> Vec<String> {
 }
 
 /// Walk `sql` reporting each character together with whether it sits inside
-/// a string literal, quoted identifier, comment or dollar quoted body. Quoted
-/// regions are reported with `inside == true` (delimiters included); comments
-/// are replaced by a single space.
+/// a string literal, quoted identifier, comment or dollar quoted body, which
+/// are reported with `inside == true` (delimiters included). A line
+/// comment's closing newline is outside it.
 fn scan(sql: &str, mut visit: impl FnMut(char, bool)) {
     let mut chars = sql.chars().peekable();
     while let Some(c) = chars.next() {
@@ -276,23 +276,28 @@ fn scan(sql: &str, mut visit: impl FnMut(char, bool)) {
                 }
             }
             '-' if chars.peek() == Some(&'-') => {
+                visit(c, true);
                 for inner in chars.by_ref() {
                     if inner == '\n' {
+                        visit(inner, false);
                         break;
                     }
+                    visit(inner, true);
                 }
-                visit(' ', false);
             }
             '/' if chars.peek() == Some(&'*') => {
-                chars.next();
+                visit(c, true);
+                if let Some(star) = chars.next() {
+                    visit(star, true);
+                }
                 let mut previous = ' ';
                 for inner in chars.by_ref() {
+                    visit(inner, true);
                     if previous == '*' && inner == '/' {
                         break;
                     }
                     previous = inner;
                 }
-                visit(' ', false);
             }
             '$' => {
                 // Dollar quoting: `$tag$ ... $tag$`. Anything else starting
@@ -331,9 +336,19 @@ fn scan(sql: &str, mut visit: impl FnMut(char, bool)) {
     }
 }
 
+/// The statements of a script that hold code, without the ones that are only
+/// comments, so running all of them yields one result per real statement.
+pub fn runnable_statements(sql: &str) -> Vec<String> {
+    split_statements(sql)
+        .into_iter()
+        .filter(|statement| !strip_literals_and_comments(statement).trim().is_empty())
+        .map(|statement| statement.trim().to_string())
+        .collect()
+}
+
 /// Split on `;` outside strings, quoted identifiers, comments and dollar
 /// quoted bodies.
-fn split_statements(sql: &str) -> Vec<String> {
+pub fn split_statements(sql: &str) -> Vec<String> {
     let mut statements = Vec::new();
     let mut current = String::new();
     scan(sql, |c, inside| {
@@ -363,6 +378,26 @@ fn strip_literals_and_comments(statement: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runnable_statements_skip_comment_only_ones() {
+        assert_eq!(
+            runnable_statements(
+                "-- setup\nSELECT 1;\n/* nothing here */;\n-- just a note\n;\nSELECT ';' -- trailing\n"
+            ),
+            ["-- setup\nSELECT 1", "SELECT ';' -- trailing"]
+        );
+        // Comments stay with their statement, so optimizer hints still run.
+        assert_eq!(
+            runnable_statements("SELECT /*+ NO_INDEX(t) */ * FROM t"),
+            ["SELECT /*+ NO_INDEX(t) */ * FROM t"]
+        );
+        assert!(runnable_statements("-- only a comment").is_empty());
+        assert_eq!(
+            runnable_statements("/*/ x */ SELECT 2"),
+            ["/*/ x */ SELECT 2"]
+        );
+    }
 
     #[test]
     fn plain_reads_are_reads() {

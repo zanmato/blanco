@@ -143,6 +143,113 @@ impl EditorPanel {
         }
     }
 
+    /// Run every statement of the active query tab, whatever the cursor or
+    /// selection. Statements that are only comments are left out, so they
+    /// make no result tab. On a connection whose tag confirms writes, it asks
+    /// first and names how many statements will run. A script tab runs its
+    /// whole script, which is what Run does there anyway.
+    pub fn on_run_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tab_index = self.active_tab_ix;
+        let query_tab = match self.tabs.get(tab_index) {
+            Some(TabType::Script(_)) => {
+                self.on_run_query(window, cx);
+                return;
+            }
+            Some(TabType::Query(query_tab)) => query_tab,
+            _ => return,
+        };
+        let full_text = query_tab.editor.read(cx).text().to_string();
+        let context = query_tab.context.clone();
+        let db_type = context.db_type;
+
+        let statements: Vec<String> = if db_type.supports_sql() {
+            blanco_core::write_guard::runnable_statements(&full_text)
+        } else {
+            full_text
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_string)
+                .collect()
+        };
+        if statements.is_empty() {
+            window.push_notification((NotificationType::Error, "Nothing to run"), cx);
+            cx.emit(super::EditorPanelEvent::QueryRunEnded {
+                tab_index,
+                outcome: Err("Nothing to run".to_string()),
+            });
+            return;
+        }
+        let count = statements.len();
+        let separator = if db_type.supports_sql() { ";\n" } else { "\n" };
+        let mut query = String::new();
+        // Parameters point into the joined text, which the parameter form
+        // substitutes into.
+        let mut params: Vec<QueryParameter> = Vec::new();
+        for (ix, statement) in statements.iter().enumerate() {
+            if ix > 0 {
+                query.push_str(separator);
+            }
+            if db_type.supports_sql() {
+                let info = extract_statement_info_with_styles(
+                    &Rope::from_str(statement),
+                    0,
+                    db_type.parameter_styles(),
+                );
+                params.extend(
+                    info.map(|info| info.parameters)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|param| QueryParameter {
+                            byte_offset: query.len() + param.byte_offset,
+                            ..param
+                        }),
+                );
+            }
+            query.push_str(statement);
+        }
+        let connection_id = context.connection_id;
+        let database_name = context.database_name.clone();
+        if !params.is_empty() {
+            // The parameter form runs through the usual write confirmation.
+            self.show_parameter_modal(query, params, connection_id, database_name, window, cx);
+            return;
+        }
+
+        if context.environment_type != Some(EnvironmentType::Prod) {
+            self.execute_query_unchecked(query, connection_id, &database_name, window, cx);
+            return;
+        }
+        let statements_label = if count == 1 {
+            "1 statement".to_string()
+        } else {
+            format!("{count} statements")
+        };
+        self.confirm_prod_write(
+            ProdWritePrompt {
+                title: "Run all on PROD?",
+                message: format!(
+                    "This runs {statements_label} on \"{}\", which is tagged as a production connection.",
+                    context.connection_name
+                ),
+                confirm_label: "Run All on PROD",
+                tab_index,
+            },
+            move |panel, window, cx| {
+                panel.execute_query_unchecked(
+                    query.clone(),
+                    connection_id,
+                    &database_name,
+                    window,
+                    cx,
+                );
+            },
+            None,
+            window,
+            cx,
+        );
+    }
+
     /// Wrap the statement at the cursor in an EXPLAIN appropriate to the
     /// active connection's dialect and run it. The plan lands as a normal
     /// result tab (multi-result aware) so the user can pin it.

@@ -68,6 +68,8 @@ pub struct EditorPanel {
     tabbar_scroll_handle: gpui::ScrollHandle,
     _subscriptions: Vec<gpui::Subscription>,
     run_query_keystroke: KeybindingKeystroke,
+    /// `None` when Run All is unbound.
+    run_all_keystroke: Option<KeybindingKeystroke>,
     format_query_keystroke: KeybindingKeystroke,
     editor_results_resize_state: Entity<ResizableState>,
     results_log_resize_state: Entity<ResizableState>,
@@ -572,6 +574,13 @@ impl EditorPanel {
             tabbar_scroll_handle: gpui::ScrollHandle::default(),
             _subscriptions: Vec::new(),
             run_query_keystroke: keystroke_hint("RunQuery", cx),
+            run_all_keystroke: (!crate::keybindings::effective_keystroke(
+                &AppSettings::global(cx).settings,
+                "RunAll",
+            )
+            .trim()
+            .is_empty())
+            .then(|| keystroke_hint("RunAll", cx)),
             format_query_keystroke: keystroke_hint("FormatQuery", cx),
             editor_results_resize_state,
             results_log_resize_state,
