@@ -1,7 +1,9 @@
 use crate::app::{
-    CommitChanges, DecreaseEditorFontSize, ExplainQuery, FormatQuery, IncreaseEditorFontSize,
-    OpenSettings, OpenTerminal, ResetEditorFontSize, RollbackChanges, RunQuery,
-    ToggleCommandPalette, ToggleFilterBar,
+    ActivateNextTab, ActivatePreviousTab, CancelQuery, CloseActiveTab, CommitChanges,
+    DecreaseEditorFontSize, ExplainQuery, ExportTableData, FormatQuery, ImportTableData,
+    IncreaseEditorFontSize, NewQueryTab, OpenSettings, OpenTerminal, RefreshConnections,
+    ResetEditorFontSize, RollbackChanges, RunQuery, ToggleCommandPalette, ToggleFilterBar,
+    ToggleResults, ToggleSidebar,
 };
 use crate::settings::Settings;
 
@@ -12,6 +14,8 @@ pub struct BindingDef {
     pub action: &'static str,
     /// Human-readable label shown in the settings UI.
     pub label: &'static str,
+    /// Heading the settings page lists the action under.
+    pub group: &'static str,
     /// Built-in keystroke. An empty string means the action is unbound by
     /// default and only becomes active once the user assigns a shortcut.
     pub default: &'static str,
@@ -24,78 +28,167 @@ pub struct BindingDef {
 /// while the terminal pane has focus.
 const INPUT_CONTEXT: &str = "Input";
 
+/// Everywhere but the terminal pane. On Linux and Windows `secondary` is
+/// ctrl, and ctrl-w, ctrl-t and ctrl-b mean something to the shell.
+const NOT_TERMINAL: &str = "!Terminal";
+
+/// The groups of the settings page, in order.
+pub const BINDING_GROUPS: &[&str] = &["Query", "Tabs", "View", "Data", "Editor"];
+
 /// The set of actions exposed for rebinding. Platform-fixed bindings such as
 /// Quit are intentionally excluded.
 pub const CUSTOMIZABLE_BINDINGS: &[BindingDef] = &[
     BindingDef {
         action: "RunQuery",
-        label: "Run query",
+        label: "Run current statement",
+        group: "Query",
         default: "secondary-enter",
         context: None,
     },
     BindingDef {
         action: "ExplainQuery",
         label: "Explain query",
+        group: "Query",
         default: "secondary-e",
         context: None,
     },
     BindingDef {
+        action: "CancelQuery",
+        label: "Cancel running query",
+        group: "Query",
+        default: "secondary-.",
+        context: Some(NOT_TERMINAL),
+    },
+    BindingDef {
         action: "FormatQuery",
         label: "Format SQL",
+        group: "Query",
         default: "shift-alt-f",
-        context: None,
-    },
-    BindingDef {
-        action: "ToggleFilterBar",
-        label: "Toggle result filter bar",
-        default: "secondary-shift-f",
-        context: None,
-    },
-    BindingDef {
-        action: "ToggleCommandPalette",
-        label: "Toggle command palette",
-        default: "secondary-k",
         context: None,
     },
     BindingDef {
         action: "CommitChanges",
         label: "Commit changes",
+        group: "Data",
         default: "super-shift-c",
         context: None,
     },
     BindingDef {
         action: "RollbackChanges",
         label: "Rollback changes",
+        group: "Data",
         default: "super-shift-r",
+        context: None,
+    },
+    BindingDef {
+        action: "ImportTableData",
+        label: "Import into the selected table",
+        group: "Data",
+        default: "",
+        context: None,
+    },
+    BindingDef {
+        action: "ExportTableData",
+        label: "Export the selected table",
+        group: "Data",
+        default: "",
+        context: None,
+    },
+    BindingDef {
+        action: "RefreshConnections",
+        label: "Refresh connection",
+        group: "Data",
+        default: "",
+        context: None,
+    },
+    BindingDef {
+        action: "NewQueryTab",
+        label: "New query tab",
+        group: "Tabs",
+        default: "secondary-t",
+        context: Some(NOT_TERMINAL),
+    },
+    BindingDef {
+        action: "CloseActiveTab",
+        label: "Close tab",
+        group: "Tabs",
+        default: "secondary-w",
+        context: Some(NOT_TERMINAL),
+    },
+    BindingDef {
+        action: "ActivateNextTab",
+        label: "Next tab",
+        group: "Tabs",
+        default: "ctrl-tab",
+        context: None,
+    },
+    BindingDef {
+        action: "ActivatePreviousTab",
+        label: "Previous tab",
+        group: "Tabs",
+        default: "ctrl-shift-tab",
+        context: None,
+    },
+    BindingDef {
+        action: "ToggleCommandPalette",
+        label: "Toggle command palette",
+        group: "View",
+        default: "secondary-k",
+        context: None,
+    },
+    BindingDef {
+        action: "ToggleSidebar",
+        label: "Toggle sidebar",
+        group: "View",
+        default: "secondary-b",
+        context: Some(NOT_TERMINAL),
+    },
+    BindingDef {
+        action: "ToggleResults",
+        label: "Toggle results pane",
+        group: "View",
+        default: "",
+        context: None,
+    },
+    BindingDef {
+        action: "ToggleFilterBar",
+        label: "Toggle result filter bar",
+        group: "View",
+        default: "secondary-shift-f",
         context: None,
     },
     BindingDef {
         action: "OpenSettings",
         label: "Open settings",
+        group: "View",
         default: "super-,",
         context: None,
     },
     BindingDef {
         action: "OpenTerminal",
         label: "Toggle terminal",
+        group: "View",
         default: "ctrl-`",
         context: None,
     },
     BindingDef {
         action: "IncreaseEditorFontSize",
         label: "Increase editor font size",
+        group: "Editor",
         default: "secondary-=",
         context: Some(INPUT_CONTEXT),
     },
     BindingDef {
         action: "DecreaseEditorFontSize",
         label: "Decrease editor font size",
+        group: "Editor",
         default: "secondary--",
         context: Some(INPUT_CONTEXT),
     },
     BindingDef {
         action: "ResetEditorFontSize",
         label: "Reset editor font size",
+        group: "Editor",
         default: "secondary-0",
         context: Some(INPUT_CONTEXT),
     },
@@ -153,9 +246,44 @@ fn key_binding(action: &str, keystrokes: &str, context: Option<&str>) -> Option<
             gpui::KeyBinding::new(keystrokes, DecreaseEditorFontSize, context)
         }
         "ResetEditorFontSize" => gpui::KeyBinding::new(keystrokes, ResetEditorFontSize, context),
+        "CancelQuery" => gpui::KeyBinding::new(keystrokes, CancelQuery, context),
+        "ImportTableData" => gpui::KeyBinding::new(keystrokes, ImportTableData, context),
+        "ExportTableData" => gpui::KeyBinding::new(keystrokes, ExportTableData, context),
+        "RefreshConnections" => gpui::KeyBinding::new(keystrokes, RefreshConnections, context),
+        "NewQueryTab" => gpui::KeyBinding::new(keystrokes, NewQueryTab, context),
+        "CloseActiveTab" => gpui::KeyBinding::new(keystrokes, CloseActiveTab, context),
+        "ActivateNextTab" => gpui::KeyBinding::new(keystrokes, ActivateNextTab, context),
+        "ActivatePreviousTab" => gpui::KeyBinding::new(keystrokes, ActivatePreviousTab, context),
+        "ToggleSidebar" => gpui::KeyBinding::new(keystrokes, ToggleSidebar, context),
+        "ToggleResults" => gpui::KeyBinding::new(keystrokes, ToggleResults, context),
         _ => return None,
     };
     Some(binding)
+}
+
+/// The actions whose shortcut is the same keystroke as `action`'s. Shortcuts
+/// limited to different key contexts can still meet (an input sits inside the
+/// window), so any two with the same keystroke count as a conflict.
+pub fn conflicting_actions(settings: &Settings, action: &str) -> Vec<&'static str> {
+    let keystroke = effective_keystroke(settings, action);
+    let keystroke = normalized(&keystroke);
+    if keystroke.is_empty() {
+        return Vec::new();
+    }
+    CUSTOMIZABLE_BINDINGS
+        .iter()
+        .filter(|other| other.action != action)
+        .filter(|other| normalized(&effective_keystroke(settings, other.action)) == keystroke)
+        .map(|other| other.label)
+        .collect()
+}
+
+fn normalized(keystrokes: &str) -> String {
+    keystrokes
+        .split_whitespace()
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Build the customizable key bindings from settings, layering user overrides
@@ -186,6 +314,37 @@ fn increase_font_size_alias(settings: &Settings) -> Option<gpui::KeyBinding> {
 mod tests {
     use super::*;
     use crate::settings::Settings;
+
+    #[test]
+    fn every_binding_resolves_to_an_action() {
+        for def in CUSTOMIZABLE_BINDINGS {
+            assert!(
+                key_binding(def.action, "ctrl-f12", def.context).is_some(),
+                "{} has no action",
+                def.action
+            );
+            assert!(BINDING_GROUPS.contains(&def.group), "{}", def.action);
+        }
+    }
+
+    #[test]
+    fn defaults_do_not_conflict_and_overrides_are_flagged() {
+        let mut settings = Settings::default();
+        for def in CUSTOMIZABLE_BINDINGS {
+            assert!(
+                conflicting_actions(&settings, def.action).is_empty(),
+                "{} conflicts by default",
+                def.action
+            );
+        }
+        settings
+            .keybindings
+            .insert("ToggleResults".to_string(), "Secondary-Enter".to_string());
+        assert_eq!(
+            conflicting_actions(&settings, "RunQuery"),
+            ["Toggle results pane"]
+        );
+    }
 
     #[test]
     fn user_override_replaces_default() {
@@ -231,7 +390,12 @@ mod tests {
             .insert("ExplainQuery".to_string(), "ctrl-a-b".to_string());
 
         let bindings = customizable_key_bindings(&settings);
-        // The font size alias adds one binding on top of the table.
-        assert_eq!(bindings.len(), CUSTOMIZABLE_BINDINGS.len() + 1 - 2);
+        // The font size alias adds one binding on top of the ones bound by
+        // default.
+        let bound_by_default = CUSTOMIZABLE_BINDINGS
+            .iter()
+            .filter(|def| !def.default.is_empty())
+            .count();
+        assert_eq!(bindings.len(), bound_by_default + 1 - 2);
     }
 }

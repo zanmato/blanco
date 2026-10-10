@@ -177,6 +177,9 @@ impl Settings {
                 "editor.hard_tabs" => {
                     settings.editor.hard_tabs = value.parse().unwrap_or_default();
                 }
+                "editor.tab_navigation_wraps" => {
+                    settings.editor.tab_navigation_wraps = value.parse().unwrap_or(true);
+                }
                 "editor.tab_size" => {
                     settings.editor.tab_size = value.parse().unwrap_or(2);
                 }
@@ -425,6 +428,10 @@ pub struct EditorSettings {
     /// The keys that accept the highlighted completion suggestion.
     #[serde(default)]
     pub completion_accept_keys: CompletionAcceptKeysSetting,
+    /// Next and Previous Tab go around from the last tab to the first and
+    /// back, rather than stopping at the ends.
+    #[serde(default = "default_true")]
+    pub tab_navigation_wraps: bool,
 }
 
 /// The keys that accept a completion suggestion, as stored in settings.
@@ -464,6 +471,10 @@ impl CompletionAcceptKeysSetting {
             Self::EnterAndTab => CompletionAcceptKeys::EnterAndTab,
         }
     }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl EditorSettings {
@@ -552,6 +563,7 @@ impl Default for EditorSettings {
             tab_size: 2,
             font_size: Self::DEFAULT_FONT_SIZE,
             completion_accept_keys: CompletionAcceptKeysSetting::default(),
+            tab_navigation_wraps: true,
         }
     }
 }

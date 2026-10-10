@@ -50,6 +50,8 @@ pub struct ConnectionBackedTab {
     /// tab. Lives with the tab and is never persisted, so a restart or a new
     /// tab warns again.
     pub skip_prod_write_confirmation: bool,
+    /// The results area under the editor is hidden (Toggle Results).
+    pub results_hidden: bool,
 }
 
 impl ConnectionBackedTab {

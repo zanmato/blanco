@@ -531,6 +531,37 @@ impl EditorPanel {
         self.set_active_tab(ix, window, cx);
     }
 
+    /// Move to the next (`step` 1) or previous (`step` -1) tab. At either end
+    /// it wraps around, or stays put when `wrap` is off.
+    pub fn activate_adjacent_tab(
+        &mut self,
+        step: isize,
+        wrap: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(ix) = adjacent_tab(self.active_tab_ix, self.tabs.len(), step, wrap) {
+            self.set_active_tab(ix, window, cx);
+        }
+    }
+
+    /// Show or hide the results area under the active tab's editor.
+    pub fn toggle_results(&mut self, cx: &mut Context<Self>) {
+        if let Some(tab) = self
+            .tabs
+            .get_mut(self.active_tab_ix)
+            .and_then(TabType::connection_tab_mut)
+        {
+            tab.results_hidden = !tab.results_hidden;
+            cx.notify();
+        }
+    }
+
+    /// The connection the active tab works against.
+    pub fn active_context(&self, cx: &App) -> Option<ConnectionContext> {
+        self.tabs.get(self.active_tab_ix)?.context(cx)
+    }
+
     pub fn close_active_tab(&mut self, cx: &mut Context<Self>) {
         self.close_tab(self.active_tab_ix, cx);
     }
@@ -839,6 +870,7 @@ impl EditorPanel {
                 results_panel,
                 terminal_enabled: false,
                 skip_prod_write_confirmation: false,
+                results_hidden: false,
                 terminal: None,
             },
             sql_view: cx.new(|cx| {
@@ -947,6 +979,7 @@ impl EditorPanel {
                 results_panel,
                 terminal_enabled: false,
                 skip_prod_write_confirmation: false,
+                results_hidden: false,
                 terminal: None,
             },
             log_view: cx.new(|cx| {
@@ -1210,5 +1243,36 @@ impl EditorPanel {
         });
         cx.notify();
         true
+    }
+}
+
+/// The tab `step` places away from `active` among `count` tabs, wrapping at
+/// the ends or stopping there.
+fn adjacent_tab(active: usize, count: usize, step: isize, wrap: bool) -> Option<usize> {
+    if count == 0 {
+        return None;
+    }
+    let target = active as isize + step;
+    if wrap {
+        Some(target.rem_euclid(count as isize) as usize)
+    } else {
+        (0..count as isize)
+            .contains(&target)
+            .then_some(target as usize)
+    }
+}
+
+#[cfg(test)]
+mod adjacent_tab_tests {
+    use super::adjacent_tab;
+
+    #[test]
+    fn test_adjacent_tab_wraps_or_stops() {
+        assert_eq!(adjacent_tab(0, 3, 1, true), Some(1));
+        assert_eq!(adjacent_tab(2, 3, 1, true), Some(0));
+        assert_eq!(adjacent_tab(0, 3, -1, true), Some(2));
+        assert_eq!(adjacent_tab(2, 3, 1, false), None);
+        assert_eq!(adjacent_tab(0, 3, -1, false), None);
+        assert_eq!(adjacent_tab(0, 0, 1, true), None);
     }
 }
