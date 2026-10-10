@@ -22,6 +22,7 @@ mod import;
 mod keybindings;
 mod logging;
 mod mcp;
+mod name_filter;
 mod redis_completion;
 mod redis_syntax;
 mod result_ext;

@@ -95,6 +95,9 @@ All notable changes to this project will be documented in this file.
   the file `PGPASSFILE` names, using libpq's matching rules. The file is read
   each time a connection opens, and an SSH tunnelled connection is matched on
   its real host and port
+- The sidebar filter takes `^` to anchor the start of a name, `$` to anchor
+  the end and `|` between alternatives, so `^users$|^orders$` shows exactly
+  those two. Matching ignores case
 - A search field in the title bar opens the command palette and shows its
   shortcut
 - Blanco checks for new releases hourly and shows an Update button in the

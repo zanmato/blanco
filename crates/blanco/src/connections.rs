@@ -21,6 +21,8 @@ use blanco_core::ConnectionContext;
 use blanco_core::DatabaseService as DatabaseServiceTrait;
 use blanco_ui::IconName;
 use blanco_ui::tree::{Tree, TreeItem, TreeState};
+
+use crate::name_filter::NameFilter;
 use database::DatabaseService;
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, IntoElement, ParentElement, Render,
@@ -444,7 +446,7 @@ impl ConnectionsPanel {
             })
             .collect();
 
-        let filter = self.filter_input.read(cx).value().trim().to_lowercase();
+        let filter = NameFilter::parse(&self.filter_input.read(cx).value());
         let tree_items = if filter.is_empty() {
             tree_items
         } else {
@@ -1517,13 +1519,13 @@ impl Render for ConnectionsPanel {
 /// the filter restores the previous layout.
 fn filter_tree_items(
     items: &[TreeItem<TreeItemMetadata>],
-    needle: &str,
+    filter: &NameFilter,
 ) -> Vec<TreeItem<TreeItemMetadata>> {
     items
         .iter()
         .filter_map(|item| {
-            let matching_children = filter_tree_items(&item.children, needle);
-            let label_matches = item.label.to_lowercase().contains(needle);
+            let matching_children = filter_tree_items(&item.children, filter);
+            let label_matches = filter.matches(&item.label);
             if !label_matches && matching_children.is_empty() {
                 return None;
             }
@@ -1647,7 +1649,7 @@ mod tests {
             ),
         ];
 
-        let filtered = filter_tree_items(&tree, "user");
+        let filtered = filter_tree_items(&tree, &NameFilter::parse("user"));
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].id.as_ref(), "local");
         assert!(filtered[0].is_expanded());
@@ -1663,7 +1665,7 @@ mod tests {
             "staging",
             vec![item("public", vec![item("invoices", vec![])])],
         )];
-        let filtered = filter_tree_items(&tree, "stag");
+        let filtered = filter_tree_items(&tree, &NameFilter::parse("stag"));
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].children.len(), 1);
         assert!(
