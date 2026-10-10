@@ -53,6 +53,7 @@ actions!(
     blanco_app,
     [
         Quit,
+        OpenThemesFolder,
         OpenConnection,
         OpenSettings,
         OpenTerminal,
@@ -429,6 +430,8 @@ impl BlancoApp {
 
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
+        // Theme file warnings found before this window opened.
+        window.defer(cx, |_, cx| crate::custom_themes::show_theme_warnings(cx));
 
         Self {
             focus_handle,
@@ -2344,6 +2347,13 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_settings))
             .on_action(cx.listener(Self::on_open_terminal))
             .on_action(cx.listener(Self::on_create_new_query_tab))
+            .on_action(cx.listener(|_, _: &OpenThemesFolder, _, cx| {
+                let dir = crate::custom_themes::themes_dir();
+                if let Err(error) = std::fs::create_dir_all(&dir) {
+                    tracing::error!("Failed to create {}: {error}", dir.display());
+                }
+                cx.open_with_system(&dir);
+            }))
             .on_action(cx.listener(Self::on_refresh_connection_tree))
             .on_action(cx.listener(Self::on_create_new_script_tab))
             .on_action(cx.listener(Self::on_open_table_structure))

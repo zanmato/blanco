@@ -14,6 +14,7 @@ mod connection_integration_test;
 mod connection_modal;
 mod connections;
 mod copy_handler;
+mod custom_themes;
 mod editor;
 mod export;
 mod history_panel;
@@ -42,7 +43,6 @@ use database::DatabaseService;
 use gpui::{AppContext, AssetSource as _, SharedString, WindowBounds, WindowOptions, px, size};
 use gpui_component::{Theme, ThemeRegistry};
 use gpui_platform::application;
-use std::path::PathBuf;
 
 use crate::{app_settings::AppSettings, settings::Settings};
 use app_database::AppDatabase;
@@ -173,16 +173,16 @@ fn main() {
         );
         cx.set_global(app_settings);
 
-        // Apply theme
-        let theme_name = SharedString::from(&AppSettings::global(cx).settings.appearance.theme);
-        if let Err(err) = ThemeRegistry::watch_dir(PathBuf::from("./themes"), cx, move |cx| {
-            // `ThemeRegistry::reload` clears the registry and repopulates it
-            // from the watched directory alone, and it runs just before this
-            // callback, so the embedded themes have to be (re)loaded here
-            // rather than once at startup. `load_themes_from_str` skips names
-            // that are already present, so a `./themes/*.json` on disk still
-            // wins and hot-reload keeps working during development.
+        // Apply theme. Custom theme files live in the config directory; every
+        // load (at startup and after a file there changes) adds the embedded
+        // themes back, re-applies the chosen theme and checks the files.
+        let themes_dir = custom_themes::themes_dir();
+        if let Err(err) = ThemeRegistry::watch_dir(themes_dir.clone(), cx, move |cx| {
+            // The registry was just reloaded from the themes directory alone.
+            // `load_themes_from_str` skips names already present, so a custom
+            // file with an embedded theme's name wins.
             load_embedded_themes(cx);
+            let theme_name = SharedString::from(&AppSettings::global(cx).settings.appearance.theme);
             if let Some(theme) = ThemeRegistry::global(cx).themes().get(&theme_name).cloned() {
                 let mode = theme.mode;
                 Theme::global_mut(cx).apply_config(&theme);
@@ -193,6 +193,8 @@ fn main() {
                 Theme::change(mode, None, cx);
             }
             settings::apply_font_settings(cx);
+            custom_themes::check_theme_files(&themes_dir, cx);
+            cx.refresh_windows();
         }) {
             tracing::error!("Failed to watch themes directory: {}", err);
         }
