@@ -1106,6 +1106,15 @@ impl EditorPanel {
         }
     }
 
+    /// Open or close the row detail panel of the active tab's results.
+    pub fn toggle_row_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(TabType::Query(query_tab)) = self.tabs.get(self.active_tab_ix) {
+            query_tab.results_panel.update(cx, |panel, cx| {
+                panel.toggle_row_detail(window, cx);
+            });
+        }
+    }
+
     /// Rollback current changes in the active tab's results panel
     pub fn rollback_current_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(TabType::Query(query_tab)) = self.tabs.get_mut(self.active_tab_ix) {

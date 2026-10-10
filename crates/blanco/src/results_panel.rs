@@ -12,6 +12,7 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{Input, InputEvent, InputState},
+    resizable::{ResizableState, h_resizable, resizable_panel},
     scroll::Scrollbar,
     table::{DataTable, TableEvent, TableState},
     tooltip::Tooltip,
@@ -38,6 +39,9 @@ mod compare;
 mod export_actions;
 mod foreign_key_popover;
 mod results_table_delegate;
+mod row_detail;
+#[cfg(test)]
+mod row_detail_test;
 mod row_ops;
 mod table_operations;
 
@@ -45,6 +49,7 @@ mod table_operations;
 pub use cell_edit_state::{CellInput, ChangeType, TableChange};
 pub use chart_view::{ChartView, ResultViewMode};
 pub use results_table_delegate::ResultsTableDelegate;
+pub use row_detail::ROW_DETAIL_CONTEXT;
 
 // Response structure for table operations
 #[derive(Debug, Clone)]
@@ -105,6 +110,11 @@ pub struct ResultsPanel {
     compare_selection: Option<compare::CompareSelection>,
     /// The most recently opened diff, kept so tests can inspect it.
     last_diff_view: Option<Entity<blanco_ui::DiffView>>,
+    /// The row detail side panel, `Some` while it is open.
+    row_detail: Option<row_detail::RowDetail>,
+    /// A refill of the row detail panel is queued for after this frame.
+    row_detail_sync_scheduled: bool,
+    row_detail_resize_state: Entity<ResizableState>,
     _subscriptions: Vec<Subscription>, // Store subscriptions to prevent them from being dropped
 }
 
@@ -142,6 +152,9 @@ impl ResultsPanel {
             tab_strip_scroll_handle: ScrollHandle::new(),
             compare_selection: None,
             last_diff_view: None,
+            row_detail: None,
+            row_detail_sync_scheduled: false,
+            row_detail_resize_state: cx.new(|_| ResizableState::default()),
             _subscriptions: vec![],
         }
     }
@@ -182,6 +195,16 @@ impl ResultsPanel {
             },
         );
 
+        // The row detail panel follows the selected row and its values; the
+        // table notifies on both, but only re-renders itself.
+        let detail_observation = cx.observe(&table_state, |panel, table_state, cx| {
+            if panel.row_detail.is_some()
+                && panel.table_state.entity_id() == table_state.entity_id()
+            {
+                cx.notify();
+            }
+        });
+
         let chart_view = cx.new(|cx| ChartView::new(table_state.clone(), window, cx));
 
         let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder("Filter rows..."));
@@ -205,7 +228,7 @@ impl ResultsPanel {
             key_value: None,
             plan: None,
             filter_input,
-            _subscriptions: vec![subscription, filter_subscription],
+            _subscriptions: vec![subscription, filter_subscription, detail_observation],
         }
     }
 
@@ -1116,6 +1139,7 @@ impl ResultsPanel {
             .is_some_and(|t| t.key_value.is_some());
         let is_table = matches!(active_view_mode, ResultViewMode::Table);
         let is_plan = matches!(active_view_mode, ResultViewMode::Plan);
+        let row_detail_open = self.is_row_detail_open();
         let has_plan = self
             .result_tabs
             .get(active)
@@ -1185,6 +1209,23 @@ impl ResultsPanel {
                         .flex_shrink_0()
                         .gap_1()
                         .px_2()
+                        .when(!is_plan && is_table, |this| {
+                            this.child(
+                                Button::new("toggle-row-detail")
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(IconName::PanelRight)
+                                    .selected(row_detail_open)
+                                    .tooltip_with_action(
+                                        "Row Detail",
+                                        &crate::app::ToggleRowDetail,
+                                        None,
+                                    )
+                                    .on_click(cx.listener(|this, _ev, window, cx| {
+                                        this.toggle_row_detail(window, cx);
+                                    })),
+                            )
+                        })
                         .when(has_plan, |this| {
                             this.child(
                                 Button::new("view-mode-plan")
@@ -1561,7 +1602,11 @@ impl Focusable for ResultsPanel {
 }
 
 impl Render for ResultsPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.row_detail_sync_scheduled && self.row_detail_out_of_sync(cx) {
+            self.row_detail_sync_scheduled = true;
+            cx.defer_in(window, |this, window, cx| this.sync_row_detail(window, cx));
+        }
         let active = self.active_tab;
         let border_color = cx.theme().border;
         let show_strip = self.has_results;
@@ -1635,6 +1680,19 @@ impl Render for ResultsPanel {
                                     .into_any_element(),
                             },
                             (None, ResultViewMode::Chart, Some(chart)) => chart.into_any_element(),
+                            _ if self.row_detail.is_some() => h_resizable("results-row-detail")
+                                .with_state(&self.row_detail_resize_state)
+                                .child(
+                                    resizable_panel()
+                                        .child(DataTable::new(&self.table_state).bordered(false)),
+                                )
+                                .child(
+                                    resizable_panel()
+                                        .size(px(row_detail::ROW_DETAIL_WIDTH))
+                                        .size_range(px(240.)..px(720.))
+                                        .child(self.render_row_detail(cx)),
+                                )
+                                .into_any_element(),
                             _ => DataTable::new(&self.table_state)
                                 .bordered(false)
                                 .into_any_element(),
