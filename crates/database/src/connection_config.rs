@@ -1,5 +1,6 @@
 //! Connection configuration
 
+use crate::driver_params::encode_driver_params;
 use async_trait::async_trait;
 
 pub use blanco_core::{DatabaseType, ParamStyles};
@@ -79,6 +80,9 @@ pub struct ConnectionConfig {
     pub trust_server_certificate: bool,
     /// Reject statements not recognised as reads before they reach the server.
     pub read_only: bool,
+    /// Connection options the dialog does not expose, appended to the
+    /// driver's connection URL. See [`crate::validate_driver_params`].
+    pub driver_params: Vec<(String, String)>,
 }
 
 impl std::fmt::Debug for ConnectionConfig {
@@ -113,6 +117,7 @@ impl std::fmt::Debug for ConnectionConfig {
             .field("ssl_ca_cert_path", &self.ssl_ca_cert_path)
             .field("trust_server_certificate", &self.trust_server_certificate)
             .field("read_only", &self.read_only)
+            .field("driver_params", &self.driver_params)
             .finish()
     }
 }
@@ -153,6 +158,7 @@ impl ConnectionConfig {
             ssl_ca_cert_path: None,
             trust_server_certificate: false,
             read_only: false,
+            driver_params: Vec::new(),
         }
     }
 
@@ -181,6 +187,7 @@ impl ConnectionConfig {
             ssl_ca_cert_path: None,
             trust_server_certificate: false,
             read_only: false,
+            driver_params: Vec::new(),
         }
     }
 
@@ -225,6 +232,11 @@ impl ConnectionConfig {
 
     pub fn with_read_only(mut self, read_only: bool) -> Self {
         self.read_only = read_only;
+        self
+    }
+
+    pub fn with_driver_params(mut self, driver_params: Vec<(String, String)>) -> Self {
+        self.driver_params = driver_params;
         self
     }
 
@@ -287,6 +299,7 @@ impl ConnectionConfig {
                 if let Some(ssl_ca) = &self.ssl_ca_cert_path {
                     params.push(format!("sslrootcert={}", ssl_ca));
                 }
+                params.extend(encode_driver_params(&self.driver_params));
 
                 conn_str = format!("{}?{}", conn_str, params.join("&"));
 
@@ -335,6 +348,7 @@ impl ConnectionConfig {
                 if let Some(ssl_ca) = &self.ssl_ca_cert_path {
                     ssl_params.push(format!("ssl-ca={}", ssl_ca));
                 }
+                ssl_params.extend(encode_driver_params(&self.driver_params));
 
                 if !ssl_params.is_empty() {
                     conn_str = format!("{}?{}", conn_str, ssl_params.join("&"));
@@ -391,6 +405,7 @@ impl ConnectionConfig {
                 if let Some(ssl_key) = &self.ssl_key_path {
                     params.push(format!("sslkey={}", ssl_key));
                 }
+                params.extend(encode_driver_params(&self.driver_params));
 
                 // Build the URL via `url::Url` so that userinfo is properly
                 // percent-encoded (passwords may contain '@', '/', ':' etc.).
@@ -577,6 +592,49 @@ mod tests {
         assert_eq!(
             override_db,
             "postgresql://user:pass@localhost:5432/new_db?application_name=Blanco"
+        );
+    }
+
+    #[test]
+    fn driver_params_are_appended_to_the_connection_url() {
+        let params = |pairs: &[(&str, &str)]| {
+            pairs
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect::<Vec<_>>()
+        };
+        let server = |db_type, port| {
+            ConnectionConfig::new(
+                1,
+                "Test DB".to_string(),
+                db_type,
+                "localhost".to_string(),
+                port,
+                "db".to_string(),
+                "user".to_string(),
+                None,
+            )
+        };
+
+        let postgres = server(DatabaseType::PostgreSQL, 5432)
+            .with_driver_params(params(&[("options", "-c statement_timeout=5000")]));
+        assert_eq!(
+            postgres.connection_string(None, None, None),
+            "postgresql://user@localhost:5432/db?application_name=Blanco&options=-c+statement_timeout%3D5000"
+        );
+
+        let mysql = server(DatabaseType::MySQL, 3306)
+            .with_driver_params(params(&[("charset", "utf8mb4"), ("time-zone", "+00:00")]));
+        assert_eq!(
+            mysql.connection_string(None, None, None),
+            "mysql://user@localhost:3306/db?charset=utf8mb4&time-zone=%2B00%3A00"
+        );
+
+        let clickhouse = server(DatabaseType::ClickHouse, 8123)
+            .with_driver_params(params(&[("max_execution_time", "30")]));
+        assert_eq!(
+            clickhouse.connection_string(None, None, None),
+            "http://user@localhost:8123/?database=db&max_execution_time=30"
         );
     }
 

@@ -129,6 +129,9 @@ pub struct ConnectionData {
     /// Show only `database_name` in the tree and the command palette instead
     /// of every database on the server.
     pub only_configured_database: bool,
+    /// Connection options the dialog does not expose, added to the driver's
+    /// connection URL.
+    pub driver_params: Vec<(String, String)>,
 }
 
 impl std::fmt::Debug for ConnectionData {
@@ -166,6 +169,7 @@ impl std::fmt::Debug for ConnectionData {
             .field("trust_server_certificate", &self.trust_server_certificate)
             .field("read_only", &self.read_only)
             .field("only_configured_database", &self.only_configured_database)
+            .field("driver_params", &self.driver_params)
             .finish()
     }
 }
@@ -229,6 +233,7 @@ impl ConnectionData {
             trust_server_certificate: false,
             read_only: false,
             only_configured_database: false,
+            driver_params: Vec::new(),
         }
     }
 
@@ -269,6 +274,7 @@ impl ConnectionData {
             trust_server_certificate: false,
             read_only: false,
             only_configured_database: false,
+            driver_params: Vec::new(),
         }
     }
 
@@ -397,7 +403,9 @@ impl ConnectionData {
                     self.ssl_cert_path.clone(),
                     self.ssl_ca_cert_path.clone(),
                 );
-                config = config.with_trust_server_certificate(self.trust_server_certificate);
+                config = config
+                    .with_trust_server_certificate(self.trust_server_certificate)
+                    .with_driver_params(self.driver_params.clone());
 
                 config
             }

@@ -11,6 +11,24 @@ pub struct LegacyConnectionCredentials {
     pub ssh_private_key_password: Option<String>,
 }
 
+/// Driver parameters as stored: a JSON array of `[key, value]` pairs, or NULL
+/// when there are none.
+fn driver_params_json(params: &[(String, String)]) -> Option<String> {
+    (!params.is_empty()).then(|| serde_json::to_string(params).unwrap_or_default())
+}
+
+fn parse_driver_params(stored: Option<String>) -> Vec<(String, String)> {
+    stored
+        .and_then(|json| {
+            serde_json::from_str(&json)
+                .inspect_err(|error| {
+                    tracing::warn!("Ignoring unreadable driver parameters: {error}")
+                })
+                .ok()
+        })
+        .unwrap_or_default()
+}
+
 impl AppDatabase {
     pub async fn save_connection(&self, conn: &ConnectionData) -> Result<i64, sqlx::Error> {
         let now = chrono::Utc::now().timestamp();
@@ -30,7 +48,7 @@ impl AppDatabase {
                         ssh_private_key_path = ?,
                         ssl_mode = ?, ssl_key_path = ?, ssl_cert_path = ?, ssl_ca_cert_path = ?,
                         trust_server_certificate = ?, read_only = ?,
-                        only_configured_database = ?
+                        only_configured_database = ?, driver_params = ?
                     WHERE id = ?
                     "#,
                 )
@@ -55,6 +73,7 @@ impl AppDatabase {
                 .bind(if conn.trust_server_certificate { 1 } else { 0 })
                 .bind(if conn.read_only { 1 } else { 0 })
                 .bind(if conn.only_configured_database { 1 } else { 0 })
+                .bind(driver_params_json(&conn.driver_params))
                 .bind(id)
                 .execute(&pool)
                 .await?;
@@ -63,8 +82,8 @@ impl AppDatabase {
                 // Insert new connection
                 let result = sqlx::query(
                     r#"
-                    INSERT INTO connections (name, db_type, host, port, database_name, username, database_path, last_used_at, created_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate, read_only, only_configured_database)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO connections (name, db_type, host, port, database_name, username, database_path, last_used_at, created_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate, read_only, only_configured_database, driver_params)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     "#,
                 )
                 .bind(&conn.name)
@@ -89,6 +108,7 @@ impl AppDatabase {
                 .bind(if conn.trust_server_certificate { 1 } else { 0 })
                 .bind(if conn.read_only { 1 } else { 0 })
                 .bind(if conn.only_configured_database { 1 } else { 0 })
+                .bind(driver_params_json(&conn.driver_params))
                 .execute(&pool)
                 .await?;
 
@@ -105,7 +125,7 @@ impl AppDatabase {
             .run(async move {
             let rows = sqlx::query(
                 r#"
-                SELECT id, name, db_type, host, port, database_name, username, database_path, last_used_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate, read_only, only_configured_database
+                SELECT id, name, db_type, host, port, database_name, username, database_path, last_used_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate, read_only, only_configured_database, driver_params
                 FROM connections
                 ORDER BY name
                 "#,
@@ -152,6 +172,9 @@ impl AppDatabase {
                         only_configured_database: row
                             .get::<i64, _>("only_configured_database")
                             != 0,
+                        driver_params: parse_driver_params(
+                            row.get::<Option<String>, _>("driver_params"),
+                        ),
                     }
                 })
                 .collect();
@@ -364,6 +387,50 @@ mod tests {
                 .first()
                 .is_some_and(|connection| connection.trust_server_certificate)
         );
+    }
+
+    #[tokio::test]
+    async fn driver_params_round_trip_in_order() {
+        let database = AppDatabase::new_in_memory(tokio::runtime::Handle::current())
+            .await
+            .expect("Failed to create in-memory database");
+        let params = vec![
+            (
+                "options".to_string(),
+                "-c statement_timeout=5000".to_string(),
+            ),
+            ("application_name".to_string(), "reports".to_string()),
+        ];
+        let mut connection = ConnectionData::new_postgres(
+            "pg".to_string(),
+            "localhost".to_string(),
+            5432,
+            "app".to_string(),
+            "postgres".to_string(),
+            String::new(),
+        );
+        connection.driver_params = params.clone();
+        let id = database
+            .save_connection(&connection)
+            .await
+            .expect("Failed to save connection");
+
+        let loaded = database.load_connections().await.expect("load");
+        assert_eq!(loaded[0].driver_params, params);
+        assert_eq!(
+            loaded[0]
+                .to_connection_config()
+                .map(|config| config.driver_params),
+            Some(params)
+        );
+
+        // Clearing them stores NULL and loads as none.
+        let mut cleared = loaded[0].clone();
+        cleared.id = Some(id);
+        cleared.driver_params.clear();
+        database.save_connection(&cleared).await.expect("update");
+        let loaded = database.load_connections().await.expect("load");
+        assert!(loaded[0].driver_params.is_empty());
     }
 
     #[tokio::test]

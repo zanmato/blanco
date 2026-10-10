@@ -20,7 +20,10 @@ use gpui_component::{
 use app_database::{ConnectionData, EnvironmentType};
 
 use super::NewConnectionModal;
-use super::shared::{make_input, render_ssh_section, render_ssl_advanced_fields};
+use super::shared::{
+    make_input, optional_secret, optional_trimmed, render_ssh_section, render_ssl_advanced_fields,
+    trimmed_value,
+};
 use super::types::host_contains_explicit_port;
 
 pub(super) struct ServerFormSpec {
@@ -113,7 +116,28 @@ pub(super) struct ServerForm {
     pub ssl_key_input: Entity<InputState>,
     pub ssl_cert_input: Entity<InputState>,
     pub ssl_ca_cert_input: Entity<InputState>,
-    pub ssl_advanced_expanded: bool,
+    pub advanced_expanded: bool,
+    /// Extra `key=value` options for the driver, one row each.
+    pub driver_params: Vec<DriverParamRow>,
+}
+
+pub(super) struct DriverParamRow {
+    key: Entity<InputState>,
+    value: Entity<InputState>,
+}
+
+impl DriverParamRow {
+    fn new(
+        key: Option<&str>,
+        value: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<NewConnectionModal>,
+    ) -> Self {
+        Self {
+            key: make_input(window, cx, "Name", false, key),
+            value: make_input(window, cx, "Value", false, value),
+        }
+    }
 }
 
 impl ServerForm {
@@ -227,6 +251,12 @@ impl ServerForm {
         );
 
         let ssh_enabled = conn.map(|c| c.uses_ssh_tunnel()).unwrap_or(false);
+        let driver_params: Vec<DriverParamRow> = conn
+            .map(|c| c.driver_params.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .map(|(key, value)| DriverParamRow::new(Some(key), Some(value), window, cx))
+            .collect();
 
         Self {
             spec,
@@ -246,7 +276,9 @@ impl ServerForm {
             ssl_key_input,
             ssl_cert_input,
             ssl_ca_cert_input,
-            ssl_advanced_expanded: false,
+            // Open when there are parameters, so they are not hidden away.
+            advanced_expanded: !driver_params.is_empty(),
+            driver_params,
         }
     }
 
@@ -254,8 +286,28 @@ impl ServerForm {
         self.ssh_enabled = !self.ssh_enabled;
     }
 
-    pub fn toggle_ssl_advanced(&mut self) {
-        self.ssl_advanced_expanded = !self.ssl_advanced_expanded;
+    pub fn toggle_advanced(&mut self) {
+        self.advanced_expanded = !self.advanced_expanded;
+    }
+
+    pub fn add_driver_param(&mut self, window: &mut Window, cx: &mut Context<NewConnectionModal>) {
+        self.driver_params
+            .push(DriverParamRow::new(None, None, window, cx));
+    }
+
+    pub fn remove_driver_param(&mut self, ix: usize) {
+        if ix < self.driver_params.len() {
+            self.driver_params.remove(ix);
+        }
+    }
+
+    /// The parameter rows as pairs, skipping rows left entirely blank.
+    fn driver_param_pairs(&self, cx: &App) -> Vec<(String, String)> {
+        self.driver_params
+            .iter()
+            .map(|row| (trimmed_value(&row.key, cx), trimmed_value(&row.value, cx)))
+            .filter(|(key, value)| !key.is_empty() || !value.is_empty())
+            .collect()
     }
 
     fn port_is_optional(&self, host: &str) -> bool {
@@ -263,10 +315,10 @@ impl ServerForm {
     }
 
     pub fn validate(&self, cx: &App) -> Option<String> {
-        let host = self.host_input.read(cx).value();
-        let port_str = self.port_input.read(cx).value();
-        let database = self.database_input.read(cx).value();
-        let username = self.username_input.read(cx).value();
+        let host = trimmed_value(&self.host_input, cx);
+        let port_str = trimmed_value(&self.port_input, cx);
+        let database = trimmed_value(&self.database_input, cx);
+        let username = trimmed_value(&self.username_input, cx);
 
         if host.is_empty() {
             return Some("Host is required".to_string());
@@ -283,7 +335,7 @@ impl ServerForm {
         if username.is_empty() {
             return Some("Username is required".to_string());
         }
-        None
+        database::validate_driver_params(self.spec.db_type, &self.driver_param_pairs(cx)).err()
     }
 
     pub fn get_connection_data(
@@ -292,10 +344,10 @@ impl ServerForm {
         environment_type: EnvironmentType,
         cx: &App,
     ) -> Option<ConnectionData> {
-        let host = self.host_input.read(cx).value().to_string();
-        let port_str = self.port_input.read(cx).value();
-        let database = self.database_input.read(cx).value().to_string();
-        let username = self.username_input.read(cx).value().to_string();
+        let host = trimmed_value(&self.host_input, cx);
+        let port_str = trimmed_value(&self.port_input, cx);
+        let database = trimmed_value(&self.database_input, cx);
+        let username = trimmed_value(&self.username_input, cx);
         let password = self.password_input.read(cx).value().to_string();
 
         if host.is_empty() || database.is_empty() || username.is_empty() {
@@ -322,9 +374,9 @@ impl ServerForm {
         );
 
         if self.ssh_enabled {
-            let ssh_host = self.ssh_host_input.read(cx).value();
-            let ssh_port_str = self.ssh_port_input.read(cx).value();
-            let ssh_user = self.ssh_user_input.read(cx).value();
+            let ssh_host = trimmed_value(&self.ssh_host_input, cx);
+            let ssh_port_str = trimmed_value(&self.ssh_port_input, cx);
+            let ssh_user = trimmed_value(&self.ssh_user_input, cx);
 
             if ssh_host.is_empty() || ssh_user.is_empty() {
                 return None;
@@ -335,30 +387,22 @@ impl ServerForm {
                 ssh_port_str.parse::<i32>().ok()?
             };
             connection = connection.with_ssh(
-                ssh_host.to_string(),
+                ssh_host,
                 ssh_port,
-                ssh_user.to_string(),
-                optional_value(&self.ssh_password_input, cx),
-                optional_value(&self.ssh_private_key_input, cx),
-                optional_value(&self.ssh_private_key_password_input, cx),
+                ssh_user,
+                optional_secret(&self.ssh_password_input, cx),
+                optional_trimmed(&self.ssh_private_key_input, cx),
+                optional_secret(&self.ssh_private_key_password_input, cx),
             );
         }
 
         connection.environment_type = environment_type;
         connection.ssl_mode = self.ssl_mode_select.read(cx).selected_value().cloned();
-        connection.ssl_key_path = optional_value(&self.ssl_key_input, cx);
-        connection.ssl_cert_path = optional_value(&self.ssl_cert_input, cx);
-        connection.ssl_ca_cert_path = optional_value(&self.ssl_ca_cert_input, cx);
+        connection.ssl_key_path = optional_trimmed(&self.ssl_key_input, cx);
+        connection.ssl_cert_path = optional_trimmed(&self.ssl_cert_input, cx);
+        connection.ssl_ca_cert_path = optional_trimmed(&self.ssl_ca_cert_input, cx);
+        connection.driver_params = self.driver_param_pairs(cx);
         Some(connection)
-    }
-}
-
-fn optional_value(input: &Entity<InputState>, cx: &App) -> Option<String> {
-    let value = input.read(cx).value();
-    if value.is_empty() {
-        None
-    } else {
-        Some(value.to_string())
     }
 }
 
@@ -418,7 +462,7 @@ pub(super) fn render(
     cx: &mut Context<NewConnectionModal>,
 ) -> AnyElement {
     let prefix = form.spec.id_prefix;
-    let ssl_advanced_expanded = form.ssl_advanced_expanded;
+    let advanced_expanded = form.advanced_expanded;
     let ssh_enabled = form.ssh_enabled;
 
     v_flex()
@@ -432,25 +476,25 @@ pub(super) fn render(
                 .child(Select::new(&form.ssl_mode_select)),
         )
         .child(
-            Button::new(format!("{prefix}-ssl-advanced-toggle"))
+            Button::new(format!("{prefix}-advanced-toggle"))
                 .ghost()
                 .xsmall()
-                .child(if ssl_advanced_expanded {
-                    "Hide Advanced SSL"
+                .child(if advanced_expanded {
+                    "Hide Advanced Options"
                 } else {
-                    "Show Advanced SSL"
+                    "Show Advanced Options"
                 })
-                .icon(if ssl_advanced_expanded {
+                .icon(if advanced_expanded {
                     IconName::ChevronUp
                 } else {
                     IconName::ChevronDown
                 })
                 .on_click(cx.listener(move |modal, _event, _window, cx| {
-                    select(modal).toggle_ssl_advanced();
+                    select(modal).toggle_advanced();
                     cx.notify();
                 })),
         )
-        .when(ssl_advanced_expanded, |this| {
+        .when(advanced_expanded, |this| {
             this.child(render_ssl_advanced_fields(
                 prefix,
                 &form.ssl_key_input,
@@ -458,6 +502,7 @@ pub(super) fn render(
                 &form.ssl_ca_cert_input,
                 cx,
             ))
+            .child(render_driver_params(select, form, cx))
         })
         .child(
             div().child(
@@ -484,5 +529,48 @@ pub(super) fn render(
                 cx,
             ))
         })
+        .into_any_element()
+}
+
+/// The driver parameter rows with their remove buttons and an add button.
+fn render_driver_params(
+    select: fn(&mut NewConnectionModal) -> &mut ServerForm,
+    form: &ServerForm,
+    cx: &mut Context<NewConnectionModal>,
+) -> AnyElement {
+    let prefix = form.spec.id_prefix;
+    v_flex()
+        .gap_2()
+        .child(div().text_sm().child("Driver Parameters"))
+        .children(form.driver_params.iter().enumerate().map(|(ix, row)| {
+            h_flex()
+                .gap_2()
+                .child(div().flex_1().child(Input::new(&row.key)))
+                .child(div().flex_1().child(Input::new(&row.value)))
+                .child(
+                    Button::new(format!("{prefix}-driver-param-remove-{ix}"))
+                        .ghost()
+                        .small()
+                        .icon(IconName::Close)
+                        .tooltip("Remove Parameter")
+                        .on_click(cx.listener(move |modal, _event, _window, cx| {
+                            select(modal).remove_driver_param(ix);
+                            cx.notify();
+                        })),
+                )
+        }))
+        .child(
+            h_flex().child(
+                Button::new(format!("{prefix}-driver-param-add"))
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::Plus)
+                    .label("Add Parameter")
+                    .on_click(cx.listener(move |modal, _event, window, cx| {
+                        select(modal).add_driver_param(window, cx);
+                        cx.notify();
+                    })),
+            ),
+        )
         .into_any_element()
 }

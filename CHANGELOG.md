@@ -6,6 +6,13 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- Driver Parameters under Show Advanced Options in the PostgreSQL, MySQL and
+  ClickHouse connection dialogs add connection options the dialog does not
+  expose, such as `options=-c statement_timeout=5000` on PostgreSQL or a
+  ClickHouse setting. A key the driver does not read is refused with a message
+  naming it and what is accepted
+- The connection dialog trims surrounding whitespace from hosts, ports,
+  database names, users and paths
 - A search field in the title bar opens the command palette and shows its
   shortcut
 - Blanco checks for new releases hourly and shows an Update button in the

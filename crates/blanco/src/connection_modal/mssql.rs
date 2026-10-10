@@ -13,7 +13,9 @@ use gpui_component::{
 use app_database::{ConnectionData, EnvironmentType};
 
 use super::NewConnectionModal;
-use super::shared::{make_input, render_ssh_section};
+use super::shared::{
+    make_input, optional_secret, optional_trimmed, render_ssh_section, trimmed_value,
+};
 
 pub(super) struct MssqlForm {
     pub host_input: Entity<InputState>,
@@ -159,10 +161,10 @@ impl MssqlForm {
     }
 
     pub fn validate(&self, cx: &App) -> Option<String> {
-        let host = self.host_input.read(cx).value();
-        let port_str = self.port_input.read(cx).value();
-        let database = self.database_input.read(cx).value();
-        let username = self.username_input.read(cx).value();
+        let host = trimmed_value(&self.host_input, cx);
+        let port_str = trimmed_value(&self.port_input, cx);
+        let database = trimmed_value(&self.database_input, cx);
+        let username = trimmed_value(&self.username_input, cx);
 
         if host.is_empty() {
             return Some("Host is required".to_string());
@@ -188,10 +190,10 @@ impl MssqlForm {
         environment_type: EnvironmentType,
         cx: &App,
     ) -> Option<ConnectionData> {
-        let host = self.host_input.read(cx).value().to_string();
-        let port_str = self.port_input.read(cx).value();
-        let database = self.database_input.read(cx).value().to_string();
-        let username = self.username_input.read(cx).value().to_string();
+        let host = trimmed_value(&self.host_input, cx);
+        let port_str = trimmed_value(&self.port_input, cx);
+        let database = trimmed_value(&self.database_input, cx);
+        let username = trimmed_value(&self.username_input, cx);
         let password = self.password_input.read(cx).value().to_string();
 
         if host.is_empty() || database.is_empty() || username.is_empty() {
@@ -202,9 +204,9 @@ impl MssqlForm {
         let encrypt = self.encrypt_select.read(cx).selected_value().cloned();
 
         let mut connection = if self.ssh_enabled {
-            let ssh_host = self.ssh_host_input.read(cx).value();
-            let ssh_port_str = self.ssh_port_input.read(cx).value();
-            let ssh_user = self.ssh_user_input.read(cx).value();
+            let ssh_host = trimmed_value(&self.ssh_host_input, cx);
+            let ssh_port_str = trimmed_value(&self.ssh_port_input, cx);
+            let ssh_user = trimmed_value(&self.ssh_user_input, cx);
 
             if ssh_host.is_empty() || ssh_user.is_empty() {
                 return None;
@@ -214,14 +216,15 @@ impl MssqlForm {
             } else {
                 ssh_port_str.parse::<i32>().ok()?
             };
-            let ssh_password = optional_path(&self.ssh_password_input, cx);
-            let ssh_private_key_path = optional_path(&self.ssh_private_key_input, cx);
-            let ssh_private_key_password = optional_path(&self.ssh_private_key_password_input, cx);
+            let ssh_password = optional_secret(&self.ssh_password_input, cx);
+            let ssh_private_key_path = optional_trimmed(&self.ssh_private_key_input, cx);
+            let ssh_private_key_password =
+                optional_secret(&self.ssh_private_key_password_input, cx);
 
             ConnectionData::new_mssql(name, host, port, database, username, password).with_ssh(
-                ssh_host.to_string(),
+                ssh_host,
                 ssh_port,
-                ssh_user.to_string(),
+                ssh_user,
                 ssh_password,
                 ssh_private_key_path,
                 ssh_private_key_password,
@@ -233,15 +236,6 @@ impl MssqlForm {
         connection.ssl_mode = encrypt;
         connection.trust_server_certificate = self.trust_server_certificate;
         Some(connection)
-    }
-}
-
-fn optional_path(input: &Entity<InputState>, cx: &App) -> Option<String> {
-    let value = input.read(cx).value();
-    if value.is_empty() {
-        None
-    } else {
-        Some(value.to_string())
     }
 }
 
