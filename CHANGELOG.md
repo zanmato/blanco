@@ -6,6 +6,10 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- The sidebar follows the active tab: switching tabs, or opening a table
+  from the command palette, selects that tab's table, view or routine,
+  loading and opening the groups above it and scrolling it into view. Follow
+  Active Tab in the General settings turns it off
 - A search field in the title bar opens the command palette and shows its
   shortcut
 - Blanco checks for new releases hourly and shows an Update button in the
@@ -20,6 +24,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixes
 
+- The sidebar selection no longer jumps to another row or disappears when
+  the tree refreshes or a group above it is collapsed and opened again
 - Clicking a cell in the results table no longer starts a text selection in
   the SQL view that follows the pointer with no button held
 

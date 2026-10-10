@@ -163,6 +163,36 @@ impl TabType {
         }
     }
 
+    /// The table, view or routine the tab shows, for the sidebar to select:
+    /// a structure or DDL tab's object, or the table a query tab's current
+    /// result was read from.
+    pub fn reveal_target(&self, cx: &App) -> Option<crate::connections::RevealTarget> {
+        let (context, name) = match self {
+            TabType::TableStructure(tab) => {
+                let tab = tab.read(cx);
+                (tab.context.clone(), tab.table_name.clone())
+            }
+            TabType::ObjectDdl(tab) => {
+                let tab = tab.read(cx);
+                (tab.context.clone(), tab.object_name.clone())
+            }
+            TabType::Query(tab) => {
+                let name = tab.base.results_panel.read(cx).source_table(cx)?;
+                (
+                    tab.base.context.clone(),
+                    unquote_identifier(&name).to_string(),
+                )
+            }
+            _ => return None,
+        };
+        Some(crate::connections::RevealTarget {
+            connection_id: context.connection_id,
+            database_name: context.database_name,
+            schema_name: context.schema_name,
+            name,
+        })
+    }
+
     /// The shared editor/results/terminal state of a query or script tab.
     pub fn connection_tab(&self) -> Option<&ConnectionBackedTab> {
         match self {
@@ -229,4 +259,17 @@ pub struct ObjectDdlParams {
 pub struct TableStructureParams {
     pub context: ConnectionContext,
     pub table_name: String,
+}
+
+/// `name` without the quotes a parser keeps on a quoted identifier.
+fn unquote_identifier(name: &str) -> &str {
+    for (open, close) in [('"', '"'), ('`', '`'), ('[', ']')] {
+        if let Some(inner) = name
+            .strip_prefix(open)
+            .and_then(|rest| rest.strip_suffix(close))
+        {
+            return inner;
+        }
+    }
+    name
 }
