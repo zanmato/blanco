@@ -80,6 +80,7 @@ actions!(
         SaveTab,
         SaveTabAs,
         ReopenClosedTab,
+        OpenReferencedRow,
         ClearSelection,
         ToggleRenderWhitespace,
         ToggleWordWrap,
@@ -275,6 +276,18 @@ pub struct CreateNewQueryTab {
     /// the "Inspect Key" action on key/value backends). Plain "New Query" leaves
     /// this false and just opens an editor tab.
     pub inspect_key: bool,
+}
+
+/// Open `sql` in a new query tab on a connection and run it, as following a
+/// foreign key to the row it references does.
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct ShowQueryInNewTab {
+    pub connection_id: i64,
+    pub database_name: String,
+    pub schema_name: Option<String>,
+    pub title: String,
+    pub sql: String,
 }
 
 /// Open a JavaScript script tab on a connection. Scripts are connection-scoped
@@ -1937,6 +1950,46 @@ impl BlancoApp {
             .update(cx, |panel, cx| panel.reopen_closed_tab(window, cx));
     }
 
+    fn on_show_query_in_new_tab(
+        &mut self,
+        action: &ShowQueryInNewTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(connection) = self
+            .sidebar
+            .read(cx)
+            .connections
+            .iter()
+            .find(|connection| connection.id == Some(action.connection_id))
+            .cloned()
+        else {
+            return;
+        };
+        let context = ConnectionContext {
+            connection_id: action.connection_id,
+            connection_name: connection.name,
+            db_type: connection.db_type,
+            database_name: action.database_name.clone(),
+            schema_name: action.schema_name.clone(),
+            environment_type: Some(connection.environment_type),
+        };
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.create_and_add_tab_with_connection(
+                window,
+                TabCreationParams {
+                    title: action.title.clone(),
+                    content: Some(action.sql.clone()),
+                    db_id: None,
+                    last_run_at: None,
+                    context,
+                },
+                cx,
+            );
+            panel.on_run_query(window, cx);
+        });
+    }
+
     fn on_database_connected(
         &mut self,
         action: &DatabaseConnected,
@@ -2930,6 +2983,7 @@ impl Render for BlancoApp {
                 }
             }))
             .on_action(cx.listener(Self::on_reopen_closed_tab))
+            .on_action(cx.listener(Self::on_show_query_in_new_tab))
             .size_full()
             .overflow_hidden()
             .bg(cx.theme().background)

@@ -1,9 +1,9 @@
 use crate::app::{
     ActivateNextTab, ActivatePreviousTab, CancelQuery, CloseActiveTab, CommitChanges,
     DecreaseEditorFontSize, ExplainQuery, ExportTableData, FormatQuery, ImportTableData,
-    IncreaseEditorFontSize, NewQueryTab, OpenSettings, OpenTerminal, RefreshConnections,
-    ReopenClosedTab, ResetEditorFontSize, RollbackChanges, RunQuery, SaveTab, SaveTabAs,
-    ToggleCommandPalette, ToggleFilterBar, ToggleResults, ToggleSidebar,
+    IncreaseEditorFontSize, NewQueryTab, OpenReferencedRow, OpenSettings, OpenTerminal,
+    RefreshConnections, ReopenClosedTab, ResetEditorFontSize, RollbackChanges, RunQuery, SaveTab,
+    SaveTabAs, ToggleCommandPalette, ToggleFilterBar, ToggleResults, ToggleSidebar,
 };
 use crate::settings::Settings;
 
@@ -193,6 +193,13 @@ pub const CUSTOMIZABLE_BINDINGS: &[BindingDef] = &[
         context: None,
     },
     BindingDef {
+        action: "OpenReferencedRow",
+        label: "Open referenced row",
+        group: "Data",
+        default: "alt-enter",
+        context: Some("DataTable"),
+    },
+    BindingDef {
         action: "IncreaseEditorFontSize",
         label: "Increase editor font size",
         group: "Editor",
@@ -307,6 +314,7 @@ fn key_binding(action: &str, keystrokes: &str, context: Option<&str>) -> Option<
         "OpenSettings" => gpui::KeyBinding::new(keystrokes, OpenSettings, context),
         "OpenTerminal" => gpui::KeyBinding::new(keystrokes, OpenTerminal, context),
         "ReopenClosedTab" => gpui::KeyBinding::new(keystrokes, ReopenClosedTab, context),
+        "OpenReferencedRow" => gpui::KeyBinding::new(keystrokes, OpenReferencedRow, context),
         "IncreaseEditorFontSize" => {
             gpui::KeyBinding::new(keystrokes, IncreaseEditorFontSize, context)
         }

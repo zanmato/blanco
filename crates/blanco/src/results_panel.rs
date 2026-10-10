@@ -443,6 +443,24 @@ impl ResultsPanel {
             .any(|tab| tab.table_state.read(cx).delegate().has_pending_changes())
     }
 
+    /// Open the row the selected foreign key cell references in a new tab.
+    fn on_open_referenced_row(
+        &mut self,
+        _: &crate::app::OpenReferencedRow,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let table_state = self.table_state.read(cx);
+        let request = table_state.selected_cell().and_then(|(row_ix, col_ix)| {
+            table_state
+                .delegate()
+                .referenced_row_request(row_ix, col_ix)
+        });
+        if let Some(request) = request {
+            window.dispatch_action(Box::new(request), cx);
+        }
+    }
+
     pub fn activate_tab(&mut self, index: usize, cx: &mut Context<Self>) {
         if index >= self.result_tabs.len() || index == self.active_tab {
             return;
@@ -1718,6 +1736,7 @@ impl Render for ResultsPanel {
             .on_action(cx.listener(Self::on_export_as_json))
             .on_action(cx.listener(Self::on_export_as_sql))
             .on_action(cx.listener(Self::on_export_as_markdown))
+            .on_action(cx.listener(Self::on_open_referenced_row))
             .on_action(cx.listener(Self::on_add_row))
             .on_action(cx.listener(Self::on_duplicate_row))
             .on_action(cx.listener(Self::on_delete_row))
