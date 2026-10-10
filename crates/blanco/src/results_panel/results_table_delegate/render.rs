@@ -14,7 +14,7 @@ use gpui_component::{
     clipboard::Clipboard,
     h_flex,
     input::{Editor, EditorState, Input, InputState, MoveLeft, MoveRight},
-    menu::PopupMenu,
+    menu::{ContextMenuExt as _, PopupMenu},
     table::{Column, ColumnSort, TableDelegate, TableState},
     tooltip::Tooltip,
     v_flex,
@@ -25,9 +25,10 @@ use blanco_core::connection_trait::ColumnType;
 use super::ResultsTableDelegate;
 use crate::app::{
     AddRow, ClearCompareSelection, CompareCellWithSelected, CompareRowWithSelected, CopyAsCSV,
-    CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CopyAsVALUES, DeleteRow, DuplicateRow,
-    ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV, FilterByCellValue,
-    SelectCellForCompare, SelectRowForCompare, SetCellDefault, SetCellNull, ToggleCellExpression,
+    CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CopyAsVALUES, CopyColumnValues, DeleteRow,
+    DuplicateRow, ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV,
+    FilterByCellValue, SelectCellForCompare, SelectRowForCompare, SetCellDefault, SetCellNull,
+    ToggleCellExpression,
 };
 use crate::results_panel::cell_edit_state::{CellInput, compare_numeric, format_value_for_display};
 use crate::results_panel::compare::CompareKind;
@@ -692,6 +693,7 @@ impl TableDelegate for ResultsTableDelegate {
                         )
                     }),
             )
+            .context_menu(move |menu, _, _| column_copy_items(menu, col_ix, false))
     }
 
     fn render_td(
@@ -823,6 +825,8 @@ impl TableDelegate for ResultsTableDelegate {
             Box::new(CopyAsMarkdown),
         )
         .separator()
+        .map(|menu| column_copy_items(menu, cell.1, true))
+        .separator()
         // Export operations
         .menu_with_icon(
             "Export as CSV",
@@ -936,4 +940,21 @@ impl TableDelegate for ResultsTableDelegate {
             )
         })
     }
+}
+
+/// The entries that copy one column's values. From the cell menu
+/// (`selected_only`) they cover the selected rows when several are selected.
+fn column_copy_items(menu: PopupMenu, column: usize, selected_only: bool) -> PopupMenu {
+    let copy = |distinct: bool, as_in_list: bool| {
+        Box::new(CopyColumnValues {
+            column,
+            distinct,
+            as_in_list,
+            selected_only,
+        })
+    };
+    menu.menu("Copy Column Values", copy(false, false))
+        .menu("Copy Distinct Column Values", copy(true, false))
+        .menu("Copy Column as IN List", copy(false, true))
+        .menu("Copy Distinct Column as IN List", copy(true, true))
 }
