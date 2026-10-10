@@ -54,7 +54,7 @@ impl From<&ConnectionContext> for TabConnection {
             schema: context.schema_name.clone(),
             environment: context
                 .environment_type
-                .map(|environment| environment.display_name().to_string()),
+                .map(|environment| environment.display_name()),
         }
     }
 }
@@ -114,11 +114,12 @@ pub(crate) struct WriteConfirmation {
 }
 
 impl WriteConfirmation {
-    pub(crate) fn title(&self) -> &'static str {
-        if self.environment == Some(EnvironmentType::Prod) {
-            "An agent wants to write to PROD"
-        } else {
-            "An agent wants to run a write statement"
+    pub(crate) fn title(&self) -> String {
+        match self.environment {
+            Some(environment) if environment.confirms_writes() => {
+                format!("An agent wants to write to {environment}")
+            }
+            _ => "An agent wants to run a write statement".to_string(),
         }
     }
 

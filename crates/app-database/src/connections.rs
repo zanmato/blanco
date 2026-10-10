@@ -322,7 +322,7 @@ mod tests {
             Some("key_pass".to_string()),
         );
         connection.ssl_mode = Some("disabled".to_string());
-        connection.environment_type = EnvironmentType::Prod;
+        connection.environment_type = EnvironmentType::PROD;
         connection.idle_timeout_minutes = Some(15);
 
         let saved_id = db
@@ -346,7 +346,7 @@ mod tests {
         assert_eq!(loaded.database_name.as_deref(), Some("mydb"));
         assert_eq!(loaded.username.as_deref(), Some("admin"));
         assert_eq!(loaded.password, None);
-        assert_eq!(loaded.environment_type, EnvironmentType::Prod);
+        assert_eq!(loaded.environment_type, EnvironmentType::PROD);
         assert_eq!(loaded.idle_timeout_minutes, Some(15));
 
         // SSH fields

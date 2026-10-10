@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 /// Schema version stored in SQLite's `PRAGMA user_version`. Bump it and append
 /// a step to [`MIGRATIONS`] for every schema change.
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 8;
 
 /// The complete schema for a fresh database, at [`SCHEMA_VERSION`]. Keep it in
 /// sync with the migrations: a database created from this must be identical
@@ -89,6 +89,14 @@ const BASELINE: &[&str] = &[
     )
     "#,
     r#"
+    CREATE TABLE environment_tags (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        color TEXT NOT NULL,
+        confirm_writes INTEGER NOT NULL DEFAULT 0
+    )
+    "#,
+    r#"
     CREATE TABLE settings (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
@@ -113,6 +121,7 @@ const MIGRATIONS: &[Migration] = &[
     |pool| Box::pin(migrate_v4_to_v5(pool)),
     |pool| Box::pin(migrate_v5_to_v6(pool)),
     |pool| Box::pin(migrate_v6_to_v7(pool)),
+    |pool| Box::pin(migrate_v7_to_v8(pool)),
 ];
 
 /// Columns that may be missing from an unversioned database, per table, in the
@@ -212,6 +221,15 @@ async fn migrate_v6_to_v7(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query("ALTER TABLE connections ADD COLUMN ssh_jump_hosts TEXT")
         .execute(pool)
         .await?;
+    Ok(())
+}
+
+async fn migrate_v7_to_v8(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE environment_tags (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, color TEXT NOT NULL, confirm_writes INTEGER NOT NULL DEFAULT 0)",
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -354,6 +372,7 @@ mod tests {
             "query_history",
             "snippets",
             "settings",
+            "environment_tags",
         ] {
             assert_eq!(
                 columns(&pool, table).await,

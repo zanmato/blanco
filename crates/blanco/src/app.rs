@@ -829,7 +829,9 @@ impl BlancoApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let is_prod = confirmation.environment == Some(blanco_core::EnvironmentType::Prod);
+        let is_prod = confirmation
+            .environment
+            .is_some_and(blanco_core::EnvironmentType::confirms_writes);
         let title = confirmation.title();
         let target = confirmation.target();
         let sql_view = cx.new(|cx| {
@@ -860,7 +862,7 @@ impl BlancoApp {
             let abandoned = abandoned.get();
             let waiting_count = waiting.len();
             dialog
-                .title(title)
+                .title(title.clone())
                 .overlay_closable(false)
                 .child(
                     v_flex()

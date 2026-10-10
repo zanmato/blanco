@@ -371,19 +371,21 @@ impl TableStructureTab {
         cx.notify();
     }
 
-    fn prod_note(&self) -> &'static str {
-        if self.context.is_prod() {
-            " on a PROD connection"
-        } else {
-            ""
+    fn prod_note(&self) -> String {
+        match self.context.environment_type {
+            Some(environment) if environment.confirms_writes() => {
+                format!(" on a {environment} connection")
+            }
+            _ => String::new(),
         }
     }
 
     fn confirm_label(&self, label: &str) -> String {
-        if self.context.is_prod() {
-            format!("{label} on PROD")
-        } else {
-            label.to_string()
+        match self.context.environment_type {
+            Some(environment) if environment.confirms_writes() => {
+                format!("{label} on {environment}")
+            }
+            _ => label.to_string(),
         }
     }
 
@@ -409,7 +411,7 @@ impl TableStructureTab {
         } else {
             "Add"
         });
-        let is_prod = self.context.is_prod();
+        let is_prod = self.context.confirms_writes();
         let this_handle = cx.entity().downgrade();
 
         window.open_dialog(cx, move |dialog, _, _| {
@@ -637,7 +639,7 @@ impl TableStructureTab {
             self.prod_note()
         );
         let confirm_label = self.confirm_label("Create");
-        let is_prod = self.context.is_prod();
+        let is_prod = self.context.confirms_writes();
         let this_handle = cx.entity().downgrade();
 
         window.open_dialog(cx, move |dialog, _, _| {
@@ -684,7 +686,7 @@ impl TableStructureTab {
             self.prod_note()
         );
         let confirm_label = self.confirm_label("Create");
-        let is_prod = self.context.is_prod();
+        let is_prod = self.context.confirms_writes();
         let this_handle = cx.entity().downgrade();
 
         window.open_dialog(cx, move |dialog, _, _| {

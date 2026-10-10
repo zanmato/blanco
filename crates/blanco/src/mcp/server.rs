@@ -85,7 +85,8 @@ impl ResolvedConnection {
     }
 
     fn is_prod(&self) -> bool {
-        self.environment == Some(EnvironmentType::Prod)
+        self.environment
+            .is_some_and(EnvironmentType::confirms_writes)
     }
 }
 

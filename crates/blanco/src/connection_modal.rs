@@ -98,15 +98,17 @@ impl NewConnectionModal {
         let db_type_select = cx
             .new(|cx| SelectState::new(db_types, initial_db_type.map(IndexPath::new), window, cx));
 
-        let environment_types = vec!["DEV".to_string(), "TEST".to_string(), "PROD".to_string()];
-        let initial_env_index = connection_data
+        let tags = blanco_core::environment_tags();
+        let environment_types: Vec<String> = tags.iter().map(|tag| tag.name.clone()).collect();
+        let current_environment = connection_data
             .as_ref()
-            .map(|c| match c.environment_type {
-                EnvironmentType::Test => 1,
-                EnvironmentType::Prod => 2,
-                _ => 0,
-            })
-            .or(Some(0));
+            .map_or(EnvironmentType::DEV, |connection| {
+                connection.environment_type
+            });
+        let initial_env_index = tags
+            .iter()
+            .position(|tag| tag.id == current_environment)
+            .or_else(|| tags.iter().position(|tag| tag.id == EnvironmentType::DEV));
         let environment_type_select = cx.new(|cx| {
             SelectState::new(
                 environment_types,
@@ -185,17 +187,11 @@ impl NewConnectionModal {
     }
 
     fn get_selected_environment_type(&self, cx: &App) -> EnvironmentType {
-        let selected = self
-            .environment_type_select
-            .read(cx)
-            .selected_value()
-            .unwrap_or(&"DEV".to_string())
-            .clone();
-        match selected.as_str() {
-            "TEST" => EnvironmentType::Test,
-            "PROD" => EnvironmentType::Prod,
-            _ => EnvironmentType::Dev,
-        }
+        let selected = self.environment_type_select.read(cx).selected_value();
+        blanco_core::environment_tags()
+            .into_iter()
+            .find(|tag| Some(&tag.name) == selected)
+            .map_or(EnvironmentType::DEV, |tag| tag.id)
     }
 
     fn validate(&self, connector_type: &ConnectorType, cx: &App) -> Option<String> {

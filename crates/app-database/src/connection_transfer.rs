@@ -4,7 +4,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ConnectionData, EnvironmentType};
+use crate::ConnectionData;
+#[cfg(test)]
+use crate::EnvironmentType;
 use database::{DatabaseType, SecretKind};
 
 /// Identifies the document format, so a wrong file is refused clearly.
@@ -76,7 +78,7 @@ impl From<&ConnectionData> for ExportedConnection {
             database_name: connection.database_name.clone(),
             username: connection.username.clone(),
             database_path: connection.database_path.clone(),
-            environment: connection.environment_type.display_name().to_string(),
+            environment: connection.environment_type.display_name(),
             ssh_host: connection.ssh_host.clone(),
             ssh_port: connection.ssh_port,
             ssh_user: connection.ssh_user.clone(),
@@ -107,18 +109,13 @@ impl ExportedConnection {
                 self.db_type
             )
         })?;
-        let environment_type = [
-            EnvironmentType::Dev,
-            EnvironmentType::Test,
-            EnvironmentType::Prod,
-        ]
-        .into_iter()
-        .find(|environment| {
-            environment
-                .display_name()
-                .eq_ignore_ascii_case(&self.environment)
-        })
-        .unwrap_or_default();
+        // A tag is exported by name. One this machine does not have falls
+        // back to the default.
+        let environment_type = blanco_core::environment_tags()
+            .into_iter()
+            .find(|tag| tag.name.eq_ignore_ascii_case(&self.environment))
+            .map(|tag| tag.id)
+            .unwrap_or_default();
         let mut connection = ConnectionData::new_sqlite(self.name, String::new());
         connection.db_type = db_type;
         connection.host = self.host;
@@ -264,7 +261,7 @@ mod tests {
     fn test_export_leaves_secrets_out_and_round_trips() {
         let mut prod = postgres("Prod");
         prod.id = Some(4);
-        prod.environment_type = EnvironmentType::Prod;
+        prod.environment_type = EnvironmentType::PROD;
         prod.read_only = true;
 
         let document = export_connections(&[prod.clone()]);
@@ -277,7 +274,7 @@ mod tests {
         assert_eq!(imported.id, None);
         assert_eq!(imported.password, None);
         assert_eq!(imported.ssh_password, None);
-        assert_eq!(imported.environment_type, EnvironmentType::Prod);
+        assert_eq!(imported.environment_type, EnvironmentType::PROD);
         assert_eq!(
             imported.ssh_private_key_path.as_deref(),
             Some("~/.ssh/id_ed25519")

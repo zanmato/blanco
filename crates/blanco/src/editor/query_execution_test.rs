@@ -516,7 +516,7 @@ async fn test_history_search_filters_entries(cx: &mut TestAppContext) {
 /// dialog instead of executing, so the statement never reaches the database.
 #[gpui::test]
 async fn test_prod_write_requires_confirmation(cx: &mut TestAppContext) {
-    let harness = TestHarness::new_with_environment(cx, app_database::EnvironmentType::Prod);
+    let harness = TestHarness::new_with_environment(cx, app_database::EnvironmentType::PROD);
     let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
 
     set_editor_text(&harness, "CREATE TABLE guarded (id INTEGER)", &mut cx);

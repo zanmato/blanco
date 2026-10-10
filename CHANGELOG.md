@@ -178,6 +178,13 @@ All notable changes to this project will be documented in this file.
   the word being typed. Snippet text may hold tab stops such as `$1`,
   `${1:default}` and `$0`; the caret lands on the first one, with its default
   selected. Write `\$` for a literal dollar sign before a digit
+- Environment tags beyond DEV, TEST and PROD: built-in LOCAL and STAGING, and
+  custom tags with a name and a colour, managed in the new Environments
+  settings page. The colour is one of the theme's, which follows light and
+  dark themes, or any other from the colour picker. Each custom tag says
+  whether writes on its connections are confirmed first, as on PROD. The
+  filter button next to the sidebar search shows only the connections with
+  one tag
 
 ### Fixes
 

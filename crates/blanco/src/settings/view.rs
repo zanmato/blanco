@@ -102,6 +102,7 @@ pub struct SettingsView {
     save_tasks: std::collections::HashMap<String, gpui::Task<()>>,
     ui_font_select: Option<Entity<SelectState<SearchableVec<FontOption>>>>,
     mono_font_select: Option<Entity<SelectState<SearchableVec<FontOption>>>>,
+    environment_tags_editor: Option<Entity<super::environments_page::EnvironmentTagsEditor>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -112,6 +113,7 @@ impl SettingsView {
             save_tasks: std::collections::HashMap::new(),
             ui_font_select: None,
             mono_font_select: None,
+            environment_tags_editor: None,
             // Re-render when the MCP server starts, stops or fails so the
             // status row stays current.
             _subscriptions: vec![cx.observe_global::<McpService>(|_, cx| cx.notify())],
@@ -905,6 +907,11 @@ impl SettingsView {
                     ),
                 ]),
             ]),
+            super::environments_page::environments_page(
+                self.environment_tags_editor
+                    .clone()
+                    .expect("created before the pages"),
+            ),
             // Appearance Settings Page
             SettingPage::new("Appearance").resettable(true).groups(vec![
                 SettingGroup::new().title("Theme").items(vec![
@@ -1297,6 +1304,10 @@ impl Focusable for SettingsView {
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_font_selects(window, cx);
+        if self.environment_tags_editor.is_none() {
+            self.environment_tags_editor =
+                Some(cx.new(|cx| super::environments_page::EnvironmentTagsEditor::new(window, cx)));
+        }
 
         GpuiSettings::new("blanco-settings")
             .with_group_variant(GroupBoxVariant::Outline)

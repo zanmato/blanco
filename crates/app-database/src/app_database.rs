@@ -1,5 +1,6 @@
 pub mod connection_transfer;
 mod connections;
+mod environment_tags;
 mod query_history;
 mod query_tabs;
 mod schema;

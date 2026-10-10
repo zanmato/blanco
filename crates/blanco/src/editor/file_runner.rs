@@ -204,7 +204,10 @@ impl EditorPanel {
             Self::push_error("A file is already running", window, cx);
             return;
         }
-        let is_prod = context.is_prod();
+        // Set for a connection whose tag confirms writes, as PROD does.
+        let confirmed_environment = context
+            .environment_type
+            .filter(|environment| environment.confirms_writes());
         let connection_name = context.connection_name.clone();
         let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: true,
@@ -237,15 +240,15 @@ impl EditorPanel {
                 let Some(ix) = this.tabs.len().checked_sub(1) else {
                     return;
                 };
-                if is_prod {
+                if let Some(environment) = confirmed_environment {
                     let name = file_name(&path);
                     this.confirm_prod_write(
                         ProdWritePrompt {
-                            title: "Run SQL file on PROD?",
+                            title: format!("Run SQL file on {environment}?"),
                             message: format!(
-                                "Every statement in {name} runs on {connection_name}, a PROD connection."
+                                "Every statement in {name} runs on \"{connection_name}\", which is tagged {environment}."
                             ),
-                            confirm_label: "Run on PROD",
+                            confirm_label: format!("Run on {environment}"),
                             tab_index: ix,
                         },
                         move |this, window, cx| this.start_file_run(ix, path.clone(), window, cx),

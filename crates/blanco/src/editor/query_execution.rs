@@ -14,7 +14,7 @@ use crate::result_ext::ResultExt;
 use crate::sql::{extract_statement_info, extract_statement_info_with_styles};
 use crate::status_bar::{ActivityReporter, ActivityResult};
 use crate::time_format;
-use app_database::{AppDatabase, EnvironmentType, QueryHistoryData};
+use app_database::{AppDatabase, QueryHistoryData};
 use blanco_core::StatementAccess;
 use database::{DatabaseService, DatabaseServiceTrait};
 use sql_parser::statement_parser::QueryParameter;
@@ -37,15 +37,17 @@ impl EditorPanel {
         if let Some(TabType::Script(script_tab)) = self.tabs.get(tab_index) {
             // A script can issue any statement through `db`, so the whole run
             // is confirmed rather than individual statements.
-            if script_tab.context.environment_type == Some(EnvironmentType::Prod) {
+            if let Some(environment) = script_tab.context.environment_type
+                && environment.confirms_writes()
+            {
                 let connection_name = script_tab.context.connection_name.clone();
                 self.confirm_prod_write(
                     ProdWritePrompt {
-                        title: "Run script on PROD?",
+                        title: format!("Run script on {environment}?"),
                         message: format!(
-                            "\"{connection_name}\" is tagged as a production connection. Scripts can modify data through `db.execute` and `db.transaction`."
+                            "\"{connection_name}\" is tagged {environment}. Scripts can modify data through `db.execute` and `db.transaction`."
                         ),
-                        confirm_label: "Run on PROD",
+                        confirm_label: format!("Run on {environment}"),
                         tab_index,
                     },
                     |panel, window, cx| panel.execute_script_tab(window, cx),
@@ -190,24 +192,27 @@ impl EditorPanel {
         let Some(TabType::Query(query_tab)) = self.tabs.get(self.active_tab_ix) else {
             return;
         };
-        let is_prod = query_tab.context.environment_type == Some(EnvironmentType::Prod);
+        let confirming_environment = query_tab
+            .context
+            .environment_type
+            .filter(|environment| environment.confirms_writes());
         let is_write = blanco_core::write_guard::classify(query_tab.context.db_type, &query)
             == StatementAccess::Write;
-        if !(is_prod && is_write) {
+        let Some(environment) = confirming_environment.filter(|_| is_write) else {
             self.execute_query_unchecked(query, connection_id, database_name, window, cx);
             return;
-        }
+        };
 
         let connection_name = query_tab.context.connection_name.clone();
         let database_name = database_name.to_string();
         let tab_index = self.active_tab_ix;
         self.confirm_prod_write(
             ProdWritePrompt {
-                title: "Run write statement on PROD?",
+                title: format!("Run write statement on {environment}?"),
                 message: format!(
-                    "\"{connection_name}\" is tagged as a production connection and this statement modifies data."
+                    "\"{connection_name}\" is tagged {environment} and this statement modifies data."
                 ),
-                confirm_label: "Run on PROD",
+                confirm_label: format!("Run on {environment}"),
                 tab_index,
             },
             move |panel, window, cx| {
