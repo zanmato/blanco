@@ -400,6 +400,9 @@ pub struct BlancoApp {
     snippets_panel: Entity<SnippetsPanel>,
     history_panel: Entity<HistoryPanel>,
     editor_panel: Entity<EditorPanel>,
+    /// The object last selected in the sidebar for the active tab, so the
+    /// sidebar is only moved when the active tab shows something else.
+    revealed_target: Option<crate::connections::RevealTarget>,
     command_palette: Entity<CommandPalette>,
     sidebar_collapsed: bool,
     sidebar_tab: SidebarTab,
@@ -477,6 +480,7 @@ impl BlancoApp {
             snippets_panel,
             history_panel,
             editor_panel,
+            revealed_target: None,
             command_palette,
             sidebar_collapsed: false,
             sidebar_tab: SidebarTab::Connections,
@@ -1170,6 +1174,7 @@ impl BlancoApp {
                 }
                 EditorPanelEvent::QueryRunEnded { tab_index, outcome } => {
                     app.resolve_mcp_run(*tab_index, outcome.clone());
+                    app.follow_active_tab(cx);
                 }
             },
         ));
@@ -1180,6 +1185,9 @@ impl BlancoApp {
             cx.notify();
         }));
 
+        // Select the active tab's table in the sidebar as tabs change.
+        subscriptions.push(cx.observe(editor_panel, |app, _, cx| app.follow_active_tab(cx)));
+
         // Re-render the status bar whenever the activity state changes.
         subscriptions.push(cx.observe(status_bar, |_, _, cx| cx.notify()));
 
@@ -1189,6 +1197,23 @@ impl BlancoApp {
         }));
 
         subscriptions
+    }
+
+    /// Select the active tab's table in the sidebar when it changed since the
+    /// last time, unless the setting is off.
+    fn follow_active_tab(&mut self, cx: &mut Context<Self>) {
+        if !AppSettings::global(cx).settings.general.follow_active_tab {
+            return;
+        }
+        let target = self.editor_panel.read(cx).active_reveal_target(cx);
+        if target == self.revealed_target {
+            return;
+        }
+        self.revealed_target = target.clone();
+        if let Some(target) = target {
+            self.sidebar
+                .update(cx, |sidebar, cx| sidebar.reveal(target, cx));
+        }
     }
 
     #[cfg(any(test, feature = "screenshots"))]

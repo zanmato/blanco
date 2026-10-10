@@ -256,6 +256,37 @@ impl SettingsView {
                         "Check for new releases hourly. An Update button appears in the title bar when one is available.",
                     ),
                 ]),
+                SettingGroup::new().title("Sidebar").items(vec![
+                    SettingItem::new(
+                        "Follow Active Tab",
+                        SettingField::switch(
+                            move |cx: &App| {
+                                AppSettings::global(cx).settings.general.follow_active_tab
+                            },
+                            {
+                                let view_handle = view_handle.clone();
+                                move |val: bool, cx: &mut App| {
+                                    AppSettings::global_mut(cx)
+                                        .settings
+                                        .general
+                                        .follow_active_tab = val;
+
+                                    let key = "general.follow_active_tab".to_string();
+                                    let value = val.to_string();
+                                    if let Some(view) = view_handle.upgrade() {
+                                        view.update(cx, |view, cx| {
+                                            view.save_setting_debounced(key, value, false, cx);
+                                        });
+                                    }
+                                }
+                            },
+                        )
+                        .default_value(default_settings.general.follow_active_tab),
+                    )
+                    .description(
+                        "Select the active tab's table in the sidebar, opening the groups above it.",
+                    ),
+                ]),
             ]),
             // Editor Settings Page
             SettingPage::new("Editor").resettable(true).groups(vec![

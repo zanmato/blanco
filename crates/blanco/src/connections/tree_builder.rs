@@ -306,6 +306,15 @@ impl ConnectionsPanel {
 
 /// Object types grouped into category folders, in display order. The third
 /// field is a stable slug used to build the category tree item id.
+/// The id segment of the category folder holding objects of `item_type`.
+pub(super) fn category_slug(item_type: DatabaseItemType) -> &'static str {
+    CATEGORY_ORDER
+        .iter()
+        .find(|(kind, _, _)| *kind == item_type)
+        .map(|(_, _, slug)| *slug)
+        .unwrap_or("tables")
+}
+
 const CATEGORY_ORDER: &[(DatabaseItemType, &str, &str)] = &[
     (DatabaseItemType::Table, "Tables", "tables"),
     (DatabaseItemType::View, "Views", "views"),
