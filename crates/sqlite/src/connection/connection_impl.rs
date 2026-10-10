@@ -20,6 +20,11 @@ impl Connection for SqliteConnection {
         self.display_name.clone()
     }
 
+    fn set_session_setup(&mut self, statements: Vec<String>) -> Result<()> {
+        self.set_session_setup_statements(statements);
+        Ok(())
+    }
+
     async fn connect(&mut self, connection_string: &str) -> Result<()> {
         // Parse and validate the connection string
         let key = SqliteConnectionKey::from_connection_string(connection_string)?;

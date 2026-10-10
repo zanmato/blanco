@@ -29,6 +29,12 @@ All notable changes to this project will be documented in this file.
   activity for the idle timeout. A failed keep-alive marks the connection as
   disconnected so the next action reconnects. A connection can set its own
   interval under Show Advanced Options
+- Startup SQL per connection, under Show Advanced Options in the connection
+  dialog, runs on every new session before it is used, pooled connections and
+  reconnects included, for example to set the time zone or the search path.
+  A failing statement stops the connection with an error that names it, and
+  Test Connection runs it too. On ClickHouse, which keeps no session over
+  HTTP, it holds SET statements that are sent as settings with every query
 
 ### Fixes
 

@@ -22,6 +22,10 @@ impl Connection for ClickhouseConnection {
         self.display_name.clone()
     }
 
+    fn set_session_setup(&mut self, statements: Vec<String>) -> Result<()> {
+        self.set_session_setup_statements(&statements)
+    }
+
     async fn connect(&mut self, _connection_string: &str) -> Result<()> {
         let start = Instant::now();
         let result = self.raw_query("SELECT 1", None).await;

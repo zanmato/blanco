@@ -4,9 +4,10 @@ use anyhow::Result;
 use blanco_core::{QueryResult, connection_trait::ColumnType};
 use futures::StreamExt;
 use hex;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
-use sqlx::{Column, ConnectOptions, Row, TypeInfo, ValueRef};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::{Column, ConnectOptions, Executor as _, Row, TypeInfo, ValueRef};
 use std::str::FromStr;
+use std::sync::Arc;
 
 /// SQLite connection implementation of the Connection trait
 /// This uses SQLX directly to provide a unified interface
@@ -15,6 +16,8 @@ pub struct SqliteConnection {
     connection_key: SqliteConnectionKey,
     display_name: String,
     database_path: String,
+    /// Startup SQL run on every new session.
+    session_setup: Arc<Vec<String>>,
 }
 
 /// Connection key for SQLite connections
@@ -94,7 +97,12 @@ impl SqliteConnection {
             connection_key,
             display_name,
             database_path,
+            session_setup: Arc::default(),
         })
+    }
+
+    pub(crate) fn set_session_setup_statements(&mut self, statements: Vec<String>) {
+        self.session_setup = Arc::new(statements);
     }
 
     /// Helper method to connect asynchronously
@@ -103,7 +111,49 @@ impl SqliteConnection {
             .create_if_missing(true)
             .disable_statement_logging();
 
-        let pool = SqlitePool::connect_with(options).await?;
+        if !self.session_setup.is_empty() {
+            // The pool retries a session whose setup fails until its acquire
+            // timeout and then reports only that it timed out, so check the
+            // startup SQL on one connection first to name a failing statement.
+            use sqlx::Connection as _;
+            let mut connection = options.connect().await?;
+            let mut setup = Ok(());
+            for statement in self.session_setup.iter() {
+                if let Err(error) = connection.execute(statement.as_str()).await {
+                    setup = Err(anyhow::anyhow!(
+                        blanco_core::session_setup::session_setup_failure(statement, error)
+                    ));
+                    break;
+                }
+            }
+            let _ = connection.close().await;
+            setup?;
+        }
+        // Every connection the pool opens runs the startup SQL first. A
+        // failure discards that connection.
+        let session_setup = Arc::clone(&self.session_setup);
+        let pool = SqlitePoolOptions::new()
+            .after_connect(move |connection, _| {
+                let session_setup = Arc::clone(&session_setup);
+                Box::pin(async move {
+                    for statement in session_setup.iter() {
+                        connection
+                            .execute(statement.as_str())
+                            .await
+                            .map_err(|error| {
+                                sqlx::Error::Configuration(
+                                    blanco_core::session_setup::session_setup_failure(
+                                        statement, error,
+                                    )
+                                    .into(),
+                                )
+                            })?;
+                    }
+                    Ok(())
+                })
+            })
+            .connect_with(options)
+            .await?;
         Ok(pool)
     }
 

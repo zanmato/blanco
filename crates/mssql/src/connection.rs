@@ -65,6 +65,8 @@ pub struct MssqlConnection {
     password: String,
     display_name: String,
     initial_database: Option<String>,
+    /// Startup SQL run on every client before it is used.
+    session_setup: Arc<Vec<String>>,
 }
 
 impl MssqlConnection {
@@ -120,6 +122,7 @@ impl MssqlConnection {
             password,
             display_name,
             initial_database,
+            session_setup: Arc::default(),
         })
     }
 
@@ -172,7 +175,19 @@ impl MssqlConnection {
             tcp.set_nodelay(true).ok();
 
             match Client::connect(config, tcp.compat_write()).await {
-                Ok(client) => return Ok(client),
+                Ok(mut client) => {
+                    // A client whose startup SQL fails is dropped, never used.
+                    for statement in self.session_setup.iter() {
+                        let outcome =
+                            async { client.simple_query(statement).await?.into_results().await };
+                        outcome.await.map_err(|error| {
+                            anyhow::anyhow!(blanco_core::session_setup::session_setup_failure(
+                                statement, error
+                            ))
+                        })?;
+                    }
+                    return Ok(client);
+                }
                 Err(tiberius::error::Error::Routing { host, port }) => {
                     redirect = Some((host, port));
                 }
@@ -355,6 +370,7 @@ impl Clone for MssqlConnection {
             password: self.password.clone(),
             display_name: self.display_name.clone(),
             initial_database: self.initial_database.clone(),
+            session_setup: Arc::clone(&self.session_setup),
         }
     }
 }
@@ -442,6 +458,11 @@ impl Connection for MssqlConnection {
 
     fn supports_schemas(&self) -> bool {
         true
+    }
+
+    fn set_session_setup(&mut self, statements: Vec<String>) -> Result<()> {
+        self.session_setup = Arc::new(statements);
+        Ok(())
     }
 
     async fn connect(&mut self, _connection_string: &str) -> Result<()> {

@@ -20,6 +20,11 @@ impl Connection for PostgresConnection {
         self.display_name.clone()
     }
 
+    fn set_session_setup(&mut self, statements: Vec<String>) -> Result<()> {
+        self.set_session_setup_statements(statements);
+        Ok(())
+    }
+
     async fn connect(&mut self, connection_string: &str) -> Result<()> {
         // Parse and validate the connection string to extract server details
         let key = PgConnectionKey::from_connection_string(connection_string)?;
@@ -66,15 +71,22 @@ impl Connection for PostgresConnection {
 
         let mut conn = smol::future::or(connect, deadline).await?;
 
-        let result = sqlx::query("SELECT 1")
-            .execute(&mut conn)
-            .await
-            .map_err(|e| blanco_core::tag_sqlx(e).context("PostgreSQL connection check failed"));
+        // Run the startup SQL too, so testing a connection reports a bad one.
+        let result = match super::run_session_setup(&mut conn, self.session_setup()).await {
+            Ok(()) => sqlx::query("SELECT 1")
+                .execute(&mut conn)
+                .await
+                .map(|_| ())
+                .map_err(|e| {
+                    blanco_core::tag_sqlx(e).context("PostgreSQL connection check failed")
+                }),
+            Err(error) => Err(anyhow::Error::from(error)),
+        };
 
         // Close best-effort; the validation result is what matters.
         let _ = conn.close().await;
 
-        result.map(|_| ())
+        result
     }
 
     async fn execute_query(
@@ -1037,6 +1049,7 @@ impl Clone for PostgresConnection {
             initial_database: self.initial_database.clone(),
             ssh_config: self.ssh_config.clone(),
             local_tunnel_port: self.local_tunnel_port,
+            session_setup: Arc::default(),
         }
     }
 }

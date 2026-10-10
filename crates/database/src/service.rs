@@ -270,6 +270,7 @@ impl DatabaseService {
         // call on the shared tokio runtime and wrap the resulting connection
         // in `TokioConnection` so subsequent method calls also hop runtimes.
         let connection_string_owned = connection_string.clone();
+        let session_setup = config.session_setup();
         let runtime_handle = self.runtime_handle.clone();
         let connect_timeout = blanco_core::connect_timeout();
         let inner_conn = runtime_handle
@@ -277,7 +278,7 @@ impl DatabaseService {
             .spawn(async move {
                 tokio::time::timeout(
                     connect_timeout,
-                    factory.create_connection(&connection_string_owned),
+                    factory.create_connection(&connection_string_owned, &session_setup),
                 )
                 .await
                 .map_err(|_| {
@@ -801,12 +802,13 @@ impl DatabaseService {
         // connection string, so we follow it with `ping` (a real round-trip) to
         // actually validate credentials and reachability.
         let connect_timeout = blanco_core::connect_timeout();
+        let session_setup = config.session_setup();
         let result = self
             .runtime_handle
             .spawn(async move {
                 let connection = tokio::time::timeout(
                     connect_timeout,
-                    factory.create_connection(&connection_string),
+                    factory.create_connection(&connection_string, &session_setup),
                 )
                 .await
                 .map_err(|_| {
@@ -1256,6 +1258,39 @@ mod tests {
             [1]
         );
         assert!(service.last_keep_alive.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_startup_sql_runs_on_every_session() {
+        let service = DatabaseService::new(tokio::runtime::Handle::current());
+        let dir = tempfile::tempdir().expect("temp dir");
+        service
+            .add_connection_config(
+                sqlite_config(1, &dir.path().join("startup.db")).with_startup_sql(Some(
+                    "CREATE TEMP TABLE session_marker (x INTEGER);\nINSERT INTO session_marker VALUES (7);"
+                        .to_string(),
+                )),
+            )
+            .await;
+        let connection = service.get_or_create_connection(1, None).await.unwrap();
+        let result = connection
+            .execute_query("SELECT x FROM session_marker", None, None)
+            .await
+            .expect("the temp table only exists if the startup SQL ran on this session");
+        assert_eq!(result.rows, [[Some("7".to_string())]]);
+
+        service
+            .add_connection_config(
+                sqlite_config(2, &dir.path().join("broken.db"))
+                    .with_startup_sql(Some("SELECT 1; SELEC broken".to_string())),
+            )
+            .await;
+        let error = match service.get_or_create_connection(2, None).await {
+            Ok(_) => panic!("a failing startup statement must refuse the connection"),
+            Err(error) => format!("{error:#}"),
+        };
+        assert!(error.contains("SELEC broken"), "{error}");
+        assert!(service.get_active_connections().await.len() == 1);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
