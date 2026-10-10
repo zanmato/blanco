@@ -333,7 +333,7 @@ fn scan(sql: &str, mut visit: impl FnMut(char, bool)) {
 
 /// Split on `;` outside strings, quoted identifiers, comments and dollar
 /// quoted bodies.
-fn split_statements(sql: &str) -> Vec<String> {
+pub fn split_statements(sql: &str) -> Vec<String> {
     let mut statements = Vec::new();
     let mut current = String::new();
     scan(sql, |c, inside| {

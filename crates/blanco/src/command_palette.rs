@@ -19,7 +19,7 @@ use crate::{
         ActivateEditorTab, ClearCompareSelection, CloseActiveTab, CommitChanges,
         ConnectToConnection, CopyAsCSV, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV,
         CreateNewQueryTab, CreateNewScriptTab, ExplainQuery, ExportAsCSV, ExportAsJSON,
-        ExportAsMarkdown, ExportAsSQL, ExportAsTSV, FormatQuery, NewSnippet,
+        ExportAsMarkdown, ExportAsSQL, ExportAsTSV, ExportCompleteResult, FormatQuery, NewSnippet,
         OpenNewConnectionModal, OpenSettings, OpenTerminal, RollbackChanges, RunQuery, SwitchTheme,
         ToggleRenderWhitespace, ToggleSidebar, ToggleWordWrap,
     },
@@ -118,6 +118,7 @@ pub enum CommandType {
     ExportAsJSON,
     ExportAsSQL,
     ExportAsMarkdown,
+    ExportCompleteResult,
     ToggleRenderWhitespace,
     ToggleWordWrap,
     CloseActiveTab,
@@ -768,6 +769,9 @@ fn execute_command(cmd: &CommandType, window: &mut Window, cx: &mut App) {
         CommandType::ExportAsJSON => window.dispatch_action(Box::new(ExportAsJSON), cx),
         CommandType::ExportAsSQL => window.dispatch_action(Box::new(ExportAsSQL), cx),
         CommandType::ExportAsMarkdown => window.dispatch_action(Box::new(ExportAsMarkdown), cx),
+        CommandType::ExportCompleteResult => {
+            window.dispatch_action(Box::new(ExportCompleteResult), cx)
+        }
         CommandType::ToggleRenderWhitespace => {
             window.dispatch_action(Box::new(ToggleRenderWhitespace), cx)
         }
@@ -1101,6 +1105,11 @@ fn build_commands(
             "Export as Markdown",
             "Results",
             CommandType::ExportAsMarkdown,
+        ),
+        leaf(
+            "Export Complete Result…",
+            "Results",
+            CommandType::ExportCompleteResult,
         ),
         leaf(
             "Render Whitespace",

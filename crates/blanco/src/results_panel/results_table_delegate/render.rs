@@ -26,8 +26,8 @@ use super::ResultsTableDelegate;
 use crate::app::{
     AddRow, ClearCompareSelection, CompareCellWithSelected, CompareRowWithSelected, CopyAsCSV,
     CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CopyAsVALUES, DeleteRow, DuplicateRow,
-    ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV, SelectCellForCompare,
-    SelectRowForCompare, SetCellDefault, SetCellNull, ToggleCellExpression,
+    ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV, ExportCompleteResult,
+    SelectCellForCompare, SelectRowForCompare, SetCellDefault, SetCellNull, ToggleCellExpression,
 };
 use crate::results_panel::cell_edit_state::{CellInput, compare_numeric, format_value_for_display};
 use crate::results_panel::compare::CompareKind;
@@ -766,6 +766,11 @@ impl TableDelegate for ResultsTableDelegate {
             "Export as Markdown",
             Icon::new(IconName::File),
             Box::new(ExportAsMarkdown),
+        )
+        .menu_with_icon(
+            "Export Complete Result…",
+            Icon::new(IconName::File),
+            Box::new(ExportCompleteResult),
         )
         .separator()
         // Row operations

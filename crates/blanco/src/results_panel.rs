@@ -1598,6 +1598,7 @@ impl Render for ResultsPanel {
             .on_action(cx.listener(Self::on_export_as_json))
             .on_action(cx.listener(Self::on_export_as_sql))
             .on_action(cx.listener(Self::on_export_as_markdown))
+            .on_action(cx.listener(Self::on_export_complete_result))
             .on_action(cx.listener(Self::on_add_row))
             .on_action(cx.listener(Self::on_duplicate_row))
             .on_action(cx.listener(Self::on_delete_row))

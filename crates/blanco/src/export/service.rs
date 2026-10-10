@@ -14,7 +14,7 @@ use transformers::{DataTransformer, SelectedTableData};
 #[derive(Clone, Debug)]
 pub struct ExportProgress {
     pub exported_rows: usize,
-    pub total_rows: usize,
+    pub _total_rows: usize,
     pub _current_file_size: u64,
     pub _is_complete: bool,
 }
@@ -55,7 +55,7 @@ impl ExportService {
         database_name: Option<&str>,
         transformer: &dyn DataTransformer,
         file_path: &Path,
-        _options: &ExportOptions,
+        options: &ExportOptions,
         mut progress_callback: impl FnMut(ExportProgress) + Send + Sync + 'static,
     ) -> Result<ExportResult, anyhow::Error>
     where
@@ -72,7 +72,7 @@ impl ExportService {
         // Create channels for producer-consumer pattern
         let (mut sender, receiver) = mpsc::channel::<StreamRowData>(1000);
         let exported_rows = Arc::new(AtomicUsize::new(0));
-        let is_cancelled = Arc::new(AtomicUsize::new(0));
+        let is_cancelled = options.cancel.clone();
 
         // Get the streaming query results
         let (columns, column_types, mut row_stream) = connection
@@ -97,7 +97,7 @@ impl ExportService {
             // Process the stream and send rows through the channel
             while let Some(row_result) = row_stream.next().await {
                 // Check for cancellation
-                if is_cancelled_clone.load(Ordering::Relaxed) == 1 {
+                if is_cancelled_clone.load(Ordering::Relaxed) {
                     tracing::info!("Export cancelled by user");
                     break;
                 }
@@ -152,7 +152,7 @@ impl ExportService {
         let mut stream = receiver;
         while let Some(stream_data) = StreamExt::next(&mut stream).await {
             // Check for cancellation
-            if is_cancelled.load(Ordering::Relaxed) == 1 {
+            if is_cancelled.load(Ordering::Relaxed) {
                 return Ok(ExportResult::Cancelled);
             }
 
@@ -177,7 +177,7 @@ impl ExportService {
             // Update progress
             let progress = ExportProgress {
                 exported_rows: rows_written,
-                total_rows: rows_written, // Estimate since we don't know total in advance
+                _total_rows: rows_written, // Estimate since we don't know total in advance
                 _current_file_size: bytes_written as u64,
                 _is_complete: false,
             };
@@ -209,7 +209,7 @@ impl ExportService {
         // Send final progress update
         let final_progress = ExportProgress {
             exported_rows: rows_written,
-            total_rows: rows_written,
+            _total_rows: rows_written,
             _current_file_size: file_size,
             _is_complete: true,
         };

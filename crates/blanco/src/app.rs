@@ -72,6 +72,7 @@ actions!(
         ExportAsJSON,
         ExportAsSQL,
         ExportAsMarkdown,
+        ExportCompleteResult,
         ClearSelection,
         ToggleRenderWhitespace,
         ToggleWordWrap,

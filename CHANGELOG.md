@@ -17,6 +17,11 @@ All notable changes to this project will be documented in this file.
 - A system notification when an agent asks to run a write over MCP while
   Blanco is in the background. Clicking it brings Blanco forward, where the
   confirmation dialog is waiting
+- Export Complete Result in the result grid menu and the command palette runs
+  the query of a result again and streams every row to a file, in any export
+  format. It is offered for a single read-only statement
+- The export dialog shows the rows written so far, and closing it cancels the
+  export and removes the partial file
 
 ### Fixes
 

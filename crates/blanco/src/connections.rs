@@ -901,36 +901,12 @@ impl ConnectionsPanel {
         if let Some(table_name) = table_name {
             // Create the export modal content
             let modal_content = cx.new(|cx| ExportModal::new(context, table_name, window, cx));
-
-            window.open_dialog(cx, move |dialog, _window, cx| {
-                let is_exporting = modal_content.read(cx).is_exporting();
-                let modal_clone = modal_content.clone();
-                dialog
-                    .title("Export Table Data")
-                    .h(px(450.0))
-                    .child(modal_content.clone())
-                    .footer(
-                        DialogFooter::new()
-                            .child(
-                                DialogClose::new()
-                                    .child(Button::new("export-cancel").label("Cancel").outline()),
-                            )
-                            .child(
-                                Button::new("export-submit")
-                                    .primary()
-                                    .label("Export")
-                                    .loading(is_exporting)
-                                    .on_click({
-                                        let modal_for_button = modal_clone;
-                                        move |_, window, cx| {
-                                            modal_for_button.update(cx, |modal, cx| {
-                                                modal.start_export(window, cx);
-                                            });
-                                        }
-                                    }),
-                            ),
-                    )
-            })
+            crate::export::modal::open_export_dialog(
+                "Export Table Data",
+                modal_content,
+                window,
+                cx,
+            );
         } else {
             tracing::error!("Cannot export: No table name provided");
         }

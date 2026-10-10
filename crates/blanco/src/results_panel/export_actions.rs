@@ -5,9 +5,15 @@ use std::path::PathBuf;
 use gpui::{Context, SharedString, Window};
 use gpui_component::{WindowExt as _, notification::NotificationType};
 
-use crate::app::{ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV};
+use crate::app::{
+    ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV, ExportCompleteResult,
+};
+use crate::export::modal::{ExportModal, ExportSource, open_export_dialog};
 use crate::export::service::{ExportResult, ExportService};
 use crate::result_ext::ResultExt;
+use blanco_core::write_guard::{self, StatementAccess};
+use database::DatabaseType;
+use gpui::AppContext as _;
 use transformers::{
     CsvTransformer, DataTransformer, JsonTransformer, MarkdownTransformer, SqlTransformer,
 };
@@ -58,6 +64,48 @@ impl ResultsPanel {
         cx: &mut Context<Self>,
     ) {
         self.export_selected_as("markdown", window, cx);
+    }
+
+    /// Runs the query of the active result again and streams every row to a
+    /// file, where the grid export writes only the selected rows.
+    pub(super) fn on_export_complete_result(
+        &mut self,
+        _action: &ExportCompleteResult,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let is_key_value = self
+            .result_tabs
+            .get(self.active_tab)
+            .is_some_and(|tab| tab.key_value.is_some());
+        let delegate = self.table_state.read(cx).delegate();
+        let query = if is_key_value {
+            Err(NOT_EXPORTABLE)
+        } else {
+            complete_result_query(self.db_type, delegate.original_query.as_deref())
+        };
+        let sql = match query {
+            Ok(sql) => sql,
+            Err(reason) => {
+                window
+                    .push_notification((NotificationType::Warning, SharedString::from(reason)), cx);
+                return;
+            }
+        };
+        let source = ExportSource::Query {
+            sql,
+            name: delegate
+                .table_name
+                .clone()
+                .unwrap_or_else(|| "result".to_string()),
+        };
+        let connection_id = self.connection_id;
+        let database_name = self.database_name.clone();
+        let db_type = self.db_type;
+        let modal = cx.new(|cx| {
+            ExportModal::with_source(connection_id, database_name, db_type, source, window, cx)
+        });
+        open_export_dialog("Export Complete Result", modal, window, cx);
     }
 
     /// Export selected data in the specified format
@@ -180,5 +228,55 @@ impl ResultsPanel {
             }
         })
         .detach();
+    }
+}
+
+const NOT_EXPORTABLE: &str = "This result has no query that can be run again for export.";
+
+/// The statement to run again to export the complete result of `query`.
+///
+/// Only a single statement that reads is run again: running the text of a
+/// write, or of a batch, a second time would change data or export the
+/// wrong result.
+fn complete_result_query(
+    db_type: DatabaseType,
+    query: Option<&str>,
+) -> Result<String, &'static str> {
+    if !db_type.dialect().supports_sql() {
+        return Err("Export Complete Result needs a SQL connection.");
+    }
+    let query = query.ok_or(NOT_EXPORTABLE)?;
+    let mut statements = write_guard::split_statements(query);
+    if statements.len() != 1 {
+        return Err(
+            "The result came from several statements. Run its statement on its own to export the complete result.",
+        );
+    }
+    let statement = statements.remove(0);
+    if write_guard::classify_sql(&statement) != StatementAccess::Read {
+        return Err("Only a result of a read-only query can be exported by running it again.");
+    }
+    Ok(statement.trim().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_complete_result_query() {
+        let pg = DatabaseType::PostgreSQL;
+        assert_eq!(
+            complete_result_query(pg, Some("  SELECT * FROM users;\n")),
+            Ok("SELECT * FROM users".to_string())
+        );
+        assert_eq!(
+            complete_result_query(pg, Some("WITH r AS (SELECT 1) SELECT * FROM r")),
+            Ok("WITH r AS (SELECT 1) SELECT * FROM r".to_string())
+        );
+        assert!(complete_result_query(pg, Some("DELETE FROM users RETURNING *")).is_err());
+        assert!(complete_result_query(pg, Some("SELECT 1; SELECT 2")).is_err());
+        assert!(complete_result_query(pg, None).is_err());
+        assert!(complete_result_query(DatabaseType::Redis, Some("GET key")).is_err());
     }
 }
