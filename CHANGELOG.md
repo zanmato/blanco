@@ -6,6 +6,11 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- Custom themes: theme JSON files in the `themes` folder of Blanco's config
+  directory are listed with the built-in themes, and edits to them apply
+  without a restart. A file with keys the theme format does not know gets a
+  warning naming them, as those keys are ignored. Open Themes Folder in the
+  command palette opens the folder
 - A search field in the title bar opens the command palette and shows its
   shortcut
 - Blanco checks for new releases hourly and shows an Update button in the
