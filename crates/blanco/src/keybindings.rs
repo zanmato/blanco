@@ -1,7 +1,7 @@
 use crate::app::{
-    CommitChanges, DecreaseEditorFontSize, ExplainQuery, FormatQuery, IncreaseEditorFontSize,
-    OpenSettings, OpenTerminal, ResetEditorFontSize, RollbackChanges, RunQuery,
-    ToggleCommandPalette,
+    CommitChanges, DecreaseEditorFontSize, ExplainQuery, FormatQuery, FormatStatement,
+    IncreaseEditorFontSize, OpenSettings, OpenTerminal, ResetEditorFontSize, RollbackChanges,
+    RunQuery, ToggleCommandPalette,
 };
 use crate::settings::Settings;
 
@@ -43,6 +43,12 @@ pub const CUSTOMIZABLE_BINDINGS: &[BindingDef] = &[
         action: "FormatQuery",
         label: "Format SQL",
         default: "shift-alt-f",
+        context: None,
+    },
+    BindingDef {
+        action: "FormatStatement",
+        label: "Format current statement",
+        default: "",
         context: None,
     },
     BindingDef {
@@ -134,6 +140,7 @@ fn key_binding(action: &str, keystrokes: &str, context: Option<&str>) -> Option<
         "RunQuery" => gpui::KeyBinding::new(keystrokes, RunQuery, context),
         "ExplainQuery" => gpui::KeyBinding::new(keystrokes, ExplainQuery, context),
         "FormatQuery" => gpui::KeyBinding::new(keystrokes, FormatQuery, context),
+        "FormatStatement" => gpui::KeyBinding::new(keystrokes, FormatStatement, context),
         "ToggleCommandPalette" => gpui::KeyBinding::new(keystrokes, ToggleCommandPalette, context),
         "CommitChanges" => gpui::KeyBinding::new(keystrokes, CommitChanges, context),
         "RollbackChanges" => gpui::KeyBinding::new(keystrokes, RollbackChanges, context),
@@ -224,7 +231,12 @@ mod tests {
             .insert("ExplainQuery".to_string(), "ctrl-a-b".to_string());
 
         let bindings = customizable_key_bindings(&settings);
-        // The font size alias adds one binding on top of the table.
-        assert_eq!(bindings.len(), CUSTOMIZABLE_BINDINGS.len() + 1 - 2);
+        // The font size alias adds one binding on top of the ones bound by
+        // default.
+        let bound_by_default = CUSTOMIZABLE_BINDINGS
+            .iter()
+            .filter(|def| !def.default.is_empty())
+            .count();
+        assert_eq!(bindings.len(), bound_by_default + 1 - 2);
     }
 }

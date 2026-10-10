@@ -281,6 +281,11 @@ pub struct DatabaseConnected {
 #[action(namespace = blanco_app, no_json)]
 pub struct FormatQuery;
 
+/// Format the statement at the cursor, whatever is selected.
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct FormatStatement;
+
 impl From<database::DatabaseConnectedMessage> for DatabaseConnected {
     fn from(msg: database::DatabaseConnectedMessage) -> Self {
         Self {

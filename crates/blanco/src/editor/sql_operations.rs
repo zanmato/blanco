@@ -2,7 +2,7 @@ use std::ops::Range;
 use std::time::Duration;
 
 use gpui::{AppContext, Context, Entity, SharedString, Window};
-use gpui_component::input::{EditorState, RangeDecoration, RangeDecorationStyle};
+use gpui_component::input::{EditorState, RangeDecoration, RangeDecorationStyle, Rope};
 use gpui_component::{ActiveTheme as _, RopeExt, WindowExt as _, notification::NotificationType};
 
 use crate::app_settings::AppSettings;
@@ -230,7 +230,20 @@ impl EditorPanel {
     }
 
     /// Format the current query/statement.
+    /// Format the selected statements, or with no selection the statement
+    /// at the cursor.
     pub(super) fn format_current_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.format_sql(true, window, cx);
+    }
+
+    /// Format the statements the selection touches when `use_selection` and
+    /// there is one, otherwise the statement at the cursor.
+    pub(super) fn format_sql(
+        &mut self,
+        use_selection: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let tab_index = self.active_tab_ix;
 
         let Some(TabType::Query(query_tab)) = self.tabs.get(tab_index) else {
@@ -244,21 +257,20 @@ impl EditorPanel {
         }
 
         let editor = query_tab.editor.clone();
-
-        // Get current text and cursor position
-        let (text, cursor_pos) = {
+        let (text, cursor_pos, selection) = {
             let editor_ref = editor.read(cx);
-            (editor_ref.text().clone(), editor_ref.cursor())
+            (
+                editor_ref.text().clone(),
+                editor_ref.cursor(),
+                editor_ref.selected_range(),
+            )
         };
-
-        // Extract current statement using existing function
-        let Some(statement_info) = extract_statement_info(&text, cursor_pos) else {
+        let selection = use_selection.then_some(selection);
+        let Some(byte_range) = format_range(&text, cursor_pos, selection) else {
             window.push_notification((NotificationType::Info, "No query found at cursor"), cx);
             return;
         };
-
-        let statement_text = statement_info.text.clone();
-        let byte_range = statement_info.byte_range;
+        let statement_text = text.slice(byte_range.clone()).to_string();
 
         // Format in background
         let sqruff_service = if let Some(sqruff_service) = &query_tab.sqruff_service {
@@ -294,16 +306,11 @@ impl EditorPanel {
                         editor_panel.tabs.get_mut(editor_panel.active_tab_ix)
                     {
                         query_tab.editor.update(cx, |state, cx| {
-                            // Replace the statement range with formatted text
-                            // Create an LSP TextEdit for the replacement
-                            let start = state.text().byte_to_char_idx(byte_range.start);
-                            let end = state.text().byte_to_char_idx(byte_range.end);
-                            let start_pos = state.text().offset_to_position(start);
-                            let end_pos = state.text().offset_to_position(end);
+                            // `offset_to_position` takes byte offsets.
                             let text_edit = lsp_types::TextEdit {
                                 range: lsp_types::Range {
-                                    start: start_pos,
-                                    end: end_pos,
+                                    start: state.text().offset_to_position(byte_range.start),
+                                    end: state.text().offset_to_position(byte_range.end),
                                 },
                                 new_text: formatted,
                             };
@@ -319,5 +326,100 @@ impl EditorPanel {
             Ok(())
         })
         .detach();
+    }
+}
+
+/// The byte range to format: with a non-empty `selection`, from the start of
+/// the statement it begins in to the end of the one it ends in, so a partly
+/// selected statement is formatted whole; otherwise the statement at `cursor`.
+fn format_range(
+    text: &Rope,
+    cursor: usize,
+    selection: Option<Range<usize>>,
+) -> Option<Range<usize>> {
+    let statement_at = |offset: usize| extract_statement_info(text, offset).map(|s| s.byte_range);
+    match selection.filter(|selection| !selection.is_empty()) {
+        Some(selection) => {
+            let start = statement_at(selection.start)
+                .map_or(selection.start, |range| range.start.min(selection.start));
+            let end = statement_at(selection.end.saturating_sub(1))
+                .map_or(selection.end, |range| range.end.max(selection.end));
+            Some(start..end)
+        }
+        None => statement_at(cursor),
+    }
+}
+
+#[cfg(test)]
+mod format_range_tests {
+    use super::*;
+
+    #[test]
+    fn selections_grow_to_whole_statements() {
+        let sql = "select 1;\nselect a from t where b = 2;\nselect 3;";
+        let rope = Rope::from_str(sql);
+        let second = sql.find("select a").unwrap();
+        let third = sql.find("select 3").unwrap();
+
+        // No selection: the statement at the cursor.
+        let range = format_range(&rope, second + 3, None).unwrap();
+        assert!(sql[range].starts_with("select a from t"));
+
+        // Part of the second statement selected: the whole second statement.
+        let range = format_range(&rope, 0, Some(second + 7..second + 12)).unwrap();
+        let formatted = &sql[range];
+        assert!(formatted.starts_with("select a") && formatted.contains("b = 2"));
+        assert!(!formatted.contains("select 1") && !formatted.contains("select 3"));
+
+        // A selection across two statements covers both, but not the first.
+        let range = format_range(&rope, 0, Some(second + 2..third + 4)).unwrap();
+        let formatted = &sql[range];
+        assert!(formatted.starts_with("select a") && formatted.contains("select 3"));
+        assert!(!formatted.contains("select 1"));
+    }
+}
+
+#[cfg(test)]
+mod format_tests {
+    use gpui::{TestAppContext, VisualTestContext};
+
+    use crate::test_harness::{TestHarness, set_editor_text};
+
+    /// Format with part of one statement selected rewrites that statement and
+    /// leaves the others as they were.
+    #[gpui::test]
+    async fn format_with_a_selection_leaves_other_statements(cx: &mut TestAppContext) {
+        let harness = TestHarness::new(cx);
+        let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+        let sql = "select   1;\nselect   a from t;";
+        set_editor_text(&harness, sql, &mut cx);
+        let editor = harness.editor_panel.read_with(&cx, |panel, _| {
+            panel
+                .active_query_tab()
+                .expect("query tab")
+                .base
+                .editor
+                .clone()
+        });
+        let second = sql.find("select   a").unwrap();
+        editor.update_in(&mut cx, |editor, window, cx| {
+            editor.set_selected_range(second + 9..second + 10, window, cx);
+        });
+        harness
+            .editor_panel
+            .update_in(&mut cx, |panel, window, cx| {
+                panel.format_current_query(window, cx);
+            });
+        cx.run_until_parked();
+
+        let text = editor.read_with(&cx, |editor, _| editor.text().to_string());
+        assert!(
+            text.starts_with("select   1;"),
+            "first statement kept: {text:?}"
+        );
+        assert!(
+            !text.contains("select   a"),
+            "second statement formatted: {text:?}"
+        );
     }
 }

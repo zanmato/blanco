@@ -6,6 +6,10 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- Format SQL with a selection formats only the statements the selection
+  touches; without one it formats the statement at the cursor as before.
+  Format Current Statement, in the command palette and rebindable, ignores
+  the selection
 - A search field in the title bar opens the command palette and shows its
   shortcut
 - Blanco checks for new releases hourly and shows an Update button in the
@@ -20,6 +24,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixes
 
+- Formatting a statement after non-ASCII text replaced the wrong range
 - Clicking a cell in the results table no longer starts a text selection in
   the SQL view that follows the pointer with no button held
 

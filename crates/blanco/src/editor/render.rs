@@ -18,7 +18,7 @@ use gpui_component::{
 
 use super::rename_form::RenameTabForm;
 use super::{EditorPanel, QueryTab, ScriptTab, TabType};
-use crate::app::{ExecuteSubstitutedQuery, FormatQuery, RenameTab};
+use crate::app::{ExecuteSubstitutedQuery, FormatQuery, FormatStatement, RenameTab};
 use crate::app_settings::AppSettings;
 use crate::result_ext::ResultExt;
 use crate::results_panel::ResultsPanel;
@@ -857,6 +857,9 @@ impl Render for EditorPanel {
             )
             .on_action(cx.listener(|this, _: &FormatQuery, window, cx| {
                 this.format_current_query(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &FormatStatement, window, cx| {
+                this.format_sql(false, window, cx);
             }))
             // The segmented trough paints its own background, and padding on
             // the bar itself would make it taller rather than inset it, which
