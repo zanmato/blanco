@@ -1,9 +1,9 @@
 use crate::app::{
     ActivateNextTab, ActivatePreviousTab, CancelQuery, CloseActiveTab, CommitChanges,
     DecreaseEditorFontSize, ExplainQuery, ExportTableData, FormatQuery, ImportTableData,
-    IncreaseEditorFontSize, NewQueryTab, OpenSettings, OpenTerminal, RefreshConnections,
-    ResetEditorFontSize, RollbackChanges, RunQuery, ToggleCommandPalette, ToggleFilterBar,
-    ToggleResults, ToggleSidebar,
+    IncreaseEditorFontSize, NewQueryTab, OpenSettings, OpenSqlFile, OpenTerminal,
+    RefreshConnections, ResetEditorFontSize, RollbackChanges, RunQuery, RunSqlFile, SaveTab,
+    SaveTabAs, ToggleCommandPalette, ToggleFilterBar, ToggleResults, ToggleSidebar,
 };
 use crate::settings::Settings;
 
@@ -33,7 +33,7 @@ const INPUT_CONTEXT: &str = "Input";
 const NOT_TERMINAL: &str = "!Terminal";
 
 /// The groups of the settings page, in order.
-pub const BINDING_GROUPS: &[&str] = &["Query", "Tabs", "View", "Data", "Editor"];
+pub const BINDING_GROUPS: &[&str] = &["Query", "File", "Tabs", "View", "Data", "Editor"];
 
 /// The set of actions exposed for rebinding. Platform-fixed bindings such as
 /// Quit are intentionally excluded.
@@ -64,6 +64,34 @@ pub const CUSTOMIZABLE_BINDINGS: &[BindingDef] = &[
         label: "Format SQL",
         group: "Query",
         default: "shift-alt-f",
+        context: None,
+    },
+    BindingDef {
+        action: "OpenSqlFile",
+        label: "Open SQL file",
+        group: "File",
+        default: "secondary-o",
+        context: Some(NOT_TERMINAL),
+    },
+    BindingDef {
+        action: "SaveTab",
+        label: "Save tab to its file",
+        group: "File",
+        default: "secondary-s",
+        context: Some(NOT_TERMINAL),
+    },
+    BindingDef {
+        action: "SaveTabAs",
+        label: "Save tab as a new file",
+        group: "File",
+        default: "secondary-shift-s",
+        context: Some(NOT_TERMINAL),
+    },
+    BindingDef {
+        action: "RunSqlFile",
+        label: "Run SQL file",
+        group: "File",
+        default: "",
         context: None,
     },
     BindingDef {
@@ -279,6 +307,10 @@ fn key_binding(action: &str, keystrokes: &str, context: Option<&str>) -> Option<
         "FormatQuery" => gpui::KeyBinding::new(keystrokes, FormatQuery, context),
         "ToggleCommandPalette" => gpui::KeyBinding::new(keystrokes, ToggleCommandPalette, context),
         "ToggleFilterBar" => gpui::KeyBinding::new(keystrokes, ToggleFilterBar, context),
+        "OpenSqlFile" => gpui::KeyBinding::new(keystrokes, OpenSqlFile, context),
+        "SaveTab" => gpui::KeyBinding::new(keystrokes, SaveTab, context),
+        "SaveTabAs" => gpui::KeyBinding::new(keystrokes, SaveTabAs, context),
+        "RunSqlFile" => gpui::KeyBinding::new(keystrokes, RunSqlFile, context),
         "CommitChanges" => gpui::KeyBinding::new(keystrokes, CommitChanges, context),
         "RollbackChanges" => gpui::KeyBinding::new(keystrokes, RollbackChanges, context),
         "OpenSettings" => gpui::KeyBinding::new(keystrokes, OpenSettings, context),

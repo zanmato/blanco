@@ -13,7 +13,7 @@ impl AppDatabase {
                 sqlx::query(
                     r#"
                     UPDATE query_tabs
-                    SET title = ?, content = ?, position = ?, connection_id = ?, connection_type = ?, database_name = ?, schema_name = ?, tab_kind = ?, updated_at = ?
+                    SET title = ?, content = ?, position = ?, connection_id = ?, connection_type = ?, database_name = ?, schema_name = ?, tab_kind = ?, file_path = ?, updated_at = ?
                     WHERE id = ?
                     "#,
                 )
@@ -25,6 +25,7 @@ impl AppDatabase {
                 .bind(&tab.database_name)
                 .bind(&tab.schema_name)
                 .bind(tab.tab_kind.as_str())
+                .bind(&tab.file_path)
                 .bind(now)
                 .bind(id)
                 .execute(&pool)
@@ -34,8 +35,8 @@ impl AppDatabase {
                 // Insert new tab
                 let result = sqlx::query(
                     r#"
-                    INSERT INTO query_tabs (title, content, position, connection_id, connection_type, database_name, schema_name, tab_kind, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO query_tabs (title, content, position, connection_id, connection_type, database_name, schema_name, tab_kind, file_path, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     "#,
                 )
                 .bind(&tab.title)
@@ -46,6 +47,7 @@ impl AppDatabase {
                 .bind(&tab.database_name)
                 .bind(&tab.schema_name)
                 .bind(tab.tab_kind.as_str())
+                .bind(&tab.file_path)
                 .bind(now)
                 .bind(now)
                 .execute(&pool)
@@ -62,7 +64,7 @@ impl AppDatabase {
         self.run(async move {
             let rows = sqlx::query(
                 r#"
-                SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type, c.name, qt.database_name, qt.schema_name, c.environment_type, qt.tab_kind, qt.last_run_at
+                SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type, c.name, qt.database_name, qt.schema_name, c.environment_type, qt.tab_kind, qt.last_run_at, qt.file_path
                 FROM query_tabs qt
                 INNER JOIN connections c ON c.id = qt.connection_id
                 ORDER BY qt.position ASC
@@ -98,6 +100,7 @@ impl AppDatabase {
                         )),
                         tab_kind: EditorKind::from_stored(&row.get::<String, _>(10)),
                         last_run_at: row.get(11),
+                        file_path: row.get(12),
                     }
                 })
                 .collect();
@@ -112,7 +115,7 @@ impl AppDatabase {
         self.run(async move {
             let row = sqlx::query(
                 r#"
-                SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type, c.name, qt.database_name, qt.schema_name, qt.tab_kind, qt.last_run_at
+                SELECT qt.id, qt.title, qt.content, qt.position, qt.connection_id, c.db_type, c.name, qt.database_name, qt.schema_name, qt.tab_kind, qt.last_run_at, qt.file_path
                 FROM query_tabs qt
                 INNER JOIN connections c ON c.id = qt.connection_id
                 WHERE qt.id = ?
@@ -145,6 +148,7 @@ impl AppDatabase {
                     environment_type: None,
                     tab_kind: EditorKind::from_stored(&row.get::<String, _>(9)),
                     last_run_at: row.get(10),
+                    file_path: row.get(11),
                 }))
             } else {
                 Ok(None)

@@ -114,10 +114,20 @@ impl EditorPanel {
     }
 
     /// Close the tabs at `indices`, highest first so the others keep theirs.
+    /// A tab with unsaved changes to its file stays open: closing it asks
+    /// first, and a bulk close has no good moment for a question per tab.
     fn close_tabs(&mut self, mut indices: Vec<usize>, cx: &mut Context<Self>) {
         indices.sort_unstable_by(|a, b| b.cmp(a));
         for ix in indices {
-            self.close_tab(ix, cx);
+            let unsaved = self
+                .tabs
+                .get(ix)
+                .and_then(TabType::connection_tab)
+                .and_then(|tab| tab.file.as_ref())
+                .is_some_and(|file| file.dirty);
+            if !unsaved {
+                self.close_tab(ix, cx);
+            }
         }
     }
 

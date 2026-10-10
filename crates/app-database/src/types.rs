@@ -62,6 +62,8 @@ pub struct QueryTabData {
     pub tab_kind: EditorKind,
     /// Unix seconds of the last query/script run in this tab.
     pub last_run_at: Option<i64>,
+    /// The `.sql` file the tab was opened from or saved to.
+    pub file_path: Option<String>,
 }
 
 /// A single recorded query execution, stored in the `query_history` table.

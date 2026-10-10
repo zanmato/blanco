@@ -52,6 +52,43 @@ pub struct ConnectionBackedTab {
     pub skip_prod_write_confirmation: bool,
     /// The results area under the editor is hidden (Toggle Results).
     pub results_hidden: bool,
+    /// The `.sql` file the tab was opened from or saved to.
+    pub file: Option<TabFile>,
+}
+
+/// A tab's file on disk and whether the editor differs from it.
+pub struct TabFile {
+    pub path: std::path::PathBuf,
+    /// The text last read from or written to the file; `None` when the file
+    /// could not be read back, which counts as unsaved.
+    pub saved_text: Option<String>,
+    pub dirty: bool,
+}
+
+impl TabFile {
+    pub fn new(path: std::path::PathBuf, saved_text: Option<String>, current: &str) -> Self {
+        let dirty = saved_text.as_deref() != Some(current);
+        Self {
+            path,
+            saved_text,
+            dirty,
+        }
+    }
+
+    /// The file name, used as the tab title.
+    pub fn name(&self) -> String {
+        file_name(&self.path)
+    }
+
+    pub fn path_string(&self) -> String {
+        self.path.to_string_lossy().into_owned()
+    }
+}
+
+pub fn file_name(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
 impl ConnectionBackedTab {

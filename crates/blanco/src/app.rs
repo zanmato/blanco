@@ -77,6 +77,10 @@ actions!(
         ExportAsSQL,
         ExportAsMarkdown,
         ToggleFilterBar,
+        OpenSqlFile,
+        SaveTab,
+        SaveTabAs,
+        RunSqlFile,
         ClearSelection,
         ToggleRenderWhitespace,
         ToggleWordWrap,
@@ -1654,14 +1658,34 @@ impl BlancoApp {
         });
     }
 
+    fn on_open_sql_file(&mut self, _: &OpenSqlFile, window: &mut Window, cx: &mut Context<Self>) {
+        self.editor_panel
+            .update(cx, |panel, cx| panel.prompt_open_sql_files(window, cx));
+    }
+
+    fn on_save_tab(&mut self, _: &SaveTab, window: &mut Window, cx: &mut Context<Self>) {
+        self.editor_panel
+            .update(cx, |panel, cx| panel.save_active_tab(window, cx));
+    }
+
+    fn on_save_tab_as(&mut self, _: &SaveTabAs, window: &mut Window, cx: &mut Context<Self>) {
+        self.editor_panel
+            .update(cx, |panel, cx| panel.save_active_tab_as(window, cx));
+    }
+
+    fn on_run_sql_file(&mut self, _: &RunSqlFile, window: &mut Window, cx: &mut Context<Self>) {
+        self.editor_panel
+            .update(cx, |panel, cx| panel.prompt_run_sql_file(window, cx));
+    }
+
     fn on_close_active_tab(
         &mut self,
         _: &CloseActiveTab,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.editor_panel.update(cx, |panel, cx| {
-            panel.close_active_tab(cx);
+            panel.close_active_tab(window, cx);
         });
     }
 
@@ -2824,6 +2848,10 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_refresh_snippets))
             .on_action(cx.listener(Self::on_activate_editor_tab))
             .on_action(cx.listener(Self::on_close_active_tab))
+            .on_action(cx.listener(Self::on_open_sql_file))
+            .on_action(cx.listener(Self::on_save_tab))
+            .on_action(cx.listener(Self::on_save_tab_as))
+            .on_action(cx.listener(Self::on_run_sql_file))
             .on_action(cx.listener(Self::on_switch_theme))
             .on_action(cx.listener(Self::on_toggle_render_whitespace))
             .on_action(cx.listener(Self::on_toggle_word_wrap))
@@ -3030,6 +3058,11 @@ fn build_menu() -> Vec<Menu> {
     // macOS always shows the first menu as the application menu, titled with
     // the app's name, and that is where Settings and Quit belong there.
     let mut file_items = vec![
+        MenuItem::action("Open SQL File…", OpenSqlFile),
+        MenuItem::action("Save", SaveTab),
+        MenuItem::action("Save As…", SaveTabAs),
+        MenuItem::action("Run SQL File…", RunSqlFile),
+        MenuItem::separator(),
         MenuItem::action("New Connection", OpenNewConnectionModal),
         MenuItem::submenu(Menu {
             name: "Open".into(),

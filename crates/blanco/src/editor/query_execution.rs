@@ -267,6 +267,7 @@ impl EditorPanel {
                 environment_type: query_tab.context.environment_type,
                 tab_kind: app_database::EditorKind::Query,
                 last_run_at: Some(run_timestamp),
+                file_path: query_tab.file.as_ref().map(|file| file.path_string()),
             };
 
             // Trigger the save operation in background

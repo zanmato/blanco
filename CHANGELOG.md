@@ -52,6 +52,18 @@ All notable changes to this project will be documented in this file.
   restoring the table order, and a search field filters them by name. Types
   show their length, precision and scale, and indexes list the primary key
   first, then the rest by name
+- `.sql` files: Open SQL File (`secondary-o`, or drop files on the editor)
+  opens them in query tabs on the active tab's connection, Save
+  (`secondary-s`) and Save As (`secondary-shift-s`) write them back, and the
+  tab is named after its file with a ● while it has unsaved changes. Closing
+  such a tab asks whether to save. A file that is already open is brought
+  forward rather than read into a second tab. Gzip compressed files are read
+  and written directly
+- Run SQL File runs a script straight from disk, statement by statement,
+  without loading it into the editor. It shows the statement count and how
+  far through the file it is, stops on the first error with the failing
+  statement in the log, and can be stopped. It understands PostgreSQL dollar
+  quotes, MySQL `DELIMITER` lines and SQL Server `GO` batches
 - A search field in the title bar opens the command palette and shows its
   shortcut
 - Blanco checks for new releases hourly and shows an Update button in the

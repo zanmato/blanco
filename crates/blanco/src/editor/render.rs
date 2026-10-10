@@ -38,8 +38,8 @@ impl EditorPanel {
             .ghost()
             .xsmall()
             .icon(IconName::Close)
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.close_tab(tab_index, cx);
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.request_close_tab(tab_index, window, cx);
             }))
     }
 
@@ -146,15 +146,17 @@ impl EditorPanel {
                 this.menu_detail(crate::time_format::format_relative(timestamp))
             })
             .when(closable, |this| {
-                let close = cx.listener(|this, index: &usize, _, cx| this.close_tab(*index, cx));
+                let close = cx.listener(|this, index: &usize, window, cx| {
+                    this.request_close_tab(*index, window, cx)
+                });
                 this.on_close(move |index, _, window, cx| close(index, window, cx))
             })
             .when(closable, |this| {
                 this.on_mouse_down(
                     MouseButton::Middle,
-                    cx.listener(move |this, _, _, cx| {
+                    cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
-                        this.close_tab(ix, cx);
+                        this.request_close_tab(ix, window, cx);
                     }),
                 )
             })
@@ -224,8 +226,8 @@ impl EditorPanel {
                 |panel, ix, window, cx| panel.toggle_pin(ix, window, cx),
             ))
             .separator()
-            .item(item("Close", closable, |panel, ix, _, cx| {
-                panel.close_tab(ix, cx)
+            .item(item("Close", closable, |panel, ix, window, cx| {
+                panel.request_close_tab(ix, window, cx)
             }))
             .item(item("Close Others", has_others, |panel, ix, _, cx| {
                 panel.close_other_tabs(ix, cx)
@@ -278,7 +280,16 @@ impl EditorPanel {
     /// under its name with the environment badge; the rest sit under "Other".
     fn render_tab_bar_item_inner(&self, ix: usize, tab: &TabType, cx: &mut Context<Self>) -> Tab {
         let show_close_button = self.tabs.len() > 1;
-        let label = tab.title(cx);
+        // A file tab with unsaved changes is marked like a document window.
+        let unsaved = tab
+            .connection_tab()
+            .and_then(|tab| tab.file.as_ref())
+            .is_some_and(|file| file.dirty);
+        let label = if unsaved {
+            format!("● {}", tab.title(cx))
+        } else {
+            tab.title(cx)
+        };
         let context = tab.context(cx);
         let icon = Self::tab_icon(tab, cx);
 
@@ -662,6 +673,7 @@ impl EditorPanel {
             .child(
                 h_flex()
                     .gap_2()
+                    .children(self.render_file_run_status(&query_tab.editor, cx))
                     // Format/lint and EXPLAIN are SQL-only; hide
                     // them for non-SQL backends (e.g. Redis).
                     .when(supports_sql, |this| {
@@ -976,6 +988,13 @@ impl Render for EditorPanel {
             .flex_1()
             .h_full()
             .overflow_hidden()
+            // Dropping files on the editor opens them in query tabs.
+            .drag_over::<gpui::ExternalPaths>(|style, _, _, cx| style.bg(cx.theme().drop_target))
+            .on_drop(
+                cx.listener(|this, paths: &gpui::ExternalPaths, window, cx| {
+                    this.open_sql_files(paths.paths().to_vec(), window, cx);
+                }),
+            )
             .on_action(
                 cx.listener(|this, action: &ExecuteSubstitutedQuery, window, cx| {
                     this.execute_query(
