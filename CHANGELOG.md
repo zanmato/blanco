@@ -6,6 +6,10 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- Go from a name in a query to the object: Ctrl-click (Cmd-click on macOS)
+  a table or view name, or an alias of one, to open its rows in a new tab,
+  or a function name to open its DDL. The editor's context menu gains Open
+  Data and Open Structure for the name under the cursor
 - A search field in the title bar opens the command palette and shows its
   shortcut
 - Blanco checks for new releases hourly and shows an Update button in the

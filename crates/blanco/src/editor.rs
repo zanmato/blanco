@@ -160,6 +160,48 @@ impl EditorPanel {
             .map(|tab| tab.results_panel.clone())
     }
 
+    /// Open the table, view or function named at the active query tab's
+    /// cursor: its rows, or with `structure` its structure tab.
+    pub fn open_object_at_cursor(
+        &mut self,
+        structure: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.tabs.get(self.active_tab_ix).and_then(TabType::query) else {
+            return;
+        };
+        let Some(provider) = tab.completion_provider.clone() else {
+            return;
+        };
+        let context = tab.base.context.clone();
+        let (text, offset) = {
+            let editor = tab.base.editor.read(cx);
+            (editor.text().clone(), editor.cursor())
+        };
+        cx.spawn_in(window, async move |_, cx| {
+            let resolved = cx
+                .background_spawn(async move {
+                    crate::sql::navigation::resolve(&provider, &text, offset).await
+                })
+                .await;
+            cx.update(|window, cx| match resolved {
+                Some((target, _)) => {
+                    crate::sql::navigation::open_target(target, structure, &context, window, cx)
+                }
+                None => window.push_notification(
+                    (
+                        gpui_component::notification::NotificationType::Info,
+                        "No table, view or function at the cursor",
+                    ),
+                    cx,
+                ),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     #[cfg(any(test, feature = "screenshots"))]
     pub fn active_query_tab(&self) -> Option<&QueryTab> {
         self.tabs.get(self.active_tab_ix).and_then(TabType::query)
@@ -711,6 +753,14 @@ impl EditorPanel {
                         sql_completion_provider.clone(),
                     ));
                     editor.lsp_mut().signature_help_provider = Some(signature_help_provider);
+
+                    editor.lsp_mut().definition_provider =
+                        Some(crate::sql::navigation::SqlDefinitionProvider::new(
+                            sql_completion_provider.clone(),
+                        ));
+                    editor.lsp_mut().show_document = Some(
+                        crate::sql::navigation::show_document_handler(params.context.clone()),
+                    );
 
                     let completion_provider: Rc<dyn gpui_component::input::CompletionProvider> =
                         Rc::new(sql_completion_provider);

@@ -1,6 +1,7 @@
 pub mod completion;
 pub mod formatting;
 pub mod functions;
+pub mod navigation;
 pub mod signature_help;
 
 pub use completion::SqlCompletionProvider;

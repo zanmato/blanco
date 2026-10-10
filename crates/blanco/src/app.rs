@@ -53,6 +53,8 @@ actions!(
     blanco_app,
     [
         Quit,
+        OpenDataAtCursor,
+        OpenStructureAtCursor,
         OpenConnection,
         OpenSettings,
         OpenTerminal,

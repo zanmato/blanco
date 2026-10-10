@@ -18,7 +18,9 @@ use gpui_component::{
 
 use super::rename_form::RenameTabForm;
 use super::{EditorPanel, QueryTab, ScriptTab, TabType};
-use crate::app::{ExecuteSubstitutedQuery, FormatQuery, RenameTab};
+use crate::app::{
+    ExecuteSubstitutedQuery, FormatQuery, OpenDataAtCursor, OpenStructureAtCursor, RenameTab,
+};
 use crate::app_settings::AppSettings;
 use crate::result_ext::ResultExt;
 use crate::results_panel::ResultsPanel;
@@ -461,6 +463,7 @@ impl EditorPanel {
     fn render_editor(
         &self,
         editor: &gpui::Entity<gpui_component::input::EditorState>,
+        navigable: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         div().size_full().min_h_0().min_w_0().relative().child(
@@ -470,7 +473,25 @@ impl EditorPanel {
                 .w_full()
                 .rounded_none()
                 .font_family(cx.theme().mono_font_family.clone())
-                .text_size(px(AppSettings::global(cx).settings.editor.font_size)),
+                .text_size(px(AppSettings::global(cx).settings.editor.font_size))
+                // SQL editors lead their menu with going to the object under
+                // the cursor; the rest is the editor's own menu.
+                .when(navigable, |editor| {
+                    editor.context_menu(|menu, _, _| {
+                        use gpui_component::input::{
+                            Copy, Cut, Paste, SelectAll, ToggleCodeActions,
+                        };
+                        menu.menu("Open Data", Box::new(OpenDataAtCursor))
+                            .menu("Open Structure", Box::new(OpenStructureAtCursor))
+                            .menu("Show Code Actions", Box::new(ToggleCodeActions))
+                            .separator()
+                            .menu("Cut", Box::new(Cut))
+                            .menu("Copy", Box::new(Copy))
+                            .menu("Paste", Box::new(Paste))
+                            .separator()
+                            .menu("Select All", Box::new(SelectAll))
+                    })
+                }),
         )
     }
 
@@ -521,11 +542,11 @@ impl EditorPanel {
         self.render_with_terminal(
             v_resizable("editor-results-split")
                 .with_state(&self.editor_results_resize_state)
-                .child(
-                    resizable_panel()
-                        .size(200.)
-                        .child(self.render_editor(&query_tab.editor, cx)),
-                )
+                .child(resizable_panel().size(200.).child(self.render_editor(
+                    &query_tab.editor,
+                    query_tab.completion_provider.is_some() && supports_sql,
+                    cx,
+                )))
                 .child(
                     resizable_panel().size(200.).child(
                         v_flex()
@@ -684,11 +705,11 @@ impl EditorPanel {
         self.render_with_terminal(
             v_resizable("script-editor-results-split")
                 .with_state(&self.editor_results_resize_state)
-                .child(
-                    resizable_panel()
-                        .size(200.)
-                        .child(self.render_editor(&script_tab.editor, cx)),
-                )
+                .child(resizable_panel().size(200.).child(self.render_editor(
+                    &script_tab.editor,
+                    false,
+                    cx,
+                )))
                 .child(
                     resizable_panel().size(200.).child(
                         v_flex()
@@ -857,6 +878,12 @@ impl Render for EditorPanel {
             )
             .on_action(cx.listener(|this, _: &FormatQuery, window, cx| {
                 this.format_current_query(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &OpenDataAtCursor, window, cx| {
+                this.open_object_at_cursor(false, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &OpenStructureAtCursor, window, cx| {
+                this.open_object_at_cursor(true, window, cx);
             }))
             // The segmented trough paints its own background, and padding on
             // the bar itself would make it taller rather than inset it, which
