@@ -109,6 +109,7 @@ pub enum CommandType {
     ToggleFilterBar,
     SaveTab,
     SaveTabAs,
+    OpenThemesFolder,
     NewSnippet,
     OpenSettings,
     OpenTerminal,
@@ -800,6 +801,9 @@ fn execute_command(cmd: &CommandType, window: &mut Window, cx: &mut App) {
         CommandType::ToggleFilterBar => window.dispatch_action(Box::new(ToggleFilterBar), cx),
         CommandType::SaveTab => window.dispatch_action(Box::new(SaveTab), cx),
         CommandType::SaveTabAs => window.dispatch_action(Box::new(SaveTabAs), cx),
+        CommandType::OpenThemesFolder => {
+            window.dispatch_action(Box::new(crate::app::OpenThemesFolder), cx)
+        }
         CommandType::NewSnippet => window.dispatch_action(Box::new(NewSnippet), cx),
         CommandType::OpenSettings => window.dispatch_action(Box::new(OpenSettings), cx),
         CommandType::OpenTerminal => window.dispatch_action(Box::new(OpenTerminal), cx),
@@ -1230,6 +1234,11 @@ fn build_commands(
         leaf("Toggle Filter Bar", "Results", CommandType::ToggleFilterBar),
         leaf("Save", "File", CommandType::SaveTab),
         leaf("Save As…", "File", CommandType::SaveTabAs),
+        leaf(
+            "Open Themes Folder",
+            "Appearance",
+            CommandType::OpenThemesFolder,
+        ),
         leaf("New Snippet", "Tab", CommandType::NewSnippet),
         leaf(
             "New Connection",

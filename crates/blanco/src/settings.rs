@@ -86,8 +86,8 @@ pub fn apply_font_settings(cx: &mut App) {
     });
 }
 
-/// gpui-component re-applies the active theme whenever the registry changes
-/// (startup load, hot reload), which puts the theme file's fonts back. Its
+/// gpui-component re-applies the active theme whenever the registry changes,
+/// as loading themes at startup does, which puts the theme file's fonts back. Its
 /// observer is registered by `gpui_component::init`, so this one runs after it
 /// and the user's fonts win.
 pub fn keep_fonts_on_theme_reload(cx: &mut App) {
@@ -960,7 +960,7 @@ mod appearance_tests {
         });
         cx.run_until_parked();
 
-        // What the themes directory watcher does on a reload.
+        // What loading a theme file does.
         cx.update(|cx| {
             gpui_component::ThemeRegistry::global_mut(cx);
         });

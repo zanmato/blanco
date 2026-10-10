@@ -447,6 +447,16 @@ deserializes each file into `ThemeSet` to catch drift. `catppuccin.json` is
 generated, not hand-edited: change the role mapping in
 `scripts/generate-catppuccin-theme.py` and re-run it.
 
+Users add theme files to `<config dir>/blanco/themes` (`custom_themes::themes_dir`).
+`custom_themes::load_custom_themes` reads them once at startup, before the
+embedded themes, since `load_themes_from_str` keeps the first theme of a name
+and a custom file should win. Edits apply after a restart. Blanco does not use
+`ThemeRegistry::watch_dir`: its watcher rebuilds the registry from the folder
+alone without calling `on_load` again, which drops the embedded themes. Keys a
+file has that the `ThemeSet` schema lacks are reported in a notification, as
+the loader ignores them. `test-data/themes/aurora.json` is a theme from
+gpui-component kept for the tests.
+
 ### Using Themes
 
 ```rust
