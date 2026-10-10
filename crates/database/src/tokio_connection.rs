@@ -161,6 +161,23 @@ impl Connection for TokioConnection {
         .await
     }
 
+    async fn execute_write_without_foreign_key_checks(
+        &self,
+        query: &str,
+        database_name: Option<&str>,
+    ) -> Result<u64> {
+        self.guard_read_only(query)?;
+        let inner = Arc::clone(&self.inner);
+        let query = query.to_string();
+        let database_name = database_name.map(str::to_string);
+        self.run(async move {
+            inner
+                .execute_write_without_foreign_key_checks(&query, database_name.as_deref())
+                .await
+        })
+        .await
+    }
+
     async fn execute_write(
         &self,
         query: &str,

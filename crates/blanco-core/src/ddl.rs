@@ -21,6 +21,72 @@ impl TableOperation {
     }
 }
 
+/// How a drop or truncate goes ahead when other objects depend on the table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferenceOverride {
+    /// PostgreSQL's `CASCADE`: dependent objects are dropped too, or for a
+    /// truncate, the tables referencing it are emptied too.
+    Cascade,
+    /// MySQL and MariaDB: foreign key checks are off for the statement and
+    /// back on right after it, so referencing rows are left dangling.
+    SkipForeignKeyChecks,
+}
+
+impl ReferenceOverride {
+    /// The override `db_type` offers for `operation` on an `entity`, if any.
+    pub fn for_operation(
+        db_type: DatabaseType,
+        entity: EntityType,
+        operation: &TableOperation,
+    ) -> Option<Self> {
+        match (db_type, operation) {
+            (DatabaseType::PostgreSQL, TableOperation::Drop) => Some(Self::Cascade),
+            (DatabaseType::PostgreSQL, TableOperation::Truncate) if entity == EntityType::Table => {
+                Some(Self::Cascade)
+            }
+            (DatabaseType::MySQL, TableOperation::Drop | TableOperation::Truncate)
+                if entity == EntityType::Table =>
+            {
+                Some(Self::SkipForeignKeyChecks)
+            }
+            _ => None,
+        }
+    }
+
+    /// The label of the confirmation's checkbox.
+    pub fn label(&self) -> &'static str {
+        match self {
+            ReferenceOverride::Cascade => "Cascade",
+            ReferenceOverride::SkipForeignKeyChecks => "Ignore foreign keys",
+        }
+    }
+
+    /// What ticking the checkbox does, said in the confirmation.
+    pub fn description(&self, operation: &TableOperation) -> &'static str {
+        match (self, operation) {
+            (ReferenceOverride::Cascade, TableOperation::Truncate) => {
+                "Also empties every table that references this one, and the tables referencing those."
+            }
+            (ReferenceOverride::Cascade, _) => {
+                "Also drops the views and foreign keys that depend on it."
+            }
+            (ReferenceOverride::SkipForeignKeyChecks, _) => {
+                "Turns foreign key checks off for this statement only. Rows in other tables that reference it are left pointing at nothing."
+            }
+        }
+    }
+
+    /// `sql` with the override applied to the statement itself. Skipping
+    /// foreign key checks happens around the statement instead, see
+    /// `Connection::execute_write_without_foreign_key_checks`.
+    pub fn apply(&self, sql: &str) -> String {
+        match self {
+            ReferenceOverride::Cascade => format!("{sql} CASCADE"),
+            ReferenceOverride::SkipForeignKeyChecks => sql.to_string(),
+        }
+    }
+}
+
 /// Quote one identifier for `db_type`. Input is taken as a bare name; any
 /// quote characters in it are escaped, not interpreted.
 pub fn quote_identifier(db_type: DatabaseType, identifier: &str) -> String {
@@ -502,6 +568,47 @@ mod tests {
                 &TableOperation::Truncate
             )
             .is_none()
+        );
+    }
+
+    #[test]
+    fn reference_overrides_per_backend() {
+        let offer = |db_type, entity, operation: TableOperation| {
+            ReferenceOverride::for_operation(db_type, entity, &operation)
+        };
+        use DatabaseType::*;
+        assert_eq!(
+            offer(PostgreSQL, EntityType::View, TableOperation::Drop),
+            Some(ReferenceOverride::Cascade)
+        );
+        assert_eq!(
+            offer(PostgreSQL, EntityType::Table, TableOperation::Truncate),
+            Some(ReferenceOverride::Cascade)
+        );
+        assert_eq!(
+            offer(MySQL, EntityType::Table, TableOperation::Truncate),
+            Some(ReferenceOverride::SkipForeignKeyChecks)
+        );
+        assert_eq!(offer(MySQL, EntityType::View, TableOperation::Drop), None);
+        assert_eq!(offer(SQLite, EntityType::Table, TableOperation::Drop), None);
+        assert_eq!(
+            offer(
+                PostgreSQL,
+                EntityType::Table,
+                TableOperation::Rename {
+                    new_name: "x".into()
+                }
+            ),
+            None
+        );
+
+        assert_eq!(
+            ReferenceOverride::Cascade.apply("TRUNCATE TABLE \"t\""),
+            "TRUNCATE TABLE \"t\" CASCADE"
+        );
+        assert_eq!(
+            ReferenceOverride::SkipForeignKeyChecks.apply("DROP TABLE `t`"),
+            "DROP TABLE `t`"
         );
     }
 

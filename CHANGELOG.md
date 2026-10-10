@@ -6,6 +6,10 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- Dropping or truncating a table that other tables reference can go ahead
+  from the sidebar: the confirmation offers Cascade on PostgreSQL, and Ignore
+  foreign keys on MySQL and MariaDB, which turns the checks off for that one
+  statement. The dialog says what the option does
 - A search field in the title bar opens the command palette and shows its
   shortcut
 - Blanco checks for new releases hourly and shows an Update button in the
