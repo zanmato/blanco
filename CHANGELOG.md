@@ -6,6 +6,11 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- A system notification when a query that ran at least 10 seconds ends
+  while Blanco is in the background. It names the tab and says whether the
+  query succeeded, and clicking it brings Blanco forward on that tab. The
+  threshold and an off switch are under Notifications in the Database
+  settings
 - A search field in the title bar opens the command palette and shows its
   shortcut
 - Blanco checks for new releases hourly and shows an Update button in the

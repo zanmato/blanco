@@ -146,6 +146,12 @@ impl Settings {
                 "database.max_history_items" => {
                     settings.database.max_history_items = value.parse().unwrap_or(1000);
                 }
+                "database.notify_finished_queries" => {
+                    settings.database.notify_finished_queries = value.parse().unwrap_or(true);
+                }
+                "database.notify_after_seconds" => {
+                    settings.database.notify_after_seconds = value.parse().unwrap_or(10);
+                }
                 "appearance.theme" => {
                     settings.appearance.theme = value.clone();
                 }
@@ -300,6 +306,10 @@ pub struct DatabaseSettings {
     /// Maximum number of query-history entries to retain. Older entries beyond
     /// this count are pruned after each execution.
     pub max_history_items: u32,
+    /// Post a system notification when a query that ran at least
+    /// `notify_after_seconds` ends while Blanco is in the background.
+    pub notify_finished_queries: bool,
+    pub notify_after_seconds: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -379,6 +389,8 @@ impl Default for DatabaseSettings {
             script_timeout_seconds: 0,
             show_connection_notifications: true,
             max_history_items: 1000,
+            notify_finished_queries: true,
+            notify_after_seconds: 10,
         }
     }
 }

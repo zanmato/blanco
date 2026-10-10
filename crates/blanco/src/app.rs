@@ -356,6 +356,8 @@ type QueuedConfirmation = (WriteConfirmation, channel::Sender<WriteAnswer>);
 /// One tag for every write confirmation, so a burst of requests keeps a single
 /// notification instead of stacking one per statement.
 const MCP_CONFIRMATION_NOTIFICATION_TAG: &str = "mcp-write-confirmation";
+/// Tags of finished-query notifications, followed by the tab's index.
+const QUERY_FINISHED_NOTIFICATION_TAG: &str = "query-finished:";
 
 pub struct BlancoApp {
     focus_handle: FocusHandle,
@@ -380,6 +382,9 @@ pub struct BlancoApp {
     /// `run_tab` callers waiting for their query tab's run to end, matched to
     /// `EditorPanelEvent::QueryRunEnded` by tab index in arrival order.
     mcp_run_replies: VecDeque<(usize, McpReply<serde_json::Value>)>,
+    /// Tags of the finished-query notifications posted while in the
+    /// background, dismissed when the window comes forward.
+    finished_query_notifications: Vec<String>,
     /// Write confirmations waiting for their turn; see
     /// `spawn_mcp_confirmation_queue`.
     mcp_confirmations: channel::Sender<QueuedConfirmation>,
@@ -449,9 +454,52 @@ impl BlancoApp {
             _save_editor_font_size_task: Task::ready(()),
             _mcp_task: mcp_task,
             mcp_run_replies: VecDeque::new(),
+            finished_query_notifications: Vec::new(),
             mcp_confirmations,
             _mcp_confirmation_task: mcp_confirmation_task,
         }
+    }
+
+    /// Post a system notification for a query that ended while Blanco is in
+    /// the background, when it ran long enough and the setting is on.
+    fn notify_query_finished(
+        &mut self,
+        tab_index: usize,
+        succeeded: bool,
+        duration: std::time::Duration,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let settings = &AppSettings::global(cx).settings.database;
+        if !settings.notify_finished_queries
+            || duration.as_secs() < u64::from(settings.notify_after_seconds)
+            || window.is_window_active()
+        {
+            return;
+        }
+        let title = self
+            .editor_panel
+            .read(cx)
+            .tab_titles(cx)
+            .get(tab_index)
+            .cloned()
+            .unwrap_or_default();
+        let tag = format!("{QUERY_FINISHED_NOTIFICATION_TAG}{tab_index}");
+        cx.show_system_notification(gpui::SystemNotification {
+            tag: tag.clone().into(),
+            title: if succeeded {
+                "Query finished".into()
+            } else {
+                "Query failed".into()
+            },
+            body: format!(
+                "{title} after {}",
+                crate::time_format::format_duration(duration.as_micros() as i64)
+            )
+            .into(),
+            actions: Vec::new(),
+        });
+        self.finished_query_notifications.push(tag);
     }
 
     /// Tell the user the update they restarted for is the build now running.
@@ -478,18 +526,36 @@ impl BlancoApp {
         cx: &mut Context<Self>,
     ) -> Subscription {
         let window_handle = window.window_handle();
+        let app = cx.entity().downgrade();
         cx.on_system_notification_response(move |response, cx| {
-            if response.tag != MCP_CONFIRMATION_NOTIFICATION_TAG {
+            let finished_tab = response
+                .tag
+                .strip_prefix(QUERY_FINISHED_NOTIFICATION_TAG)
+                .and_then(|ix| ix.parse::<usize>().ok());
+            if response.tag != MCP_CONFIRMATION_NOTIFICATION_TAG && finished_tab.is_none() {
                 return;
             }
             cx.activate(true);
+            let app = app.clone();
             window_handle
-                .update(cx, |_, window, _| window.activate_window())
+                .update(cx, |_, window, cx| {
+                    window.activate_window();
+                    if let Some(ix) = finished_tab {
+                        app.update(cx, |app, cx| {
+                            app.editor_panel
+                                .update(cx, |panel, cx| panel.activate_tab(ix, window, cx));
+                        })
+                        .log_err();
+                    }
+                })
                 .log_err();
         });
-        cx.observe_window_activation(window, |_, window, cx| {
+        cx.observe_window_activation(window, |app, window, cx| {
             if window.is_window_active() {
                 cx.dismiss_system_notification(MCP_CONFIRMATION_NOTIFICATION_TAG);
+                for tag in app.finished_query_notifications.drain(..) {
+                    cx.dismiss_system_notification(&tag);
+                }
             }
         })
     }
@@ -981,14 +1047,27 @@ impl BlancoApp {
         subscriptions.push(cx.subscribe_in(
             editor_panel,
             window,
-            move |app, _editor_panel, event, _window, cx| match event {
+            move |app, _editor_panel, event, window, cx| match event {
                 EditorPanelEvent::QueryRecorded => {
                     app.history_panel.update(cx, |panel, cx| {
                         panel.reload(cx);
                     });
                 }
-                EditorPanelEvent::QueryRunEnded { tab_index, outcome } => {
+                EditorPanelEvent::QueryRunEnded {
+                    tab_index,
+                    outcome,
+                    duration,
+                } => {
                     app.resolve_mcp_run(*tab_index, outcome.clone());
+                    if let Some(duration) = duration {
+                        app.notify_query_finished(
+                            *tab_index,
+                            outcome.is_ok(),
+                            *duration,
+                            window,
+                            cx,
+                        );
+                    }
                 }
             },
         ));
@@ -2769,6 +2848,71 @@ mod tests {
             has_dialog(&mut cx),
             "the write is still answered in the dialog"
         );
+    }
+
+    /// A query that ends while Blanco is in the background posts a system
+    /// notification naming the tab, and clicking it brings Blanco forward.
+    #[gpui::test]
+    async fn test_finished_query_notifies_when_in_background(cx: &mut TestAppContext) {
+        let harness = FullAppHarness::new(cx);
+        cx.update(|cx| cx.set_app_identity(crate::APP_ID, "Blanco"));
+        let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.close_all_dialogs(cx);
+            AppSettings::global_mut(cx)
+                .settings
+                .database
+                .notify_after_seconds = 0;
+        });
+        let editor_panel = harness.editor_panel(&cx);
+        let run = |cx: &mut VisualTestContext| {
+            editor_panel.update_in(cx, |panel, window, cx| {
+                let tab = panel.active_query_tab().expect("query tab");
+                tab.editor
+                    .update(cx, |state, cx| state.set_value("SELECT 1", window, cx));
+                panel.on_run_query(window, cx);
+            });
+        };
+        let wait = async |cx: &mut VisualTestContext| {
+            for _ in 0..100 {
+                cx.run_until_parked();
+                if !cx.shown_system_notifications().is_empty() {
+                    return;
+                }
+                cx.executor()
+                    .timer(std::time::Duration::from_millis(20))
+                    .await;
+            }
+        };
+
+        cx.update(|window, _| window.activate_window());
+        run(&mut cx);
+        wait(&mut cx).await;
+        assert!(
+            cx.shown_system_notifications().is_empty(),
+            "no notification while Blanco is in front"
+        );
+
+        cx.deactivate_window();
+        run(&mut cx);
+        wait(&mut cx).await;
+        let shown = cx.shown_system_notifications();
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].tag, "query-finished:0");
+        assert_eq!(shown[0].title, "Query finished");
+        assert!(
+            shown[0].body.starts_with("Test Query after"),
+            "{}",
+            shown[0].body
+        );
+
+        cx.simulate_system_notification_response(gpui::SystemNotificationResponse {
+            tag: shown[0].tag.clone(),
+            action_id: None,
+        });
+        cx.run_until_parked();
+        assert!(cx.update(|window, _| window.is_window_active()));
     }
 
     #[gpui::test]
