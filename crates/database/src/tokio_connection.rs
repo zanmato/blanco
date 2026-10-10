@@ -370,6 +370,22 @@ impl Connection for TokioConnection {
         .await
     }
 
+    async fn get_generated_columns(
+        &self,
+        table_name: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<String>> {
+        let inner = Arc::clone(&self.inner);
+        let table_name = table_name.to_string();
+        let schema = schema.map(str::to_string);
+        self.run(async move {
+            inner
+                .get_generated_columns(&table_name, schema.as_deref())
+                .await
+        })
+        .await
+    }
+
     async fn get_indexes_for_table(
         &self,
         table_name: &str,

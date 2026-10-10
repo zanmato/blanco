@@ -486,4 +486,30 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_postgres_generated_columns() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::PostgresConnection;
+
+        let conn = PostgresConnection::from_connection_string(&default_connection_string())?;
+        if let Err(e) = conn.ping().await {
+            return handle_unreachable("test_postgres_generated_columns", &e);
+        }
+        let db = Some("blanco");
+        conn.execute_query("DROP TABLE IF EXISTS generated_test", db, None)
+            .await?;
+        conn.execute_query(
+            "CREATE TABLE generated_test (id int, price numeric, with_tax numeric GENERATED ALWAYS AS (price * 1.25) STORED)",
+            db,
+            None,
+        )
+        .await?;
+        let generated = conn
+            .get_generated_columns("generated_test", Some("public"))
+            .await?;
+        conn.execute_query("DROP TABLE generated_test", db, None)
+            .await?;
+        assert_eq!(generated, ["with_tax"]);
+        Ok(())
+    }
 }

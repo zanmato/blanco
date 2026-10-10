@@ -240,6 +240,26 @@ impl Connection for ClickhouseConnection {
         false
     }
 
+    async fn get_generated_columns(
+        &self,
+        table_name: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<String>> {
+        let db = schema.unwrap_or(&self.database);
+        let sql = format!(
+            "SELECT name FROM system.columns WHERE database = '{}' AND table = '{}' \
+             AND default_kind IN ('MATERIALIZED', 'ALIAS', 'EPHEMERAL') ORDER BY position",
+            db.replace('\\', "\\\\").replace('\'', "''"),
+            table_name.replace('\\', "\\\\").replace('\'', "''"),
+        );
+        let tsv = self.raw_query_tsv(&sql, None).await?;
+        Ok(tsv
+            .rows
+            .into_iter()
+            .filter_map(|row| row.into_iter().next().flatten())
+            .collect())
+    }
+
     async fn get_columns_for_table(
         &self,
         table_name: &str,

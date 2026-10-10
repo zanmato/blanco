@@ -268,6 +268,25 @@ impl Connection for SqliteConnection {
         false // SQLite doesn't support schemas in the traditional sense
     }
 
+    async fn get_generated_columns(
+        &self,
+        table_name: &str,
+        _schema: Option<&str>,
+    ) -> Result<Vec<String>> {
+        // table_xinfo marks generated columns hidden = 2 (virtual) or 3
+        // (stored).
+        let sql = format!(
+            "SELECT name FROM pragma_table_xinfo('{}') WHERE hidden IN (2, 3) ORDER BY cid",
+            table_name.replace('\'', "''")
+        );
+        let result = self.execute_query(&sql, None, None).await?;
+        Ok(result
+            .rows
+            .into_iter()
+            .filter_map(|row| row.into_iter().next().flatten())
+            .collect())
+    }
+
     async fn get_columns_for_table(
         &self,
         table_name: &str,

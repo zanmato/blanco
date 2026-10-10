@@ -889,6 +889,31 @@ impl Connection for MssqlConnection {
         Ok(entities)
     }
 
+    async fn get_generated_columns(
+        &self,
+        table_name: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<String>> {
+        let sql = format!(
+            "SELECT c.name FROM sys.columns c \
+             WHERE c.object_id = OBJECT_ID(N'{}') AND c.is_computed = 1 ORDER BY c.column_id",
+            format!(
+                "[{}].[{}]",
+                schema.unwrap_or("dbo").replace(']', "]]"),
+                table_name.replace(']', "]]")
+            )
+            .replace('\'', "''"),
+        );
+        let result = self
+            .execute_query(&sql, self.initial_database.as_deref(), None)
+            .await?;
+        Ok(result
+            .rows
+            .into_iter()
+            .filter_map(|row| row.into_iter().next().flatten())
+            .collect())
+    }
+
     async fn get_columns_for_table(
         &self,
         table_name: &str,

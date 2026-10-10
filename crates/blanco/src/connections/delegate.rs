@@ -321,6 +321,22 @@ impl TreeDelegate for ConnectionsTreeDelegate {
 
                 menu = menu.item(self.new_script_item(metadata, window));
 
+                if db_type.supports_table_operations() {
+                    let dump_context = ConnectionContext {
+                        connection_id,
+                        connection_name: connection_name.clone(),
+                        db_type,
+                        database_name: database_name.clone(),
+                        schema_name: None,
+                        environment_type,
+                    };
+                    menu = menu.item(PopupMenuItem::new("Export as SQL…").on_click(
+                        window.listener_for(&self.parent, move |this, _event, window, cx| {
+                            this.export_sql_dump(dump_context.clone(), None, None, window, cx);
+                        }),
+                    ));
+                }
+
                 let connection_name_for_graph = connection_name;
                 let database_name_for_graph = database_name.clone();
                 menu =
@@ -452,7 +468,32 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                         ));
                     }
 
-                    if supports_table_ops {
+                    if supports_table_ops
+                        && matches!(metadata.kind, TreeItemKind::Schema | TreeItemKind::Table)
+                    {
+                        // A schema exports all its tables; a table opens the
+                        // same picker with only itself checked.
+                        let context_for_dump = context_for_export.clone();
+                        let schema_for_dump = metadata.schema_name.clone();
+                        let preselect = matches!(metadata.kind, TreeItemKind::Table)
+                            .then(|| table_name.clone())
+                            .flatten();
+                        menu = menu.item(PopupMenuItem::new("Export as SQL…").on_click(
+                            window.listener_for(&self.parent, move |this, _event, window, cx| {
+                                this.export_sql_dump(
+                                    context_for_dump.clone(),
+                                    schema_for_dump.clone(),
+                                    preselect.clone(),
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        ));
+                    }
+
+                    // Exporting rows needs a table; on a schema node the item
+                    // had nothing to export.
+                    if supports_table_ops && !matches!(metadata.kind, TreeItemKind::Schema) {
                         menu = menu.item(PopupMenuItem::new("Export Data").on_click(
                             window.listener_for(&self.parent, move |this, _event, window, cx| {
                                 this.export_table_data(

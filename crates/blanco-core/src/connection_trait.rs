@@ -594,6 +594,16 @@ pub trait Connection: Send + Sync {
 
     /// Get column information for a specific table
     /// Returns detailed column metadata including names, types, and constraints.
+    /// Columns whose value the database computes (generated, computed or
+    /// materialized columns), which an INSERT must leave out.
+    async fn get_generated_columns(
+        &self,
+        _table_name: &str,
+        _schema: Option<&str>,
+    ) -> anyhow::Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+
     /// Defaults to empty so non-relational drivers (e.g. Redis) that have no
     /// column catalog need not implement it.
     async fn get_columns_for_table(

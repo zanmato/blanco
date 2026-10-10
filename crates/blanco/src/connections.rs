@@ -936,6 +936,56 @@ impl ConnectionsPanel {
         }
     }
 
+    /// Open Export as SQL for the tables of `schema` (every schema when
+    /// `None`), with only `preselect` checked when given.
+    pub fn export_sql_dump(
+        &mut self,
+        context: ConnectionContext,
+        schema: Option<String>,
+        preselect: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let modal = cx.new(|cx| {
+            crate::export::sql_dump_modal::SqlDumpModal::new(context, schema, preselect, window, cx)
+        });
+        window.open_dialog(cx, move |dialog, _window, cx| {
+            let running = modal.read(cx).is_running();
+            let export_modal = modal.clone();
+            let cancel_modal = modal.clone();
+            dialog
+                .title("Export as SQL")
+                .w(px(640.0))
+                .h(px(620.0))
+                .overlay_closable(false)
+                .child(modal.clone())
+                .footer(
+                    DialogFooter::new()
+                        .child(
+                            Button::new("dump-cancel")
+                                .label(if running { "Stop" } else { "Close" })
+                                .outline()
+                                .on_click(move |_, window, cx| {
+                                    let stopped =
+                                        cancel_modal.update(cx, |modal, _| modal.cancel());
+                                    if !stopped {
+                                        window.close_dialog(cx);
+                                    }
+                                }),
+                        )
+                        .child(
+                            Button::new("dump-export")
+                                .primary()
+                                .label("Export…")
+                                .loading(running)
+                                .on_click(move |_, window, cx| {
+                                    export_modal.update(cx, |modal, cx| modal.start(window, cx));
+                                }),
+                        ),
+                )
+        });
+    }
+
     pub fn import_table_data(
         &mut self,
         context: ConnectionContext,

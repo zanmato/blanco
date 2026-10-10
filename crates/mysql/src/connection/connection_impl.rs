@@ -683,6 +683,31 @@ impl Connection for MysqlConnection {
         false // MySQL doesn't support schemas in the PostgreSQL sense
     }
 
+    async fn get_generated_columns(
+        &self,
+        table_name: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<String>> {
+        let database = schema
+            .or(self.initial_database.as_deref())
+            .unwrap_or_default();
+        let sql = format!(
+            "SELECT COLUMN_NAME FROM information_schema.COLUMNS \
+             WHERE TABLE_SCHEMA = '{}' AND TABLE_NAME = '{}' AND EXTRA LIKE '%GENERATED%' \
+             AND EXTRA NOT LIKE 'DEFAULT_GENERATED%' ORDER BY ORDINAL_POSITION",
+            database.replace('\\', "\\\\").replace('\'', "''"),
+            table_name.replace('\\', "\\\\").replace('\'', "''"),
+        );
+        let result = self
+            .execute_query(&sql, self.initial_database.as_deref(), None)
+            .await?;
+        Ok(result
+            .rows
+            .into_iter()
+            .filter_map(|row| row.into_iter().next().flatten())
+            .collect())
+    }
+
     async fn get_columns_for_table(
         &self,
         table_name: &str,

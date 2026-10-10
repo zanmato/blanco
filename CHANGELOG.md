@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- Export as SQL on a database, schema or table writes one SQL file for any
+  set of tables, with structure, data or both per table. Tables come after
+  the tables they reference (foreign key checks are turned off for cycles or
+  on request), DROP TABLE IF EXISTS can precede each CREATE, generated
+  columns are left out of the INSERTs, and rows go in batched INSERT
+  statements
 - A search field in the title bar opens the command palette and shows its
   shortcut
 - Blanco checks for new releases hourly and shows an Update button in the
@@ -20,6 +26,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixes
 
+- PostgreSQL's CREATE statement writes stored generated and identity
+  columns as such instead of as a DEFAULT that cannot be loaded
+- PostgreSQL column details load for tables outside the search path
 - Clicking a cell in the results table no longer starts a text selection in
   the SQL view that follows the pointer with no button held
 
