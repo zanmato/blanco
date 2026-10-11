@@ -597,6 +597,67 @@ fn find_statement_at_cursor<'a>(
 
 /// Extract table aliases from `relation` nodes in the AST.
 /// A `relation` with an `object_reference` child and an `identifier` sibling = table with alias.
+/// A table a statement reads from, with its alias when it has one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Relation {
+    /// The table as written, quotes removed per part (`public.users`).
+    pub table_name: String,
+    pub alias: Option<String>,
+}
+
+/// The tables named in the FROM and JOIN clauses of the statement at
+/// `cursor_byte_pos`, in order. Tables of subqueries and CTEs are left out:
+/// they are not what the statement's own select list reads.
+pub fn extract_relations(text: &Rope, cursor_byte_pos: usize) -> Vec<Relation> {
+    with_parser(|parser| {
+        let text_str: String = text.chunks().collect();
+        let tree = parser.parser.parse(&text_str, None)?;
+        let root_node = tree.root_node();
+        let mut statements = Vec::new();
+        parser.collect_statements(root_node, &mut statements);
+        let search_root =
+            find_statement_at_cursor(&statements, cursor_byte_pos, root_node).unwrap_or(root_node);
+        let mut relations = Vec::new();
+        collect_relations(search_root, &text_str, true, &mut relations);
+        Some(relations)
+    })
+    .unwrap_or_default()
+}
+
+fn collect_relations(node: Node, source: &str, is_root: bool, out: &mut Vec<Relation>) {
+    if !is_root && matches!(node.kind(), "subquery" | "cte") {
+        return;
+    }
+    if node.kind() == "relation" {
+        let mut table_name = None;
+        let mut alias = None;
+        for i in 0..node.child_count() as u32 {
+            let Some(child) = node.child(i) else {
+                continue;
+            };
+            let range = child.byte_range();
+            if range.end > source.len() {
+                continue;
+            }
+            match child.kind() {
+                "object_reference" => {
+                    table_name = Some(normalize_object_reference(&source[range]));
+                }
+                "identifier" => alias = Some(strip_identifier_quotes(&source[range]).to_string()),
+                _ => {}
+            }
+        }
+        if let Some(table_name) = table_name {
+            out.push(Relation { table_name, alias });
+        }
+    }
+    for i in 0..node.child_count() as u32 {
+        if let Some(child) = node.child(i) {
+            collect_relations(child, source, false, out);
+        }
+    }
+}
+
 fn extract_table_aliases_from_ast(node: Node, source: &str) -> Vec<TableAlias> {
     let mut aliases = Vec::new();
     collect_table_aliases(node, source, &mut aliases);
@@ -2230,5 +2291,26 @@ WITH customer_addresses AS (
         let info = result.unwrap();
         assert_eq!(info.parameters.len(), 1);
         assert_eq!(info.parameters[0].raw_text, "$1");
+    }
+
+    #[test]
+    fn relations_of_the_statement_without_subqueries() {
+        let sql = "SELECT 1;\nSELECT * FROM public.\"Users\" u JOIN orders ON true \
+                   WHERE u.id IN (SELECT x FROM other)";
+        let rope = Rope::from_str(sql);
+        let relations = extract_relations(&rope, sql.find('*').unwrap());
+        assert_eq!(
+            relations,
+            [
+                Relation {
+                    table_name: "public.Users".into(),
+                    alias: Some("u".into()),
+                },
+                Relation {
+                    table_name: "orders".into(),
+                    alias: None,
+                },
+            ]
+        );
     }
 }

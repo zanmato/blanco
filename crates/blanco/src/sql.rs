@@ -1,4 +1,5 @@
 pub mod completion;
+pub mod expand_star;
 pub mod formatting;
 pub mod functions;
 pub mod signature_help;
