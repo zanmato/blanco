@@ -947,7 +947,7 @@ impl ConnectionsPanel {
                     Ok(()) => (
                         NotificationType::Success,
                         SharedString::from(format!(
-                            "Exported {count} connection{} to {}. Passwords are not included.",
+                            "Exported {count} connection{} to {}.",
                             if count == 1 { "" } else { "s" },
                             path.display()
                         )),
