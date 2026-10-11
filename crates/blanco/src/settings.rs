@@ -1,3 +1,4 @@
+mod csv_group;
 mod formatter_page;
 mod keybindings_page;
 mod view;
@@ -9,6 +10,7 @@ use gpui::{App, SharedString, WindowAppearance};
 use gpui_component::Theme;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use transformers::{CsvOptions, CsvQuoting};
 
 /// Switch to the registered theme called `name`, persist the choice, and
 /// re-apply the user's font settings on top. Used by the settings page and the
@@ -124,6 +126,9 @@ pub struct Settings {
     pub appearance: AppearanceSettings,
     #[serde(default)]
     pub results: ResultsSettings,
+    /// Defaults for Copy as CSV, which the export dialog starts from too.
+    #[serde(default)]
+    pub csv: CsvSettings,
     /// The built-in MCP server external agents connect to.
     #[serde(default)]
     pub mcp: McpSettings,
@@ -198,6 +203,30 @@ impl Settings {
                 }
                 "database.max_history_items" => {
                     settings.database.max_history_items = value.parse().unwrap_or(1000);
+                }
+                "csv.delimiter" => {
+                    settings.csv.delimiter = CsvDelimiter::from_stored(value);
+                }
+                "csv.custom_delimiter" => {
+                    settings.csv.custom_delimiter = value.clone();
+                }
+                "csv.header" => {
+                    settings.csv.header = value.parse().unwrap_or(true);
+                }
+                "csv.null_text" => {
+                    settings.csv.null_text = value.clone();
+                }
+                "csv.quote" => {
+                    settings.csv.quote = value.clone();
+                }
+                "csv.quoting" => {
+                    settings.csv.quoting = CsvQuoting::from_stored(value);
+                }
+                "csv.replace_line_breaks" => {
+                    settings.csv.replace_line_breaks = value.parse().unwrap_or_default();
+                }
+                "csv.line_break_replacement" => {
+                    settings.csv.line_break_replacement = value.clone();
                 }
                 "appearance.theme" => {
                     settings.appearance.theme = value.clone();
@@ -538,6 +567,119 @@ impl DatabaseSettings {
     pub fn idle_disconnect_timeout(&self) -> Option<std::time::Duration> {
         (self.idle_disconnect_minutes > 0)
             .then(|| std::time::Duration::from_secs(u64::from(self.idle_disconnect_minutes) * 60))
+    }
+}
+
+/// The character between CSV values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum CsvDelimiter {
+    Comma,
+    #[default]
+    Semicolon,
+    Tab,
+    Pipe,
+    /// The character in [`CsvSettings::custom_delimiter`].
+    Custom,
+}
+
+impl CsvDelimiter {
+    pub const ALL: [CsvDelimiter; 5] = [
+        CsvDelimiter::Comma,
+        CsvDelimiter::Semicolon,
+        CsvDelimiter::Tab,
+        CsvDelimiter::Pipe,
+        CsvDelimiter::Custom,
+    ];
+
+    /// The stored setting value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CsvDelimiter::Comma => "comma",
+            CsvDelimiter::Semicolon => "semicolon",
+            CsvDelimiter::Tab => "tab",
+            CsvDelimiter::Pipe => "pipe",
+            CsvDelimiter::Custom => "custom",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            CsvDelimiter::Comma => "Comma",
+            CsvDelimiter::Semicolon => "Semicolon",
+            CsvDelimiter::Tab => "Tab",
+            CsvDelimiter::Pipe => "Pipe",
+            CsvDelimiter::Custom => "Custom",
+        }
+    }
+
+    /// Parse a stored value, falling back to the default for anything unknown.
+    pub fn from_stored(value: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|delimiter| delimiter.as_str() == value)
+            .unwrap_or_default()
+    }
+
+    /// The character, taking a custom one from the first character of
+    /// `custom`. An empty custom delimiter falls back to the default.
+    pub fn char(self, custom: &str) -> char {
+        match self {
+            CsvDelimiter::Comma => ',',
+            CsvDelimiter::Semicolon => ';',
+            CsvDelimiter::Tab => '\t',
+            CsvDelimiter::Pipe => '|',
+            CsvDelimiter::Custom => custom
+                .chars()
+                .next()
+                .unwrap_or_else(|| CsvDelimiter::default().char("")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CsvSettings {
+    pub delimiter: CsvDelimiter,
+    pub custom_delimiter: String,
+    pub header: bool,
+    /// Written for NULL values.
+    pub null_text: String,
+    /// The quote character, its first character counts.
+    pub quote: String,
+    pub quoting: CsvQuoting,
+    pub replace_line_breaks: bool,
+    /// Written in place of each line break inside a value when
+    /// `replace_line_breaks` is on.
+    pub line_break_replacement: String,
+}
+
+impl Default for CsvSettings {
+    fn default() -> Self {
+        let defaults = CsvOptions::default();
+        Self {
+            delimiter: CsvDelimiter::default(),
+            custom_delimiter: String::new(),
+            header: defaults.header,
+            null_text: defaults.null_text,
+            quote: defaults.quote.to_string(),
+            quoting: defaults.quoting,
+            replace_line_breaks: false,
+            line_break_replacement: " ".to_string(),
+        }
+    }
+}
+
+impl CsvSettings {
+    pub fn to_options(&self) -> CsvOptions {
+        CsvOptions {
+            delimiter: self.delimiter.char(&self.custom_delimiter),
+            header: self.header,
+            null_text: self.null_text.clone(),
+            quote: self.quote.chars().next().unwrap_or('"'),
+            quoting: self.quoting,
+            line_break_replacement: self
+                .replace_line_breaks
+                .then(|| self.line_break_replacement.clone()),
+        }
     }
 }
 

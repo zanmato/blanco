@@ -26,6 +26,13 @@ All notable changes to this project will be documented in this file.
   it; Filter by Value in a cell's menu filters on that value, and the copy
   button copies the SQL the view runs. The bar's open state and the last
   operator picked are remembered
+- CSV options in the export dialog: delimiter (comma, semicolon, tab, pipe or
+  a custom character), header row, text for NULL, quote character, when to
+  quote, and replacing line breaks inside values. Copy as CSV uses the same
+  options, with defaults under Copy as CSV in the Database settings, which the
+  export dialog starts from. Exports can be written as UTF-8, UTF-8 with a
+  byte order mark, or UTF-16, and SQL exports can write one INSERT per row
+  instead of one for all rows
 - A search field in the title bar opens the command palette and shows its
   shortcut
 - Blanco checks for new releases hourly and shows an Update button in the
@@ -58,8 +65,14 @@ All notable changes to this project will be documented in this file.
 
 ### Fixes
 
+<<<<<<< HEAD
 - Formatting JSON in the cell editor and the cell comparison no longer sorts
   object keys or rounds large numbers
+=======
+- Exporting an empty table as SQL wrote an INSERT without any rows; the file
+  is now empty. Copy as SQL escapes strings for the result's database rather
+  than always for PostgreSQL
+>>>>>>> 6acfc38 (CSV options for export and copy)
 - Clicking a cell in the results table no longer starts a text selection in
   the SQL view that follows the pointer with no button held
 

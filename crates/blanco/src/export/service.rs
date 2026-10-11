@@ -55,7 +55,7 @@ impl ExportService {
         database_name: Option<&str>,
         transformer: &dyn DataTransformer,
         file_path: &Path,
-        _options: &ExportOptions,
+        options: &ExportOptions,
         mut progress_callback: impl FnMut(ExportProgress) + Send + Sync + 'static,
     ) -> Result<ExportResult, anyhow::Error>
     where
@@ -139,11 +139,17 @@ impl ExportService {
         let mut writer = BufWriter::new(file);
         let mut rows_written = 0;
         let mut bytes_written = 0;
+        let encoding = options.encoding;
+
+        writer
+            .write_all(encoding.preamble())
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to write byte order mark: {}", e))?;
 
         // Write initial output (headers, etc.)
         if !initial_output.is_empty() {
             writer
-                .write_all(initial_output.as_bytes())
+                .write_all(&encoding.encode(&initial_output))
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to write initial output: {}", e))?;
             bytes_written += initial_output.len();
@@ -167,7 +173,7 @@ impl ExportService {
 
             // Write transformed row
             writer
-                .write_all(row_output.as_bytes())
+                .write_all(&encoding.encode(&row_output))
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to write transformed row: {}", e))?;
 
@@ -192,7 +198,7 @@ impl ExportService {
 
         if !final_output.is_empty() {
             writer
-                .write_all(final_output.as_bytes())
+                .write_all(&encoding.encode(&final_output))
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to write final output: {}", e))?;
         }
@@ -269,5 +275,46 @@ impl ExportService {
 impl Default for ExportService {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use blanco_core::Connection as _;
+    use transformers::{CsvOptions, CsvTransformer, TextEncoding};
+
+    #[tokio::test]
+    async fn streamed_export_is_written_in_the_chosen_encoding() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let connection_string = format!("sqlite:{}", dir.path().join("export.db").display());
+        let mut connection =
+            sqlite::SqliteConnection::new(connection_string.clone()).expect("sqlite");
+        connection
+            .connect(&connection_string)
+            .await
+            .expect("connect");
+
+        let path = dir.path().join("out.csv");
+        let options = ExportOptions {
+            encoding: TextEncoding::Utf16Le,
+        };
+        ExportService::new()
+            .export_data_streaming_with_transformer(
+                &connection,
+                "SELECT 'å' AS name",
+                None,
+                &CsvTransformer::new(CsvOptions::default()),
+                &path,
+                &options,
+                |_| {},
+            )
+            .await
+            .expect("export");
+
+        let bytes = std::fs::read(&path).expect("read export");
+        let mut expected = vec![0xFF, 0xFE];
+        expected.extend(TextEncoding::Utf16Le.encode("name\nå\n").iter());
+        assert_eq!(bytes, expected);
     }
 }

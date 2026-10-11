@@ -9,6 +9,7 @@ path = "src/transformers.rs"
 
 [dependencies]
 blanco-core = { path = "../blanco-core" }
+serde = { workspace = true }
 serde_json = { workspace = true }
 
 [lints]

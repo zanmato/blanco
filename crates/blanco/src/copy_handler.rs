@@ -1,9 +1,10 @@
 use gpui::{AppContext, ClipboardItem, Context};
 use std::sync::Arc;
 
+use crate::app_settings::AppSettings;
 use crate::result_ext::ResultExt;
 use crate::results_panel::ResultsPanel;
-use transformers::{SelectedTableData, TransformerRegistry};
+use transformers::{CsvTransformer, DataTransformer, SelectedTableData, TransformerRegistry};
 
 /// Handles copying table data to the clipboard in various formats
 #[derive(Clone)]
@@ -31,13 +32,22 @@ impl CopyHandler {
             return;
         }
 
+        // CSV follows the options in settings, the other formats are fixed.
+        let transformer: Arc<dyn DataTransformer> = if format.eq_ignore_ascii_case("csv") {
+            Arc::new(CsvTransformer::new(
+                AppSettings::global(cx).settings.csv.to_options(),
+            ))
+        } else if let Some(transformer) = self.registry.get_transformer(format) {
+            transformer
+        } else {
+            tracing::error!("Failed to copy: unknown format {}", format);
+            return;
+        };
         let data_clone = data.clone();
-        let format_owned = format.to_string();
-        let registry = self.registry.clone();
 
         let transform_task = cx.background_spawn(async move {
             tracing::debug!("Starting copy transformation");
-            let result = registry.transform_data(&data_clone, &format_owned);
+            let result = transformer.transform_selected_data(&data_clone);
             tracing::debug!("Copy transformation completed");
             result
         });

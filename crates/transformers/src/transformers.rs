@@ -130,6 +130,7 @@ impl TransformerRegistry {
 
 // Re-export transformer modules and types
 pub mod csv_transformer;
+pub mod encoding;
 pub mod json_transformer;
 pub mod markdown_transformer;
 pub mod sql_transformer;
@@ -137,7 +138,8 @@ pub mod tsv_transformer;
 pub mod values_transformer;
 
 // Export types for convenience
-pub use csv_transformer::CsvTransformer;
+pub use csv_transformer::{CsvOptions, CsvQuoting, CsvTransformer};
+pub use encoding::TextEncoding;
 pub use json_transformer::JsonTransformer;
 pub use markdown_transformer::MarkdownTransformer;
 pub use sql_transformer::SqlTransformer;
@@ -147,7 +149,7 @@ pub use values_transformer::ValuesTransformer;
 impl Default for TransformerRegistry {
     fn default() -> Self {
         let mut registry = Self::new();
-        registry.register(CsvTransformer);
+        registry.register(CsvTransformer::default());
         registry.register(TsvTransformer);
         registry.register(SqlTransformer::new());
         registry.register(ValuesTransformer::new());

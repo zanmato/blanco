@@ -1146,7 +1146,7 @@ impl ConnectionsPanel {
                 let modal_clone = modal_content.clone();
                 dialog
                     .title("Export Table Data")
-                    .h(px(450.0))
+                    .h(px(600.0))
                     .child(modal_content.clone())
                     .footer(
                         DialogFooter::new()
