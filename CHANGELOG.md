@@ -9,6 +9,9 @@ All notable changes to this project will be documented in this file.
 - Sort a result by several columns: Shift-click another column's sort icon
   to add it as the next sort key. With more than one key, each sorted header
   shows its place, and a plain click goes back to sorting by one column
+- Follow System Appearance in the Appearance settings switches between a
+  light and a dark theme of your choice as the system appearance changes,
+  live and at startup
 - A search field in the title bar opens the command palette and shows its
   shortcut
 - Blanco checks for new releases hourly and shows an Update button in the

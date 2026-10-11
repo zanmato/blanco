@@ -5,7 +5,7 @@ mod view;
 pub use view::SettingsView;
 
 use crate::app_settings::AppSettings;
-use gpui::{App, SharedString};
+use gpui::{App, SharedString, WindowAppearance};
 use gpui_component::Theme;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -14,32 +14,65 @@ use std::collections::{HashMap, HashSet};
 /// re-apply the user's font settings on top. Used by the settings page and the
 /// command palette.
 pub fn apply_theme_by_name(name: &str, cx: &mut App) {
+    if !install_theme(name, cx) {
+        return;
+    }
+    AppSettings::global_mut(cx).settings.appearance.theme = name.to_string();
+    persist_setting("appearance.theme", name.to_string(), cx);
+}
+
+/// Make the theme called `name` the current one, without changing settings.
+/// False when there is no such theme.
+pub fn install_theme(name: &str, cx: &mut App) -> bool {
     let Some(theme_config) = gpui_component::ThemeRegistry::global(cx)
         .themes()
         .get(&SharedString::from(name.to_string()))
         .cloned()
     else {
         tracing::warn!("Unknown theme: {name}");
-        return;
+        return false;
     };
-    AppSettings::global_mut(cx).settings.appearance.theme = name.to_string();
     let mode = theme_config.mode;
     Theme::global_mut(cx).apply_config(&theme_config);
     // Pushes the config into the base layer (scrollbars, resize handles,
     // input frame).
     Theme::change(mode, None, cx);
     apply_font_settings(cx);
+    true
+}
 
+/// The theme to show: with Follow System on, the light or dark theme for
+/// `appearance`, otherwise the chosen theme.
+pub fn theme_for_appearance(appearance: &AppearanceSettings, system: WindowAppearance) -> &str {
+    if !appearance.follow_system {
+        return &appearance.theme;
+    }
+    match system {
+        WindowAppearance::Light | WindowAppearance::VibrantLight => &appearance.light_theme,
+        WindowAppearance::Dark | WindowAppearance::VibrantDark => &appearance.dark_theme,
+    }
+}
+
+/// With Follow System on, switch to the theme for `system`.
+pub fn follow_system_appearance(system: WindowAppearance, cx: &mut App) {
+    let appearance = &AppSettings::global(cx).settings.appearance;
+    if appearance.follow_system {
+        let name = theme_for_appearance(appearance, system).to_string();
+        install_theme(&name, cx);
+    }
+}
+
+/// Save one setting in the background, logging a failure.
+fn persist_setting(key: &'static str, value: String, cx: &mut App) {
     let db = app_database::AppDatabase::global(cx).clone();
-    let name = name.to_string();
     let save = gpui_tokio::Tokio::spawn_result(cx, async move {
-        db.save_setting("appearance.theme", &name, false)
+        db.save_setting(key, &value, false)
             .await
             .map_err(anyhow::Error::from)
     });
     cx.spawn(async move |_| {
         if let Err(error) = save.await {
-            tracing::error!("Failed to persist theme choice: {error:#}");
+            tracing::error!("Failed to persist {key}: {error:#}");
         }
     })
     .detach();
@@ -151,6 +184,15 @@ impl Settings {
                 }
                 "appearance.theme" => {
                     settings.appearance.theme = value.clone();
+                }
+                "appearance.follow_system" => {
+                    settings.appearance.follow_system = value.parse().unwrap_or_default();
+                }
+                "appearance.light_theme" => {
+                    settings.appearance.light_theme = value.clone();
+                }
+                "appearance.dark_theme" => {
+                    settings.appearance.dark_theme = value.clone();
                 }
                 "appearance.font_family" => {
                     settings.appearance.font_family = value.clone();
@@ -312,6 +354,11 @@ pub struct DatabaseSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppearanceSettings {
     pub theme: String,
+    /// Switch between `light_theme` and `dark_theme` with the system
+    /// appearance instead of showing `theme`.
+    pub follow_system: bool,
+    pub light_theme: String,
+    pub dark_theme: String,
     pub font_family: String,
     pub mono_font_family: String,
     /// Terminal pane font size in pixels.
@@ -401,6 +448,9 @@ impl Default for AppearanceSettings {
     fn default() -> Self {
         Self {
             theme: "One Dark - Darkened".to_string(),
+            follow_system: false,
+            light_theme: "Catppuccin Latte".to_string(),
+            dark_theme: "One Dark - Darkened".to_string(),
             font_family: String::new(),
             mono_font_family: String::new(),
             terminal_font_size: 12.0,
@@ -452,5 +502,30 @@ impl Default for FormatterSettings {
             terminator_multiline_newline: false,
             require_final_semicolon: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod appearance_tests {
+    use super::*;
+
+    #[test]
+    fn follow_system_picks_the_theme_for_the_appearance() {
+        let mut appearance = AppearanceSettings::default();
+        appearance.theme = "Chosen".into();
+        assert_eq!(
+            theme_for_appearance(&appearance, WindowAppearance::Light),
+            "Chosen"
+        );
+
+        appearance.follow_system = true;
+        assert_eq!(
+            theme_for_appearance(&appearance, WindowAppearance::VibrantLight),
+            "Catppuccin Latte"
+        );
+        assert_eq!(
+            theme_for_appearance(&appearance, WindowAppearance::Dark),
+            "One Dark - Darkened"
+        );
     }
 }
