@@ -37,7 +37,7 @@ gpui_platform = { package = "gpui-pre-platform", version = "0.3.8", features = [
     "wayland",
     "runtime_shaders",
 ] }
-gpui-component = { git = "https://github.com/zanmato/gpui-component", branch = "claude/upbeat-turing-ks27z9", features = [
+gpui-component = { git = "https://github.com/zanmato/gpui-component", branch = "blanco", features = [
     "tree-sitter",
     "tree-sitter-javascript",
 ] }
