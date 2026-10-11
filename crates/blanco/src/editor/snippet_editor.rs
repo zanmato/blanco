@@ -62,6 +62,8 @@ impl SnippetEditor {
                     hard_tabs,
                 })
                 .soft_wrap(true);
+            editor.lsp_mut().completion_menu.accept_keys =
+                crate::settings::completion_accept_keys(cx);
 
             if kind == EditorKind::Script {
                 // A snippet has no connection behind it, so the completions

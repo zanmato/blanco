@@ -206,6 +206,18 @@ impl EditorPanel {
         }
     }
 
+    pub fn set_all_editors_completion_accept_keys(
+        &mut self,
+        accept_keys: gpui_component::input::CompletionAcceptKeys,
+        cx: &mut Context<Self>,
+    ) {
+        for editor in self.connection_backed_editors() {
+            editor.update(cx, |state, _| {
+                state.lsp_mut().completion_menu.accept_keys = accept_keys;
+            });
+        }
+    }
+
     pub fn set_all_editors_soft_wrap(
         &mut self,
         wrap: bool,
@@ -586,6 +598,8 @@ impl EditorPanel {
                 let show_whitespace = AppSettings::global(cx).settings.editor.show_whitespace;
                 this.set_all_editors_soft_wrap(word_wrap, window, cx);
                 this.set_all_editors_show_whitespace(show_whitespace, window, cx);
+                let accept_keys = crate::settings::completion_accept_keys(cx);
+                this.set_all_editors_completion_accept_keys(accept_keys, cx);
             });
         panel._subscriptions.push(settings_subscription);
 
@@ -713,6 +727,8 @@ impl EditorPanel {
                     })
                     .soft_wrap(word_wrap)
                     .show_whitespaces(show_whitespace);
+                editor.lsp_mut().completion_menu.accept_keys =
+                    crate::settings::completion_accept_keys(cx);
 
                 if supports_sql {
                     let signature_help_provider: Rc<
@@ -874,6 +890,8 @@ impl EditorPanel {
                 })
                 .soft_wrap(editor_settings.word_wrap)
                 .show_whitespaces(editor_settings.show_whitespace);
+            editor.lsp_mut().completion_menu.accept_keys =
+                editor_settings.completion_accept_keys.accept_keys();
 
             // The injected `db` object is the only API a script has that the
             // editor can't infer, so that is what gets completed.
