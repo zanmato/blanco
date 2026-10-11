@@ -62,22 +62,6 @@ pub fn follow_system_appearance(system: WindowAppearance, cx: &mut App) {
     }
 }
 
-/// Save one setting in the background, logging a failure.
-fn persist_setting(key: &'static str, value: String, cx: &mut App) {
-    let db = app_database::AppDatabase::global(cx).clone();
-    let save = gpui_tokio::Tokio::spawn_result(cx, async move {
-        db.save_setting(key, &value, false)
-            .await
-            .map_err(anyhow::Error::from)
-    });
-    cx.spawn(async move |_| {
-        if let Err(error) = save.await {
-            tracing::error!("Failed to persist {key}: {error:#}");
-        }
-    })
-    .detach();
-}
-
 /// Apply user font settings on top of the current theme.
 /// Called after theme changes and on startup to ensure font preferences persist.
 pub fn apply_font_settings(cx: &mut App) {
@@ -684,8 +668,6 @@ mod appearance_tests {
 }
 
 mod tests {
-    use super::*;
-
     #[test]
     fn test_completion_accept_keys_round_trip() {
         for setting in [

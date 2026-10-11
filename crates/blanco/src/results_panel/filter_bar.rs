@@ -518,6 +518,11 @@ impl Render for FilterBar {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let danger = theme.danger;
+        // Same layering as the result tab strip: `theme.table` underneath and
+        // `theme.table_head` on top, so the bar composites like the active
+        // tab above it and the column header below it.
+        let table = theme.table;
+        let table_head = theme.table_head;
         let mode_button = |id: &'static str, label: &'static str, target: FilterMode| {
             Button::new(id)
                 .label(label)
@@ -525,7 +530,7 @@ impl Render for FilterBar {
                 .selected(mode == target)
         };
 
-        v_flex()
+        let bar = v_flex()
             .key_context(FILTER_BAR_CONTEXT)
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::on_add_condition))
@@ -536,7 +541,7 @@ impl Render for FilterBar {
             .py_1()
             .border_b_1()
             .border_color(theme.border)
-            .bg(theme.secondary)
+            .bg(table_head)
             .child(
                 h_flex()
                     .gap_2()
@@ -681,7 +686,9 @@ impl Render for FilterBar {
                             .text_color(muted),
                     ),
                 ),
-            })
+            });
+
+        div().w_full().bg(table).child(bar)
     }
 }
 
