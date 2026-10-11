@@ -33,6 +33,10 @@ struct SqlStatementParser {
     parser: Parser,
 }
 
+/// Stands in for the identifier the user is about to type, see
+/// [`with_cursor_placeholder`].
+const CURSOR_PLACEHOLDER: &str = "__blanco_cursor__";
+
 static SQL_LANGUAGE: Lazy<Language> = Lazy::new(|| tree_sitter_sequel::LANGUAGE.into());
 
 // Thread-local parser instance for reuse.
@@ -447,14 +451,26 @@ pub struct CompletionContext {
     pub table_aliases: Vec<TableAlias>,
     pub is_dot_notation: bool,
     pub dot_table_name: Option<String>,
-    /// Columns of CTEs and derived tables (subqueries) referenced in the
-    /// statement's FROM clauses, keyed by the name used to reference them (the
-    /// CTE name, or the relation alias). Ordered by appearance. Only populated
-    /// when the projection is statically determinable (no `*`).
-    pub cte_columns: Vec<(String, Vec<String>)>,
+    /// CTEs and derived tables (subqueries) referenced in the FROM clauses
+    /// visible at the cursor, innermost query first.
+    pub derived_relations: Vec<DerivedRelation>,
+    /// Names of the CTEs the statement defines, in definition order.
+    pub cte_names: Vec<String>,
     /// The innermost function call whose argument list contains the cursor,
     /// for signature help.
     pub enclosing_call: Option<EnclosingCall>,
+}
+
+/// A CTE or derived table (subquery in FROM) as a FROM clause references it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DerivedRelation {
+    /// The name the statement refers to it by: the alias, else the CTE name.
+    pub name: String,
+    /// Columns its select list names.
+    pub columns: Vec<String>,
+    /// Tables whose every column it selects with `*` or `t.*`, as written
+    /// (possibly schema-qualified).
+    pub all_columns_of: Vec<String>,
 }
 
 /// A function invocation whose parentheses surround the cursor.
@@ -493,15 +509,35 @@ pub fn extract_completion_context(
             0..text_str.len()
         };
 
-        // Extract table aliases from all `relation` nodes within the statement
         let search_root = statement_node.unwrap_or(root_node);
-        let table_aliases = extract_table_aliases_from_ast(search_root, &text_str);
 
         // Detect dot notation by checking if cursor is right after or within "identifier."
         let (is_dot_notation, dot_table_name) = detect_dot_notation(&text_str, cursor_byte_pos);
 
         // Extract current word by scanning backwards from cursor
         let current_word = extract_current_word_from_text(&text_str, cursor_byte_pos);
+
+        let placeholder = current_word
+            .is_empty()
+            .then(|| with_cursor_placeholder(&text_str, cursor_byte_pos))
+            .flatten()
+            .and_then(|text| Some((parser.parser.parse(&text, None)?, text)));
+        let scope = match &placeholder {
+            Some((placeholder_tree, placeholder_text)) => relations_in_scope(
+                parser,
+                placeholder_tree.root_node(),
+                placeholder_text,
+                cursor_byte_pos,
+                cursor_byte_pos,
+            ),
+            None => relations_in_scope(
+                parser,
+                root_node,
+                &text_str,
+                cursor_byte_pos,
+                cursor_byte_pos.saturating_sub(1),
+            ),
+        };
 
         // Determine clause. Strategies in priority order:
         // 1. Check ERROR nodes near cursor for trailing keywords (incomplete SQL like
@@ -526,8 +562,6 @@ pub fn extract_completion_context(
                 }
             });
 
-        let cte_columns = extract_derived_columns(search_root, &text_str);
-
         // While the user is typing the tree usually has ERROR nodes around the
         // cursor, and an unclosed `f(` never produces an `invocation` node, so
         // fall back to a textual scan when the AST cannot answer.
@@ -537,10 +571,11 @@ pub fn extract_completion_context(
         Some(CompletionContext {
             current_word,
             clause,
-            table_aliases,
+            table_aliases: scope.table_aliases,
             is_dot_notation,
             dot_table_name,
-            cte_columns,
+            derived_relations: scope.derived_relations,
+            cte_names: scope.cte_names,
             enclosing_call,
         })
     })
@@ -595,8 +630,6 @@ fn find_statement_at_cursor<'a>(
     best
 }
 
-/// Extract table aliases from `relation` nodes in the AST.
-/// A `relation` with an `object_reference` child and an `identifier` sibling = table with alias.
 /// A table a statement reads from, with its alias when it has one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Relation {
@@ -658,12 +691,6 @@ fn collect_relations(node: Node, source: &str, is_root: bool, out: &mut Vec<Rela
     }
 }
 
-fn extract_table_aliases_from_ast(node: Node, source: &str) -> Vec<TableAlias> {
-    let mut aliases = Vec::new();
-    collect_table_aliases(node, source, &mut aliases);
-    aliases
-}
-
 /// Text of a node.
 fn node_text<'a>(node: Node, source: &'a str) -> &'a str {
     let range = node.byte_range();
@@ -675,16 +702,6 @@ fn first_child_of_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
     (0..node.child_count() as u32)
         .filter_map(|i| node.child(i))
         .find(|child| child.kind() == kind)
-}
-
-/// Whether `node` has any descendant matching `kind`.
-fn has_descendant_of_kind(node: Node, kind: &str) -> bool {
-    if node.kind() == kind {
-        return true;
-    }
-    (0..node.child_count() as u32)
-        .filter_map(|i| node.child(i))
-        .any(|child| has_descendant_of_kind(child, kind))
 }
 
 /// The text of the last `identifier` descendant in document order. For a column
@@ -725,14 +742,236 @@ fn find_select_clause<'a>(node: Node<'a>) -> Option<Node<'a>> {
     None
 }
 
-/// The projected column names of the query rooted at `node` (a `cte` or
-/// `subquery` node). Returns `None` if the projection is not statically
-/// enumerable (e.g. it uses `*`), so callers can fall back to a database lookup.
-fn projected_columns(node: Node, source: &str) -> Option<Vec<String>> {
-    let select = find_select_clause(node)?;
-    let select_expression = first_child_of_kind(select, "select_expression")?;
+/// Whether `name` is the identifier [`with_cursor_placeholder`] inserted.
+fn is_cursor_placeholder(name: &str) -> bool {
+    ident_eq(name, CURSOR_PLACEHOLDER)
+}
 
+/// `source` with [`CURSOR_PLACEHOLDER`] inserted at the cursor. Typing `u.` or
+/// leaving a select list empty breaks the statement apart, and tree-sitter
+/// then drops the FROM clause into ERROR nodes that hold no relations. With an
+/// identifier where the user is about to type one, the statement parses whole.
+fn with_cursor_placeholder(source: &str, cursor_byte_pos: usize) -> Option<String> {
+    let before = source.get(..cursor_byte_pos)?;
+    let after = source.get(cursor_byte_pos..)?;
+    Some(format!("{before}{CURSOR_PLACEHOLDER}{after}"))
+}
+
+/// The relations visible at the cursor and the statement's CTEs.
+#[derive(Default)]
+struct ScopeRelations {
+    table_aliases: Vec<TableAlias>,
+    derived_relations: Vec<DerivedRelation>,
+    cte_names: Vec<String>,
+}
+
+/// Collect what completion needs to know about the relations of the statement
+/// at `cursor_byte_pos`. `anchor` is a byte inside the token at the cursor.
+fn relations_in_scope(
+    parser: &SqlStatementParser,
+    root: Node,
+    source: &str,
+    cursor_byte_pos: usize,
+    anchor: usize,
+) -> ScopeRelations {
+    let mut statements = Vec::new();
+    parser.collect_statements(root, &mut statements);
+    let statement = find_statement_at_cursor(&statements, cursor_byte_pos, root).unwrap_or(root);
+
+    let mut cte_definitions = Vec::new();
+    collect_cte_definitions(statement, source, &mut cte_definitions);
+
+    let mut scope = ScopeRelations::default();
+    for block in scope_blocks(statement, anchor) {
+        let mut relations = Vec::new();
+        collect_relation_nodes(block, &mut relations);
+        for relation in relations {
+            let Some(resolved) = resolve_relation(relation, source, &cte_definitions) else {
+                continue;
+            };
+            if let Some(table_name) = resolved.table_name {
+                scope.table_aliases.push(TableAlias {
+                    table_name,
+                    alias: resolved.name.clone(),
+                });
+            }
+            if let Some(derived) = resolved.derived
+                && !scope
+                    .derived_relations
+                    .iter()
+                    .any(|existing| existing.name == derived.name)
+            {
+                scope.derived_relations.push(derived);
+            }
+        }
+    }
+    scope.cte_names = cte_definitions
+        .into_iter()
+        .map(|definition| definition.name)
+        .collect();
+    scope
+}
+
+/// The queries whose FROM relations are visible at `anchor`, innermost first.
+/// A subquery in a WHERE or select list sees the relations of the queries
+/// around it; a CTE body and a derived table see only their own.
+fn scope_blocks<'a>(statement: Node<'a>, anchor: usize) -> Vec<Node<'a>> {
+    let mut blocks = Vec::new();
+    let mut current = statement.descendant_for_byte_range(anchor, anchor + 1);
+    while let Some(node) = current {
+        match node.kind() {
+            "statement" => blocks.push(node),
+            "subquery" => {
+                blocks.push(node);
+                if node
+                    .parent()
+                    .is_some_and(|parent| parent.kind() == "relation")
+                {
+                    break;
+                }
+            }
+            "cte" => break,
+            _ => {}
+        }
+        if node.id() == statement.id() {
+            break;
+        }
+        current = node.parent();
+    }
+    if blocks.is_empty() {
+        blocks.push(statement);
+    }
+    blocks
+}
+
+/// The relations in `node`'s own FROM, UPDATE and DELETE clauses, leaving out
+/// those of nested subqueries and CTE bodies.
+fn collect_relation_nodes<'a>(node: Node<'a>, out: &mut Vec<Node<'a>>) {
+    for i in 0..node.child_count() as u32 {
+        let Some(child) = node.child(i) else { continue };
+        match child.kind() {
+            "cte" | "subquery" => {}
+            "relation" => out.push(child),
+            // `DELETE FROM t` names its table without a `relation` node.
+            "object_reference" if node.kind() == "from" => out.push(child),
+            _ => collect_relation_nodes(child, out),
+        }
+    }
+}
+
+/// A relation as the statement refers to it.
+struct ResolvedRelation {
+    /// The alias, or the table or CTE name when there is none.
+    name: String,
+    /// The schema-qualified name of a table or CTE, `None` for a subquery.
+    table_name: Option<String>,
+    /// The columns of a CTE or subquery.
+    derived: Option<DerivedRelation>,
+}
+
+fn resolve_relation(
+    node: Node,
+    source: &str,
+    cte_definitions: &[DerivedRelation],
+) -> Option<ResolvedRelation> {
+    let (object_reference, alias) = if node.kind() == "object_reference" {
+        (Some(node), None)
+    } else {
+        let alias = node
+            .child_by_field_name("alias")
+            .map(|alias| strip_identifier_quotes(node_text(alias, source)).to_string())
+            .filter(|alias| !is_cursor_placeholder(alias));
+        (first_child_of_kind(node, "object_reference"), alias)
+    };
+
+    if let Some(object_reference) = object_reference {
+        let table_name = normalize_object_reference(node_text(object_reference, source));
+        if table_name.is_empty() || is_cursor_placeholder(&table_name) {
+            return None;
+        }
+        let name = alias.unwrap_or_else(|| {
+            table_name
+                .rsplit('.')
+                .next()
+                .unwrap_or(&table_name)
+                .to_string()
+        });
+        let derived = cte_definitions
+            .iter()
+            .find(|definition| ident_eq(&definition.name, &table_name))
+            .map(|definition| DerivedRelation {
+                name: name.clone(),
+                ..definition.clone()
+            });
+        return Some(ResolvedRelation {
+            name,
+            table_name: Some(table_name),
+            derived,
+        });
+    }
+
+    let subquery = first_child_of_kind(node, "subquery")?;
+    let name = alias?;
+    let (columns, all_columns_of) = projection(subquery, source, cte_definitions);
+    Some(ResolvedRelation {
+        derived: Some(DerivedRelation {
+            name: name.clone(),
+            columns,
+            all_columns_of,
+        }),
+        name,
+        table_name: None,
+    })
+}
+
+/// Map each CTE definition to its columns, in definition order so a CTE can
+/// select `*` from the ones before it.
+fn collect_cte_definitions(node: Node, source: &str, out: &mut Vec<DerivedRelation>) {
+    if node.kind() == "cte"
+        && let Some(name_node) = first_child_of_kind(node, "identifier")
+    {
+        let name = node_text(name_node, source).to_string();
+        if !is_cursor_placeholder(&name) {
+            let mut tree_cursor = node.walk();
+            let listed: Vec<String> = node
+                .children_by_field_name("argument", &mut tree_cursor)
+                .map(|argument| node_text(argument, source).to_string())
+                .filter(|column| !is_cursor_placeholder(column))
+                .collect();
+            let (columns, all_columns_of) = if listed.is_empty() {
+                projection(node, source, out)
+            } else {
+                (listed, Vec::new())
+            };
+            out.push(DerivedRelation {
+                name,
+                columns,
+                all_columns_of,
+            });
+        }
+    }
+    for i in 0..node.child_count() as u32 {
+        if let Some(child) = node.child(i) {
+            collect_cte_definitions(child, source, out);
+        }
+    }
+}
+
+/// The columns the query rooted at `node` (a `cte` or `subquery`) projects:
+/// the names it selects, and the tables it selects every column of with `*`.
+fn projection(
+    node: Node,
+    source: &str,
+    cte_definitions: &[DerivedRelation],
+) -> (Vec<String>, Vec<String>) {
     let mut columns = Vec::new();
+    let mut all_columns_of = Vec::new();
+    let Some(select_expression) = find_select_clause(node)
+        .and_then(|select| first_child_of_kind(select, "select_expression"))
+    else {
+        return (columns, all_columns_of);
+    };
+
     for i in 0..select_expression.child_count() as u32 {
         let Some(term) = select_expression.child(i) else {
             continue;
@@ -740,85 +979,80 @@ fn projected_columns(node: Node, source: &str) -> Option<Vec<String>> {
         if term.kind() != "term" {
             continue;
         }
-        // `SELECT *` / `t.*` can't be enumerated without the source schema.
-        if has_descendant_of_kind(term, "all_fields") {
-            return None;
-        }
-        columns.push(last_identifier_text(term, source)?);
-    }
-
-    if columns.is_empty() {
-        None
-    } else {
-        Some(columns)
-    }
-}
-
-/// Extract the statically-known columns of CTEs and derived tables referenced in
-/// `search_root`'s FROM clauses. See [`CompletionContext::cte_columns`].
-fn extract_derived_columns(search_root: Node, source: &str) -> Vec<(String, Vec<String>)> {
-    let mut cte_defs: Vec<(String, Vec<String>)> = Vec::new();
-    collect_cte_defs(search_root, source, &mut cte_defs);
-
-    let mut result: Vec<(String, Vec<String>)> = Vec::new();
-    collect_derived_relations(search_root, source, &cte_defs, &mut result);
-    result
-}
-
-/// Map CTE definition names to their projected columns.
-fn collect_cte_defs(node: Node, source: &str, out: &mut Vec<(String, Vec<String>)>) {
-    if node.kind() == "cte"
-        && let Some(name_node) = first_child_of_kind(node, "identifier")
-        && let Some(columns) = projected_columns(node, source)
-    {
-        out.push((node_text(name_node, source).to_string(), columns));
-    }
-    for i in 0..node.child_count() as u32 {
-        if let Some(child) = node.child(i) {
-            collect_cte_defs(child, source, out);
+        let Some(value) = term.child_by_field_name("value") else {
+            continue;
+        };
+        if value.kind() == "all_fields" {
+            let qualifier = first_child_of_kind(value, "object_reference")
+                .map(|reference| normalize_object_reference(node_text(reference, source)));
+            expand_all_fields(
+                node,
+                source,
+                cte_definitions,
+                qualifier.as_deref(),
+                &mut columns,
+                &mut all_columns_of,
+            );
+        } else if let Some(name) = projected_name(term, value, source)
+            && !is_cursor_placeholder(&name)
+        {
+            columns.push(name);
         }
     }
+    (columns, all_columns_of)
 }
 
-/// Walk `relation` nodes; for each derived table (subquery) or CTE reference,
-/// record its reference name and columns.
-fn collect_derived_relations(
+/// The name a select-list term gets: its alias, the column it reads, or the
+/// function it calls, as PostgreSQL names them. Other expressions get a name
+/// no one types (`?column?`), so they are left out.
+fn projected_name(term: Node, value: Node, source: &str) -> Option<String> {
+    if let Some(alias) = term.child_by_field_name("alias") {
+        return Some(node_text(alias, source).to_string());
+    }
+    match value.kind() {
+        "field" => value
+            .child_by_field_name("name")
+            .map(|name| node_text(name, source).to_string()),
+        "invocation" => first_child_of_kind(value, "object_reference")
+            .and_then(|reference| reference.child_by_field_name("name"))
+            .map(|name| node_text(name, source).to_string()),
+        _ => None,
+    }
+}
+
+/// Resolve a `*` (or `qualifier.*`) in the select list of `node` to the
+/// relations of its FROM clause.
+fn expand_all_fields(
     node: Node,
     source: &str,
-    cte_defs: &[(String, Vec<String>)],
-    out: &mut Vec<(String, Vec<String>)>,
+    cte_definitions: &[DerivedRelation],
+    qualifier: Option<&str>,
+    columns: &mut Vec<String>,
+    all_columns_of: &mut Vec<String>,
 ) {
-    if node.kind() == "relation" {
-        if let Some(subquery) = first_child_of_kind(node, "subquery") {
-            // `FROM (SELECT ...) alias` -> columns keyed by the alias.
-            if let (Some(alias), Some(columns)) = (
-                first_child_of_kind(node, "identifier"),
-                projected_columns(subquery, source),
-            ) {
-                push_named(out, node_text(alias, source).to_string(), columns);
-            }
-        } else if let Some(object_reference) = first_child_of_kind(node, "object_reference") {
-            // `FROM cte [alias]` -> columns of the matching CTE, keyed by the
-            // alias if present, else the CTE name.
-            let table_name = node_text(object_reference, source);
-            if let Some((_, columns)) = cte_defs.iter().find(|(name, _)| name == table_name) {
-                let key = first_child_of_kind(node, "identifier")
-                    .map(|id| node_text(id, source).to_string())
-                    .unwrap_or_else(|| table_name.to_string());
-                push_named(out, key, columns.clone());
-            }
+    let mut relations = Vec::new();
+    collect_relation_nodes(node, &mut relations);
+    for relation in relations {
+        let Some(resolved) = resolve_relation(relation, source, cte_definitions) else {
+            continue;
+        };
+        if let Some(qualifier) = qualifier
+            && !ident_eq(qualifier, &resolved.name)
+            && resolved
+                .table_name
+                .as_deref()
+                .is_none_or(|table_name| !ident_eq(qualifier, table_name))
+        {
+            continue;
         }
-    }
-    for i in 0..node.child_count() as u32 {
-        if let Some(child) = node.child(i) {
-            collect_derived_relations(child, source, cte_defs, out);
+        match (resolved.derived, resolved.table_name) {
+            (Some(derived), _) => {
+                columns.extend(derived.columns);
+                all_columns_of.extend(derived.all_columns_of);
+            }
+            (None, Some(table_name)) => all_columns_of.push(table_name),
+            (None, None) => {}
         }
-    }
-}
-
-fn push_named(out: &mut Vec<(String, Vec<String>)>, name: String, columns: Vec<String>) {
-    if !out.iter().any(|(existing, _)| *existing == name) {
-        out.push((name, columns));
     }
 }
 
@@ -832,52 +1066,6 @@ fn normalize_object_reference(reference: &str) -> String {
         .map(strip_identifier_quotes)
         .collect::<Vec<_>>()
         .join(".")
-}
-
-fn collect_table_aliases(node: Node, source: &str, aliases: &mut Vec<TableAlias>) {
-    if node.kind() == "relation" {
-        let mut table_name: Option<String> = None;
-        let mut alias: Option<String> = None;
-
-        for i in 0..node.child_count() as u32 {
-            if let Some(child) = node.child(i) {
-                match child.kind() {
-                    "object_reference" => {
-                        // The table name is the text of the object_reference.
-                        // Strip quotes so `"Order"`/`` `t` ``/`[t]` match the
-                        // unquoted cache keys and per-part quoting in a
-                        // schema-qualified name is normalized.
-                        let range = child.byte_range();
-                        if range.end <= source.len() {
-                            table_name = Some(normalize_object_reference(&source[range]));
-                        }
-                    }
-                    "identifier" => {
-                        // The alias is a bare identifier after the object_reference
-                        let range = child.byte_range();
-                        if range.end <= source.len() {
-                            alias = Some(strip_identifier_quotes(&source[range]).to_string());
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        if let (Some(table), Some(al)) = (table_name, alias) {
-            aliases.push(TableAlias {
-                table_name: table,
-                alias: al,
-            });
-        }
-    }
-
-    // Recurse into children
-    for i in 0..node.child_count() as u32 {
-        if let Some(child) = node.child(i) {
-            collect_table_aliases(child, source, aliases);
-        }
-    }
 }
 
 /// Strip a single pair of surrounding SQL quote characters from an identifier:

@@ -108,6 +108,22 @@ All notable changes to this project will be documented in this file.
   than always for PostgreSQL
 - The sidebar selection no longer jumps to another row or disappears when
   the tree refreshes or a group above it is collapsed and opened again
+- Completion offers the columns of a CTE or a subquery in FROM after its name
+  or alias, also while the select list is still being written, including
+  columns it selects with `*` and names from a CTE column list. A query inside
+  a CTE gets the columns of its own tables, and FROM lists the statement's CTEs
+- Completion lists columns and tables before functions and keywords where a
+  name is expected, and the current schema's tables before other schemas.
+  Keywords are offered there too once a word is typed
+- Long names in the completion list are shortened in the middle, and the list
+  is wider
+
+### Fixes
+
+- Completion offers the columns of tables without an alias, such as in
+  `UPDATE users SET` or `DELETE FROM users WHERE`
+- Completion no longer opens while a number is typed, and offers only columns
+  after `alias.`
 - Clicking a cell in the results table no longer starts a text selection in
   the SQL view that follows the pointer with no button held
 

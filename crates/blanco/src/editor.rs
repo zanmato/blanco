@@ -829,6 +829,8 @@ impl EditorPanel {
                     let completion_provider: Rc<dyn gpui_component::input::CompletionProvider> =
                         Rc::new(sql_completion_provider);
                     editor.lsp_mut().completion_provider = Some(completion_provider);
+                    editor.lsp_mut().completion_menu.max_width =
+                        crate::sql::completion::COMPLETION_MENU_MAX_WIDTH;
                 } else if params.context.db_type == database::DatabaseType::Redis {
                     // Redis gets command/subcommand completion instead of the
                     // SQL schema-aware completion.
