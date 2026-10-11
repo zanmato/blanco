@@ -43,6 +43,9 @@ All notable changes to this project will be documented in this file.
   connection's context menu writes just that one. Passwords are never
   written. Import shows what it will add first, skips connections that are
   already saved with the same settings and renames ones whose name is taken
+- Accept Suggestion With in the Editor settings chooses whether Enter, Tab
+  or either accepts a completion suggestion. When Enter does not accept, it
+  starts a new line and closes the list
 
 ### Fixes
 

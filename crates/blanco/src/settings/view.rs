@@ -2,7 +2,7 @@ use crate::app_settings::AppSettings;
 use crate::mcp::{McpService, McpStatus};
 use crate::settings::formatter_page::formatter_page;
 use crate::settings::keybindings_page::keybindings_page;
-use crate::settings::{EditorSettings, Settings};
+use crate::settings::{CompletionAcceptKeysSetting, EditorSettings, Settings};
 use app_database::AppDatabase;
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, FocusHandle, Focusable, IntoElement,
@@ -376,6 +376,49 @@ impl SettingsView {
                         .default_value(default_settings.editor.tab_size as f64),
                     )
                     .description("Number of spaces per tab stop (1-8)."),
+                    SettingItem::new(
+                        "Accept Suggestion With",
+                        SettingField::dropdown(
+                            vec![
+                                ("enter".into(), "Enter".into()),
+                                ("tab".into(), "Tab".into()),
+                                ("enter_and_tab".into(), "Enter or Tab".into()),
+                            ],
+                            move |cx: &App| {
+                                SharedString::from(
+                                    AppSettings::global(cx)
+                                        .settings
+                                        .editor
+                                        .completion_accept_keys
+                                        .key(),
+                                )
+                            },
+                            {
+                                let view_handle = view_handle.clone();
+                                move |val: SharedString, cx: &mut App| {
+                                    let keys = CompletionAcceptKeysSetting::from_key(&val);
+                                    AppSettings::global_mut(cx)
+                                        .settings
+                                        .editor
+                                        .completion_accept_keys = keys;
+
+                                    let key = "editor.completion_accept_keys".to_string();
+                                    let value = keys.key().to_string();
+                                    if let Some(view) = view_handle.upgrade() {
+                                        view.update(cx, |view, cx| {
+                                            view.save_setting_debounced(key, value, false, cx);
+                                        });
+                                    }
+                                }
+                            },
+                        )
+                        .default_value(SharedString::from(
+                            default_settings.editor.completion_accept_keys.key(),
+                        )),
+                    )
+                    .description(
+                        "The key that accepts the highlighted completion. A key that does not accept keeps its usual meaning: Enter starts a new line and closes the list, Tab indents.",
+                    ),
                     SettingItem::new(
                         "Font Size",
                         SettingField::number_input(

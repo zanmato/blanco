@@ -108,6 +108,15 @@ pub fn keep_fonts_on_theme_reload(cx: &mut App) {
         .detach();
 }
 
+/// The keys that accept a completion suggestion in the code editors.
+pub fn completion_accept_keys(cx: &App) -> gpui_component::input::CompletionAcceptKeys {
+    AppSettings::global(cx)
+        .settings
+        .editor
+        .completion_accept_keys
+        .accept_keys()
+}
+
 /// Step the code editor font size by `delta` pixels, as the zoom shortcuts do.
 pub fn adjust_editor_font_size(delta: f32, cx: &mut App) {
     let current = AppSettings::global(cx).settings.editor.font_size;
@@ -179,6 +188,10 @@ impl Settings {
                 }
                 "editor.tab_size" => {
                     settings.editor.tab_size = value.parse().unwrap_or(2);
+                }
+                "editor.completion_accept_keys" => {
+                    settings.editor.completion_accept_keys =
+                        CompletionAcceptKeysSetting::from_key(value);
                 }
                 "database.default_connection_timeout_seconds" => {
                     settings.database.default_connection_timeout_seconds =
@@ -344,6 +357,48 @@ pub struct EditorSettings {
     /// Font size in pixels of the code editors (query, script and snippet
     /// tabs).
     pub font_size: f32,
+    /// The keys that accept the highlighted completion suggestion.
+    #[serde(default)]
+    pub completion_accept_keys: CompletionAcceptKeysSetting,
+}
+
+/// The keys that accept a completion suggestion, as stored in settings.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompletionAcceptKeysSetting {
+    #[default]
+    Enter,
+    Tab,
+    EnterAndTab,
+}
+
+impl CompletionAcceptKeysSetting {
+    /// The value written to the settings store.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Enter => "enter",
+            Self::Tab => "tab",
+            Self::EnterAndTab => "enter_and_tab",
+        }
+    }
+
+    /// Reads a stored value, falling back to Enter for anything unknown.
+    pub fn from_key(key: &str) -> Self {
+        match key {
+            "tab" => Self::Tab,
+            "enter_and_tab" => Self::EnterAndTab,
+            _ => Self::Enter,
+        }
+    }
+
+    pub fn accept_keys(self) -> gpui_component::input::CompletionAcceptKeys {
+        use gpui_component::input::CompletionAcceptKeys;
+        match self {
+            Self::Enter => CompletionAcceptKeys::Enter,
+            Self::Tab => CompletionAcceptKeys::Tab,
+            Self::EnterAndTab => CompletionAcceptKeys::EnterAndTab,
+        }
+    }
 }
 
 impl EditorSettings {
@@ -431,6 +486,7 @@ impl Default for EditorSettings {
             hard_tabs: false,
             tab_size: 2,
             font_size: Self::DEFAULT_FONT_SIZE,
+            completion_accept_keys: CompletionAcceptKeysSetting::default(),
         }
     }
 }
@@ -572,5 +628,33 @@ mod appearance_tests {
         cx.update(|cx| {
             assert_eq!(Theme::global(cx).mono_font_family, "JetBrains Mono");
         });
+    }
+}
+
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_completion_accept_keys_round_trip() {
+        for setting in [
+            CompletionAcceptKeysSetting::Enter,
+            CompletionAcceptKeysSetting::Tab,
+            CompletionAcceptKeysSetting::EnterAndTab,
+        ] {
+            let stored = vec![(
+                "editor.completion_accept_keys".to_string(),
+                setting.key().to_string(),
+            )];
+            assert_eq!(
+                Settings::from_key_values(&stored)
+                    .editor
+                    .completion_accept_keys,
+                setting
+            );
+        }
+        assert_eq!(
+            CompletionAcceptKeysSetting::from_key("bogus"),
+            CompletionAcceptKeysSetting::Enter
+        );
     }
 }
