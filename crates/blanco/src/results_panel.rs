@@ -37,6 +37,7 @@ mod commit;
 mod compare;
 mod export_actions;
 mod foreign_key_popover;
+pub(crate) mod json_text;
 mod results_table_delegate;
 mod row_ops;
 mod table_operations;
@@ -689,11 +690,13 @@ impl ResultsPanel {
                     .as_ref()
                     .map(|input| input.text(cx))
                     .unwrap_or_default();
+                table.delegate_mut().recheck_expanded_json(&new_text);
                 table
                     .delegate_mut()
                     .edit_state
                     .edited_values
                     .insert((row_clone, col_clone), Some(new_text));
+                cx.notify();
 
                 // Debug: Input change handled in edited_values for commit_cell_edit
                 // Note: Can't refresh here due to borrowing issues

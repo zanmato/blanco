@@ -22,9 +22,16 @@ All notable changes to this project will be documented in this file.
   pending grid edit. The next action reconnects. A connection can set its own
   value under Show Advanced Options in the connection dialog, where 0 keeps it
   open. A connection with a query running is never closed
+- The expanded cell editor opens JSON formatted, keeping key order and
+  numbers exactly as stored, and has Format and Minify buttons. Text values
+  that hold a JSON object or array get the same treatment. Invalid JSON is
+  pointed out under the editor while typing, and applying edits stops at a
+  JSON column whose new value does not parse, naming the row and column
 
 ### Fixes
 
+- Formatting JSON in the cell editor and the cell comparison no longer sorts
+  object keys or rounds large numbers
 - Clicking a cell in the results table no longer starts a text selection in
   the SQL view that follows the pointer with no button held
 

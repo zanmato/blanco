@@ -143,6 +143,11 @@ pub struct CellEditState {
     pub editing_input: Option<CellInput>, // Store input state per delegate
     /// Size of the expanded editor overlay, kept while a cell stays expanded.
     pub expanded_size: ExpandedEditorSize,
+    /// The expanded editor holds JSON: a JSON column, or a text value that
+    /// is a JSON object or array. It then offers Format and Minify.
+    pub expanded_as_json: bool,
+    /// Why the expanded JSON text does not parse, shown under the editor.
+    pub json_error: Option<String>,
     pub changes: Vec<TableChange>, // Track all changes for SQL generation
     pub selected_rows: HashSet<usize>, // Track selected rows
     pub current_column: usize,     // Track current column for selection
