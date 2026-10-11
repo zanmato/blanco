@@ -903,6 +903,7 @@ dependencies = [
  "encoding_rs",
  "encoding_rs_io",
  "futures",
+ "gpui-base",
  "gpui-component",
  "gpui-pre",
  "gpui-pre-platform",

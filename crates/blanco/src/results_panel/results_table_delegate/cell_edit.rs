@@ -3,11 +3,13 @@ use gpui::{AppContext, Context, Focusable, Window};
 use gpui_component::input::{EditorState, InputState};
 use gpui_component::table::TableState;
 
-use super::ResultsTableDelegate;
+use super::{ResultsTableDelegate, results_settings};
 use crate::results_panel::ResultsPanel;
 use crate::results_panel::cell_edit_state::{CellInput, ChangeType, TableChange};
 use crate::results_panel::compare::pretty_json_or_original;
+use crate::results_panel::date_time_picker::{DateTimePicker, DateTimePickerEvent};
 use crate::results_panel::json_text::{is_json_document, json_error, minify_json};
+use crate::results_panel::temporal::{TemporalShape, TemporalValue};
 
 impl ResultsTableDelegate {
     pub fn start_editing_cell(&mut self, row: usize, col: usize) {
@@ -226,6 +228,99 @@ impl ResultsTableDelegate {
                 .unwrap_or_else(|| format!("column {}", col + 1));
             Some(format!("Row {}, {column}: invalid JSON: {error}", row + 1))
         })
+    }
+
+    /// What a date or time cell holds, which decides whether the cell editor
+    /// offers the picker and what it edits. The declared column type decides
+    /// when the table's metadata is known, since an interval's text can read
+    /// like a time of day.
+    pub(crate) fn temporal_shape(&self, row_ix: usize, col_ix: usize) -> Option<TemporalShape> {
+        if self.column_types.get(col_ix) != Some(&ColumnType::DateTime) {
+            return None;
+        }
+        match self.table_column_info(col_ix) {
+            Some(info) => TemporalShape::from_data_type(&info.data_type),
+            None => self
+                .stored_cell_value(row_ix, col_ix)
+                .and_then(|value| TemporalValue::parse(&value))
+                .map(|value| value.shape()),
+        }
+    }
+
+    /// Open the date and time picker on the cell being edited, starting from
+    /// the text in its editor.
+    pub(crate) fn open_date_time_picker(
+        state: &mut TableState<ResultsTableDelegate>,
+        shape: TemporalShape,
+        window: &mut Window,
+        cx: &mut Context<'_, TableState<ResultsTableDelegate>>,
+    ) {
+        let Some(cell) = state.delegate().edit_state.editing_cell else {
+            return;
+        };
+        let text = state
+            .delegate()
+            .edit_state
+            .editing_input
+            .as_ref()
+            .map(|input| input.text(cx))
+            .unwrap_or_default();
+        let time_zone = results_settings(cx).time_zone;
+        let picker = cx.new(|cx| {
+            DateTimePicker::new(shape, TemporalValue::parse(&text), time_zone, window, cx)
+        });
+        cx.subscribe_in(&picker, window, move |state, _picker, event, window, cx| {
+            Self::handle_date_time_picker_event(state, cell, event, window, cx);
+        })
+        .detach();
+        if let Some(focus_handle) = picker.read(cx).initial_focus(cx) {
+            focus_handle.focus(window, cx);
+        }
+        state.delegate_mut().edit_state.date_picker = Some(picker);
+        state.refresh(cx);
+        cx.notify();
+    }
+
+    pub(crate) fn close_date_time_picker(
+        state: &mut TableState<ResultsTableDelegate>,
+        cx: &mut Context<'_, TableState<ResultsTableDelegate>>,
+    ) {
+        if state.delegate_mut().edit_state.date_picker.take().is_some() {
+            state.refresh(cx);
+            cx.notify();
+        }
+    }
+
+    /// A picked value replaces the editor's text, in the form the driver
+    /// returns, and the edit stays open so it is committed the same way as a
+    /// typed one.
+    fn handle_date_time_picker_event(
+        state: &mut TableState<ResultsTableDelegate>,
+        cell: (usize, usize),
+        event: &DateTimePickerEvent,
+        window: &mut Window,
+        cx: &mut Context<'_, TableState<ResultsTableDelegate>>,
+    ) {
+        let edit_state = &mut state.delegate_mut().edit_state;
+        edit_state.date_picker = None;
+        if let DateTimePickerEvent::Pick(value) = event
+            && edit_state.editing_cell == Some(cell)
+        {
+            let text = value.to_edit_text();
+            if let Some(CellInput::Inline(input)) = edit_state.editing_input.clone() {
+                input.update(cx, |input, cx| input.set_value(text.clone(), window, cx));
+            }
+            // A picked value is data, never SQL to evaluate.
+            edit_state.editing_as_expression = false;
+            edit_state.edited_values.insert(cell, Some(text));
+        }
+        state.refresh(cx);
+        cx.notify();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn date_time_picker(&self) -> Option<gpui::Entity<DateTimePicker>> {
+        self.edit_state.date_picker.clone()
     }
 
     /// Collapse an expanded cell editor back to a single-line inline input.

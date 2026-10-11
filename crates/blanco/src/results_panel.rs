@@ -43,6 +43,7 @@ mod commit;
 mod compare;
 #[cfg(test)]
 mod csv_copy_test;
+mod date_time_picker;
 mod export_actions;
 pub mod filter_bar;
 mod foreign_key_popover;
@@ -53,6 +54,7 @@ mod server_filter;
 #[cfg(test)]
 mod server_filter_test;
 mod table_operations;
+mod temporal;
 
 // Re-exports
 pub use cell_edit_state::{CellInput, ChangeType, TableChange};
@@ -773,7 +775,10 @@ impl ResultsPanel {
                 let editing_cell = table.delegate_mut().edit_state.editing_cell;
 
                 if let Some((row, col)) = editing_cell {
-                    if table.delegate_mut().edit_state.is_expanded(row, col) {
+                    // The expanded editor and the date picker take focus from
+                    // the inline input while the edit is still in progress.
+                    let edit_state = &table.delegate().edit_state;
+                    if edit_state.is_expanded(row, col) || edit_state.date_picker.is_some() {
                         return;
                     }
 

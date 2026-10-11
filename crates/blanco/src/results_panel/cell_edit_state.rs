@@ -3,6 +3,8 @@ use std::collections::{HashMap, HashSet};
 use gpui::{App, Entity, Pixels, Point, Size, px, size};
 use gpui_component::input::{EditorState, InputState};
 
+use super::date_time_picker::DateTimePicker;
+
 /// Starting size of the expanded cell editor, before the user drags it.
 pub const EXPANDED_EDITOR_SIZE: Size<Pixels> = Size {
     width: px(600.),
@@ -148,6 +150,8 @@ pub struct CellEditState {
     pub expanded_as_json: bool,
     /// Why the expanded JSON text does not parse, shown under the editor.
     pub json_error: Option<String>,
+    /// The open date and time picker of the cell being edited.
+    pub date_picker: Option<Entity<DateTimePicker>>,
     pub changes: Vec<TableChange>, // Track all changes for SQL generation
     pub selected_rows: HashSet<usize>, // Track selected rows
     pub current_column: usize,     // Track current column for selection
@@ -189,12 +193,14 @@ impl CellEditState {
         self.editing_cell = Some((row, col));
         self.editing_input = Some(input);
         self.editing_as_expression = self.is_expression(row, col);
+        self.date_picker = None;
     }
 
     pub fn stop_editing(&mut self) {
         self.editing_cell = None;
         self.editing_input = None;
         self.expanded_cell = None;
+        self.date_picker = None;
         self.editing_as_expression = false;
     }
 
@@ -216,6 +222,7 @@ impl CellEditState {
         self.editing_cell = None;
         self.editing_input = None;
         self.expanded_cell = None;
+        self.date_picker = None;
     }
 
     pub fn clear_all(&mut self) {
@@ -227,6 +234,7 @@ impl CellEditState {
         self.pending_deleted_rows.clear();
         self.editing_input = None;
         self.expanded_cell = None;
+        self.date_picker = None;
         self.changes.clear();
         self.selected_rows.clear();
         self.current_column = 1; // Start with first data column

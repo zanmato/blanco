@@ -9,7 +9,7 @@ use gpui::{
 };
 use gpui_component::popover::{Popover, PopoverState};
 use gpui_component::{
-    ActiveTheme, Icon, Sizable, Size,
+    ActiveTheme, Disableable, Icon, Sizable, Size,
     button::{Button, ButtonVariants},
     clipboard::Clipboard,
     h_flex,
@@ -22,7 +22,7 @@ use gpui_component::{
 
 use blanco_core::connection_trait::ColumnType;
 
-use super::ResultsTableDelegate;
+use super::{ResultsTableDelegate, results_settings};
 use crate::app::{
     AddRow, ClearCompareSelection, CompareCellWithSelected, CompareRowWithSelected, CopyAsCSV,
     CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CopyAsVALUES, CopyColumnValues, DeleteRow,
@@ -33,6 +33,7 @@ use crate::app::{
 use crate::results_panel::cell_edit_state::{CellInput, compare_numeric, format_value_for_display};
 use crate::results_panel::compare::CompareKind;
 use crate::results_panel::foreign_key_popover::ForeignKeyPopover;
+use crate::results_panel::temporal::TemporalShape;
 use blanco_ui::IconName;
 
 /// Drag payload for the expanded cell editor's resize grip.
@@ -355,6 +356,45 @@ impl ResultsTableDelegate {
                             ),
                     ),
             )
+            // Beside the input rather than in its suffix, so keys typed into
+            // the picker do not reach the input's own bindings.
+            .when_some(self.temporal_shape(row_ix, col_ix), |this, shape| {
+                this.child(self.render_date_time_picker(shape, row_ix, col_ix, cx))
+            })
+    }
+
+    /// Calendar button of a date or time cell editor and the picker it opens.
+    fn render_date_time_picker(
+        &self,
+        shape: TemporalShape,
+        row_ix: usize,
+        col_ix: usize,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        let picker = self.edit_state.date_picker.clone();
+        let table_state = cx.entity();
+        Popover::new(("cell-date-time-picker", row_ix * 1000 + col_ix))
+            .anchor(gpui::Anchor::TopRight)
+            .open(picker.is_some())
+            .on_open_change(move |open, window, cx| {
+                table_state.update(cx, |state, cx| {
+                    if *open {
+                        Self::open_date_time_picker(state, shape, window, cx);
+                    } else {
+                        Self::close_date_time_picker(state, cx);
+                    }
+                });
+            })
+            .trigger(
+                Button::new(("cell-date-time-picker-trigger", row_ix * 1000 + col_ix))
+                    .icon(IconName::Calendar)
+                    .ghost()
+                    .xsmall()
+                    .disabled(!self.is_editable()),
+            )
+            .content(move |_, _, _| {
+                div().when_some(picker.clone(), |this, picker| this.child(picker))
+            })
     }
 
     /// Static (non-editing) cell: display text plus hover affordances for
@@ -384,16 +424,17 @@ impl ResultsTableDelegate {
         // Untouched cells of a pending new row show the server default that
         // will apply because the column is omitted from the INSERT.
         let uses_default = is_null && self.cell_uses_default(row_ix, col_ix);
-        let display_text = if uses_default {
-            "DEFAULT".to_string()
-        } else if is_null {
-            "NULL".to_string()
-        } else {
-            format_value_for_display(current_value.as_deref().unwrap_or(""))
+        let display_text = match current_value.as_deref() {
+            None if uses_default => "DEFAULT".to_string(),
+            None => "NULL".to_string(),
+            // Until it is applied, an expression is SQL text, not a value.
+            Some(value) if is_expression => format_value_for_display(value),
+            Some(value) => self.display_value(col_ix, value, &results_settings(cx)),
         };
-        // The clipboard gets the stored value, not the single-line rendering
-        // with its ⏎ / ⇥ markers.
-        let clipboard_text = current_value.unwrap_or_else(|| display_text.clone());
+        // The clipboard and the foreign key lookup get the stored value, not
+        // the single-line rendering with its ⏎ / ⇥ markers or a reformatted
+        // date.
+        let stored_text = current_value.unwrap_or_else(|| display_text.clone());
 
         // Check if this is a numeric column for right-alignment
         let is_numeric = self
@@ -420,7 +461,7 @@ impl ResultsTableDelegate {
                     .flex_1()
                     .min_w_0()
                     .overflow_hidden()
-                    .child(display_text.clone()),
+                    .child(display_text),
             )
             .child(
                 div()
@@ -428,7 +469,7 @@ impl ResultsTableDelegate {
                     .group_hover("", |this| this.visible())
                     .child(
                         Clipboard::new(format!("cell-clipboard-{}-{}", row_ix, col_ix))
-                            .value(clipboard_text),
+                            .value(stored_text.clone()),
                     ),
             )
             .when_some(
@@ -437,7 +478,7 @@ impl ResultsTableDelegate {
                     .and_then(|c| c.foreign_key.as_ref()),
                 |this, fk_info| {
                     let fk_info = fk_info.clone();
-                    let cell_value = display_text.clone();
+                    let cell_value = stored_text.clone();
                     let popover_id = format!("fk-popover-{}-{}", row_ix, col_ix);
                     let connection_id = self.connection_id;
                     let database_name = if self.database_name.is_empty() {

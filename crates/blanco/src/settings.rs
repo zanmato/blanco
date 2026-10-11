@@ -257,6 +257,14 @@ impl Settings {
                         .parse()
                         .unwrap_or(AppearanceSettings::default().terminal_font_size);
                 }
+                "results.date_format" => {
+                    settings.results.date_format =
+                        DateDisplayFormat::from_key(value).unwrap_or_default();
+                }
+                "results.time_zone" => {
+                    settings.results.time_zone =
+                        TimeZoneDisplay::from_key(value).unwrap_or_default();
+                }
                 "mcp.enabled" => {
                     settings.mcp.enabled = value.parse().unwrap_or_default();
                 }
@@ -363,7 +371,7 @@ impl Settings {
     }
 }
 
-/// The result grid and its server-side filter bar.
+/// The result grid: its server-side filter bar, row numbers and date display.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResultsSettings {
     /// Whether the filter bar is shown above a table's rows.
@@ -374,6 +382,13 @@ pub struct ResultsSettings {
     /// Whether the grid shows the row number column. Applies to results
     /// shown after the change.
     pub show_row_numbers: bool,
+    /// How the grid shows date and time values. Display only: copy, export
+    /// and cell editing keep the text the database returned.
+    #[serde(default)]
+    pub date_format: DateDisplayFormat,
+    /// The zone a timestamp with a time zone is shown in.
+    #[serde(default)]
+    pub time_zone: TimeZoneDisplay,
 }
 
 impl Default for ResultsSettings {
@@ -382,6 +397,8 @@ impl Default for ResultsSettings {
             filter_bar_open: false,
             filter_operator: blanco_core::FilterOperator::Equals.key().to_string(),
             show_row_numbers: true,
+            date_format: DateDisplayFormat::default(),
+            time_zone: TimeZoneDisplay::default(),
         }
     }
 }
@@ -525,6 +542,75 @@ pub struct AppearanceSettings {
     pub mono_font_family: String,
     /// Terminal pane font size in pixels.
     pub terminal_font_size: f32,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DateDisplayFormat {
+    #[default]
+    Iso8601,
+    Sql,
+    DayMonthYear,
+    MonthDayYear,
+}
+
+impl DateDisplayFormat {
+    pub const ALL: [Self; 4] = [
+        Self::Iso8601,
+        Self::Sql,
+        Self::DayMonthYear,
+        Self::MonthDayYear,
+    ];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Iso8601 => "iso8601",
+            Self::Sql => "sql",
+            Self::DayMonthYear => "day_month_year",
+            Self::MonthDayYear => "month_day_year",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|format| format.key() == key)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Iso8601 => "ISO 8601 (2024-01-31T14:05:09)",
+            Self::Sql => "SQL (2024-01-31 14:05:09)",
+            Self::DayMonthYear => "Day first (31/01/2024 14:05:09)",
+            Self::MonthDayYear => "Month first (01/31/2024 2:05:09 PM)",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TimeZoneDisplay {
+    #[default]
+    Local,
+    Utc,
+}
+
+impl TimeZoneDisplay {
+    pub const ALL: [Self; 2] = [Self::Local, Self::Utc];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Utc => "utc",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|zone| zone.key() == key)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Local => "Local time",
+            Self::Utc => "UTC",
+        }
+    }
 }
 
 /// Persisted window geometry, in logical pixels. `width`/`height` are `None`

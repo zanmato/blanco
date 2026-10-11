@@ -1130,3 +1130,154 @@ async fn test_column_header_selects_and_has_a_menu(cx: &mut TestAppContext) {
     });
     assert!(!menu.read_with(&cx, |menu, _| menu.is_empty()));
 }
+
+/// Dates read in the configured display format, but the cell editor, the
+/// copy paths and the picker all work with the text the driver returned.
+#[gpui::test]
+async fn test_date_display_format_and_picker_keep_values_raw(cx: &mut TestAppContext) {
+    use chrono::{NaiveDate, NaiveTime};
+
+    use crate::app_settings::AppSettings;
+    use crate::results_panel::results_table_delegate::results_settings;
+    use crate::results_panel::temporal::{TemporalShape, TemporalValue};
+    use crate::settings::DateDisplayFormat;
+
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    for statement in [
+        "CREATE TABLE events (id INTEGER PRIMARY KEY, happened DATETIME, day DATE)",
+        "INSERT INTO events (id, happened, day) VALUES (1, '2024-01-31 14:05:09', '2024-01-31')",
+        "SELECT * FROM events",
+    ] {
+        set_editor_text(&harness, statement, &mut cx);
+        run_query(&harness, &mut cx);
+        wait_for_query(&harness, &mut cx).await;
+    }
+    let results_panel = harness.editor_panel.read_with(&cx, |panel, _| {
+        panel
+            .active_query_tab()
+            .expect("query tab should exist")
+            .results_panel
+            .clone()
+    });
+    let table_state = results_panel.read_with(&cx, |panel, _| panel.table_state().clone());
+
+    cx.update(|_, cx| {
+        AppSettings::global_mut(cx).settings.results.date_format = DateDisplayFormat::DayMonthYear;
+        cx.refresh_windows();
+    });
+    cx.run_until_parked();
+
+    let raw = "2024-01-31 14:05:09";
+    assert_eq!(
+        result_cell(&harness, 0, 1, &cx),
+        Some(Some(raw.to_string()))
+    );
+    let (shown, shape) = table_state.read_with(&cx, |state, cx| {
+        let delegate = state.delegate();
+        (
+            delegate.display_value(1, raw, &results_settings(cx)),
+            delegate.temporal_shape(0, 1),
+        )
+    });
+    assert_eq!(shown, "31/01/2024 14:05:09");
+    assert_eq!(shape, Some(TemporalShape::Timestamp));
+
+    let copied = results_panel.read_with(&cx, |panel, cx| {
+        let delegate = table_state.read(cx).delegate();
+        panel.get_selected_data_for_rows(&std::collections::HashSet::from([0]), delegate)
+    });
+    let copied_value = copied
+        .selected_rows
+        .first()
+        .and_then(|row| row.cells.get(1))
+        .and_then(|cell| cell.value.clone());
+    assert_eq!(
+        copied_value.as_deref(),
+        Some(raw),
+        "copy uses the stored text"
+    );
+
+    results_panel.update_in(&mut cx, |panel, window, cx| {
+        panel.start_cell_edit(0, 1, window, cx);
+    });
+    cx.run_until_parked();
+    let input_text = |cx: &VisualTestContext| {
+        table_state.read_with(cx, |state, cx| {
+            state
+                .delegate()
+                .edit_state
+                .get_editing_input()
+                .expect("editing input should exist")
+                .text(cx)
+        })
+    };
+    assert_eq!(input_text(&cx), raw, "the editor opens on the stored text");
+
+    table_state.update_in(&mut cx, |state, window, cx| {
+        ResultsTableDelegate::open_date_time_picker(state, TemporalShape::Timestamp, window, cx);
+    });
+    cx.run_until_parked();
+    let picker = table_state
+        .read_with(&cx, |state, _| state.delegate().date_time_picker())
+        .expect("the picker should be open");
+    let still_editing =
+        table_state.read_with(&cx, |state, _| state.delegate().edit_state.editing_cell);
+    assert_eq!(
+        still_editing,
+        Some((0, 1)),
+        "moving focus into the picker must not end the edit"
+    );
+
+    picker.update_in(&mut cx, |picker, window, cx| {
+        picker.select(
+            NaiveDate::from_ymd_opt(2024, 2, 1).expect("valid date"),
+            NaiveTime::from_hms_opt(8, 30, 0).expect("valid time"),
+            window,
+            cx,
+        );
+        picker.apply(cx);
+    });
+    cx.run_until_parked();
+
+    let picker_closed = table_state.read_with(&cx, |state, _| {
+        state.delegate().date_time_picker().is_none()
+    });
+    assert!(picker_closed, "applying closes the picker");
+    assert_eq!(input_text(&cx), "2024-02-01 08:30:00");
+
+    let statements = results_panel.update(&mut cx, |panel, cx| {
+        panel.finalize_active_cell_edit(cx);
+        panel.preview_pending_sql(cx)
+    });
+    assert_eq!(
+        statements,
+        vec![
+            r#"UPDATE "events" SET "happened" = '2024-02-01 08:30:00' WHERE "id" = '1'"#
+                .to_string()
+        ],
+    );
+
+    results_panel.update_in(&mut cx, |panel, window, cx| {
+        panel.start_cell_edit(0, 2, window, cx);
+    });
+    cx.run_until_parked();
+    let date_shape = table_state.read_with(&cx, |state, _| state.delegate().temporal_shape(0, 2));
+    assert_eq!(date_shape, Some(TemporalShape::Date));
+    table_state.update_in(&mut cx, |state, window, cx| {
+        ResultsTableDelegate::open_date_time_picker(state, TemporalShape::Date, window, cx);
+    });
+    cx.run_until_parked();
+    let picker = table_state
+        .read_with(&cx, |state, _| state.delegate().date_time_picker())
+        .expect("the picker should be open");
+    picker.update(&mut cx, |picker, cx| picker.pick_now(cx));
+    cx.run_until_parked();
+    let picked = TemporalValue::parse(&input_text(&cx)).map(|value| value.shape());
+    assert_eq!(
+        picked,
+        Some(TemporalShape::Date),
+        "Now on a date cell is today"
+    );
+}
