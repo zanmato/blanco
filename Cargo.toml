@@ -37,14 +37,12 @@ gpui_platform = { package = "gpui-pre-platform", version = "0.3.8", features = [
     "wayland",
     "runtime_shaders",
 ] }
-gpui-component = { git = "https://github.com/zanmato/gpui-component", branch = "claude/upbeat-turing-ks27z9-issue-35", features = [
+gpui-component = { git = "https://github.com/zanmato/gpui-component", branch = "blanco", features = [
     "tree-sitter",
     "tree-sitter-javascript",
 ] }
 
-# Window text selection for read-only text (the SQL log). Same repository and
-# branch as gpui-component, so both resolve to one copy.
-gpui-base = { git = "https://github.com/zanmato/gpui-component", branch = "claude/upbeat-turing-ks27z9-issue-35" }
+gpui-base = { git = "https://github.com/zanmato/gpui-component", branch = "blanco" }
 
 # LSP dependencies (needed by gpui-component)
 lsp-types = { version = "0.97.0", features = ["proposed"] }

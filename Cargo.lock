@@ -3156,7 +3156,7 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.7.1"
-source = "git+https://github.com/zanmato/gpui-component?branch=claude%2Fupbeat-turing-ks27z9-issue-35#4ce59ca4fae39a280dfe46c0d73f2ecc2bc4a400"
+source = "git+https://github.com/zanmato/gpui-component?branch=blanco#6f3432293428bf83c08c3ef7cb61cb0da87573e8"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -3196,7 +3196,7 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.7.1"
-source = "git+https://github.com/zanmato/gpui-component?branch=claude%2Fupbeat-turing-ks27z9-issue-35#4ce59ca4fae39a280dfe46c0d73f2ecc2bc4a400"
+source = "git+https://github.com/zanmato/gpui-component?branch=blanco#6f3432293428bf83c08c3ef7cb61cb0da87573e8"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3245,7 +3245,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-macros"
 version = "0.7.1"
-source = "git+https://github.com/zanmato/gpui-component?branch=claude%2Fupbeat-turing-ks27z9-issue-35#4ce59ca4fae39a280dfe46c0d73f2ecc2bc4a400"
+source = "git+https://github.com/zanmato/gpui-component?branch=blanco#6f3432293428bf83c08c3ef7cb61cb0da87573e8"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -3256,7 +3256,7 @@ dependencies = [
 [[package]]
 name = "gpui-kit-assets"
 version = "0.7.1"
-source = "git+https://github.com/zanmato/gpui-component?branch=claude%2Fupbeat-turing-ks27z9-issue-35#4ce59ca4fae39a280dfe46c0d73f2ecc2bc4a400"
+source = "git+https://github.com/zanmato/gpui-component?branch=blanco#6f3432293428bf83c08c3ef7cb61cb0da87573e8"
 dependencies = [
  "anyhow",
  "gpui-pre",
