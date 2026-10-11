@@ -185,6 +185,16 @@ impl EditorPanel {
             .collect()
     }
 
+    /// Connections with uncommitted edits in a result grid of any tab.
+    pub fn connections_with_pending_edits(&self, cx: &App) -> std::collections::HashSet<i64> {
+        self.tabs
+            .iter()
+            .filter_map(TabType::connection_tab)
+            .filter(|tab| tab.results_panel.read(cx).has_pending_changes(cx))
+            .map(|tab| tab.context.connection_id)
+            .collect()
+    }
+
     pub fn set_all_editors_show_whitespace(
         &mut self,
         show: bool,

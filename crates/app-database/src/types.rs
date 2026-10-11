@@ -129,6 +129,9 @@ pub struct ConnectionData {
     /// Show only `database_name` in the tree and the command palette instead
     /// of every database on the server.
     pub only_configured_database: bool,
+    /// Minutes without activity after which the connection is closed. `None`
+    /// follows the global setting, `Some(0)` keeps it open.
+    pub idle_timeout_minutes: Option<u32>,
 }
 
 impl std::fmt::Debug for ConnectionData {
@@ -166,6 +169,7 @@ impl std::fmt::Debug for ConnectionData {
             .field("trust_server_certificate", &self.trust_server_certificate)
             .field("read_only", &self.read_only)
             .field("only_configured_database", &self.only_configured_database)
+            .field("idle_timeout_minutes", &self.idle_timeout_minutes)
             .finish()
     }
 }
@@ -229,6 +233,7 @@ impl ConnectionData {
             trust_server_certificate: false,
             read_only: false,
             only_configured_database: false,
+            idle_timeout_minutes: None,
         }
     }
 
@@ -269,6 +274,7 @@ impl ConnectionData {
             trust_server_certificate: false,
             read_only: false,
             only_configured_database: false,
+            idle_timeout_minutes: None,
         }
     }
 
@@ -403,6 +409,10 @@ impl ConnectionData {
             }
         };
 
-        Some(config.with_read_only(self.read_only))
+        Some(
+            config
+                .with_read_only(self.read_only)
+                .with_idle_timeout_minutes(self.idle_timeout_minutes),
+        )
     }
 }

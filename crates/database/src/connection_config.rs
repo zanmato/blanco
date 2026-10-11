@@ -1,6 +1,7 @@
 //! Connection configuration
 
 use async_trait::async_trait;
+use std::time::Duration;
 
 pub use blanco_core::{DatabaseType, ParamStyles};
 
@@ -79,6 +80,9 @@ pub struct ConnectionConfig {
     pub trust_server_certificate: bool,
     /// Reject statements not recognised as reads before they reach the server.
     pub read_only: bool,
+    /// Minutes without activity after which the connection is closed. `None`
+    /// follows the global setting, `Some(0)` never closes it.
+    pub idle_timeout_minutes: Option<u32>,
 }
 
 impl std::fmt::Debug for ConnectionConfig {
@@ -113,6 +117,7 @@ impl std::fmt::Debug for ConnectionConfig {
             .field("ssl_ca_cert_path", &self.ssl_ca_cert_path)
             .field("trust_server_certificate", &self.trust_server_certificate)
             .field("read_only", &self.read_only)
+            .field("idle_timeout_minutes", &self.idle_timeout_minutes)
             .finish()
     }
 }
@@ -153,6 +158,7 @@ impl ConnectionConfig {
             ssl_ca_cert_path: None,
             trust_server_certificate: false,
             read_only: false,
+            idle_timeout_minutes: None,
         }
     }
 
@@ -181,6 +187,7 @@ impl ConnectionConfig {
             ssl_ca_cert_path: None,
             trust_server_certificate: false,
             read_only: false,
+            idle_timeout_minutes: None,
         }
     }
 
@@ -226,6 +233,21 @@ impl ConnectionConfig {
     pub fn with_read_only(mut self, read_only: bool) -> Self {
         self.read_only = read_only;
         self
+    }
+
+    pub fn with_idle_timeout_minutes(mut self, minutes: Option<u32>) -> Self {
+        self.idle_timeout_minutes = minutes;
+        self
+    }
+
+    /// How long the connection may sit unused before it is closed, given the
+    /// global default. `None` keeps it open.
+    pub fn idle_timeout(&self, default: Option<Duration>) -> Option<Duration> {
+        match self.idle_timeout_minutes {
+            None => default,
+            Some(0) => None,
+            Some(minutes) => Some(Duration::from_secs(u64::from(minutes) * 60)),
+        }
     }
 
     /// Get a connection string with optional overrides for database, host, and port

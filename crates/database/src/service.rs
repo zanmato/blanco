@@ -6,8 +6,9 @@ use blanco_core::{Connection, ConnectionFactory, DatabaseService as DatabaseServ
 use gpui::Global;
 use smol::channel;
 use smol::lock::RwLock;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex as StdMutex};
+use std::time::{Duration, Instant};
 
 use crate::connection_config::{
     ConnectionConfig, ConnectionSecretStore, DatabaseType, NoSecretStore,
@@ -30,6 +31,8 @@ pub struct DatabaseConnectedMessage {
 pub struct DatabaseDisconnectedMessage {
     pub connection_id: i64,
     pub database_name: String,
+    /// Closed on purpose after its idle timeout, rather than lost.
+    pub idle: bool,
 }
 
 /// Enum for all messages that can be sent through the database service channel
@@ -50,6 +53,8 @@ pub struct DatabaseService {
     // Connection storage
     connection_configs: Arc<RwLock<HashMap<DatabaseConfigId, ConnectionConfig>>>,
     active_connections: Arc<RwLock<HashMap<ConnectionId, Arc<dyn Connection>>>>,
+    // When each active connection was last handed out or seen busy
+    last_used: Arc<StdMutex<HashMap<ConnectionId, Instant>>>,
 
     // Connection factories
     connection_factories: Arc<HashMap<DatabaseType, Arc<dyn ConnectionFactory>>>,
@@ -91,6 +96,7 @@ impl DatabaseService {
         Self {
             connection_configs: Arc::new(RwLock::new(HashMap::new())),
             active_connections: Arc::new(RwLock::new(HashMap::new())),
+            last_used: Arc::new(StdMutex::new(HashMap::new())),
             connection_factories: Arc::new(factories),
             ssh_tunnels: Arc::new(RwLock::new(HashMap::new())),
             tunnel_connections: Arc::new(RwLock::new(HashMap::new())),
@@ -190,6 +196,7 @@ impl DatabaseService {
                 // Tunnel is healthy, check if we have a cached connection
                 let connections = self.active_connections.read().await;
                 if let Some(existing_conn) = connections.get(&connection_id) {
+                    self.touch(&connection_id);
                     return Ok(Arc::clone(existing_conn));
                 }
             }
@@ -197,6 +204,7 @@ impl DatabaseService {
             // Non-SSH connection, use simple caching
             let connections = self.active_connections.read().await;
             if let Some(existing_conn) = connections.get(&connection_id) {
+                self.touch(&connection_id);
                 return Ok(Arc::clone(existing_conn));
             }
         }
@@ -289,6 +297,7 @@ impl DatabaseService {
             let mut connections = self.active_connections.write().await;
             connections.insert(connection_id.clone(), conn_arc.clone());
         }
+        self.touch(&connection_id);
 
         // Track which connections use SSH tunnels
         if config.requires_ssh_tunnel() {
@@ -348,6 +357,11 @@ impl DatabaseService {
                 }
             }
         }
+        if let Ok(mut last_used) = self.last_used.lock() {
+            for connection_id in &disconnected_connections {
+                last_used.remove(connection_id);
+            }
+        }
 
         // First, remove from tunnel_connections tracking to get accurate tunnel usage
         let tunnels_to_check: std::collections::HashSet<DatabaseConfigId> = {
@@ -404,6 +418,83 @@ impl DatabaseService {
         Ok(())
     }
 
+    /// Record that `connection_id` is in use now.
+    fn touch(&self, connection_id: &ConnectionId) {
+        if let Ok(mut last_used) = self.last_used.lock() {
+            last_used.insert(connection_id.clone(), Instant::now());
+        }
+    }
+
+    /// Close every connection that has been idle for longer than its timeout,
+    /// with its SSH tunnel, and report each as disconnected so the next action
+    /// reconnects. `default_timeout` applies to connections without their own.
+    ///
+    /// A connection counts as busy while anything besides the cache holds it,
+    /// which a running query or export does, and is never closed then.
+    /// Connections listed in `keep` (for example ones with uncommitted grid
+    /// edits) are left open too. Returns the closed connection ids.
+    pub async fn disconnect_idle_connections(
+        &self,
+        default_timeout: Option<Duration>,
+        keep: &HashSet<DatabaseConfigId>,
+    ) -> Vec<DatabaseConfigId> {
+        let now = Instant::now();
+        let idle = {
+            let connections = self.active_connections.read().await;
+            let configs = self.connection_configs.read().await;
+            let Ok(mut last_used) = self.last_used.lock() else {
+                return Vec::new();
+            };
+            // The most recent use of any database opened through each
+            // connection, or `None` once one of them is busy.
+            let mut latest: HashMap<DatabaseConfigId, Option<Instant>> = HashMap::new();
+            for (connection_id, connection) in connections.iter() {
+                let busy = Arc::strong_count(connection) > 1;
+                if busy {
+                    last_used.insert(connection_id.clone(), now);
+                }
+                let used = last_used.get(connection_id).copied().unwrap_or(now);
+                let entry = latest.entry(connection_id.0).or_insert(Some(used));
+                *entry = match (*entry, busy) {
+                    (_, true) | (None, _) => None,
+                    (Some(previous), false) => Some(previous.max(used)),
+                };
+            }
+            latest
+                .into_iter()
+                .filter(|(config_id, _)| !keep.contains(config_id))
+                .filter_map(|(config_id, used)| {
+                    let timeout = configs.get(&config_id)?.idle_timeout(default_timeout)?;
+                    (now.duration_since(used?) >= timeout).then_some(config_id)
+                })
+                .collect::<Vec<_>>()
+        };
+
+        for &config_id in &idle {
+            tracing::info!("Closing connection {config_id} after its idle timeout");
+            if let Err(error) = self.disconnect(config_id, None).await {
+                tracing::error!("Failed to close idle connection {config_id}: {error}");
+                continue;
+            }
+            let sender = self.action_sender.lock().ok().and_then(|s| s.clone());
+            if let Some(sender) = sender {
+                let name = self
+                    .get_connection_config(config_id)
+                    .await
+                    .map_or_else(|| config_id.to_string(), |config| config.name);
+                let message = DatabaseServiceMessage::Disconnected(DatabaseDisconnectedMessage {
+                    connection_id: config_id,
+                    database_name: name,
+                    idle: true,
+                });
+                if let Err(error) = sender.send(message).await {
+                    tracing::error!("Failed to send disconnect notification: {error}");
+                }
+            }
+        }
+        idle
+    }
+
     /// Get active connections reference
     pub async fn get_active_connections(
         &self,
@@ -442,6 +533,7 @@ impl DatabaseService {
             let message = DatabaseServiceMessage::Disconnected(DatabaseDisconnectedMessage {
                 connection_id: config_id,
                 database_name: database.unwrap_or("default").to_string(),
+                idle: false,
             });
             if let Err(e) = sender.send(message).await {
                 tracing::error!("Failed to send disconnect notification: {}", e);
@@ -803,6 +895,7 @@ impl Clone for DatabaseService {
         Self {
             connection_configs: Arc::clone(&self.connection_configs),
             active_connections: Arc::clone(&self.active_connections),
+            last_used: Arc::clone(&self.last_used),
             connection_factories: Arc::clone(&self.connection_factories),
             ssh_tunnels: Arc::clone(&self.ssh_tunnels),
             tunnel_connections: Arc::clone(&self.tunnel_connections),
@@ -983,6 +1076,53 @@ mod tests {
             !Arc::ptr_eq(&first, &recreated),
             "after disconnect a fresh connection must be created, not the evicted one"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_disconnect_idle_connections() {
+        let service = DatabaseService::new(tokio::runtime::Handle::current());
+        let dir = tempfile::tempdir().expect("temp dir");
+        service
+            .add_connection_config(sqlite_config(1, &dir.path().join("idle.db")))
+            .await;
+        service
+            .add_connection_config(
+                sqlite_config(2, &dir.path().join("never.db")).with_idle_timeout_minutes(Some(0)),
+            )
+            .await;
+        let immediately = Some(Duration::ZERO);
+        let nothing_kept = HashSet::new();
+
+        // No default timeout and no override: nothing closes.
+        let held = service.get_or_create_connection(1, None).await.unwrap();
+        service.get_or_create_connection(2, None).await.unwrap();
+        assert!(service
+            .disconnect_idle_connections(None, &nothing_kept)
+            .await
+            .is_empty());
+
+        // A connection in use, or one with pending edits, stays open.
+        assert!(
+            service
+                .disconnect_idle_connections(immediately, &nothing_kept)
+                .await
+                .is_empty(),
+            "a held connection is busy, and connection 2 opted out"
+        );
+        drop(held);
+        assert!(service
+            .disconnect_idle_connections(immediately, &HashSet::from([1]))
+            .await
+            .is_empty());
+
+        assert_eq!(
+            service
+                .disconnect_idle_connections(immediately, &nothing_kept)
+                .await,
+            [1]
+        );
+        let remaining = service.get_active_connections().await;
+        assert_eq!(remaining.keys().map(|(id, _)| *id).collect::<Vec<_>>(), [2]);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

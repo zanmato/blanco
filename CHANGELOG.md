@@ -17,6 +17,11 @@ All notable changes to this project will be documented in this file.
 - A system notification when an agent asks to run a write over MCP while
   Blanco is in the background. Clicking it brings Blanco forward, where the
   confirmation dialog is waiting
+- Disconnect When Idle in the Database settings closes a connection, with its
+  SSH tunnel, after a number of minutes without a query, metadata fetch or
+  pending grid edit. The next action reconnects. A connection can set its own
+  value under Show Advanced Options in the connection dialog, where 0 keeps it
+  open. A connection with a query running is never closed
 
 ### Fixes
 
