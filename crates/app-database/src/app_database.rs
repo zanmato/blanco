@@ -1,3 +1,4 @@
+pub mod connection_transfer;
 mod connections;
 mod query_history;
 mod query_tabs;

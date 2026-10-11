@@ -38,6 +38,11 @@ All notable changes to this project will be documented in this file.
   that hold a JSON object or array get the same treatment. Invalid JSON is
   pointed out under the editor while typing, and applying edits stops at a
   JSON column whose new value does not parse, naming the row and column
+- Export and import connections as a JSON file, from the new menu next to
+  the sidebar filter, the File menu and the command palette. Export… in a
+  connection's context menu writes just that one. Passwords are never
+  written. Import shows what it will add first, skips connections that are
+  already saved with the same settings and renames ones whose name is taken
 
 ### Fixes
 

@@ -19,9 +19,10 @@ use crate::{
         ActivateEditorTab, ClearCompareSelection, CloseActiveTab, CommitChanges,
         ConnectToConnection, CopyAsCSV, CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV,
         CreateNewQueryTab, CreateNewScriptTab, ExplainQuery, ExportAsCSV, ExportAsJSON,
-        ExportAsMarkdown, ExportAsSQL, ExportAsTSV, FormatQuery, NewSnippet,
-        OpenNewConnectionModal, OpenSettings, OpenTerminal, RollbackChanges, RunQuery, SwitchTheme,
-        ToggleRenderWhitespace, ToggleSidebar, ToggleWordWrap,
+        ExportAsMarkdown, ExportAsSQL, ExportAsTSV, ExportConnections, FormatQuery,
+        ImportConnections, NewSnippet, OpenNewConnectionModal, OpenSettings, OpenTerminal,
+        RollbackChanges, RunQuery, SwitchTheme, ToggleRenderWhitespace, ToggleSidebar,
+        ToggleWordWrap,
     },
     connections::ConnectionsPanel,
     editor::EditorPanel,
@@ -104,6 +105,8 @@ pub enum CommandType {
     OpenSettings,
     OpenTerminal,
     OpenNewConnectionModal,
+    ImportConnections,
+    ExportConnections,
     ToggleSidebar,
     CommitChanges,
     RollbackChanges,
@@ -752,6 +755,8 @@ fn execute_command(cmd: &CommandType, window: &mut Window, cx: &mut App) {
         CommandType::OpenNewConnectionModal => {
             window.dispatch_action(Box::new(OpenNewConnectionModal), cx)
         }
+        CommandType::ImportConnections => window.dispatch_action(Box::new(ImportConnections), cx),
+        CommandType::ExportConnections => window.dispatch_action(Box::new(ExportConnections), cx),
         CommandType::ToggleSidebar => window.dispatch_action(Box::new(ToggleSidebar), cx),
         CommandType::CommitChanges => window.dispatch_action(Box::new(CommitChanges), cx),
         CommandType::RollbackChanges => window.dispatch_action(Box::new(RollbackChanges), cx),
@@ -1077,6 +1082,16 @@ fn build_commands(
             "New Connection",
             "Connection",
             CommandType::OpenNewConnectionModal,
+        ),
+        leaf(
+            "Import Connections…",
+            "Connection",
+            CommandType::ImportConnections,
+        ),
+        leaf(
+            "Export Connections…",
+            "Connection",
+            CommandType::ExportConnections,
         ),
         leaf("Open Settings", "View", CommandType::OpenSettings),
         leaf("Toggle Terminal", "View", CommandType::OpenTerminal),

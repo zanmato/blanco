@@ -57,6 +57,8 @@ actions!(
         OpenSettings,
         OpenTerminal,
         OpenNewConnectionModal,
+        ImportConnections,
+        ExportConnections,
         NewSnippet,
         CommitChanges,
         RollbackChanges,
@@ -1505,6 +1507,27 @@ impl BlancoApp {
         });
     }
 
+    fn on_import_connections(
+        &mut self,
+        _: &ImportConnections,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.sidebar
+            .update(cx, |sidebar, cx| sidebar.import_connections(window, cx));
+    }
+
+    fn on_export_connections(
+        &mut self,
+        _: &ExportConnections,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.export_connections(None, window, cx)
+        });
+    }
+
     fn on_database_connected(
         &mut self,
         action: &DatabaseConnected,
@@ -2415,6 +2438,8 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_explain_query))
             .on_action(cx.listener(Self::on_connect_to_connection))
             .on_action(cx.listener(Self::on_toggle_command_palette))
+            .on_action(cx.listener(Self::on_import_connections))
+            .on_action(cx.listener(Self::on_export_connections))
             .size_full()
             .overflow_hidden()
             .bg(cx.theme().background)
@@ -2592,6 +2617,8 @@ fn build_menu() -> Vec<Menu> {
     // the app's name, and that is where Settings and Quit belong there.
     let mut file_items = vec![
         MenuItem::action("New Connection", OpenNewConnectionModal),
+        MenuItem::action("Import Connections…", ImportConnections),
+        MenuItem::action("Export Connections…", ExportConnections),
         MenuItem::action("Toggle Terminal", OpenTerminal),
         MenuItem::action("New Snippet", NewSnippet),
     ];
