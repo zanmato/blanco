@@ -463,7 +463,7 @@ fn is_valid_identifier(word: &str) -> bool {
         && !word.chars().next().is_none_or(|c| c.is_ascii_digit())
 }
 
-fn is_sql_keyword(word: &str) -> bool {
+pub(crate) fn is_sql_keyword(word: &str) -> bool {
     SQL_KEYWORDS.contains(&word.to_uppercase().as_str())
 }
 

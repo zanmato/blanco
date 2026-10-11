@@ -721,6 +721,11 @@ impl EditorPanel {
                         sql_completion_provider.clone(),
                     ));
                     editor.lsp_mut().signature_help_provider = Some(signature_help_provider);
+                    editor.lsp_mut().code_action_providers.push(Rc::new(
+                        crate::sql::expand_star::ExpandStarProvider::new(
+                            sql_completion_provider.clone(),
+                        ),
+                    ));
 
                     let completion_provider: Rc<dyn gpui_component::input::CompletionProvider> =
                         Rc::new(sql_completion_provider);
