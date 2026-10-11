@@ -9454,6 +9454,7 @@ name = "transformers"
 version = "0.1.2"
 dependencies = [
  "blanco-core",
+ "serde",
  "serde_json",
 ]
 

@@ -1,6 +1,7 @@
 use crate::{DataTransformer, SelectedTableData, TransformError};
 use blanco_core::ColumnType;
 use blanco_core::DatabaseType;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(crate) fn should_quote_value(column_type: &ColumnType) -> bool {
@@ -19,7 +20,12 @@ pub(crate) fn should_quote_value(column_type: &ColumnType) -> bool {
 pub struct SqlTransformer {
     table_name: Option<String>,
     db_type: DatabaseType,
+    /// One INSERT holding every row, rather than one INSERT per row.
+    multi_row: bool,
     first_row: AtomicBool,
+    /// `INSERT INTO t (columns) VALUES` while streaming, set up once the
+    /// columns are known.
+    statement_prefix: Mutex<String>,
 }
 
 impl SqlTransformer {
@@ -27,7 +33,9 @@ impl SqlTransformer {
         Self {
             table_name: None,
             db_type: DatabaseType::PostgreSQL,
+            multi_row: true,
             first_row: AtomicBool::new(true),
+            statement_prefix: Mutex::new(String::new()),
         }
     }
 
@@ -35,9 +43,52 @@ impl SqlTransformer {
         Self {
             table_name: Some(table_name),
             db_type,
-            first_row: AtomicBool::new(true),
+            ..Self::new()
         }
     }
+
+    /// Write one INSERT with many rows (the default), or one INSERT per row.
+    pub fn multi_row(mut self, multi_row: bool) -> Self {
+        self.multi_row = multi_row;
+        self
+    }
+
+    fn write_values<'a>(
+        db_type: DatabaseType,
+        values: impl Iterator<Item = (Option<&'a str>, &'a ColumnType)>,
+        output: &mut String,
+    ) {
+        output.push('(');
+        for (i, (value, column_type)) in values.enumerate() {
+            if i > 0 {
+                output.push_str(", ");
+            }
+            match value {
+                None => output.push_str("NULL"),
+                Some("") => output.push_str("''"),
+                Some(value) if should_quote_value(column_type) => {
+                    output.push('\'');
+                    sql_escape_string_to(value, db_type, output);
+                    output.push('\'');
+                }
+                Some(value) => output.push_str(value),
+            }
+        }
+        output.push(')');
+    }
+}
+
+fn statement_prefix(table_name: &str, columns: &[String], db_type: DatabaseType) -> String {
+    let column_list = columns
+        .iter()
+        .map(|col| sql_identifier(col, db_type))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "INSERT INTO {} ({}) VALUES",
+        sql_identifier(table_name, db_type),
+        column_list
+    )
 }
 
 impl DataTransformer for SqlTransformer {
@@ -59,64 +110,34 @@ impl DataTransformer for SqlTransformer {
             .cloned()
             .unwrap_or_else(|| "unknown".to_string());
 
-        // Estimate capacity: ~150 bytes per row on average plus header
-        let estimated_capacity = (data.selected_rows.len() * 150) + 200;
-        let mut output = String::with_capacity(estimated_capacity);
-
-        // Handle selected rows first
-        if !data.selected_rows.is_empty() {
-            // Generate column list once
-            let mut column_list = String::with_capacity(data.columns.len() * 20);
-            for (i, col) in data.columns.iter().enumerate() {
-                if i > 0 {
-                    column_list.push_str(", ");
-                }
-                column_list.push_str(&sql_identifier(col, db_type));
+        let prefix = statement_prefix(&table_name, &data.columns, db_type);
+        let mut output = String::with_capacity(data.selected_rows.len() * 150 + 200);
+        let unknown = ColumnType::Unknown;
+        for (i, row) in data.selected_rows.iter().enumerate() {
+            if self.multi_row {
+                output.push_str(if i == 0 { &prefix } else { "," });
+                output.push_str("\n  ");
+            } else {
+                output.push_str(&prefix);
+                output.push(' ');
             }
-
-            // Create the INSERT statement header
-            output.push_str("INSERT INTO ");
-            output.push_str(&sql_identifier(&table_name, db_type));
-            output.push_str(" (");
-            output.push_str(&column_list);
-            output.push_str(")\nVALUES\n");
-
-            let row_count = data.selected_rows.len();
-            for (i, row) in data.selected_rows.iter().enumerate() {
-                output.push('(');
-
-                // Write values directly without intermediate Vec<String>
-                let mut cell_iter = row.cells.iter().peekable();
-                while let Some(cell) = cell_iter.next() {
-                    // Use column type from cell if available, fall back to Unknown (which quotes)
-                    let col_type = cell.column_type.as_ref().unwrap_or(&ColumnType::Unknown);
-
-                    match &cell.value {
-                        None => output.push_str("NULL"),
-                        Some(val) if val.is_empty() => output.push_str("''"),
-                        Some(val) => {
-                            if should_quote_value(col_type) {
-                                output.push('\'');
-                                sql_escape_string_to(val, self.db_type, &mut output);
-                                output.push('\'');
-                            } else {
-                                output.push_str(val);
-                            }
-                        }
-                    }
-
-                    // Add comma separator if not last cell
-                    if cell_iter.peek().is_some() {
-                        output.push_str(", ");
-                    }
-                }
-
-                if i < row_count - 1 {
-                    output.push_str("),\n");
-                } else {
-                    output.push_str(");\n");
-                }
+            // A cell without a type falls back to Unknown, which quotes.
+            Self::write_values(
+                db_type,
+                row.cells.iter().map(|cell| {
+                    (
+                        cell.value.as_deref(),
+                        cell.column_type.as_ref().unwrap_or(&unknown),
+                    )
+                }),
+                &mut output,
+            );
+            if !self.multi_row {
+                output.push_str(";\n");
             }
+        }
+        if self.multi_row {
+            output.push_str(";\n");
         }
 
         Ok(output)
@@ -127,19 +148,15 @@ impl DataTransformer for SqlTransformer {
         columns: &[String],
         _column_types: &[ColumnType],
     ) -> Result<String, TransformError> {
-        let db_type = self.db_type;
-        let column_list = columns
-            .iter()
-            .map(|col| sql_identifier(col, db_type))
-            .collect::<Vec<_>>()
-            .join(", ");
-
         let table_name = self.table_name.as_deref().unwrap_or("exported_data");
-        Ok(format!(
-            "INSERT INTO {} ({})\nVALUES\n",
-            sql_identifier(table_name, db_type),
-            column_list
-        ))
+        *self
+            .statement_prefix
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) =
+            statement_prefix(table_name, columns, self.db_type);
+        // The statement starts with the first row, so an export without rows
+        // is an empty file rather than an INSERT without values.
+        Ok(String::new())
     }
 
     fn transform_stream_row(
@@ -148,53 +165,47 @@ impl DataTransformer for SqlTransformer {
         _columns: &[String],
         column_types: &[ColumnType],
     ) -> Result<String, TransformError> {
-        // Estimate capacity: ~50 bytes per cell plus indentation
-        let estimated_capacity = (row_data.len() * 50) + 20;
-        let mut output = String::with_capacity(estimated_capacity);
-
-        // Add comma separator if this is not the first row
-        if self
+        let prefix = self
+            .statement_prefix
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let mut output = String::with_capacity(prefix.len() + row_data.len() * 50 + 20);
+        let first = self
             .first_row
             .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed)
-            .is_err()
-        {
-            output.push_str(",\n");
+            .is_ok();
+        if self.multi_row {
+            output.push_str(if first { &prefix } else { "," });
+            output.push_str("\n  ");
+        } else {
+            output.push_str(&prefix);
+            output.push(' ');
         }
 
-        output.push_str("  (");
-
-        // Write values directly without intermediate Vec<String>
-        for (i, value) in row_data.iter().enumerate() {
-            if i > 0 {
-                output.push_str(", ");
-            }
-
-            // Get column type for this column, default to Unknown
-            let col_type = column_types.get(i).unwrap_or(&ColumnType::Unknown);
-
-            match value {
-                None => output.push_str("NULL"),
-                Some(val) if val.is_empty() => output.push_str("''"),
-                Some(val) => {
-                    if should_quote_value(col_type) {
-                        output.push('\'');
-                        sql_escape_string_to(val, self.db_type, &mut output);
-                        output.push('\'');
-                    } else {
-                        output.push_str(val);
-                    }
-                }
-            }
+        let unknown = ColumnType::Unknown;
+        Self::write_values(
+            self.db_type,
+            row_data
+                .iter()
+                .enumerate()
+                .map(|(i, value)| (value.as_deref(), column_types.get(i).unwrap_or(&unknown))),
+            &mut output,
+        );
+        if !self.multi_row {
+            output.push_str(";\n");
         }
-
-        output.push(')');
-
         Ok(output)
     }
 
     fn finalize_stream(&self) -> Result<String, TransformError> {
-        // End the INSERT statement with semicolon
-        Ok(";\n".to_string())
+        // Close the INSERT, unless every row closed its own or none came.
+        let wrote_rows = !self.first_row.load(Ordering::Relaxed);
+        Ok(if self.multi_row && wrote_rows {
+            ";\n".to_string()
+        } else {
+            String::new()
+        })
     }
 
     fn transform_header_row(&self, _columns: &[String]) -> Result<String, TransformError> {
@@ -370,5 +381,40 @@ mod tests {
     fn test_sql_transformer() {
         let transformer = SqlTransformer::new();
         assert_eq!(transformer.format_name(), "SQL");
+    }
+
+    fn stream(transformer: &SqlTransformer, rows: &[Vec<Option<String>>]) -> String {
+        let columns = ["id".to_string(), "name".to_string()];
+        let types = [ColumnType::Integer, ColumnType::Text];
+        let mut output = transformer.initialize_stream(&columns, &types).unwrap();
+        for row in rows {
+            output.push_str(
+                &transformer
+                    .transform_stream_row(row, &columns, &types)
+                    .unwrap(),
+            );
+        }
+        output.push_str(&transformer.finalize_stream().unwrap());
+        output
+    }
+
+    #[test]
+    fn test_streamed_insert_styles() {
+        let rows = [
+            vec![Some("1".to_string()), Some("a".to_string())],
+            vec![Some("2".to_string()), None],
+        ];
+        let table = || SqlTransformer::with_table_name("t".into(), DatabaseType::PostgreSQL);
+
+        assert_eq!(
+            stream(&table(), &rows),
+            "INSERT INTO \"t\" (\"id\", \"name\") VALUES\n  (1, 'a'),\n  (2, NULL);\n"
+        );
+        assert_eq!(
+            stream(&table().multi_row(false), &rows),
+            "INSERT INTO \"t\" (\"id\", \"name\") VALUES (1, 'a');\n\
+             INSERT INTO \"t\" (\"id\", \"name\") VALUES (2, NULL);\n"
+        );
+        assert_eq!(stream(&table(), &[]), "");
     }
 }

@@ -95,6 +95,10 @@ impl ResultsPanel {
         let path = cx.prompt_for_new_path(&home_dir, Some(&default_filename));
 
         let format_owned = format.to_string();
+        let csv_options = crate::app_settings::AppSettings::global(cx)
+            .settings
+            .csv
+            .to_options();
         let table_name_for_sql = table_name;
         let db_type = selected_data
             .db_type
@@ -113,7 +117,7 @@ impl ResultsPanel {
             };
 
             let transformer: Box<dyn DataTransformer> = match format_owned.as_str() {
-                "csv" => Box::new(CsvTransformer),
+                "csv" => Box::new(CsvTransformer::new(csv_options)),
                 "json" => Box::new(JsonTransformer::new()),
                 "sql" => Box::new(SqlTransformer::with_table_name(
                     table_name_for_sql.clone(),

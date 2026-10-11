@@ -37,6 +37,8 @@ mod chart_view;
 mod clipboard;
 mod commit;
 mod compare;
+#[cfg(test)]
+mod csv_copy_test;
 mod export_actions;
 pub mod filter_bar;
 mod foreign_key_popover;

@@ -1,5 +1,6 @@
 use crate::app_settings::AppSettings;
 use crate::mcp::{McpService, McpStatus};
+use crate::settings::csv_group::csv_group;
 use crate::settings::formatter_page::formatter_page;
 use crate::settings::keybindings_page::keybindings_page;
 use crate::settings::{CompletionAcceptKeysSetting, EditorSettings, Settings};
@@ -680,6 +681,7 @@ impl SettingsView {
                          pruned after each query. Set to 0 to keep an unlimited history.",
                     ),
                 ]),
+                csv_group(view_handle.clone(), &default_settings),
             ]),
             // Appearance Settings Page
             SettingPage::new("Appearance").resettable(true).groups(vec![

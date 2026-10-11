@@ -8,6 +8,7 @@ use gpui::{
 use gpui_component::{
     ActiveTheme, IndexPath, WindowExt,
     button::Button,
+    checkbox::Checkbox,
     h_flex,
     input::{Input, InputState},
     scroll::ScrollableElement,
@@ -17,9 +18,12 @@ use gpui_component::{
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use transformers::{
-    CsvTransformer, DataTransformer, JsonTransformer, MarkdownTransformer, SqlTransformer,
-    TsvTransformer,
+    CsvOptions, CsvQuoting, CsvTransformer, DataTransformer, JsonTransformer, MarkdownTransformer,
+    SqlTransformer, TextEncoding, TsvTransformer,
 };
+
+use crate::app_settings::AppSettings;
+use crate::settings::CsvDelimiter;
 
 /// Export format options
 #[derive(Clone, Debug, PartialEq)]
@@ -54,7 +58,91 @@ impl ExportFormat {
 }
 
 #[derive(Clone, Default)]
-pub struct ExportOptions {}
+pub struct ExportOptions {
+    pub encoding: TextEncoding,
+}
+
+type OptionSelect = Entity<SelectState<Vec<String>>>;
+
+/// A select over `all`, labelled with `label`, starting at `selected`.
+fn option_select<T: Copy + PartialEq>(
+    all: &[T],
+    label: fn(T) -> &'static str,
+    selected: T,
+    window: &mut Window,
+    cx: &mut App,
+) -> OptionSelect {
+    let labels = all.iter().map(|item| label(*item).to_string()).collect();
+    let selected = all.iter().position(|item| *item == selected).unwrap_or(0);
+    cx.new(|cx| SelectState::new(labels, Some(IndexPath::new(selected)), window, cx))
+}
+
+/// The item of `all` the select has chosen.
+fn chosen<T: Copy + Default>(select: &OptionSelect, all: &[T], cx: &App) -> T {
+    select
+        .read(cx)
+        .selected_index(cx)
+        .and_then(|index| all.get(index.row).copied())
+        .unwrap_or_default()
+}
+
+/// The CSV options in the dialog, filled in from the Copy as CSV settings.
+struct CsvControls {
+    delimiter: OptionSelect,
+    custom_delimiter: Entity<InputState>,
+    header: bool,
+    null_text: Entity<InputState>,
+    quote: Entity<InputState>,
+    quoting: OptionSelect,
+    replace_line_breaks: bool,
+    line_break_replacement: Entity<InputState>,
+}
+
+impl CsvControls {
+    fn new(window: &mut Window, cx: &mut App) -> Self {
+        let settings = AppSettings::global(cx).settings.csv.clone();
+        let input = |value: &str, window: &mut Window, cx: &mut App| {
+            let value = value.to_string();
+            cx.new(|cx| InputState::new(window, cx).default_value(value))
+        };
+        Self {
+            delimiter: option_select(
+                &CsvDelimiter::ALL,
+                CsvDelimiter::label,
+                settings.delimiter,
+                window,
+                cx,
+            ),
+            custom_delimiter: input(&settings.custom_delimiter, window, cx),
+            header: settings.header,
+            null_text: input(&settings.null_text, window, cx),
+            quote: input(&settings.quote, window, cx),
+            quoting: option_select(
+                &CsvQuoting::ALL,
+                CsvQuoting::label,
+                settings.quoting,
+                window,
+                cx,
+            ),
+            replace_line_breaks: settings.replace_line_breaks,
+            line_break_replacement: input(&settings.line_break_replacement, window, cx),
+        }
+    }
+
+    fn options(&self, cx: &App) -> CsvOptions {
+        let custom = self.custom_delimiter.read(cx).value();
+        CsvOptions {
+            delimiter: chosen(&self.delimiter, &CsvDelimiter::ALL, cx).char(&custom),
+            header: self.header,
+            null_text: self.null_text.read(cx).value().to_string(),
+            quote: self.quote.read(cx).value().chars().next().unwrap_or('"'),
+            quoting: chosen(&self.quoting, &CsvQuoting::ALL, cx),
+            line_break_replacement: self
+                .replace_line_breaks
+                .then(|| self.line_break_replacement.read(cx).value().to_string()),
+        }
+    }
+}
 
 pub struct ExportModal {
     focus_handle: FocusHandle,
@@ -63,7 +151,10 @@ pub struct ExportModal {
     format_select: Entity<SelectState<Vec<String>>>,
     directory_input: Entity<InputState>,
     filename_input: Entity<InputState>,
-    options: ExportOptions,
+    encoding_select: OptionSelect,
+    csv: CsvControls,
+    /// SQL output as one INSERT holding every row.
+    sql_multi_row: bool,
     is_exporting: bool,
     export_progress: f32,
     exported_rows: usize,
@@ -111,6 +202,13 @@ impl ExportModal {
             },
         );
 
+        let csv = CsvControls::new(window, cx);
+        // The custom delimiter field is enabled by the delimiter choice.
+        let delimiter_subscription = cx
+            .subscribe(&csv.delimiter, |_, _, _: &SelectEvent<Vec<String>>, cx| {
+                cx.notify()
+            });
+
         Self {
             focus_handle: cx.focus_handle(),
             context,
@@ -118,13 +216,21 @@ impl ExportModal {
             format_select,
             directory_input,
             filename_input,
-            options: ExportOptions::default(),
+            encoding_select: option_select(
+                &TextEncoding::ALL,
+                TextEncoding::label,
+                TextEncoding::default(),
+                window,
+                cx,
+            ),
+            csv,
+            sql_multi_row: true,
             is_exporting: false,
             export_progress: 0.0,
             exported_rows: 0,
             total_rows: 0, // We'll estimate this later
             is_cancelled: false,
-            _subscriptions: vec![subscription],
+            _subscriptions: vec![subscription, delimiter_subscription],
             format_changed: AtomicBool::new(false),
         }
     }
@@ -206,7 +312,11 @@ impl ExportModal {
         match self.get_full_file_path(cx) {
             Ok(file_path) => {
                 let format = self.get_selected_format(cx);
-                let options = self.options.clone();
+                let options = ExportOptions {
+                    encoding: chosen(&self.encoding_select, &TextEncoding::ALL, cx),
+                };
+                let csv_options = self.csv.options(cx);
+                let sql_multi_row = self.sql_multi_row;
 
                 self.is_exporting = true;
                 self.is_cancelled = false;
@@ -238,7 +348,7 @@ impl ExportModal {
                                 .await?;
 
                             let transformer: Box<dyn DataTransformer> = match format {
-                                ExportFormat::Csv => Box::new(CsvTransformer),
+                                ExportFormat::Csv => Box::new(CsvTransformer::new(csv_options)),
                                 ExportFormat::Tsv => Box::new(TsvTransformer),
                                 ExportFormat::Markdown => Box::new(MarkdownTransformer),
                                 ExportFormat::Json => Box::new(JsonTransformer::new()),
@@ -248,10 +358,13 @@ impl ExportModal {
                                     } else {
                                         table_name_param.clone()
                                     };
-                                    Box::new(SqlTransformer::with_table_name(
-                                        table_name_for_sql,
-                                        db_type,
-                                    ))
+                                    Box::new(
+                                        SqlTransformer::with_table_name(
+                                            table_name_for_sql,
+                                            db_type,
+                                        )
+                                        .multi_row(sql_multi_row),
+                                    )
                                 }
                             };
 
@@ -341,6 +454,83 @@ impl ExportModal {
     }
 }
 
+impl ExportModal {
+    fn render_csv_options(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let csv = &self.csv;
+        let custom_delimiter =
+            chosen(&csv.delimiter, &CsvDelimiter::ALL, cx) == CsvDelimiter::Custom;
+        let field = |label: &'static str, control: gpui::AnyElement| {
+            v_flex()
+                .gap_2()
+                .flex_1()
+                .child(div().text_sm().child(label))
+                .child(control)
+        };
+
+        v_flex()
+            .gap_3()
+            .child(
+                h_flex()
+                    .gap_3()
+                    .items_start()
+                    .child(field(
+                        "Delimiter",
+                        Select::new(&csv.delimiter).into_any_element(),
+                    ))
+                    .child(field(
+                        "Custom Delimiter",
+                        Input::new(&csv.custom_delimiter)
+                            .disabled(!custom_delimiter)
+                            .into_any_element(),
+                    )),
+            )
+            .child(
+                h_flex()
+                    .gap_3()
+                    .items_start()
+                    .child(field(
+                        "Quote Values",
+                        Select::new(&csv.quoting).into_any_element(),
+                    ))
+                    .child(field(
+                        "Quote Character",
+                        Input::new(&csv.quote).into_any_element(),
+                    )),
+            )
+            .child(field(
+                "NULL Text",
+                Input::new(&csv.null_text).into_any_element(),
+            ))
+            .child(
+                Checkbox::new("export-csv-header")
+                    .label("Header row")
+                    .checked(csv.header)
+                    .on_click(cx.listener(|modal, checked: &bool, _, cx| {
+                        modal.csv.header = *checked;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                h_flex()
+                    .gap_3()
+                    .child(
+                        Checkbox::new("export-csv-replace-line-breaks")
+                            .label("Replace line breaks with")
+                            .checked(csv.replace_line_breaks)
+                            .on_click(cx.listener(|modal, checked: &bool, _, cx| {
+                                modal.csv.replace_line_breaks = *checked;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Input::new(&csv.line_break_replacement)
+                            .disabled(!csv.replace_line_breaks)
+                            .flex_1(),
+                    ),
+            )
+    }
+}
+
 impl Focusable for ExportModal {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -363,9 +553,10 @@ impl Render for ExportModal {
             });
         }
 
+        let format = self.get_selected_format(cx);
         v_flex()
             .gap_4()
-            .max_h(px(500.0))
+            .max_h(px(440.0))
             .p_4()
             .child(
                 v_flex()
@@ -394,6 +585,25 @@ impl Render for ExportModal {
                     .child(div().text_sm().child("File Name"))
                     .child(Input::new(&self.filename_input)),
             )
+            .child(
+                v_flex()
+                    .gap_2()
+                    .child(div().text_sm().child("Encoding"))
+                    .child(Select::new(&self.encoding_select)),
+            )
+            .map(|this| match format {
+                ExportFormat::Csv => this.child(self.render_csv_options(cx)),
+                ExportFormat::Sql => this.child(
+                    Checkbox::new("export-sql-multi-row")
+                        .label("One INSERT for all rows")
+                        .checked(self.sql_multi_row)
+                        .on_click(cx.listener(|modal, checked: &bool, _, cx| {
+                            modal.sql_multi_row = *checked;
+                            cx.notify();
+                        })),
+                ),
+                _ => this,
+            })
             .child(self.render_progress_bar(cx))
             .overflow_y_scrollbar()
     }
@@ -422,5 +632,45 @@ mod tests {
         let filename = generate_default_filename("test_table", &ExportFormat::Sql);
         assert!(filename.starts_with("test_table_"));
         assert!(filename.ends_with(".sql"));
+    }
+
+    /// The dialog draws its CSV options, and the SQL option once SQL is
+    /// chosen, from the Copy as CSV settings.
+    #[gpui::test]
+    async fn test_dialog_draws_the_format_options(cx: &mut gpui::TestAppContext) {
+        let harness = crate::test_harness::TestHarness::new(cx);
+        let mut cx = gpui::VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+        cx.update(|_, cx| AppSettings::global_mut(cx).settings.csv.delimiter = CsvDelimiter::Pipe);
+        let modal = cx.update(|window, cx| {
+            let context = ConnectionContext {
+                connection_id: harness.connection_id,
+                connection_name: "test".into(),
+                db_type: database::DatabaseType::SQLite,
+                database_name: "main".into(),
+                schema_name: None,
+                environment_type: None,
+            };
+            let modal = cx.new(|cx| ExportModal::new(context, "items".into(), window, cx));
+            let content = modal.clone();
+            window.open_dialog(cx, move |dialog, _, _| dialog.child(content.clone()));
+            modal
+        });
+        cx.run_until_parked();
+
+        modal.read_with(&cx, |modal, cx| {
+            assert_eq!(modal.csv.options(cx).delimiter, '|');
+            assert_eq!(modal.get_selected_format(cx), ExportFormat::Csv);
+        });
+
+        modal.update_in(&mut cx, |modal, window, cx| {
+            modal.format_select.update(cx, |select, cx| {
+                select.set_selected_index(Some(IndexPath::new(3)), window, cx)
+            });
+        });
+        cx.run_until_parked();
+        modal.read_with(&cx, |modal, cx| {
+            assert_eq!(modal.get_selected_format(cx), ExportFormat::Sql);
+        });
     }
 }
