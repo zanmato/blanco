@@ -33,10 +33,7 @@ pub struct CompareSelection {
 
 /// Pretty print `text` when it parses as JSON, otherwise return it unchanged.
 pub fn pretty_json_or_original(text: String) -> String {
-    match serde_json::from_str::<serde_json::Value>(&text) {
-        Ok(value) => serde_json::to_string_pretty(&value).unwrap_or(text),
-        Err(_) => text,
-    }
+    super::json_text::format_json(&text).unwrap_or(text)
 }
 
 /// The value the grid currently shows for a cell: a pending edit wins over

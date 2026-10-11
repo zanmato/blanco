@@ -1,4 +1,5 @@
-use gpui::{AppContext, Context, Entity, Window};
+use gpui::{AppContext, Context, Entity, SharedString, Window};
+use gpui_component::{WindowExt as _, notification::NotificationType};
 
 use database::DatabaseService;
 
@@ -19,7 +20,7 @@ impl ResultsPanel {
 
     fn commit_changes_internal(
         &mut self,
-        _window: &mut Window,
+        window: &mut Window,
         sql_view: Option<&Entity<blanco_ui::SqlView>>,
         cx: &mut Context<Self>,
     ) {
@@ -29,6 +30,13 @@ impl ResultsPanel {
 
         // First, commit any currently editing cell
         self.finalize_active_cell_edit(cx);
+
+        // Invalid JSON for a JSON column is refused by the server anyway; say
+        // which cell it is before sending anything.
+        if let Some(problem) = self.table_state.read(cx).delegate().invalid_json_edit() {
+            window.push_notification((NotificationType::Error, SharedString::from(problem)), cx);
+            return;
+        }
 
         // Get changes and convert to database-agnostic operations
         let change_operations = self

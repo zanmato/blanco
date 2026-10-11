@@ -1,12 +1,13 @@
+use blanco_core::ColumnType;
 use gpui::{AppContext, Context, Focusable, Window};
 use gpui_component::input::{EditorState, InputState};
 use gpui_component::table::TableState;
-use serde_json::Value;
 
 use super::ResultsTableDelegate;
 use crate::results_panel::ResultsPanel;
 use crate::results_panel::cell_edit_state::{CellInput, ChangeType, TableChange};
 use crate::results_panel::compare::pretty_json_or_original;
+use crate::results_panel::json_text::{is_json_document, json_error, minify_json};
 
 impl ResultsTableDelegate {
     pub fn start_editing_cell(&mut self, row: usize, col: usize) {
@@ -172,6 +173,61 @@ impl ResultsTableDelegate {
         }
     }
 
+    /// Re-indent or minify the JSON in the expanded editor. Text that does
+    /// not parse is left as it is.
+    pub(crate) fn reflow_expanded_json(
+        state: &mut TableState<ResultsTableDelegate>,
+        minify: bool,
+        window: &mut Window,
+        cx: &mut Context<'_, TableState<ResultsTableDelegate>>,
+    ) {
+        let Some(CellInput::Expanded(editor)) = state.delegate().edit_state.editing_input.clone()
+        else {
+            return;
+        };
+        let text = editor.read(cx).text().to_string();
+        let reflowed = if minify {
+            minify_json(&text)
+        } else {
+            crate::results_panel::json_text::format_json(&text)
+        };
+        if let Some(reflowed) = reflowed
+            && reflowed != text
+        {
+            editor.update(cx, |editor, cx| editor.set_value(reflowed, window, cx));
+        }
+    }
+
+    /// Recheck the expanded JSON after an edit.
+    pub(crate) fn recheck_expanded_json(&mut self, text: &str) {
+        if self.edit_state.expanded_as_json {
+            self.edit_state.json_error = json_error(text);
+        }
+    }
+
+    /// Why an edit pending for a JSON column is not valid JSON, naming the row
+    /// and column, so it can be fixed before it is sent. SQL expressions are
+    /// the server's to evaluate and are not checked.
+    pub fn invalid_json_edit(&self) -> Option<String> {
+        let mut cells: Vec<&(usize, usize)> = self.edit_state.edited_values.keys().collect();
+        cells.sort();
+        cells.into_iter().find_map(|&(row, col)| {
+            if self.column_types.get(col) != Some(&ColumnType::Json)
+                || self.edit_state.expression_cells.contains(&(row, col))
+            {
+                return None;
+            }
+            let text = self.edit_state.edited_values.get(&(row, col))?.as_deref()?;
+            let error = json_error(text)?;
+            let column = self
+                .columns
+                .get(col)
+                .map(|column| column.name.to_string())
+                .unwrap_or_else(|| format!("column {}", col + 1));
+            Some(format!("Row {}, {column}: invalid JSON: {error}", row + 1))
+        })
+    }
+
     /// Collapse an expanded cell editor back to a single-line inline input.
     pub(crate) fn handle_minimize(
         state: &mut TableState<ResultsTableDelegate>,
@@ -189,14 +245,15 @@ impl ResultsTableDelegate {
             .map(|input| input.text(cx))
             .unwrap_or_default();
 
-        // Re-compact prettified JSON back to its single-line form. The
+        // Re-compact formatted JSON back to its single-line form. The
         // single-line input strips newlines but leaves indentation behind,
-        // which otherwise mangles the value, so reserialize it compactly.
-        if is_json && let Ok(value) = serde_json::from_str::<Value>(&current_text) {
-            if let Ok(compact) = serde_json::to_string(&value) {
-                current_text = compact;
-            }
+        // which otherwise mangles the value, so minify it.
+        let is_json = is_json || state.delegate().edit_state.expanded_as_json;
+        if is_json && let Some(compact) = minify_json(&current_text) {
+            current_text = compact;
         }
+        state.delegate_mut().edit_state.expanded_as_json = false;
+        state.delegate_mut().edit_state.json_error = None;
 
         // Recreate the state in single-line mode and subscribe to events
         let new_input = cx.new(|cx| InputState::new(window, cx).default_value(current_text));
@@ -252,6 +309,17 @@ impl ResultsTableDelegate {
             .delegate_mut()
             .edit_state
             .toggle_expanded(row_ix, col_ix);
+
+        // A text value holding a JSON object or array is edited like a JSON
+        // column.
+        let is_json = is_json
+            || (state.delegate().column_types.get(col_ix) == Some(&ColumnType::Text)
+                && is_json_document(&current_text));
+        {
+            let edit_state = &mut state.delegate_mut().edit_state;
+            edit_state.expanded_as_json = is_json;
+            edit_state.json_error = is_json.then(|| json_error(&current_text)).flatten();
+        }
 
         // Recreate the state as a multi-line editor
         let new_input = cx.new(|cx| {

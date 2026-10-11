@@ -355,6 +355,37 @@ mod tests {
     use blanco_core::ColumnInfo;
 
     #[test]
+    fn test_invalid_json_edit_names_the_cell() {
+        let mut delegate = ResultsTableDelegate {
+            columns: vec![Column::new("id", "id"), Column::new("doc", "doc")],
+            column_types: vec![ColumnType::Integer, ColumnType::Json],
+            ..Default::default()
+        };
+        delegate
+            .edit_state
+            .edited_values
+            .insert((0, 1), Some(r#"{"ok": true}"#.to_string()));
+        delegate
+            .edit_state
+            .edited_values
+            .insert((0, 0), Some("not json, but not a JSON column".to_string()));
+        assert_eq!(delegate.invalid_json_edit(), None);
+
+        delegate
+            .edit_state
+            .edited_values
+            .insert((2, 1), Some(r#"{"broken": }"#.to_string()));
+        let problem = delegate
+            .invalid_json_edit()
+            .expect("invalid JSON is caught");
+        assert!(problem.starts_with("Row 3, doc: invalid JSON"), "{problem}");
+
+        // An expression is SQL for the server, not JSON.
+        delegate.edit_state.expression_cells.insert((2, 1));
+        assert_eq!(delegate.invalid_json_edit(), None);
+    }
+
+    #[test]
     fn test_cell_edit_state() {
         let mut edit_state = CellEditState {
             editing_cell: Some((0, 0)),

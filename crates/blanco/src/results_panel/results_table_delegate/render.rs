@@ -122,6 +122,8 @@ impl ResultsTableDelegate {
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
         let is_json = self.column_types.get(col_ix).copied() == Some(ColumnType::Json);
+        let as_json = self.edit_state.expanded_as_json;
+        let json_error = self.edit_state.json_error.clone();
         let overlay_size = self.edit_state.expanded_size.size();
         // The affordances sit over the editor's own text padding, so they line
         // up with the first line rather than crowding the border.
@@ -163,11 +165,28 @@ impl ResultsTableDelegate {
                         // through and scroll the table underneath the overlay.
                         .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
                         .child(
-                            Editor::new(&input)
-                                .disabled(!self.is_editable())
+                            v_flex()
                                 .size_full()
-                                .font_family(cx.theme().mono_font_family.clone())
-                                .text_size(px(12.)),
+                                .child(
+                                    Editor::new(&input)
+                                        .disabled(!self.is_editable())
+                                        .flex_1()
+                                        .min_h_0()
+                                        .font_family(cx.theme().mono_font_family.clone())
+                                        .text_size(px(12.)),
+                                )
+                                .when_some(json_error, |this, error| {
+                                    this.child(
+                                        div()
+                                            .px_2()
+                                            .py_1()
+                                            .text_xs()
+                                            .text_color(cx.theme().danger)
+                                            .border_t_1()
+                                            .border_color(cx.theme().border)
+                                            .child(format!("Invalid JSON: {error}")),
+                                    )
+                                }),
                         )
                         // The editor takes no suffix, so the minimize
                         // affordance sits over its top-right corner.
@@ -177,6 +196,38 @@ impl ResultsTableDelegate {
                                 .right(editor_size.input_px())
                                 .top(editor_size.input_py())
                                 .gap_1()
+                                .when(as_json && self.is_editable(), |this| {
+                                    this.child(
+                                        Button::new((
+                                            "expanded-json-format",
+                                            row_ix * 1000 + col_ix,
+                                        ))
+                                        .label("Format")
+                                        .ghost()
+                                        .xsmall()
+                                        .on_click(
+                                            cx.listener(|table, _, window, cx| {
+                                                Self::reflow_expanded_json(
+                                                    table, false, window, cx,
+                                                );
+                                            }),
+                                        ),
+                                    )
+                                    .child(
+                                        Button::new((
+                                            "expanded-json-minify",
+                                            row_ix * 1000 + col_ix,
+                                        ))
+                                        .label("Minify")
+                                        .ghost()
+                                        .xsmall()
+                                        .on_click(
+                                            cx.listener(|table, _, window, cx| {
+                                                Self::reflow_expanded_json(table, true, window, cx);
+                                            }),
+                                        ),
+                                    )
+                                })
                                 .child(self.render_expression_toggle(cx))
                                 .child(
                                     div()

@@ -956,3 +956,86 @@ async fn test_expression_toggle_sends_cell_text_as_sql(cx: &mut TestAppContext) 
         "a cancelled edit must leave the pending expression as it was"
     );
 }
+
+/// A text value holding a JSON object opens formatted in the expanded editor,
+/// keeps its key order, reports invalid JSON while typing, and collapses back
+/// to its minified form.
+#[gpui::test]
+async fn test_expanded_text_json_formats_and_minifies(cx: &mut TestAppContext) {
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    set_editor_text(
+        &harness,
+        "CREATE TABLE docs (id INTEGER PRIMARY KEY, body TEXT)",
+        &mut cx,
+    );
+    run_query(&harness, &mut cx);
+    wait_for_query(&harness, &mut cx).await;
+    set_editor_text(
+        &harness,
+        r#"INSERT INTO docs (id, body) VALUES (1, '{"zeta":1,"alpha":[1,2]}')"#,
+        &mut cx,
+    );
+    run_query(&harness, &mut cx);
+    wait_for_query(&harness, &mut cx).await;
+    set_editor_text(&harness, "SELECT * FROM docs", &mut cx);
+    run_query(&harness, &mut cx);
+    wait_for_query(&harness, &mut cx).await;
+
+    let results_panel = harness.editor_panel.read_with(&cx, |panel, _| {
+        panel
+            .active_query_tab()
+            .expect("query tab")
+            .results_panel
+            .clone()
+    });
+    let table_state = results_panel.read_with(&cx, |panel, _| panel.table_state().clone());
+    results_panel.update_in(&mut cx, |panel, window, cx| {
+        panel.start_cell_edit(0, 1, window, cx);
+    });
+    table_state.update_in(&mut cx, |state, window, cx| {
+        ResultsTableDelegate::handle_maximize(state, 0, 1, false, window, cx);
+    });
+    cx.run_until_parked();
+
+    let editor = table_state.read_with(&cx, |state, _| {
+        assert!(state.delegate().edit_state.expanded_as_json);
+        match state.delegate().edit_state.get_editing_input() {
+            Some(CellInput::Expanded(editor)) => editor,
+            _ => panic!("maximize opens the expanded editor"),
+        }
+    });
+    let text = editor.read_with(&cx, |editor, _| editor.text().to_string());
+    assert_eq!(
+        text,
+        "{\n  \"zeta\": 1,\n  \"alpha\": [\n    1,\n    2\n  ]\n}"
+    );
+
+    editor.update_in(&mut cx, |editor, window, cx| {
+        editor.replace_all("{\"zeta\": }", window, cx);
+    });
+    cx.run_until_parked();
+    let error = table_state.read_with(&cx, |state, _| {
+        state.delegate().edit_state.json_error.clone()
+    });
+    assert!(error.is_some(), "invalid JSON is flagged while typing");
+
+    editor.update_in(&mut cx, |editor, window, cx| {
+        editor.replace_all("{\n  \"zeta\": 2,\n  \"alpha\": []\n}", window, cx);
+    });
+    cx.run_until_parked();
+    table_state.update_in(&mut cx, |state, window, cx| {
+        assert!(state.delegate().edit_state.json_error.is_none());
+        ResultsTableDelegate::handle_minimize(state, (1, 0), false, window, cx);
+    });
+    cx.run_until_parked();
+    let inline = table_state.read_with(&cx, |state, cx| {
+        state
+            .delegate()
+            .edit_state
+            .get_editing_input()
+            .map(|input| input.text(cx))
+    });
+    assert_eq!(inline.as_deref(), Some(r#"{"zeta":2,"alpha":[]}"#));
+}
