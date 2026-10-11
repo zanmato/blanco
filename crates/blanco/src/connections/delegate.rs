@@ -278,6 +278,12 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                         },
                     )),
                 )
+                .item(PopupMenuItem::new("Export…").on_click(window.listener_for(
+                    &self.parent,
+                    move |this, _event, window, cx| {
+                        this.export_connections(Some(connection_id), window, cx);
+                    },
+                )))
                 .item(
                     PopupMenuItem::new("Disconnect").on_click(window.listener_for(
                         &self.parent,

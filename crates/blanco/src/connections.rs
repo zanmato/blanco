@@ -5,7 +5,10 @@ mod tree_builder;
 pub use data_loading::DatabaseMetadata;
 pub use delegate::ConnectionsTreeDelegate;
 
-use crate::app::{CreateNewQueryTab, CreateNewScriptTab};
+use crate::app::{
+    CreateNewQueryTab, CreateNewScriptTab, ExportConnections, ImportConnections,
+    OpenNewConnectionModal,
+};
 use crate::connection_credentials;
 use crate::export::modal::ExportModal;
 use crate::import::modal::ImportModal;
@@ -17,15 +20,18 @@ use blanco_ui::IconName;
 use blanco_ui::tree::{Tree, TreeItem, TreeState};
 use database::DatabaseService;
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, IntoElement, ParentElement, Render, Styled,
-    Subscription, Window, div, px,
+    App, AppContext, Context, Entity, EventEmitter, IntoElement, ParentElement, Render,
+    SharedString, Styled, Subscription, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     ActiveTheme as _, Sizable as _, WindowExt,
     button::{Button, ButtonVariants as _},
     dialog::{DialogAction, DialogClose, DialogFooter},
+    h_flex,
     input::{Input, InputEvent, InputState},
+    menu::DropdownMenu as _,
     notification::NotificationType,
+    v_flex,
 };
 
 #[derive(Clone, Debug)]
@@ -885,10 +891,243 @@ impl ConnectionsPanel {
     }
 
     fn render_filter(&self, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
+        h_flex()
             .px_2()
             .pb_2()
-            .child(Input::new(&self.filter_input).small())
+            .gap_1()
+            .child(div().flex_1().child(Input::new(&self.filter_input).small()))
+            .child(
+                Button::new("connections-menu")
+                    .icon(IconName::Ellipsis)
+                    .ghost()
+                    .small()
+                    .tooltip("Connections")
+                    .dropdown_menu(|menu, _, _| {
+                        menu.menu("New Connection…", Box::new(OpenNewConnectionModal))
+                            .separator()
+                            .menu("Import Connections…", Box::new(ImportConnections))
+                            .menu("Export Connections…", Box::new(ExportConnections))
+                    }),
+            )
+    }
+
+    /// Write saved connections to a JSON file the user picks: all of them, or
+    /// only `connection_id`. Secrets are never written.
+    pub fn export_connections(
+        &mut self,
+        connection_id: Option<i64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let connections: Vec<ConnectionData> = self
+            .connections
+            .iter()
+            .filter(|connection| connection.id.is_some_and(|id| id >= 0))
+            .filter(|connection| connection_id.is_none_or(|only| connection.id == Some(only)))
+            .cloned()
+            .collect();
+        if connections.is_empty() {
+            return;
+        }
+        let file_name = match connections.as_slice() {
+            [single] => format!("{}.blanco-connections.json", single.name),
+            _ => "blanco-connections.json".to_string(),
+        };
+        let document = app_database::connection_transfer::export_connections(&connections);
+        let directory = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+        let path = cx.prompt_for_new_path(&directory, Some(&file_name));
+        let count = connections.len();
+        cx.spawn_in(window, async move |_, cx| {
+            let Ok(Ok(Some(path))) = path.await else {
+                return;
+            };
+            let result = smol::fs::write(&path, document).await;
+            cx.update(|window, cx| {
+                let note = match result {
+                    Ok(()) => (
+                        NotificationType::Success,
+                        SharedString::from(format!(
+                            "Exported {count} connection{} to {}.",
+                            if count == 1 { "" } else { "s" },
+                            path.display()
+                        )),
+                    ),
+                    Err(error) => (
+                        NotificationType::Error,
+                        SharedString::from(format!("Export failed: {error}")),
+                    ),
+                };
+                window.push_notification(note, cx);
+            })
+            .log_err();
+        })
+        .detach();
+    }
+
+    /// Read connections from a file the user picks and show what importing it
+    /// would add before anything is saved.
+    pub fn import_connections(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Import connections".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = paths.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let parsed = smol::fs::read_to_string(&path)
+                .await
+                .map_err(anyhow::Error::from)
+                .and_then(|text| app_database::connection_transfer::parse_connections(&text));
+            this.update_in(cx, |this, window, cx| match parsed {
+                Ok(incoming) => {
+                    let plan =
+                        app_database::connection_transfer::plan_import(incoming, &this.connections);
+                    this.confirm_import(plan, window, cx);
+                }
+                Err(error) => window.push_notification(
+                    (
+                        NotificationType::Error,
+                        SharedString::from(format!("Import failed: {error:#}")),
+                    ),
+                    cx,
+                ),
+            })
+            .log_err();
+        })
+        .detach();
+    }
+
+    fn confirm_import(
+        &mut self,
+        plan: app_database::connection_transfer::ImportPlan,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if plan.add.is_empty() {
+            let message = if plan.skipped.is_empty() {
+                "The file holds no connections.".to_string()
+            } else {
+                format!(
+                    "Nothing to import: {} already saved.",
+                    plan.skipped.join(", ")
+                )
+            };
+            window.push_notification((NotificationType::Info, SharedString::from(message)), cx);
+            return;
+        }
+        let this_handle = cx.entity().downgrade();
+        let plan = std::rc::Rc::new(plan);
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let add_lines = plan.add.iter().map(|(connection, renamed_from)| {
+                let line = match renamed_from {
+                    Some(original) => format!("{} (renamed from {original})", connection.name),
+                    None => connection.name.clone(),
+                };
+                div().text_sm().child(line)
+            });
+            dialog
+                .title("Import Connections")
+                .w(px(480.))
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .child(div().text_sm().font_weight(gpui::FontWeight::SEMIBOLD).child(format!(
+                            "Add {} connection{}:",
+                            plan.add.len(),
+                            if plan.add.len() == 1 { "" } else { "s" }
+                        )))
+                        .children(add_lines)
+                        .when(!plan.skipped.is_empty(), |this| {
+                            this.child(div().text_sm().text_color(cx.theme().muted_foreground).child(
+                                format!("Skip, already saved: {}", plan.skipped.join(", ")),
+                            ))
+                        })
+                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child(
+                            "Passwords are not part of the file. Add them by editing each connection.",
+                        )),
+                )
+                .footer(
+                    DialogFooter::new()
+                        .child(
+                            DialogClose::new()
+                                .child(Button::new("import-cancel").label("Cancel").outline()),
+                        )
+                        .child(DialogAction::new().child(
+                            Button::new("import-confirm").primary().label("Import").on_click({
+                                let this_handle = this_handle.clone();
+                                let plan = plan.clone();
+                                move |_, window, cx| {
+                                    let connections: Vec<ConnectionData> = plan
+                                        .add
+                                        .iter()
+                                        .map(|(connection, _)| connection.clone())
+                                        .collect();
+                                    this_handle
+                                        .update(cx, |this, cx| {
+                                            this.save_imported_connections(connections, window, cx)
+                                        })
+                                        .log_err();
+                                    window.close_dialog(cx);
+                                }
+                            }),
+                        )),
+                )
+        });
+    }
+
+    fn save_imported_connections(
+        &mut self,
+        connections: Vec<ConnectionData>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let app_database = AppDatabase::global(cx).clone();
+        let db_service = DatabaseService::global(cx).clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let mut saved = 0usize;
+            let mut failures = Vec::new();
+            for mut connection in connections {
+                match app_database.save_connection(&connection).await {
+                    Ok(id) => {
+                        connection.id = Some(id);
+                        if let Some(config) = connection.to_connection_config() {
+                            db_service.add_connection_config(config).await;
+                        }
+                        saved += 1;
+                    }
+                    Err(error) => failures.push(format!("{}: {error}", connection.name)),
+                }
+            }
+            this.update_in(cx, |this, window, cx| {
+                this.reload_connections(cx);
+                let note = if failures.is_empty() {
+                    (
+                        NotificationType::Success,
+                        SharedString::from(format!(
+                            "Imported {saved} connection{}",
+                            if saved == 1 { "" } else { "s" }
+                        )),
+                    )
+                } else {
+                    (
+                        NotificationType::Error,
+                        SharedString::from(format!(
+                            "Imported {saved}, failed: {}",
+                            failures.join("; ")
+                        )),
+                    )
+                };
+                window.push_notification(note, cx);
+            })
+            .log_err();
+        })
+        .detach();
     }
 
     pub fn export_table_data(
