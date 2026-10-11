@@ -1636,8 +1636,8 @@ mod visual_tests {
         });
         cx.run_until_parked();
 
-        // Activating a database item drills into a level holding a single
-        // "New query" leaf, with the database name in the breadcrumb trail.
+        // Activating a database item drills into a level holding its action
+        // leaves, with the database name in the breadcrumb trail.
         palette.update_in(&mut cx, |p, window, cx| {
             let item = CommandItem {
                 label: "mydb".into(),
@@ -1657,8 +1657,8 @@ mod visual_tests {
         let labels = palette.read_with(&cx, |p, cx| p.filtered_labels(cx));
         assert_eq!(
             labels,
-            vec!["New query".to_string(), "New script".to_string()],
-            "database level should hold the New query and New script leaves, got {labels:?}"
+            vec!["New query", "New script", "Back up…", "Restore…"],
+            "a PostgreSQL database level should hold the new tab and backup leaves, got {labels:?}"
         );
 
         let crumbs = palette.read_with(&cx, |p, cx| p.breadcrumbs_for_test(cx));
