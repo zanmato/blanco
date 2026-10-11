@@ -13,7 +13,8 @@ use gpui_component::{
 use app_database::{ConnectionData, EnvironmentType};
 
 use super::NewConnectionModal;
-use super::shared::{make_input, render_ssh_section};
+use super::shared::{make_input, render_ssh_section, secret_field};
+use database::SecretKind;
 
 pub(super) struct MssqlForm {
     pub host_input: Entity<InputState>,
@@ -245,7 +246,11 @@ fn optional_path(input: &Entity<InputState>, cx: &App) -> Option<String> {
     }
 }
 
-fn render_base_fields(form: &MssqlForm) -> AnyElement {
+fn render_base_fields(
+    form: &MssqlForm,
+    ask_secrets: &[SecretKind],
+    cx: &mut Context<NewConnectionModal>,
+) -> AnyElement {
     v_flex()
         .gap_3()
         .child(
@@ -276,13 +281,14 @@ fn render_base_fields(form: &MssqlForm) -> AnyElement {
                         .child(div().text_sm().child("User"))
                         .child(Input::new(&form.username_input)),
                 )
-                .child(
-                    v_flex()
-                        .flex_1()
-                        .gap_2()
-                        .child(div().text_sm().child("Password"))
-                        .child(Input::new(&form.password_input).mask_toggle()),
-                ),
+                .child(secret_field(
+                    "mssql-password-ask",
+                    "Password",
+                    &form.password_input,
+                    SecretKind::Password,
+                    ask_secrets,
+                    cx,
+                )),
         )
         .child(
             v_flex()
@@ -302,7 +308,7 @@ pub(super) fn render(
     let trust_server_certificate = form.trust_server_certificate;
     v_flex()
         .gap_3()
-        .child(render_base_fields(form))
+        .child(render_base_fields(form, &modal.ask_secrets, cx))
         .child(
             v_flex()
                 .flex_1()
@@ -341,6 +347,7 @@ pub(super) fn render(
                 &form.ssh_password_input,
                 &form.ssh_private_key_input,
                 &form.ssh_private_key_password_input,
+                &modal.ask_secrets,
                 cx,
             ))
         })

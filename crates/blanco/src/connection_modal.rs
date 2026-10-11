@@ -26,6 +26,7 @@ use gpui_component::{
 };
 
 use app_database::{ConnectionData, EnvironmentType};
+use database::SecretKind;
 
 pub struct NewConnectionModal {
     focus_handle: FocusHandle,
@@ -38,6 +39,10 @@ pub struct NewConnectionModal {
     /// Minutes of inactivity before the connection is closed. Empty follows
     /// the global setting.
     idle_timeout_input: Entity<InputState>,
+    /// Secrets asked for when the connection opens instead of stored. One
+    /// list for the dialog, since every backend's form edits the same
+    /// connection.
+    ask_secrets: Vec<SecretKind>,
     sqlite_form: SqliteForm,
     postgres_form: ServerForm,
     mysql_form: ServerForm,
@@ -134,6 +139,9 @@ impl NewConnectionModal {
                 .map(|minutes| minutes.to_string())
                 .as_deref(),
         );
+        let ask_secrets = conn_ref
+            .map(|connection| connection.ask_secrets.clone())
+            .unwrap_or_default();
         let sqlite_form = SqliteForm::new(window, cx, conn_ref);
         let postgres_form = ServerForm::new(&POSTGRES_SPEC, window, cx, conn_ref);
         let mysql_form = ServerForm::new(&MYSQL_SPEC, window, cx, conn_ref);
@@ -151,6 +159,7 @@ impl NewConnectionModal {
             // Open on a connection that already overrides a default.
             advanced_expanded: idle_timeout_minutes.is_some(),
             idle_timeout_input,
+            ask_secrets,
             sqlite_form,
             postgres_form,
             mysql_form,
@@ -286,6 +295,7 @@ impl NewConnectionModal {
             };
 
         let mut data_with_id = connection_data;
+        self.apply_ask_secrets(&mut data_with_id);
         data_with_id.id = Some(0);
         let config = match data_with_id.to_connection_config() {
             Some(c) => c,
@@ -345,6 +355,77 @@ impl NewConnectionModal {
         .detach();
     }
 
+    /// Tick or untick Ask on connect for `kind`. Ticking empties that secret
+    /// in every form, since an asked secret is never stored.
+    pub(crate) fn set_ask_secret(
+        &mut self,
+        kind: SecretKind,
+        ask: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.ask_secrets.retain(|asked| *asked != kind);
+        if ask {
+            self.ask_secrets.push(kind);
+            for input in self.secret_inputs(kind) {
+                input.update(cx, |input, cx| input.set_value("", window, cx));
+            }
+        }
+        cx.notify();
+    }
+
+    /// Mark the ticked secrets as asked on `connection` and drop their values.
+    /// SQLite has no password, and SSH secrets only matter with a tunnel.
+    fn apply_ask_secrets(&self, connection: &mut ConnectionData) {
+        let uses_ssh = connection.uses_ssh_tunnel();
+        connection.ask_secrets = self
+            .ask_secrets
+            .iter()
+            .copied()
+            .filter(|kind| match kind {
+                SecretKind::Password => connection.db_type != database::DatabaseType::SQLite,
+                SecretKind::SshPassword | SecretKind::SshPrivateKeyPassword => uses_ssh,
+            })
+            .collect();
+        for kind in connection.ask_secrets.clone() {
+            match kind {
+                SecretKind::Password => connection.password = None,
+                SecretKind::SshPassword => connection.ssh_password = None,
+                SecretKind::SshPrivateKeyPassword => connection.ssh_private_key_password = None,
+            }
+        }
+    }
+
+    fn secret_inputs(&self, kind: SecretKind) -> Vec<Entity<InputState>> {
+        let servers = [&self.postgres_form, &self.mysql_form, &self.clickhouse_form];
+        match kind {
+            SecretKind::Password => servers
+                .iter()
+                .map(|form| form.password_input.clone())
+                .chain([
+                    self.mssql_form.password_input.clone(),
+                    self.redis_form.password_input.clone(),
+                ])
+                .collect(),
+            SecretKind::SshPassword => servers
+                .iter()
+                .map(|form| form.ssh_password_input.clone())
+                .chain([
+                    self.mssql_form.ssh_password_input.clone(),
+                    self.redis_form.ssh_password_input.clone(),
+                ])
+                .collect(),
+            SecretKind::SshPrivateKeyPassword => servers
+                .iter()
+                .map(|form| form.ssh_private_key_password_input.clone())
+                .chain([
+                    self.mssql_form.ssh_private_key_password_input.clone(),
+                    self.redis_form.ssh_private_key_password_input.clone(),
+                ])
+                .collect(),
+        }
+    }
+
     pub fn get_connection_data(&self, cx: &App) -> Option<ConnectionData> {
         let name = self.name_input.read(cx).value().to_string();
         if name.is_empty() {
@@ -361,6 +442,7 @@ impl NewConnectionModal {
             connection.id = Some(editing_id);
         }
 
+        self.apply_ask_secrets(&mut connection);
         Some(connection)
     }
 }
@@ -606,14 +688,19 @@ impl Render for NewConnectionModal {
                     ConnectorType::PostgreSQL => server_form::render(
                         |modal| &mut modal.postgres_form,
                         &self.postgres_form,
+                        &self.ask_secrets,
                         cx,
                     ),
-                    ConnectorType::MySQL => {
-                        server_form::render(|modal| &mut modal.mysql_form, &self.mysql_form, cx)
-                    }
+                    ConnectorType::MySQL => server_form::render(
+                        |modal| &mut modal.mysql_form,
+                        &self.mysql_form,
+                        &self.ask_secrets,
+                        cx,
+                    ),
                     ConnectorType::ClickHouse => server_form::render(
                         |modal| &mut modal.clickhouse_form,
                         &self.clickhouse_form,
+                        &self.ask_secrets,
                         cx,
                     ),
                     ConnectorType::MsSql => mssql::render(self, cx),

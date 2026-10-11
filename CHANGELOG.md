@@ -161,6 +161,11 @@ All notable changes to this project will be documented in this file.
 - Open Referenced Row, in the foreign key popover of a cell and in the cell
   context menu (Alt+Enter, rebindable), opens the referenced table in a new
   tab with a query limited to the matching key and runs it
+- Ask on connect next to a connection's password, SSH password and key
+  passphrase leaves that secret unsaved and asks for it in a dialog when the
+  connection opens. The answer is kept in memory for reconnects until you
+  disconnect. A connection saved without a password also asks when the
+  server wants one, and asks again when it refuses what was typed
 
 ### Fixes
 

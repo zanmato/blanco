@@ -134,6 +134,8 @@ pub struct ConnectionData {
     /// Minutes without activity after which the connection is closed. `None`
     /// follows the global setting, `Some(0)` keeps it open.
     pub idle_timeout_minutes: Option<u32>,
+    /// Secrets asked for each time the connection opens instead of stored.
+    pub ask_secrets: Vec<database::SecretKind>,
 }
 
 impl std::fmt::Debug for ConnectionData {
@@ -172,6 +174,7 @@ impl std::fmt::Debug for ConnectionData {
             .field("read_only", &self.read_only)
             .field("only_configured_database", &self.only_configured_database)
             .field("idle_timeout_minutes", &self.idle_timeout_minutes)
+            .field("ask_secrets", &self.ask_secrets)
             .finish()
     }
 }
@@ -243,6 +246,7 @@ impl ConnectionData {
             read_only: false,
             only_configured_database: false,
             idle_timeout_minutes: None,
+            ask_secrets: Vec::new(),
         }
     }
 
@@ -284,6 +288,7 @@ impl ConnectionData {
             read_only: false,
             only_configured_database: false,
             idle_timeout_minutes: None,
+            ask_secrets: Vec::new(),
         }
     }
 
@@ -421,7 +426,8 @@ impl ConnectionData {
         Some(
             config
                 .with_read_only(self.read_only)
-                .with_idle_timeout_minutes(self.idle_timeout_minutes),
+                .with_idle_timeout_minutes(self.idle_timeout_minutes)
+                .with_ask_secrets(self.ask_secrets.clone()),
         )
     }
 }

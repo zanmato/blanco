@@ -5,6 +5,7 @@
 
 mod connection_config;
 mod factories;
+mod secret_prompt;
 mod service;
 mod ssh_tunnel;
 mod tokio_connection;
@@ -13,6 +14,7 @@ pub use connection_config::{
     ConnectionConfig, ConnectionSecretStore, DatabaseType, NoSecretStore, ParamStyles, SecretKind,
 };
 pub use factories::{MysqlConnectionFactory, PostgresConnectionFactory, SqliteConnectionFactory};
+pub use secret_prompt::{NoSecretPrompt, SecretPrompt, SecretPromptCancelled, SecretPromptRequest};
 pub use service::{
     ClientToolEndpoint, ConnectionId, DatabaseConfigId, DatabaseConnectedMessage,
     DatabaseDisconnectedMessage, DatabaseService, DatabaseServiceMessage,

@@ -1407,3 +1407,142 @@ fn test_postgres_table_parents_through_database_service() {
         ))
         .unwrap_or_else(|error| panic!("drop: {error:#}"));
 }
+
+/// Answers secret prompts from a script and records each request.
+struct ScriptedPrompt {
+    answers: std::sync::Mutex<Vec<Option<String>>>,
+    asked: std::sync::Mutex<Vec<database::SecretPromptRequest>>,
+}
+
+#[async_trait::async_trait]
+impl database::SecretPrompt for ScriptedPrompt {
+    async fn ask(&self, request: database::SecretPromptRequest) -> anyhow::Result<Option<String>> {
+        self.asked.lock().unwrap().push(request);
+        Ok(self.answers.lock().unwrap().pop().flatten())
+    }
+}
+
+/// A connection saved without a password asks when the server wants one,
+/// asks again after a wrong answer, and reuses the right one for a reconnect
+/// until it is forgotten. One set to ask on connect asks up front.
+#[test]
+fn test_password_prompt_against_postgres() {
+    password_prompt_round_trip(postgres_case(), 9101);
+}
+
+/// MySQL refuses the password while the pool opens rather than at the first
+/// query, so it takes the other path through the retry.
+#[test]
+fn test_password_prompt_against_mysql() {
+    password_prompt_round_trip(mysql_case(), 9111);
+}
+
+fn password_prompt_round_trip(case: DriverCase, id: i64) {
+    use database::{ConnectionConfig, SecretKind};
+    use std::sync::Arc;
+
+    let label = case.label;
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let prompt = Arc::new(ScriptedPrompt {
+        // Popped from the end: wrong, then right, then right for the
+        // ask-on-connect config.
+        answers: std::sync::Mutex::new(vec![
+            Some(case.password.clone()),
+            Some(case.password.clone()),
+            Some("wrong".to_string()),
+        ]),
+        asked: std::sync::Mutex::new(Vec::new()),
+    });
+    let mut service = DatabaseService::new(runtime.handle().clone());
+    service.set_secret_prompt(prompt.clone());
+
+    let config = ConnectionConfig::new(
+        id,
+        "prompted".to_string(),
+        case.db_type,
+        case.host.clone(),
+        case.port.parse().expect("port"),
+        case.database.clone(),
+        case.username.clone(),
+        None,
+    );
+    let database = Some(case.database.as_str());
+    let connected = runtime.block_on(async {
+        service.add_connection_config(config.clone()).await;
+        service.get_or_create_connection(config.id, database).await
+    });
+    let connection = match connected {
+        Ok(connection) => connection,
+        Err(error) if prompt.asked.lock().unwrap().is_empty() && !strict() => {
+            eprintln!("skip {label}: server unreachable ({error:#})");
+            return;
+        }
+        Err(error) => panic!("{label}: {error:#}"),
+    };
+    runtime
+        .block_on(connection.execute_query("SELECT 1", database, None))
+        .expect("query with the prompted password");
+    {
+        let asked = prompt.asked.lock().unwrap();
+        assert_eq!(asked.len(), 2, "{asked:?}");
+        assert_eq!(asked[0].kind, SecretKind::Password);
+        // The first prompt is the server asking; only the refused answer
+        // comes with a reason.
+        assert_eq!(asked[0].retry_reason, None);
+        assert!(
+            asked[1]
+                .retry_reason
+                .as_deref()
+                .is_some_and(|reason| reason.to_lowercase().contains(match case.db_type {
+                    DatabaseType::MySQL => "access denied",
+                    _ => "password authentication failed",
+                })),
+            "{:?}",
+            asked[1].retry_reason
+        );
+    }
+
+    // A dropped connection reconnects with the remembered password.
+    runtime.block_on(async {
+        service
+            .disconnect(config.id, None)
+            .await
+            .expect("disconnect");
+        service
+            .get_or_create_connection(config.id, database)
+            .await
+            .expect("reconnect");
+    });
+    assert_eq!(prompt.asked.lock().unwrap().len(), 2);
+
+    // Ask on connect asks before connecting; the script's last answer is
+    // right, then it runs out and the next prompt is cancelled.
+    let asking = ConnectionConfig {
+        id: id + 1,
+        ..config.clone()
+    }
+    .with_ask_secrets(vec![SecretKind::Password]);
+    runtime.block_on(async {
+        service.add_connection_config(asking.clone()).await;
+        service
+            .get_or_create_connection(asking.id, database)
+            .await
+            .expect("ask on connect");
+        service
+            .disconnect(asking.id, None)
+            .await
+            .expect("disconnect");
+        service.forget_session_secrets(asking.id).await;
+        let error = match service.get_or_create_connection(asking.id, database).await {
+            Ok(_) => panic!("cancelled prompt should fail the connect"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .downcast_ref::<database::SecretPromptCancelled>()
+                .is_some(),
+            "{error:#}"
+        );
+    });
+    assert_eq!(prompt.asked.lock().unwrap().len(), 4);
+}

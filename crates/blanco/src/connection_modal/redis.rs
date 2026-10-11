@@ -12,7 +12,8 @@ use gpui_component::{
 use app_database::{ConnectionData, EnvironmentType};
 
 use super::NewConnectionModal;
-use super::shared::{make_input, render_ssh_section};
+use super::shared::{make_input, render_ssh_section, secret_field};
+use database::SecretKind;
 
 pub(super) struct RedisForm {
     pub host_input: Entity<InputState>,
@@ -255,13 +256,14 @@ pub(super) fn render(
                         .child(div().text_sm().child("User"))
                         .child(Input::new(&form.username_input)),
                 )
-                .child(
-                    v_flex()
-                        .flex_1()
-                        .gap_2()
-                        .child(div().text_sm().child("Password"))
-                        .child(Input::new(&form.password_input).mask_toggle()),
-                ),
+                .child(secret_field(
+                    "redis-password-ask",
+                    "Password",
+                    &form.password_input,
+                    SecretKind::Password,
+                    &modal.ask_secrets,
+                    cx,
+                )),
         )
         .child(
             v_flex()
@@ -291,6 +293,7 @@ pub(super) fn render(
                 &form.ssh_password_input,
                 &form.ssh_private_key_input,
                 &form.ssh_private_key_password_input,
+                &modal.ask_secrets,
                 cx,
             ))
         })

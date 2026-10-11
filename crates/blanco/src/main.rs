@@ -29,6 +29,7 @@ mod results_panel;
 #[cfg(feature = "screenshots")]
 mod screenshots;
 mod script_completion;
+mod secret_prompt;
 mod settings;
 mod snippets_panel;
 mod sql;
@@ -160,6 +161,7 @@ fn main() {
         // Initialize database service with tokio runtime handle for automatic SSH tunnel establishment
         let mut db_service = DatabaseService::new(runtime_handle.clone());
         db_service.set_secret_store(connection_credentials::KeyringSecretStore::install(cx));
+        db_service.set_secret_prompt(secret_prompt::DialogSecretPrompt::install(cx));
         cx.set_global(db_service);
         mcp::McpService::init(cx);
 
