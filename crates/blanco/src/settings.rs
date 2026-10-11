@@ -81,13 +81,31 @@ fn persist_setting(key: &'static str, value: String, cx: &mut App) {
 /// Apply user font settings on top of the current theme.
 /// Called after theme changes and on startup to ensure font preferences persist.
 pub fn apply_font_settings(cx: &mut App) {
-    let appearance = AppSettings::global(cx).settings.appearance.clone();
-    if !appearance.font_family.is_empty() {
-        Theme::global_mut(cx).font_family = SharedString::from(appearance.font_family);
+    let appearance = &AppSettings::global(cx).settings.appearance;
+    let font_family = SharedString::from(appearance.font_family.clone());
+    let mono_font_family = SharedString::from(appearance.mono_font_family.clone());
+    if font_family.is_empty() && mono_font_family.is_empty() {
+        return;
     }
-    if !appearance.mono_font_family.is_empty() {
-        Theme::global_mut(cx).mono_font_family = SharedString::from(appearance.mono_font_family);
-    }
+    // `update` rather than `global_mut`, so the base layer's copy of the theme
+    // gets the fonts too.
+    Theme::update(cx, |theme| {
+        if !font_family.is_empty() {
+            theme.font_family = font_family;
+        }
+        if !mono_font_family.is_empty() {
+            theme.mono_font_family = mono_font_family;
+        }
+    });
+}
+
+/// gpui-component re-applies the active theme whenever the registry changes
+/// (startup load, hot reload), which puts the theme file's fonts back. Its
+/// observer is registered by `gpui_component::init`, so this one runs after it
+/// and the user's fonts win.
+pub fn keep_fonts_on_theme_reload(cx: &mut App) {
+    cx.observe_global::<gpui_component::ThemeRegistry>(apply_font_settings)
+        .detach();
 }
 
 /// Step the code editor font size by `delta` pixels, as the zoom shortcuts do.
@@ -527,5 +545,32 @@ mod appearance_tests {
             theme_for_appearance(&appearance, WindowAppearance::Dark),
             "One Dark - Darkened"
         );
+    }
+
+    #[gpui::test]
+    fn user_fonts_survive_a_theme_registry_change(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            let mut settings = Settings::default();
+            settings.appearance.mono_font_family = "JetBrains Mono".into();
+            cx.set_global(AppSettings::new(settings));
+            keep_fonts_on_theme_reload(cx);
+
+            gpui_component::ThemeRegistry::global_mut(cx)
+                .load_themes_from_str(include_str!("../assets/themes/catppuccin.json"))
+                .unwrap();
+            assert!(install_theme("Catppuccin Latte", cx));
+        });
+        cx.run_until_parked();
+
+        // What the themes directory watcher does on a reload.
+        cx.update(|cx| {
+            gpui_component::ThemeRegistry::global_mut(cx);
+        });
+        cx.run_until_parked();
+
+        cx.update(|cx| {
+            assert_eq!(Theme::global(cx).mono_font_family, "JetBrains Mono");
+        });
     }
 }

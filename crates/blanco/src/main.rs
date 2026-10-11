@@ -173,6 +173,8 @@ fn main() {
         );
         cx.set_global(app_settings);
 
+        settings::keep_fonts_on_theme_reload(cx);
+
         // Apply theme
         let theme_name = SharedString::from(settings::theme_for_appearance(
             &AppSettings::global(cx).settings.appearance,
