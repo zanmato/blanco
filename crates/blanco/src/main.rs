@@ -174,7 +174,10 @@ fn main() {
         cx.set_global(app_settings);
 
         // Apply theme
-        let theme_name = SharedString::from(&AppSettings::global(cx).settings.appearance.theme);
+        let theme_name = SharedString::from(settings::theme_for_appearance(
+            &AppSettings::global(cx).settings.appearance,
+            cx.window_appearance(),
+        ));
         if let Err(err) = ThemeRegistry::watch_dir(PathBuf::from("./themes"), cx, move |cx| {
             // `ThemeRegistry::reload` clears the registry and repopulates it
             // from the watched directory alone, and it runs just before this

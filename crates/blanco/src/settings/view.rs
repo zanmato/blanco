@@ -207,11 +207,17 @@ impl SettingsView {
         // Capture a weak handle to self for the closures
         let view_handle = cx.entity().downgrade();
 
-        let sorted_themes = ThemeRegistry::global(cx)
-            .sorted_themes()
-            .into_iter()
-            .map(|v| (v.name.clone(), v.name.clone()))
-            .collect();
+        let themes_of = |mode: Option<gpui_component::ThemeMode>, cx: &App| {
+            ThemeRegistry::global(cx)
+                .sorted_themes()
+                .into_iter()
+                .filter(|theme| mode.is_none_or(|mode| theme.mode == mode))
+                .map(|theme| (theme.name.clone(), theme.name.clone()))
+                .collect::<Vec<(SharedString, SharedString)>>()
+        };
+        let sorted_themes = themes_of(None, cx);
+        let light_themes = themes_of(Some(gpui_component::ThemeMode::Light), cx);
+        let dark_themes = themes_of(Some(gpui_component::ThemeMode::Dark), cx);
 
         let ui_font_select = self.ui_font_select.clone();
         let mono_font_select = self.mono_font_select.clone();
@@ -652,7 +658,90 @@ impl SettingsView {
                             default_settings.appearance.theme.clone(),
                         )),
                     )
-                    .description("Choose the color theme for the application."),
+                    .description(
+                        "Choose the color theme for the application. Used while Follow \
+                         System Appearance is off.",
+                    ),
+                    SettingItem::new(
+                        "Follow System Appearance",
+                        SettingField::switch(
+                            |cx: &App| AppSettings::global(cx).settings.appearance.follow_system,
+                            {
+                                let view_handle = view_handle.clone();
+                                move |val: bool, cx: &mut App| {
+                                    AppSettings::global_mut(cx)
+                                        .settings
+                                        .appearance
+                                        .follow_system = val;
+                                    let system = cx.window_appearance();
+                                    let appearance =
+                                        AppSettings::global(cx).settings.appearance.clone();
+                                    crate::settings::install_theme(
+                                        crate::settings::theme_for_appearance(&appearance, system),
+                                        cx,
+                                    );
+                                    save_appearance(&view_handle, "follow_system", val.to_string(), cx);
+                                }
+                            },
+                        )
+                        .default_value(default_settings.appearance.follow_system),
+                    )
+                    .description(
+                        "Switch between the light and dark theme below as the system \
+                         appearance changes.",
+                    ),
+                    SettingItem::new(
+                        "Light Theme",
+                        SettingField::dropdown(
+                            light_themes,
+                            |cx: &App| {
+                                SharedString::from(
+                                    AppSettings::global(cx).settings.appearance.light_theme.clone(),
+                                )
+                            },
+                            {
+                                let view_handle = view_handle.clone();
+                                move |val: SharedString, cx: &mut App| {
+                                    AppSettings::global_mut(cx).settings.appearance.light_theme =
+                                        val.to_string();
+                                    crate::settings::follow_system_appearance(
+                                        cx.window_appearance(),
+                                        cx,
+                                    );
+                                    save_appearance(&view_handle, "light_theme", val.to_string(), cx);
+                                }
+                            },
+                        )
+                        .default_value(SharedString::from(
+                            default_settings.appearance.light_theme.clone(),
+                        )),
+                    ),
+                    SettingItem::new(
+                        "Dark Theme",
+                        SettingField::dropdown(
+                            dark_themes,
+                            |cx: &App| {
+                                SharedString::from(
+                                    AppSettings::global(cx).settings.appearance.dark_theme.clone(),
+                                )
+                            },
+                            {
+                                let view_handle = view_handle.clone();
+                                move |val: SharedString, cx: &mut App| {
+                                    AppSettings::global_mut(cx).settings.appearance.dark_theme =
+                                        val.to_string();
+                                    crate::settings::follow_system_appearance(
+                                        cx.window_appearance(),
+                                        cx,
+                                    );
+                                    save_appearance(&view_handle, "dark_theme", val.to_string(), cx);
+                                }
+                            },
+                        )
+                        .default_value(SharedString::from(
+                            default_settings.appearance.dark_theme.clone(),
+                        )),
+                    ),
                 ]),
                 SettingGroup::new().title("Fonts").items(vec![
                     SettingItem::new(
@@ -945,5 +1034,19 @@ impl Render for SettingsView {
         GpuiSettings::new("blanco-settings")
             .with_group_variant(GroupBoxVariant::Outline)
             .pages(self.setting_pages(cx))
+    }
+}
+
+/// Save `appearance.<field>` through the settings view's debounce.
+fn save_appearance(
+    view_handle: &gpui::WeakEntity<SettingsView>,
+    field: &str,
+    value: String,
+    cx: &mut App,
+) {
+    if let Some(view) = view_handle.upgrade() {
+        view.update(cx, |view, cx| {
+            view.save_setting_debounced(format!("appearance.{field}"), value, false, cx);
+        });
     }
 }

@@ -1028,6 +1028,12 @@ impl BlancoApp {
             },
         ));
 
+        // Switch theme with the system appearance when Follow System is on.
+        subscriptions.push(cx.observe_window_appearance(window, |_, window, cx| {
+            crate::settings::follow_system_appearance(window.appearance(), cx);
+            cx.notify();
+        }));
+
         // Re-render the status bar whenever the activity state changes.
         subscriptions.push(cx.observe(status_bar, |_, _, cx| cx.notify()));
 
