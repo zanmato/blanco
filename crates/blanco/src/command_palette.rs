@@ -21,8 +21,8 @@ use crate::{
         CreateNewQueryTab, CreateNewScriptTab, ExplainQuery, ExportAsCSV, ExportAsJSON,
         ExportAsMarkdown, ExportAsSQL, ExportAsTSV, ExportConnections, FormatQuery,
         ImportConnections, NewSnippet, OpenNewConnectionModal, OpenSettings, OpenTerminal,
-        RollbackChanges, RunQuery, SwitchTheme, ToggleRenderWhitespace, ToggleSidebar,
-        ToggleWordWrap,
+        RollbackChanges, RunQuery, SwitchTheme, ToggleFilterBar, ToggleRenderWhitespace,
+        ToggleSidebar, ToggleWordWrap,
     },
     connections::ConnectionsPanel,
     editor::EditorPanel,
@@ -101,6 +101,7 @@ pub enum CommandType {
     RunQuery,
     ExplainQuery,
     FormatQuery,
+    ToggleFilterBar,
     NewSnippet,
     OpenSettings,
     OpenTerminal,
@@ -735,6 +736,7 @@ fn keybinding_for_command(cmd: &CommandType, window: &Window) -> Option<gpui_com
     use gpui_component::kbd::Kbd;
     let action: Box<dyn gpui::Action> = match cmd {
         CommandType::FormatQuery => Box::new(FormatQuery),
+        CommandType::ToggleFilterBar => Box::new(ToggleFilterBar),
         CommandType::OpenSettings => Box::new(OpenSettings),
         CommandType::OpenTerminal => Box::new(OpenTerminal),
         CommandType::CommitChanges => Box::new(CommitChanges),
@@ -749,6 +751,7 @@ fn execute_command(cmd: &CommandType, window: &mut Window, cx: &mut App) {
         CommandType::RunQuery => window.dispatch_action(Box::new(RunQuery), cx),
         CommandType::ExplainQuery => window.dispatch_action(Box::new(ExplainQuery), cx),
         CommandType::FormatQuery => window.dispatch_action(Box::new(FormatQuery), cx),
+        CommandType::ToggleFilterBar => window.dispatch_action(Box::new(ToggleFilterBar), cx),
         CommandType::NewSnippet => window.dispatch_action(Box::new(NewSnippet), cx),
         CommandType::OpenSettings => window.dispatch_action(Box::new(OpenSettings), cx),
         CommandType::OpenTerminal => window.dispatch_action(Box::new(OpenTerminal), cx),
@@ -1077,6 +1080,7 @@ fn build_commands(
         leaf("Run Query", "Query", CommandType::RunQuery),
         leaf("Explain Query", "Query", CommandType::ExplainQuery),
         leaf("Format Query", "Query", CommandType::FormatQuery),
+        leaf("Toggle Filter Bar", "Results", CommandType::ToggleFilterBar),
         leaf("New Snippet", "Tab", CommandType::NewSnippet),
         leaf(
             "New Connection",

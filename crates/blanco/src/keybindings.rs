@@ -1,7 +1,7 @@
 use crate::app::{
     CommitChanges, DecreaseEditorFontSize, ExplainQuery, FormatQuery, IncreaseEditorFontSize,
     OpenSettings, OpenTerminal, ResetEditorFontSize, RollbackChanges, RunQuery,
-    ToggleCommandPalette,
+    ToggleCommandPalette, ToggleFilterBar,
 };
 use crate::settings::Settings;
 
@@ -43,6 +43,12 @@ pub const CUSTOMIZABLE_BINDINGS: &[BindingDef] = &[
         action: "FormatQuery",
         label: "Format SQL",
         default: "shift-alt-f",
+        context: None,
+    },
+    BindingDef {
+        action: "ToggleFilterBar",
+        label: "Toggle result filter bar",
+        default: "secondary-shift-f",
         context: None,
     },
     BindingDef {
@@ -135,6 +141,7 @@ fn key_binding(action: &str, keystrokes: &str, context: Option<&str>) -> Option<
         "ExplainQuery" => gpui::KeyBinding::new(keystrokes, ExplainQuery, context),
         "FormatQuery" => gpui::KeyBinding::new(keystrokes, FormatQuery, context),
         "ToggleCommandPalette" => gpui::KeyBinding::new(keystrokes, ToggleCommandPalette, context),
+        "ToggleFilterBar" => gpui::KeyBinding::new(keystrokes, ToggleFilterBar, context),
         "CommitChanges" => gpui::KeyBinding::new(keystrokes, CommitChanges, context),
         "RollbackChanges" => gpui::KeyBinding::new(keystrokes, RollbackChanges, context),
         "OpenSettings" => gpui::KeyBinding::new(keystrokes, OpenSettings, context),

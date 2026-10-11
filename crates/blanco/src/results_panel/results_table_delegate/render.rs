@@ -26,8 +26,8 @@ use super::ResultsTableDelegate;
 use crate::app::{
     AddRow, ClearCompareSelection, CompareCellWithSelected, CompareRowWithSelected, CopyAsCSV,
     CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CopyAsVALUES, DeleteRow, DuplicateRow,
-    ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV, SelectCellForCompare,
-    SelectRowForCompare, SetCellDefault, SetCellNull, ToggleCellExpression,
+    ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV, FilterByCellValue,
+    SelectCellForCompare, SelectRowForCompare, SetCellDefault, SetCellNull, ToggleCellExpression,
 };
 use crate::results_panel::cell_edit_state::{CellInput, compare_numeric, format_value_for_display};
 use crate::results_panel::compare::CompareKind;
@@ -786,6 +786,7 @@ impl TableDelegate for ResultsTableDelegate {
         // a server default: it reverts the cell so the INSERT omits the column.
         let compare_kind = self.compare_selection_kind;
         let is_editable = self.is_editable();
+        let can_filter = self.supports_server_filter();
         let can_set_default = self.edit_state.is_new_row(cell.0)
             && self
                 .table_column_info(cell.1)
@@ -881,6 +882,16 @@ impl TableDelegate for ResultsTableDelegate {
                 "Set DEFAULT",
                 Icon::new(IconName::RotateCcw),
                 Box::new(SetCellDefault {
+                    row: cell.0,
+                    col: cell.1,
+                }),
+            )
+        })
+        .when(can_filter, |this| {
+            this.separator().menu_with_icon(
+                "Filter by Value",
+                Icon::new(IconName::Search),
+                Box::new(FilterByCellValue {
                     row: cell.0,
                     col: cell.1,
                 }),

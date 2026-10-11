@@ -324,10 +324,13 @@ impl Dialect {
 
     /// Escape `value` for use inside a single-quoted string literal (without
     /// the surrounding quotes). MySQL treats backslashes as escapes unless
-    /// `NO_BACKSLASH_ESCAPES` is set, so they are doubled there as well.
+    /// `NO_BACKSLASH_ESCAPES` is set, and ClickHouse always does, so they are
+    /// doubled there as well.
     pub fn escape_string_literal(&self, value: &str) -> String {
         match self.0 {
-            DatabaseType::MySQL => value.replace('\\', "\\\\").replace('\'', "''"),
+            DatabaseType::MySQL | DatabaseType::ClickHouse => {
+                value.replace('\\', "\\\\").replace('\'', "''")
+            }
             _ => value.replace('\'', "''"),
         }
     }
