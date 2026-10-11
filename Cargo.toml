@@ -42,8 +42,6 @@ gpui-component = { git = "https://github.com/zanmato/gpui-component", branch = "
     "tree-sitter-javascript",
 ] }
 
-# Window text selection for read-only text (the SQL log). Same repository and
-# branch as gpui-component, so both resolve to one copy.
 gpui-base = { git = "https://github.com/zanmato/gpui-component", branch = "blanco" }
 
 # LSP dependencies (needed by gpui-component)
