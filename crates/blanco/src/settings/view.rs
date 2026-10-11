@@ -742,6 +742,31 @@ impl SettingsView {
                     ),
                 ]),
                 csv_group(view_handle.clone(), &default_settings),
+                SettingGroup::new().title("Results").items(vec![
+                    SettingItem::new(
+                        "Show Row Numbers",
+                        SettingField::switch(
+                            move |cx: &App| AppSettings::global(cx).settings.results.show_row_numbers,
+                            {
+                                let view_handle = view_handle.clone();
+                                move |val: bool, cx: &mut App| {
+                                    AppSettings::global_mut(cx).settings.results.show_row_numbers =
+                                        val;
+
+                                    let key = "results.show_row_numbers".to_string();
+                                    let value = val.to_string();
+                                    if let Some(view) = view_handle.upgrade() {
+                                        view.update(cx, |view, cx| {
+                                            view.save_setting_debounced(key, value, false, cx);
+                                        });
+                                    }
+                                }
+                            },
+                        )
+                        .default_value(default_settings.results.show_row_numbers),
+                    )
+                    .description("Number the rows of a result. Applies to the next result shown."),
+                ]),
             ]),
             // Appearance Settings Page
             SettingPage::new("Appearance").resettable(true).groups(vec![

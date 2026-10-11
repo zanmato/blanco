@@ -8,7 +8,10 @@ use super::compare::CompareKind;
 
 mod cell_edit;
 mod change_ops;
+mod layout;
 mod render;
+
+pub use layout::ColumnLayout;
 
 #[derive(Default)]
 pub struct ResultsTableDelegate {
@@ -31,6 +34,14 @@ pub struct ResultsTableDelegate {
     /// (selection, editing, sorting) unaware of filtering. `None` when no
     /// filter is applied.
     unfiltered_rows: Option<Vec<Vec<Option<String>>>>,
+    /// How many columns at the end of `columns` are hidden. See `layout`.
+    hidden_columns: usize,
+    /// How many columns at the start are pinned to the left edge.
+    pinned_columns: usize,
+    /// For each column, its index in the query's result.
+    source_order: Vec<usize>,
+    /// The widths the result opened with.
+    measured_widths: Vec<gpui::Pixels>,
 }
 
 impl ResultsTableDelegate {
@@ -302,6 +313,7 @@ impl ResultsTableDelegate {
             .collect();
 
         self.rows = result.rows;
+        self.reset_column_layout();
 
         // Use table metadata from QueryResult if available
         let old_table_name = self.table_name.clone();

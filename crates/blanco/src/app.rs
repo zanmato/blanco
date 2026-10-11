@@ -172,6 +172,21 @@ pub struct DeleteRow {
     pub row: usize,
 }
 
+/// Hide a result column, by its position in the grid.
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct HideResultColumn {
+    pub col: usize,
+}
+
+/// Pin a result column to the left edge, or unpin it.
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct PinResultColumn {
+    pub col: usize,
+    pub pinned: bool,
+}
+
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
 pub struct SetCellNull {
