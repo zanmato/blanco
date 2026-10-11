@@ -7,6 +7,7 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 mod app;
 mod app_settings;
 mod assets;
+mod backup;
 mod command_palette;
 mod connection_credentials;
 #[cfg(test)]

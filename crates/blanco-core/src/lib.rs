@@ -26,7 +26,7 @@ pub use connection_trait::{
 pub use connection_context::{ConnectionContext, EnvironmentType};
 pub use database_service::{ConnectionStatus, DatabaseService};
 pub use database_type::{DatabaseType, ParamStyles};
-pub use dialect::{Dialect, UpsertStyle, ValuesQueryStyle};
+pub use dialect::{ClientTools, Dialect, UpsertStyle, ValuesQueryStyle};
 pub use table_extractor::TableExtractor;
 pub use table_filter::{FilterCondition, FilterJoin, FilterOperator};
 pub use write_guard::StatementAccess;

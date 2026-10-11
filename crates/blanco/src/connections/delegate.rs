@@ -14,6 +14,7 @@ use gpui_component::{
 use crate::app::CreateNewQueryTab;
 use crate::app::OpenSchemaGraph;
 use crate::app::OpenTableStructure;
+use crate::app::{BackupDatabase, RestoreDatabase};
 use crate::connections::{
     ConnectionsPanel, CreateNewQueryTabParams, TreeItemIcon, TreeItemKind, TreeItemMetadata,
 };
@@ -40,6 +41,43 @@ impl ConnectionsTreeDelegate {
                 window.dispatch_action(Box::new(action.clone()), cx);
             },
         ))
+    }
+
+    /// "Back Up…" and "Restore…" for a database whose backend has native
+    /// client tools.
+    fn backup_items(
+        &self,
+        menu: PopupMenu,
+        context: ConnectionContext,
+        window: &mut Window,
+    ) -> PopupMenu {
+        if context.db_type.dialect().client_tools().is_none() || context.database_name.is_empty() {
+            return menu;
+        }
+        let restore_context = context.clone();
+        menu.separator()
+            .item(PopupMenuItem::new("Back Up…").on_click(window.listener_for(
+                &self.parent,
+                move |_this, _event, window, cx| {
+                    window.dispatch_action(
+                        Box::new(BackupDatabase {
+                            context: context.clone(),
+                        }),
+                        cx,
+                    );
+                },
+            )))
+            .item(PopupMenuItem::new("Restore…").on_click(window.listener_for(
+                &self.parent,
+                move |_this, _event, window, cx| {
+                    window.dispatch_action(
+                        Box::new(RestoreDatabase {
+                            context: restore_context.clone(),
+                        }),
+                        cx,
+                    );
+                },
+            )))
     }
 
     pub fn new(parent: &Entity<ConnectionsPanel>) -> Self {
@@ -252,7 +290,7 @@ impl TreeDelegate for ConnectionsTreeDelegate {
         entry: &TreeEntry<TreeItemMetadata>,
         menu: PopupMenu,
         window: &mut Window,
-        _cx: &mut App,
+        cx: &mut App,
     ) -> PopupMenu {
         let metadata = &entry.item().metadata;
 
@@ -286,52 +324,77 @@ impl TreeDelegate for ConnectionsTreeDelegate {
             TreeItemKind::Connection => {
                 let connection_id = metadata.connection_id;
                 let connection_name = metadata.connection_name.clone();
-                menu.item(PopupMenuItem::new("Refresh").on_click(window.listener_for(
-                    &self.parent,
-                    move |this, _event, _window, cx| {
-                        this.refresh_connection(connection_id, cx);
-                    },
-                )))
-                .item(PopupMenuItem::new("Edit").on_click(window.listener_for(
-                    &self.parent,
-                    move |this, _event, _window, cx| {
-                        this.edit_connection(connection_id, cx);
-                    },
-                )))
-                .item(
-                    PopupMenuItem::new("Duplicate").on_click(window.listener_for(
+                // A connection whose backend lists no databases above the
+                // schema level stands for its configured database.
+                let configured_database = (!metadata.db_type.dialect().lists_server_databases())
+                    .then(|| {
+                        self.parent
+                            .read(cx)
+                            .connections
+                            .iter()
+                            .find(|connection| connection.id == Some(connection_id))
+                            .and_then(|connection| connection.database_name.clone())
+                    })
+                    .flatten();
+                let backup_context = configured_database.map(|database_name| ConnectionContext {
+                    connection_id,
+                    connection_name: connection_name.clone(),
+                    db_type: metadata.db_type,
+                    database_name,
+                    schema_name: None,
+                    environment_type: metadata.environment_type,
+                });
+                let menu = menu
+                    .item(PopupMenuItem::new("Refresh").on_click(window.listener_for(
                         &self.parent,
                         move |this, _event, _window, cx| {
-                            this.duplicate_connection(connection_id, cx);
+                            this.refresh_connection(connection_id, cx);
                         },
-                    )),
-                )
-                .item(PopupMenuItem::new("Export…").on_click(window.listener_for(
-                    &self.parent,
-                    move |this, _event, window, cx| {
-                        this.export_connections(Some(connection_id), window, cx);
-                    },
-                )))
-                .item(
-                    PopupMenuItem::new("Disconnect").on_click(window.listener_for(
+                    )))
+                    .item(PopupMenuItem::new("Edit").on_click(window.listener_for(
                         &self.parent,
                         move |this, _event, _window, cx| {
-                            this.disconnect_connection(connection_id, cx);
+                            this.edit_connection(connection_id, cx);
                         },
-                    )),
-                )
-                .separator()
-                .item(PopupMenuItem::new("Remove").on_click(window.listener_for(
-                    &self.parent,
-                    move |this, _event, window, cx| {
-                        this.confirm_remove_connection(
-                            connection_id,
-                            connection_name.clone(),
-                            window,
-                            cx,
-                        );
-                    },
-                )))
+                    )))
+                    .item(
+                        PopupMenuItem::new("Duplicate").on_click(window.listener_for(
+                            &self.parent,
+                            move |this, _event, _window, cx| {
+                                this.duplicate_connection(connection_id, cx);
+                            },
+                        )),
+                    )
+                    .item(PopupMenuItem::new("Export…").on_click(window.listener_for(
+                        &self.parent,
+                        move |this, _event, window, cx| {
+                            this.export_connections(Some(connection_id), window, cx);
+                        },
+                    )))
+                    .item(
+                        PopupMenuItem::new("Disconnect").on_click(window.listener_for(
+                            &self.parent,
+                            move |this, _event, _window, cx| {
+                                this.disconnect_connection(connection_id, cx);
+                            },
+                        )),
+                    );
+                let menu = match backup_context {
+                    Some(context) => self.backup_items(menu, context, window),
+                    None => menu,
+                };
+                menu.separator()
+                    .item(PopupMenuItem::new("Remove").on_click(window.listener_for(
+                        &self.parent,
+                        move |this, _event, window, cx| {
+                            this.confirm_remove_connection(
+                                connection_id,
+                                connection_name.clone(),
+                                window,
+                                cx,
+                            );
+                        },
+                    )))
             }
             TreeItemKind::Database => {
                 let connection_id = metadata.connection_id;
@@ -355,26 +418,38 @@ impl TreeDelegate for ConnectionsTreeDelegate {
 
                 menu = menu.item(self.new_script_item(metadata, window));
 
-                let connection_name_for_graph = connection_name;
+                let connection_name_for_graph = connection_name.clone();
                 let database_name_for_graph = database_name.clone();
-                menu =
-                    menu.item(PopupMenuItem::new("View Schema Graph").on_click(
-                        window.listener_for(&self.parent, move |_this, _event, window, cx| {
-                            window.dispatch_action(
-                                Box::new(OpenSchemaGraph {
-                                    context: ConnectionContext {
-                                        connection_id,
-                                        connection_name: connection_name_for_graph.clone(),
-                                        db_type,
-                                        database_name: database_name_for_graph.clone(),
-                                        schema_name: None,
-                                        environment_type,
-                                    },
-                                }),
-                                cx,
-                            );
-                        }),
-                    ))
+                menu = menu.item(PopupMenuItem::new("View Schema Graph").on_click(
+                    window.listener_for(&self.parent, move |_this, _event, window, cx| {
+                        window.dispatch_action(
+                            Box::new(OpenSchemaGraph {
+                                context: ConnectionContext {
+                                    connection_id,
+                                    connection_name: connection_name_for_graph.clone(),
+                                    db_type,
+                                    database_name: database_name_for_graph.clone(),
+                                    schema_name: None,
+                                    environment_type,
+                                },
+                            }),
+                            cx,
+                        );
+                    }),
+                ));
+                menu = self.backup_items(
+                    menu,
+                    ConnectionContext {
+                        connection_id,
+                        connection_name,
+                        db_type,
+                        database_name: database_name.clone(),
+                        schema_name: None,
+                        environment_type,
+                    },
+                    window,
+                );
+                menu.separator()
                     .item(
                         PopupMenuItem::new("Disconnect").on_click(window.listener_for(
                             &self.parent,
@@ -382,9 +457,7 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                                 this.disconnect_database(connection_id, database_name.clone(), cx);
                             },
                         )),
-                    );
-
-                menu
+                    )
             }
             TreeItemKind::Procedure | TreeItemKind::Function | TreeItemKind::Trigger => {
                 // Routine items have no contextual operations yet; double-

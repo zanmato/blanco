@@ -49,6 +49,53 @@ impl SelectItem for FontOption {
     }
 }
 
+/// One path field per client tool used for backup and restore.
+fn client_tool_items(view_handle: &gpui::WeakEntity<SettingsView>) -> Vec<SettingItem> {
+    use crate::backup::tools::ToolProgram;
+    [
+        (ToolProgram::PgDump, "client_tools.pg_dump_path"),
+        (ToolProgram::PgRestore, "client_tools.pg_restore_path"),
+        (ToolProgram::Psql, "client_tools.psql_path"),
+        (ToolProgram::MysqlDump, "client_tools.mysqldump_path"),
+        (ToolProgram::Mysql, "client_tools.mysql_path"),
+    ]
+    .into_iter()
+    .map(|(program, key)| {
+        let name = program.display_name();
+        SettingItem::new(
+            name,
+            SettingField::input(
+                move |cx: &App| {
+                    SharedString::from(
+                        program
+                            .configured_path(&AppSettings::global(cx).settings.client_tools)
+                            .to_string(),
+                    )
+                },
+                {
+                    let view_handle = view_handle.clone();
+                    move |value: SharedString, cx: &mut App| {
+                        let path = value.trim().to_string();
+                        *program.configured_path_mut(
+                            &mut AppSettings::global_mut(cx).settings.client_tools,
+                        ) = path.clone();
+                        if let Some(view) = view_handle.upgrade() {
+                            view.update(cx, |view, cx| {
+                                view.save_setting_debounced(key.to_string(), path, false, cx);
+                            });
+                        }
+                    }
+                },
+            )
+            .default_value(SharedString::default()),
+        )
+        .description(format!(
+            "Path to {name}. Leave empty to find it on PATH and in the usual install locations."
+        ))
+    })
+    .collect()
+}
+
 /// Main settings view component
 pub struct SettingsView {
     focus_handle: FocusHandle,
@@ -769,6 +816,9 @@ impl SettingsView {
                     )
                     .description("Number the rows of a result. Applies to the next result shown."),
                 ]),
+                SettingGroup::new()
+                    .title("Backup Tools")
+                    .items(client_tool_items(&view_handle)),
             ]),
             SettingPage::new("Results").resettable(true).groups(vec![
                 SettingGroup::new().title("Dates and Times").items(vec![

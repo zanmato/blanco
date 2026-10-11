@@ -14,8 +14,8 @@ pub use connection_config::{
 };
 pub use factories::{MysqlConnectionFactory, PostgresConnectionFactory, SqliteConnectionFactory};
 pub use service::{
-    ConnectionId, DatabaseConfigId, DatabaseConnectedMessage, DatabaseDisconnectedMessage,
-    DatabaseService, DatabaseServiceMessage,
+    ClientToolEndpoint, ConnectionId, DatabaseConfigId, DatabaseConnectedMessage,
+    DatabaseDisconnectedMessage, DatabaseService, DatabaseServiceMessage,
 };
 pub use ssh_tunnel::{SshTunnel, SshTunnelConfig, TunnelInfo};
 

@@ -132,6 +132,11 @@ pub struct Settings {
     /// The built-in MCP server external agents connect to.
     #[serde(default)]
     pub mcp: McpSettings,
+    /// Paths to the native tools that back up and restore databases.
+    #[serde(default)]
+    pub client_tools: ClientToolSettings,
+    #[serde(default)]
+    pub backup: BackupSettings,
     /// Last known window geometry, restored on the next startup. Empty until the
     /// window has been moved or resized at least once.
     #[serde(default)]
@@ -332,6 +337,27 @@ impl Settings {
                         .map(|s| s.trim().to_string())
                         .filter(|s| !s.is_empty())
                         .collect();
+                }
+                "client_tools.pg_dump_path" => {
+                    settings.client_tools.pg_dump_path = value.clone();
+                }
+                "client_tools.pg_restore_path" => {
+                    settings.client_tools.pg_restore_path = value.clone();
+                }
+                "client_tools.psql_path" => {
+                    settings.client_tools.psql_path = value.clone();
+                }
+                "client_tools.mysqldump_path" => {
+                    settings.client_tools.mysqldump_path = value.clone();
+                }
+                "client_tools.mysql_path" => {
+                    settings.client_tools.mysql_path = value.clone();
+                }
+                "backup.file_name_pattern" => {
+                    settings.backup.file_name_pattern = value.clone();
+                }
+                "backup.directory" => {
+                    settings.backup.directory = value.clone();
                 }
                 "window.x" => {
                     settings.window.x = value.parse().ok();
@@ -609,6 +635,38 @@ impl TimeZoneDisplay {
         match self {
             Self::Local => "Local time",
             Self::Utc => "UTC",
+        }
+    }
+}
+
+/// Explicit paths to the client tools. An empty path means the tool is looked
+/// up on `PATH` and in the usual install locations.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ClientToolSettings {
+    pub pg_dump_path: String,
+    pub pg_restore_path: String,
+    pub psql_path: String,
+    pub mysqldump_path: String,
+    pub mysql_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupSettings {
+    /// File name of a new backup, see `backup::command::expand_file_name`.
+    pub file_name_pattern: String,
+    /// Folder the last backup went to, empty before the first one.
+    pub directory: String,
+}
+
+impl BackupSettings {
+    pub const DEFAULT_FILE_NAME_PATTERN: &str = "{database}_{date}";
+}
+
+impl Default for BackupSettings {
+    fn default() -> Self {
+        Self {
+            file_name_pattern: Self::DEFAULT_FILE_NAME_PATTERN.to_string(),
+            directory: String::new(),
         }
     }
 }

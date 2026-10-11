@@ -16,14 +16,14 @@ use database::{DatabaseService, DatabaseType};
 
 use crate::{
     app::{
-        ActivateEditorTab, ActivateNextTab, ActivatePreviousTab, CancelQuery,
+        ActivateEditorTab, ActivateNextTab, ActivatePreviousTab, BackupDatabase, CancelQuery,
         ClearCompareSelection, CloseActiveTab, CommitChanges, ConnectToConnection, CopyAsCSV,
         CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CreateNewQueryTab, CreateNewScriptTab,
         ExplainQuery, ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV,
         ExportConnections, ExportTableData, FormatQuery, ImportConnections, ImportTableData,
         NewQueryTab, NewSnippet, OpenNewConnectionModal, OpenSettings, OpenSqliteFile,
-        OpenTerminal, RefreshConnections, RollbackChanges, RunQuery, SwitchTheme, ToggleFilterBar,
-        ToggleRenderWhitespace, ToggleResults, ToggleSidebar, ToggleWordWrap,
+        OpenTerminal, RefreshConnections, RestoreDatabase, RollbackChanges, RunQuery, SwitchTheme,
+        ToggleFilterBar, ToggleRenderWhitespace, ToggleResults, ToggleSidebar, ToggleWordWrap,
     },
     connections::ConnectionsPanel,
     editor::EditorPanel,
@@ -139,6 +139,8 @@ pub enum CommandType {
     SwitchTheme(String),
     NewQueryForDatabase(DatabaseRef),
     NewScriptForDatabase(DatabaseRef),
+    BackupDatabase(DatabaseRef),
+    RestoreDatabase(DatabaseRef),
 }
 
 /// One pushed level of the navigation stack. `crumb` labels the breadcrumb
@@ -835,6 +837,18 @@ fn execute_command(cmd: &CommandType, window: &mut Window, cx: &mut App) {
             }),
             cx,
         ),
+        CommandType::BackupDatabase(database) => window.dispatch_action(
+            Box::new(BackupDatabase {
+                context: database.context(),
+            }),
+            cx,
+        ),
+        CommandType::RestoreDatabase(database) => window.dispatch_action(
+            Box::new(RestoreDatabase {
+                context: database.context(),
+            }),
+            cx,
+        ),
         CommandType::NewScriptForDatabase(database) => window.dispatch_action(
             Box::new(CreateNewScriptTab {
                 context: ConnectionContext {
@@ -1057,6 +1071,19 @@ fn fuzzy_score(text: &str, query: &str) -> Option<i64> {
     }
 }
 
+impl DatabaseRef {
+    fn context(&self) -> ConnectionContext {
+        ConnectionContext {
+            connection_id: self.connection_id,
+            connection_name: self.connection_name.clone(),
+            db_type: self.db_type,
+            database_name: self.database_name.clone(),
+            schema_name: None,
+            environment_type: Some(self.environment_type),
+        }
+    }
+}
+
 /// Build a leaf command item.
 fn leaf(label: impl Into<String>, group: &str, command: CommandType) -> CommandItem {
     CommandItem {
@@ -1068,7 +1095,20 @@ fn leaf(label: impl Into<String>, group: &str, command: CommandType) -> CommandI
 
 /// The leaf actions shown at the bottom of a navigation drill-down.
 fn database_action_leaves(database: &DatabaseRef) -> Vec<CommandItem> {
-    vec![new_query_leaf(database), new_script_leaf(database)]
+    let mut leaves = vec![new_query_leaf(database), new_script_leaf(database)];
+    if database.db_type.dialect().client_tools().is_some() && !database.database_name.is_empty() {
+        leaves.push(CommandItem {
+            label: "Back up…".into(),
+            group: "Action".into(),
+            kind: ItemKind::Command(CommandType::BackupDatabase(database.clone())),
+        });
+        leaves.push(CommandItem {
+            label: "Restore…".into(),
+            group: "Action".into(),
+            kind: ItemKind::Command(CommandType::RestoreDatabase(database.clone())),
+        });
+    }
+    leaves
 }
 
 fn new_query_leaf(database: &DatabaseRef) -> CommandItem {

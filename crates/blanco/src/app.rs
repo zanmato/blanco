@@ -303,6 +303,20 @@ pub struct OpenSchemaGraph {
     pub context: ConnectionContext,
 }
 
+/// Back up a database with the native dump tool.
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct BackupDatabase {
+    pub context: ConnectionContext,
+}
+
+/// Restore a dump into a database with the native client tools.
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct RestoreDatabase {
+    pub context: ConnectionContext,
+}
+
 /// Reload one connection's subtree in the sidebar, e.g. after DDL ran from a
 /// structure tab.
 #[derive(Action, Clone, PartialEq, Eq)]
@@ -532,16 +546,18 @@ impl BlancoApp {
         });
     }
 
-    /// Clicking the write confirmation's system notification brings Blanco's
-    /// window forward, and the notification goes away once the window is in
-    /// front by any route.
+    /// Clicking the write confirmation's or a finished backup's system
+    /// notification brings Blanco's window forward, and the notification goes
+    /// away once the window is in front by any route.
     fn wire_mcp_confirmation_notification(
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Subscription {
         let window_handle = window.window_handle();
         cx.on_system_notification_response(move |response, cx| {
-            if response.tag != MCP_CONFIRMATION_NOTIFICATION_TAG {
+            if response.tag != MCP_CONFIRMATION_NOTIFICATION_TAG
+                && response.tag != crate::backup::NOTIFICATION_TAG
+            {
                 return;
             }
             cx.activate(true);
@@ -552,6 +568,7 @@ impl BlancoApp {
         cx.observe_window_activation(window, |_, window, cx| {
             if window.is_window_active() {
                 cx.dismiss_system_notification(MCP_CONFIRMATION_NOTIFICATION_TAG);
+                cx.dismiss_system_notification(crate::backup::NOTIFICATION_TAG);
             }
         })
     }
@@ -2121,6 +2138,24 @@ impl BlancoApp {
         cx.notify();
     }
 
+    fn on_backup_database(
+        &mut self,
+        action: &BackupDatabase,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        crate::backup::open_backup(action.context.clone(), window, cx);
+    }
+
+    fn on_restore_database(
+        &mut self,
+        action: &RestoreDatabase,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        crate::backup::open_restore(action.context.clone(), window, cx);
+    }
+
     fn on_open_schema_graph(
         &mut self,
         action: &OpenSchemaGraph,
@@ -2776,6 +2811,8 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_open_table_structure))
             .on_action(cx.listener(Self::on_open_object_ddl))
             .on_action(cx.listener(Self::on_open_schema_graph))
+            .on_action(cx.listener(Self::on_backup_database))
+            .on_action(cx.listener(Self::on_restore_database))
             .on_action(cx.listener(Self::on_new_connection_modal))
             .on_action(cx.listener(Self::on_new_snippet))
             .on_action(cx.listener(Self::on_commit_changes))

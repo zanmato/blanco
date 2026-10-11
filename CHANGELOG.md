@@ -106,6 +106,15 @@ All notable changes to this project will be documented in this file.
   day first and month first formats in the new Results settings, and
   timestamps with a time zone can be shown in local time or UTC. Copy, export
   and editing still use the value as the database returns it
+- Back Up and Restore for PostgreSQL and MySQL/MariaDB databases, in the
+  sidebar and the command palette. They run `pg_dump`, `pg_restore`, `psql`,
+  `mysqldump` and `mysql` from PATH or the paths in the Database settings,
+  and explain when a tool is older than the server. Backups take a format,
+  tables, structure only tables, compression, extra arguments and a file name
+  pattern (`{database}_{date}` by default). Restores read plain and custom
+  dumps, gzip included, and confirm again on PROD. Progress, live output,
+  Stop and a notification when done. SSH tunnels work, and the password goes
+  to the tool through its environment, never its command line
 
 ### Fixes
 
