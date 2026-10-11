@@ -77,6 +77,16 @@ impl ObjectComments {
     }
 }
 
+/// The table a table descends from: the partitioned table of a partition, or
+/// the parent of a table created with `INHERITS`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableParent {
+    pub name: String,
+    /// Whether the child is a partition of `name` rather than an inheritance
+    /// child.
+    pub is_partition: bool,
+}
+
 /// A queryable database entity with its type
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct QueryableEntity {
@@ -680,6 +690,16 @@ pub trait Connection: Send + Sync {
         _schema: Option<&str>,
     ) -> Result<ObjectComments, anyhow::Error> {
         Ok(ObjectComments::default())
+    }
+
+    /// Return the parent of every table in a schema that is a partition or an
+    /// inheritance child of another table in the same schema, keyed by child
+    /// name. Defaults to empty for backends without table inheritance.
+    async fn get_table_parents(
+        &self,
+        _schema: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, TableParent>, anyhow::Error> {
+        Ok(std::collections::HashMap::new())
     }
 
     /// Return the SQL DDL source for a routine/trigger object. Used by the

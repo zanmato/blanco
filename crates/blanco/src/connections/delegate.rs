@@ -17,7 +17,8 @@ use crate::app::OpenSchemaGraph;
 use crate::app::OpenTableStructure;
 use crate::app::{BackupDatabase, OpenSqlFile, RestoreDatabase, RunSqlFile};
 use crate::connections::{
-    ConnectionsPanel, CreateNewQueryTabParams, TreeItemIcon, TreeItemKind, TreeItemMetadata,
+    ChildTables, ConnectionsPanel, CreateNewQueryTabParams, TreeItemIcon, TreeItemKind,
+    TreeItemMetadata,
 };
 
 use blanco_ui::{
@@ -174,6 +175,18 @@ fn format_bytes_exact(bytes: u64) -> String {
     out.chars().rev().collect()
 }
 
+/// Tooltip for the count shown next to a table with nested tables, e.g.
+/// "12 partitions" or "1 child table".
+fn child_table_description(child_tables: ChildTables) -> String {
+    let noun = match (child_tables.are_partitions, child_tables.count) {
+        (true, 1) => "partition",
+        (true, _) => "partitions",
+        (false, 1) => "child table",
+        (false, _) => "child tables",
+    };
+    format!("{} {noun}", child_tables.count)
+}
+
 /// Total width of the bordered size indicator rectangle, including border.
 const SIZE_BAR_WIDTH_PX: f32 = 48.0;
 const SIZE_BAR_HEIGHT_PX: f32 = 16.0;
@@ -266,6 +279,17 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                 .child(bar)
         });
 
+        let child_table_count = metadata.child_tables.map(|child_tables| {
+            let tooltip_text: SharedString = child_table_description(child_tables).into();
+            div()
+                .id(("tree-item-child-count", ix))
+                .flex_shrink_0()
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .tooltip(move |window, cx| Tooltip::new(tooltip_text.clone()).build(window, cx))
+                .child(child_tables.count.to_string())
+        });
+
         ListItem::new(ix)
             .selected(selected)
             .w_full()
@@ -301,6 +325,7 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                             .truncate()
                             .child(item.label.clone()),
                     )
+                    .when_some(child_table_count, |this, count| this.child(count))
                     .when_some(environment_label, |this, label| this.child(label))
                     .when_some(size_indicator, |this, indicator| this.child(indicator))
                     .when(

@@ -1,4 +1,5 @@
 use anyhow::Context as _;
+use blanco_core::TableParent;
 use database::DatabaseService;
 use gpui::Context;
 
@@ -48,6 +49,9 @@ pub struct DatabaseTable {
     pub relative_size: Option<f32>,
     /// The comment stored on the object, shown in its tooltip.
     pub comment: Option<String>,
+    /// The table this table is a partition or inheritance child of, when that
+    /// table is in the same schema. The tree nests it under that table.
+    pub parent: Option<TableParent>,
 }
 
 /// The stored comment for an item of `kind` named `name`.
@@ -201,6 +205,11 @@ impl ConnectionsPanel {
                             .get_object_comments(Some(schema_name))
                             .await
                             .unwrap_or_default();
+                        let parents = connection
+                            .get_table_parents(Some(schema_name))
+                            .await
+                            .log_err()
+                            .unwrap_or_default();
                         let push = |items: &mut Vec<DatabaseTable>,
                                     v: Vec<String>,
                                     kind: DatabaseItemType,
@@ -214,6 +223,11 @@ impl ConnectionsPanel {
                                 } else {
                                     None
                                 };
+                                let parent = if kind == DatabaseItemType::Table {
+                                    parents.get(&n).cloned()
+                                } else {
+                                    None
+                                };
                                 items.push(DatabaseTable {
                                     comment: item_comment(&comments, kind, &n),
                                     name: n,
@@ -221,6 +235,7 @@ impl ConnectionsPanel {
                                     item_type: kind,
                                     size_bytes,
                                     relative_size: None,
+                                    parent,
                                 });
                             }
                         };
@@ -484,6 +499,12 @@ impl ConnectionsPanel {
                         .await
                         .unwrap_or_default();
 
+                    let parents = connection
+                        .get_table_parents(Some(&schema_name))
+                        .await
+                        .log_err()
+                        .unwrap_or_default();
+
                     let mut all_items: Vec<DatabaseTable> = Vec::new();
                     let push_named = |items: &mut Vec<DatabaseTable>,
                                       names: Vec<String>,
@@ -498,6 +519,11 @@ impl ConnectionsPanel {
                             } else {
                                 None
                             };
+                            let parent = if kind == DatabaseItemType::Table {
+                                parents.get(&n).cloned()
+                            } else {
+                                None
+                            };
                             items.push(DatabaseTable {
                                 comment: item_comment(&comments, kind, &n),
                                 name: n,
@@ -505,6 +531,7 @@ impl ConnectionsPanel {
                                 item_type: kind,
                                 size_bytes,
                                 relative_size: None,
+                                parent,
                             });
                         }
                     };

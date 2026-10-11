@@ -30,6 +30,9 @@ pub(super) struct PendingReveal {
 struct Located {
     item_id: String,
     category_id: String,
+    /// The tables the item is nested under as a partition or inheritance
+    /// child, which are closed by default.
+    ancestor_ids: Vec<String>,
     item_type: DatabaseItemType,
 }
 
@@ -97,6 +100,7 @@ impl ConnectionsPanel {
         } else {
             self.expanded_categories.insert(located.category_id);
         }
+        self.expanded_tables.extend(located.ancestor_ids);
         self.rebuild_tree(cx);
         self.tree_state.update(cx, |state, cx| {
             if let Some(ix) = state.select_id(located.item_id, cx) {
@@ -138,6 +142,8 @@ impl ConnectionsPanel {
                 .min_by_key(|(schema, _)| schema.name != target.database_name)
                 .ok_or(None)?;
             return Ok(Located {
+                // Only PostgreSQL nests tables, and it has schemas.
+                ancestor_ids: Vec::new(),
                 item_id: format!("table:{connection_id}:{}:{}", schema.name, table.name),
                 category_id: format!(
                     "category:{connection_id}:{}",
@@ -181,7 +187,24 @@ impl ConnectionsPanel {
             .find(|table| table.name == target.name)
             .ok_or(None)?;
         let path = format!("{connection_id}:{}:{}", database.name, schema.name);
+        let mut ancestor_ids = Vec::new();
+        let mut parent = table.parent.as_ref();
+        // Bounded by the table count in case the catalog ever reports a cycle.
+        while let Some(table_parent) = parent
+            && ancestor_ids.len() < schema.tables.len()
+        {
+            ancestor_ids.push(format!("table:{path}:{}", table_parent.name));
+            parent = schema
+                .tables
+                .iter()
+                .find(|candidate| {
+                    candidate.item_type == DatabaseItemType::Table
+                        && candidate.name == table_parent.name
+                })
+                .and_then(|candidate| candidate.parent.as_ref());
+        }
         Ok(Located {
+            ancestor_ids,
             item_id: format!("table:{path}:{}", table.name),
             category_id: format!("category:{path}:{}", category_slug(table.item_type)),
             item_type: table.item_type,
