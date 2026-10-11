@@ -74,6 +74,7 @@ actions!(
         ExportAsJSON,
         ExportAsSQL,
         ExportAsMarkdown,
+        ToggleFilterBar,
         ClearSelection,
         ToggleRenderWhitespace,
         ToggleWordWrap,
@@ -151,6 +152,14 @@ pub struct DeleteRow {
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
 pub struct SetCellNull {
+    pub row: usize,
+    pub col: usize,
+}
+
+/// Filter the result's table on the server by a cell's value.
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct FilterByCellValue {
     pub row: usize,
     pub col: usize,
 }
@@ -2550,6 +2559,9 @@ fn init_menus(cx: &mut App) {
             Some("ExpandedCellEditor"),
         ),
     ]);
+
+    // Adding and removing conditions in the result filter bar.
+    cx.bind_keys(crate::results_panel::filter_bar::key_bindings());
 
     // Clipboard shortcuts inside a terminal tab. Plain ctrl-c/ctrl-v must reach
     // the shell (interrupt, literal), so the shifted chords copy and paste.

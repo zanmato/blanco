@@ -138,6 +138,8 @@ pub struct Settings {
     pub formatter: FormatterSettings,
     pub database: DatabaseSettings,
     pub appearance: AppearanceSettings,
+    #[serde(default)]
+    pub results: ResultsSettings,
     /// The built-in MCP server external agents connect to.
     #[serde(default)]
     pub mcp: McpSettings,
@@ -319,6 +321,12 @@ impl Settings {
                 "window.maximized" => {
                     settings.window.maximized = value.parse().unwrap_or_default();
                 }
+                "results.filter_bar_open" => {
+                    settings.results.filter_bar_open = value.parse().unwrap_or_default();
+                }
+                "results.filter_operator" => {
+                    settings.results.filter_operator = value.clone();
+                }
                 key if key.starts_with("keybinding.") => {
                     let action = key.trim_start_matches("keybinding.").to_string();
                     if !action.is_empty() {
@@ -331,6 +339,50 @@ impl Settings {
 
         settings
     }
+}
+
+/// The result grid's server-side filter bar.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResultsSettings {
+    /// Whether the filter bar is shown above a table's rows.
+    pub filter_bar_open: bool,
+    /// The operator a new filter condition starts with, by
+    /// `FilterOperator::key`.
+    pub filter_operator: String,
+}
+
+impl Default for ResultsSettings {
+    fn default() -> Self {
+        Self {
+            filter_bar_open: false,
+            filter_operator: blanco_core::FilterOperator::Equals.key().to_string(),
+        }
+    }
+}
+
+impl ResultsSettings {
+    pub fn default_operator(&self) -> blanco_core::FilterOperator {
+        blanco_core::FilterOperator::from_key(&self.filter_operator)
+            .unwrap_or(blanco_core::FilterOperator::Equals)
+    }
+}
+
+/// Store one setting in the app database in the background, logging a
+/// failure. For choices remembered as a side effect of using the UI rather
+/// than made on the settings page.
+pub fn persist_setting(key: &'static str, value: String, cx: &mut App) {
+    let db = app_database::AppDatabase::global(cx).clone();
+    let save = gpui_tokio::Tokio::spawn_result(cx, async move {
+        db.save_setting(key, &value, false)
+            .await
+            .map_err(anyhow::Error::from)
+    });
+    cx.spawn(async move |_| {
+        if let Err(error) = save.await {
+            tracing::error!("Failed to persist {key}: {error:#}");
+        }
+    })
+    .detach();
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

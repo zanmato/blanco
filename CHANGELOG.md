@@ -17,6 +17,15 @@ All notable changes to this project will be documented in this file.
   it covers. `alias.*` keeps its alias, and with several tables each column
   is prefixed with its table. Names are quoted only where the database needs
   it
+- A filter bar above a table's rows narrows them on the server. Build
+  conditions from column, operator and value joined by Match All or Match
+  Any, type a WHERE condition with column completion, or search every text
+  column. The condition is added to the result's own query, which keeps its
+  columns, ordering and limit, and the rows stay editable. WHERE in the result
+  strip, `secondary-shift-f` or Toggle Filter Bar in the command palette shows
+  it; Filter by Value in a cell's menu filters on that value, and the copy
+  button copies the SQL the view runs. The bar's open state and the last
+  operator picked are remembered
 - A search field in the title bar opens the command palette and shows its
   shortcut
 - Blanco checks for new releases hourly and shows an Update button in the

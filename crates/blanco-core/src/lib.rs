@@ -12,6 +12,7 @@ pub mod ddl;
 pub mod dialect;
 pub mod explain_plan;
 pub mod table_extractor;
+pub mod table_filter;
 pub mod write_guard;
 
 // Re-export main types for convenience
@@ -27,6 +28,7 @@ pub use database_service::{ConnectionStatus, DatabaseService};
 pub use database_type::{DatabaseType, ParamStyles};
 pub use dialect::{Dialect, UpsertStyle, ValuesQueryStyle};
 pub use table_extractor::TableExtractor;
+pub use table_filter::{FilterCondition, FilterJoin, FilterOperator};
 pub use write_guard::StatementAccess;
 
 // Re-export lsp-types Position for convenience

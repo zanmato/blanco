@@ -100,6 +100,21 @@ impl ResultsTableDelegate {
             .and_then(|row_data| row_data.get_mut(col))
     }
 
+    /// Column metadata of the table the result was read from.
+    pub fn table_columns(&self) -> &[blanco_core::ColumnInfo] {
+        &self.table_columns
+    }
+
+    /// Whether the result comes from a single table of a SQL backend, so the
+    /// filter bar can narrow it on the server.
+    pub fn supports_server_filter(&self) -> bool {
+        self.table_name.is_some()
+            && self.original_query.is_some()
+            && self
+                .db_type
+                .is_some_and(|db_type| db_type.dialect().supports_sql())
+    }
+
     /// Table metadata for a result column, matched by name because the query's
     /// column order need not match the table's (`SELECT b, a FROM t`).
     pub fn table_column_info(&self, data_index: usize) -> Option<&blanco_core::ColumnInfo> {

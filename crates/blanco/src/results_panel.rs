@@ -25,7 +25,9 @@ use blanco_core::{
 };
 use std::sync::Arc;
 
+use crate::app_settings::AppSettings;
 use crate::copy_handler::CopyHandler;
+use filter_bar::FilterBar;
 pub use transformers::{SelectedCell, SelectedRow, SelectedTableData};
 
 mod cell_edit_state;
@@ -36,10 +38,14 @@ mod clipboard;
 mod commit;
 mod compare;
 mod export_actions;
+pub mod filter_bar;
 mod foreign_key_popover;
 pub(crate) mod json_text;
 mod results_table_delegate;
 mod row_ops;
+mod server_filter;
+#[cfg(test)]
+mod server_filter_test;
 mod table_operations;
 
 // Re-exports
@@ -77,6 +83,12 @@ pub struct ResultTab {
     pub plan: Option<Arc<PlanTree>>,
     /// Client-side text filter over the loaded rows of this tab.
     pub filter_input: Entity<InputState>,
+    /// Server-side filter bar, created the first time it is shown for this
+    /// tab.
+    pub filter_bar: Option<Entity<FilterBar>>,
+    /// The query the tab's result came from, without a filter. The filter bar
+    /// adds its condition to this, never to an already filtered query.
+    pub filter_base_query: Option<String>,
     pub _subscriptions: Vec<Subscription>,
 }
 
@@ -106,6 +118,8 @@ pub struct ResultsPanel {
     compare_selection: Option<compare::CompareSelection>,
     /// The most recently opened diff, kept so tests can inspect it.
     last_diff_view: Option<Entity<blanco_ui::DiffView>>,
+    /// Whether the server-side filter bar is shown for table results.
+    filter_bar_open: bool,
     _subscriptions: Vec<Subscription>, // Store subscriptions to prevent them from being dropped
 }
 
@@ -143,6 +157,7 @@ impl ResultsPanel {
             tab_strip_scroll_handle: ScrollHandle::new(),
             compare_selection: None,
             last_diff_view: None,
+            filter_bar_open: AppSettings::global(cx).settings.results.filter_bar_open,
             _subscriptions: vec![],
         }
     }
@@ -206,6 +221,8 @@ impl ResultsPanel {
             key_value: None,
             plan: None,
             filter_input,
+            filter_bar: None,
+            filter_base_query: None,
             _subscriptions: vec![subscription, filter_subscription],
         }
     }
@@ -345,6 +362,7 @@ impl ResultsPanel {
                             tab.view_mode = ResultViewMode::Plan;
                         }
                     }
+                    tab.filter_base_query = query_text.clone();
                     tab.table_state.update(cx, |state, cx| {
                         if let Some(ref q) = query_text {
                             state.delegate_mut().set_original_query(q.clone());
@@ -1142,6 +1160,9 @@ impl ResultsPanel {
             )
         });
 
+        let can_server_filter = self.tab_supports_server_filter(active, cx);
+        let filter_bar_open = self.filter_bar_open;
+
         h_flex()
             .id("result-tabs-strip")
             .w_full()
@@ -1167,6 +1188,23 @@ impl ResultsPanel {
                                         .text_color(muted_fg)
                                         .whitespace_nowrap()
                                         .child(format!("{shown} of {total}")),
+                                )
+                            })
+                            .when(can_server_filter, |this| {
+                                this.child(
+                                    Button::new("toggle-filter-bar")
+                                        .ghost()
+                                        .xsmall()
+                                        .label("WHERE")
+                                        .selected(filter_bar_open)
+                                        .tooltip_with_action(
+                                            "Filter on the Server",
+                                            &crate::app::ToggleFilterBar,
+                                            None,
+                                        )
+                                        .on_click(cx.listener(|panel, _, window, cx| {
+                                            panel.toggle_filter_bar(window, cx);
+                                        })),
                                 )
                             })
                             .child(
@@ -1571,7 +1609,8 @@ impl Focusable for ResultsPanel {
 }
 
 impl Render for ResultsPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let filter_bar = self.visible_filter_bar(window, cx);
         let active = self.active_tab;
         let border_color = cx.theme().border;
         let show_strip = self.has_results;
@@ -1613,6 +1652,7 @@ impl Render for ResultsPanel {
             .on_action(cx.listener(Self::on_delete_row))
             .on_action(cx.listener(Self::on_set_cell_null))
             .on_action(cx.listener(Self::on_set_cell_default))
+            .on_action(cx.listener(Self::on_filter_by_cell_value))
             .on_action(cx.listener(Self::on_select_cell_for_compare))
             .on_action(cx.listener(Self::on_compare_cell_with_selected))
             .on_action(cx.listener(Self::on_select_row_for_compare))
@@ -1625,6 +1665,9 @@ impl Render for ResultsPanel {
             .on_action(cx.listener(Self::on_input_enter))
             .on_action(cx.listener(Self::on_input_escape))
             .when(show_strip, |this| this.child(self.render_tab_strip(cx)))
+            .when_some(filter_bar.filter(|_| show_strip), |this, bar| {
+                this.child(bar)
+            })
             .child(
                 div()
                     .id("results-body")
