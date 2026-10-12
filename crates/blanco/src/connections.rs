@@ -932,6 +932,8 @@ impl ConnectionsPanel {
             if let Err(e) = db_service.disconnect(connection_id, None).await {
                 tracing::error!("Failed to disconnect connection {}: {}", connection_id, e);
             }
+            // Secrets typed at a prompt last until the user disconnects.
+            db_service.forget_session_secrets(connection_id).await;
 
             // Update the UI
             this_handle

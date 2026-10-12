@@ -1,11 +1,16 @@
-use gpui::{AppContext, Context, Entity, IntoElement, ParentElement, Styled, Window, div};
+use gpui::{
+    AppContext, Context, ElementId, Entity, IntoElement, ParentElement, Styled, Window, div,
+};
 use gpui_component::{
     IconName, Sizable,
     button::{Button, ButtonVariants},
+    checkbox::Checkbox,
     h_flex,
     input::{Input, InputState},
     v_flex,
 };
+
+use database::SecretKind;
 
 use super::NewConnectionModal;
 
@@ -116,6 +121,39 @@ pub(super) fn render_ssl_advanced_fields(
         ))
 }
 
+/// A masked secret field with an Ask on connect checkbox beside its label.
+/// While the box is ticked the field is disabled: the secret is not stored
+/// and is asked for each time the connection opens.
+pub(super) fn secret_field(
+    id: impl Into<ElementId>,
+    label: &'static str,
+    input: &Entity<InputState>,
+    kind: SecretKind,
+    ask_secrets: &[SecretKind],
+    cx: &mut Context<NewConnectionModal>,
+) -> impl IntoElement {
+    let asked = ask_secrets.contains(&kind);
+    v_flex()
+        .flex_1()
+        .gap_2()
+        .child(
+            h_flex()
+                .gap_2()
+                .justify_between()
+                .child(div().text_sm().child(label))
+                .child(
+                    Checkbox::new(id)
+                        .small()
+                        .label("Ask on connect")
+                        .checked(asked)
+                        .on_click(cx.listener(move |modal, checked: &bool, window, cx| {
+                            modal.set_ask_secret(kind, *checked, window, cx);
+                        })),
+                ),
+        )
+        .child(Input::new(input).mask_toggle().disabled(asked))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_ssh_section(
     prefix: &str,
@@ -125,6 +163,7 @@ pub(super) fn render_ssh_section(
     ssh_password_input: &Entity<InputState>,
     ssh_private_key_input: &Entity<InputState>,
     ssh_private_key_password_input: &Entity<InputState>,
+    ask_secrets: &[SecretKind],
     cx: &mut Context<NewConnectionModal>,
 ) -> impl IntoElement {
     v_flex()
@@ -157,13 +196,14 @@ pub(super) fn render_ssh_section(
                         .child(div().text_sm().child("User"))
                         .child(Input::new(ssh_user_input)),
                 )
-                .child(
-                    v_flex()
-                        .flex_1()
-                        .gap_2()
-                        .child(div().text_sm().child("Password"))
-                        .child(Input::new(ssh_password_input).mask_toggle()),
-                ),
+                .child(secret_field(
+                    format!("{prefix}-ssh-password-ask"),
+                    "Password",
+                    ssh_password_input,
+                    SecretKind::SshPassword,
+                    ask_secrets,
+                    cx,
+                )),
         )
         .child(
             h_flex()
@@ -174,12 +214,13 @@ pub(super) fn render_ssh_section(
                     ssh_private_key_input,
                     cx,
                 )))
-                .child(
-                    v_flex()
-                        .flex_1()
-                        .gap_2()
-                        .child(div().text_sm().child("Private key password"))
-                        .child(Input::new(ssh_private_key_password_input).mask_toggle()),
-                ),
+                .child(secret_field(
+                    format!("{prefix}-ssh-key-password-ask"),
+                    "Private key password",
+                    ssh_private_key_password_input,
+                    SecretKind::SshPrivateKeyPassword,
+                    ask_secrets,
+                    cx,
+                )),
         )
 }

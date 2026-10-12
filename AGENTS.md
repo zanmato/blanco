@@ -101,6 +101,16 @@ concurrent sessions crashes gnome-keyring-daemon, so keep reads serialized and l
 The edit dialog hydrates the single connection it shows with
 `connection_credentials::hydrate_connection`.
 
+Secrets in `ConnectionConfig::ask_secrets` are never stored. `get_or_create_connection`
+asks for them through its `SecretPrompt` instead, and asks for a missing secret the
+server or SSH host refuses (`secret_prompt::rejected_secret`), retrying a few times.
+Answers are kept in `DatabaseService`'s session map, reused for reconnects, and
+dropped by `forget_session_secrets` on Disconnect or when the config is replaced.
+The prompt is `secret_prompt::DialogSecretPrompt`, the same kind of foreground bridge
+as the keyring store, showing one dialog at a time. A connection without a password,
+or with a typed one, is pinged on open so a refusal surfaces while it can be asked
+for; PostgreSQL's pools otherwise only fail at the first query.
+
 ## Updates
 
 `update_manager::UpdateManager` (a global installed in `main.rs`) asks GitHub for the

@@ -11,11 +11,14 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use crate::connection_config::{
-    ConnectionConfig, ConnectionSecretStore, DatabaseType, NoSecretStore,
+    ConnectionConfig, ConnectionSecretStore, DatabaseType, NoSecretStore, SecretKind,
 };
 use crate::factories::{
     ClickhouseConnectionFactory, MssqlConnectionFactory, MysqlConnectionFactory,
     PostgresConnectionFactory, RedisConnectionFactory, SqliteConnectionFactory,
+};
+use crate::secret_prompt::{
+    rejected_secret, NoSecretPrompt, SecretPrompt, SecretPromptCancelled, SecretPromptRequest,
 };
 use crate::ssh_tunnel::{SshTunnel, SshTunnelConfig, TunnelInfo};
 use crate::tokio_connection::TokioConnection;
@@ -80,6 +83,14 @@ pub struct DatabaseService {
     // Resolves a connection's secrets the moment it is opened
     secret_store: Arc<dyn ConnectionSecretStore>,
 
+    // Asks the user for secrets that are not stored
+    secret_prompt: Arc<dyn SecretPrompt>,
+
+    // Secrets the user typed at a prompt, kept for reconnects until the
+    // connection is closed or edited. The lock is held across a prompt so
+    // connections opening together ask once and share the answer.
+    session_secrets: Arc<smol::lock::Mutex<HashMap<(DatabaseConfigId, SecretKind), String>>>,
+
     // Dependencies
     runtime_handle: tokio::runtime::Handle,
 }
@@ -113,6 +124,8 @@ impl DatabaseService {
             tunnel_connections: Arc::new(RwLock::new(HashMap::new())),
             action_sender: Arc::new(StdMutex::new(None)),
             secret_store: Arc::new(NoSecretStore),
+            secret_prompt: Arc::new(NoSecretPrompt),
+            session_secrets: Arc::new(smol::lock::Mutex::new(HashMap::new())),
             runtime_handle,
         }
     }
@@ -125,14 +138,96 @@ impl DatabaseService {
         Arc::clone(&self.secret_store)
     }
 
+    pub fn set_secret_prompt(&mut self, prompt: Arc<dyn SecretPrompt>) {
+        self.secret_prompt = prompt;
+    }
+
+    /// Drop the secrets typed for `config_id` this session, so the next
+    /// connect asks again.
+    pub async fn forget_session_secrets(&self, config_id: DatabaseConfigId) {
+        self.session_secrets
+            .lock()
+            .await
+            .retain(|(id, _), _| *id != config_id);
+    }
+
     /// Fill in the secrets `config` is missing, one store read after another
     /// so a burst of connections never floods the backing keyring.
+    #[cfg(test)]
     async fn resolve_secrets(&self, config: &mut ConnectionConfig) -> Result<()> {
+        self.resolve_secrets_asking(config, None).await.map(|_| ())
+    }
+
+    /// Fill in the secrets `config` is missing. Secrets the connection asks
+    /// for come from this session's answers or a prompt, the rest from the
+    /// store. `rejected` names a secret the server just refused: it is asked
+    /// for again unless another connection has remembered a newer answer
+    /// meanwhile. Returns the secrets that came from the user.
+    async fn resolve_secrets_asking(
+        &self,
+        config: &mut ConnectionConfig,
+        rejected: Option<Rejected>,
+    ) -> Result<Vec<SecretKind>> {
+        let rejected_kind = rejected.as_ref().map(|rejected| rejected.kind);
+        let asked: Vec<SecretKind> = SecretKind::ALL
+            .into_iter()
+            .filter(|kind| {
+                config.uses_secret(*kind)
+                    && (config.asks_for(*kind) || rejected_kind == Some(*kind))
+            })
+            .collect();
+        let mut from_user = Vec::new();
         for kind in config.missing_secret_kinds() {
+            if asked.contains(&kind) {
+                continue;
+            }
+            // An answer typed earlier when the server asked for a secret the
+            // connection lacks stands in for the store until forgotten.
+            let remembered = self
+                .session_secrets
+                .lock()
+                .await
+                .get(&(config.id, kind))
+                .cloned();
+            if remembered.is_some() {
+                config.set_secret(kind, remembered);
+                from_user.push(kind);
+                continue;
+            }
             let value = self.secret_store.read(config.id, kind).await?;
             config.set_secret(kind, value);
         }
-        Ok(())
+
+        for kind in asked {
+            let mut answers = self.session_secrets.lock().await;
+            let key = (config.id, kind);
+            if let Some(rejected) = rejected.as_ref().filter(|rejected| rejected.kind == kind) {
+                if answers.get(&key) == rejected.value.as_ref() {
+                    answers.remove(&key);
+                }
+            }
+            // A remembered answer is reused, including one another connection
+            // stored while this one waited for the lock.
+            if let Some(value) = answers.get(&key) {
+                config.set_secret(kind, Some(value.clone()));
+                from_user.push(kind);
+                continue;
+            }
+            let retry_reason = rejected
+                .as_ref()
+                .filter(|rejected| rejected.kind == kind)
+                .and_then(|rejected| rejected.reason.clone());
+            let request = SecretPromptRequest::new(config, kind, retry_reason);
+            match self.secret_prompt.ask(request).await? {
+                Some(value) => {
+                    answers.insert(key, value.clone());
+                    config.set_secret(kind, Some(value));
+                    from_user.push(kind);
+                }
+                None => return Err(SecretPromptCancelled { kind }.into()),
+            }
+        }
+        Ok(from_user)
     }
 
     /// Set the action sender (called via cx.update_global from app initialization)
@@ -142,8 +237,10 @@ impl DatabaseService {
         }
     }
 
-    /// Add a connection configuration
+    /// Add a connection configuration. Replacing a connection's config also forgets the secrets typed for it,
+    /// since they may belong to the old user or host.
     pub async fn add_connection_config(&self, config: ConnectionConfig) {
+        self.forget_session_secrets(config.id).await;
         let mut configs = self.connection_configs.write().await;
         configs.insert(config.id, config.clone());
         tracing::info!(
@@ -221,9 +318,75 @@ impl DatabaseService {
         }
 
         // Secrets are resolved only now, after the cache misses, and live in
-        // this local copy of the config for the duration of the connect.
-        let mut config = config;
-        self.resolve_secrets(&mut config).await?;
+        // a local copy of the config for the duration of the connect. A
+        // refused secret that the user can supply is asked for again, a few
+        // times at most.
+        const ATTEMPTS: usize = 3;
+        let mut rejected = None;
+        for attempt in 1..=ATTEMPTS {
+            let mut attempt_config = config.clone();
+            let from_user = self
+                .resolve_secrets_asking(&mut attempt_config, rejected.take())
+                .await?;
+            match self
+                .open_connection(&attempt_config, database, &from_user)
+                .await
+            {
+                Ok(connection) => return Ok(connection),
+                Err(error) => {
+                    let refused = self
+                        .secret_prompt
+                        .is_interactive()
+                        .then(|| rejected_secret(&attempt_config, &from_user, &error))
+                        .flatten();
+                    let Some(kind) = refused else {
+                        return Err(error);
+                    };
+                    let typed = from_user.contains(&kind);
+                    if attempt == ATTEMPTS {
+                        // Do not keep an answer the server refused for the
+                        // next reconnect.
+                        if typed {
+                            let key = (config_id, kind);
+                            let mut answers = self.session_secrets.lock().await;
+                            if answers.get(&key).map(String::as_str) == attempt_config.secret(kind)
+                            {
+                                answers.remove(&key);
+                            }
+                        }
+                        return Err(error);
+                    }
+                    tracing::info!(
+                        "Connection {} refused its {}; asking again",
+                        config_id,
+                        kind.label()
+                    );
+                    // A missing secret the server wants is simply asked
+                    // for; a typed one it refused says why.
+                    rejected = Some(Rejected {
+                        kind,
+                        value: attempt_config.secret(kind).map(str::to_string),
+                        reason: typed.then(|| format!("{error:#}")),
+                    });
+                }
+            }
+        }
+        unreachable!("the last attempt returns")
+    }
+
+    /// Open a connection with secrets already resolved and cache it.
+    /// `from_user` lists the secrets typed at a prompt; when the password is
+    /// one of them, or there is none, the server is pinged so a refusal
+    /// surfaces now, while it can still be asked for, rather than at the
+    /// first query.
+    async fn open_connection(
+        &self,
+        config: &ConnectionConfig,
+        database: Option<&str>,
+        from_user: &[SecretKind],
+    ) -> Result<Arc<dyn Connection>> {
+        let config_id = config.id;
+        let connection_id = (config_id, database.unwrap_or("default").to_string());
 
         // Check if this connection requires an SSH tunnel
         let mut connection_host = None;
@@ -303,6 +466,21 @@ impl DatabaseService {
             config.read_only,
         ));
 
+        let password_unverified = config.uses_secret(SecretKind::Password)
+            && (from_user.contains(&SecretKind::Password)
+                || config.password.as_deref().is_none_or(str::is_empty));
+        if password_unverified && self.secret_prompt.is_interactive() {
+            if let Err(error) = conn_arc.ping().await {
+                // Only a refused password stops the connect here; anything
+                // else surfaces at the first query as it did before.
+                let message = format!("{error:#}").to_lowercase();
+                if crate::secret_prompt::is_authentication_failure(&message) {
+                    return Err(error);
+                }
+                tracing::debug!("Ping after connect failed: {error:#}");
+            }
+        }
+
         // Store in active_connections
         {
             let mut connections = self.active_connections.write().await;
@@ -352,7 +530,9 @@ impl DatabaseService {
         let mut config = self.get_connection_config(config_id).await.ok_or_else(|| {
             anyhow::anyhow!("Connection configuration not found for ID: {}", config_id)
         })?;
-        self.resolve_secrets(&mut config).await?;
+        // A secret that is asked for was just answered for the connection
+        // above and is remembered for the session, so this does not ask again.
+        self.resolve_secrets_asking(&mut config, None).await?;
         let tunnel_port = if config.requires_ssh_tunnel() {
             let tunnels = self.ssh_tunnels.read().await;
             let tunnel = tunnels
@@ -685,6 +865,19 @@ impl DatabaseService {
     /// Test a connection without caching it. Creates a temporary connection
     /// (and SSH tunnel if needed), verifies it works, then drops everything.
     pub async fn test_connection(&self, config: &ConnectionConfig) -> Result<()> {
+        // A test asks for the secrets the connection asks for, every time; the
+        // answers are not remembered, since the connection is not saved yet.
+        let mut asked = config.clone();
+        for kind in SecretKind::ALL {
+            if asked.uses_secret(kind) && asked.asks_for(kind) && asked.secret(kind).is_none() {
+                let request = SecretPromptRequest::new(&asked, kind, None);
+                match self.secret_prompt.ask(request).await? {
+                    Some(value) => asked.set_secret(kind, Some(value)),
+                    None => return Err(SecretPromptCancelled { kind }.into()),
+                }
+            }
+        }
+        let config = &asked;
         let mut connection_host = None;
         let mut connection_port = None;
         let mut temp_tunnel: Option<SshTunnel> = None;
@@ -935,6 +1128,16 @@ impl DatabaseServiceTrait for DatabaseService {
     }
 }
 
+/// A secret a connect attempt was refused for.
+struct Rejected {
+    kind: SecretKind,
+    /// The value that was refused, so a newer remembered answer is not
+    /// mistaken for it.
+    value: Option<String>,
+    /// What to tell the user, when the refused value was theirs.
+    reason: Option<String>,
+}
+
 impl Clone for DatabaseService {
     fn clone(&self) -> Self {
         Self {
@@ -946,6 +1149,8 @@ impl Clone for DatabaseService {
             tunnel_connections: Arc::clone(&self.tunnel_connections),
             action_sender: Arc::clone(&self.action_sender),
             secret_store: Arc::clone(&self.secret_store),
+            secret_prompt: Arc::clone(&self.secret_prompt),
+            session_secrets: Arc::clone(&self.session_secrets),
             runtime_handle: self.runtime_handle.clone(),
         }
     }
@@ -1248,5 +1453,127 @@ mod tests {
         // An ordinary query error carries no marker and must not evict.
         let ordinary = anyhow::anyhow!("syntax error at or near \"SELET\"");
         assert!(!blanco_core::is_connection_lost(&ordinary));
+    }
+
+    /// Answers prompts from a script and records what it was asked.
+    struct ScriptedPrompt {
+        answers: StdMutex<Vec<Option<String>>>,
+        asked: StdMutex<Vec<SecretPromptRequest>>,
+    }
+
+    impl ScriptedPrompt {
+        fn new(answers: &[Option<&str>]) -> Arc<Self> {
+            Arc::new(Self {
+                answers: StdMutex::new(
+                    answers
+                        .iter()
+                        .rev()
+                        .map(|a| a.map(str::to_string))
+                        .collect(),
+                ),
+                asked: StdMutex::new(Vec::new()),
+            })
+        }
+
+        fn asked(&self) -> Vec<SecretPromptRequest> {
+            self.asked.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl SecretPrompt for ScriptedPrompt {
+        async fn ask(&self, request: SecretPromptRequest) -> Result<Option<String>> {
+            self.asked.lock().unwrap().push(request);
+            Ok(self.answers.lock().unwrap().pop().flatten())
+        }
+    }
+
+    fn asking_config() -> ConnectionConfig {
+        ConnectionConfig::new(
+            7,
+            "prod".into(),
+            DatabaseType::PostgreSQL,
+            "db.example.com".into(),
+            5432,
+            "app".into(),
+            "alice".into(),
+            None,
+        )
+        .with_ask_secrets(vec![SecretKind::Password])
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn asked_secrets_skip_the_store_and_are_remembered_for_the_session() {
+        let mut service = DatabaseService::new(tokio::runtime::Handle::current());
+        service.set_secret_store(Arc::new(MapSecretStore(HashMap::from([(
+            (7, SecretKind::Password),
+            "stale-stored".to_string(),
+        )]))));
+        let prompt = ScriptedPrompt::new(&[Some("typed")]);
+        service.set_secret_prompt(prompt.clone());
+
+        let mut config = asking_config();
+        let from_user = service
+            .resolve_secrets_asking(&mut config, None)
+            .await
+            .expect("resolve");
+        assert_eq!(from_user, vec![SecretKind::Password]);
+        assert_eq!(config.password.as_deref(), Some("typed"));
+        let asked = prompt.asked();
+        assert_eq!(asked.len(), 1);
+        assert_eq!(asked[0].connection_name, "prod");
+        assert_eq!(asked[0].account, "alice@db.example.com");
+
+        // A reconnect reuses the answer without asking.
+        let mut again = asking_config();
+        service
+            .resolve_secrets_asking(&mut again, None)
+            .await
+            .expect("resolve");
+        assert_eq!(again.password.as_deref(), Some("typed"));
+        assert_eq!(prompt.asked().len(), 1);
+
+        // Forgetting, as Disconnect does, asks again; cancelling fails the
+        // connect with a typed error.
+        service.forget_session_secrets(7).await;
+        let error = service
+            .resolve_secrets_asking(&mut asking_config(), None)
+            .await
+            .expect_err("cancelled");
+        assert!(error.downcast_ref::<SecretPromptCancelled>().is_some());
+        assert_eq!(prompt.asked().len(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_rejected_secret_is_asked_again_with_the_reason() {
+        let mut service = DatabaseService::new(tokio::runtime::Handle::current());
+        let prompt = ScriptedPrompt::new(&[Some("first"), Some("second")]);
+        service.set_secret_prompt(prompt.clone());
+
+        let mut config = asking_config();
+        service
+            .resolve_secrets_asking(&mut config, None)
+            .await
+            .expect("resolve");
+        let mut retry = asking_config();
+        service
+            .resolve_secrets_asking(
+                &mut retry,
+                Some(Rejected {
+                    kind: SecretKind::Password,
+                    value: Some("first".into()),
+                    reason: Some("password authentication failed".into()),
+                }),
+            )
+            .await
+            .expect("resolve");
+        assert_eq!(retry.password.as_deref(), Some("second"));
+        let asked = prompt.asked();
+        assert_eq!(asked.len(), 2);
+        assert_eq!(asked[0].retry_reason, None);
+        assert_eq!(
+            asked[1].retry_reason.as_deref(),
+            Some("password authentication failed")
+        );
     }
 }

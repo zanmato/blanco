@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{ConnectionData, EnvironmentType};
-use database::DatabaseType;
+use database::{DatabaseType, SecretKind};
 
 /// Identifies the document format, so a wrong file is refused clearly.
 const FORMAT: &str = "blanco-connections";
@@ -58,6 +58,10 @@ struct ExportedConnection {
     read_only: bool,
     #[serde(default)]
     only_configured_database: bool,
+    /// Which secrets are asked for when the connection opens instead of
+    /// stored, by `SecretKind::key`. The setting, never a secret itself.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ask_on_connect: Vec<String>,
 }
 
 impl From<&ConnectionData> for ExportedConnection {
@@ -82,6 +86,11 @@ impl From<&ConnectionData> for ExportedConnection {
             trust_server_certificate: connection.trust_server_certificate,
             read_only: connection.read_only,
             only_configured_database: connection.only_configured_database,
+            ask_on_connect: connection
+                .ask_secrets
+                .iter()
+                .map(|kind| kind.key().to_string())
+                .collect(),
         }
     }
 }
@@ -126,6 +135,12 @@ impl ExportedConnection {
         connection.trust_server_certificate = self.trust_server_certificate;
         connection.read_only = self.read_only;
         connection.only_configured_database = self.only_configured_database;
+        // A name this build does not know is skipped rather than refused.
+        connection.ask_secrets = self
+            .ask_on_connect
+            .iter()
+            .filter_map(|key| SecretKind::from_key(key))
+            .collect();
         Ok(connection)
     }
 }
@@ -264,6 +279,28 @@ mod tests {
             Some("~/.ssh/id_ed25519")
         );
         assert!(same_settings(imported, &prod));
+    }
+
+    #[test]
+    fn test_export_carries_which_secrets_are_asked_for() {
+        let mut prod = postgres("Prod");
+        prod.ask_secrets = vec![SecretKind::Password, SecretKind::SshPrivateKeyPassword];
+
+        let document = export_connections(&[prod.clone()]);
+        assert!(!document.contains("secret"), "{document}");
+        let imported = parse_connections(&document).unwrap();
+        assert_eq!(imported[0].ask_secrets, prod.ask_secrets);
+        assert!(same_settings(&imported[0], &prod));
+
+        // A file written before the setting existed asks for nothing, and a
+        // name from a newer build is skipped.
+        let older = document.replace("\"ask_on_connect\"", "\"unknown_field\"");
+        assert!(parse_connections(&older).unwrap()[0].ask_secrets.is_empty());
+        let newer = document.replace("\"password\"", "\"hardware-token\"");
+        assert_eq!(
+            parse_connections(&newer).unwrap()[0].ask_secrets,
+            vec![SecretKind::SshPrivateKeyPassword]
+        );
     }
 
     #[test]

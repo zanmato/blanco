@@ -1,7 +1,27 @@
 use sqlx::Row;
 
 use crate::{AppDatabase, ConnectionData, EnvironmentType};
-use database::DatabaseType;
+use database::{DatabaseType, SecretKind};
+
+/// The secrets a connection asks for, as stored: their keys separated by
+/// commas, or NULL when there are none.
+fn ask_secrets_column(kinds: &[SecretKind]) -> Option<String> {
+    (!kinds.is_empty()).then(|| {
+        kinds
+            .iter()
+            .map(|kind| kind.key())
+            .collect::<Vec<_>>()
+            .join(",")
+    })
+}
+
+fn parse_ask_secrets(stored: Option<String>) -> Vec<SecretKind> {
+    stored
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|key| SecretKind::from_key(key.trim()))
+        .collect()
+}
 
 #[derive(Debug)]
 pub struct LegacyConnectionCredentials {
@@ -30,7 +50,7 @@ impl AppDatabase {
                         ssh_private_key_path = ?,
                         ssl_mode = ?, ssl_key_path = ?, ssl_cert_path = ?, ssl_ca_cert_path = ?,
                         trust_server_certificate = ?, read_only = ?,
-                        only_configured_database = ?, idle_timeout_minutes = ?
+                        only_configured_database = ?, idle_timeout_minutes = ?, ask_secrets = ?
                     WHERE id = ?
                     "#,
                 )
@@ -56,6 +76,7 @@ impl AppDatabase {
                 .bind(if conn.read_only { 1 } else { 0 })
                 .bind(if conn.only_configured_database { 1 } else { 0 })
                 .bind(conn.idle_timeout_minutes.map(i64::from))
+                .bind(ask_secrets_column(&conn.ask_secrets))
                 .bind(id)
                 .execute(&pool)
                 .await?;
@@ -64,8 +85,8 @@ impl AppDatabase {
                 // Insert new connection
                 let result = sqlx::query(
                     r#"
-                    INSERT INTO connections (name, db_type, host, port, database_name, username, database_path, last_used_at, created_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate, read_only, only_configured_database, idle_timeout_minutes)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO connections (name, db_type, host, port, database_name, username, database_path, last_used_at, created_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate, read_only, only_configured_database, idle_timeout_minutes, ask_secrets)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     "#,
                 )
                 .bind(&conn.name)
@@ -91,6 +112,7 @@ impl AppDatabase {
                 .bind(if conn.read_only { 1 } else { 0 })
                 .bind(if conn.only_configured_database { 1 } else { 0 })
                 .bind(conn.idle_timeout_minutes.map(i64::from))
+                .bind(ask_secrets_column(&conn.ask_secrets))
                 .execute(&pool)
                 .await?;
 
@@ -107,7 +129,7 @@ impl AppDatabase {
             .run(async move {
             let rows = sqlx::query(
                 r#"
-                SELECT id, name, db_type, host, port, database_name, username, database_path, last_used_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate, read_only, only_configured_database, idle_timeout_minutes
+                SELECT id, name, db_type, host, port, database_name, username, database_path, last_used_at, is_active, environment_type, ssh_host, ssh_port, ssh_user, ssh_private_key_path, ssl_mode, ssl_key_path, ssl_cert_path, ssl_ca_cert_path, trust_server_certificate, read_only, only_configured_database, idle_timeout_minutes, ask_secrets
                 FROM connections
                 ORDER BY name
                 "#,
@@ -157,6 +179,7 @@ impl AppDatabase {
                         idle_timeout_minutes: row
                             .get::<Option<i64>, _>("idle_timeout_minutes")
                             .and_then(|minutes| u32::try_from(minutes).ok()),
+                        ask_secrets: parse_ask_secrets(row.get("ask_secrets")),
                     }
                 })
                 .collect();
@@ -339,6 +362,39 @@ mod tests {
         assert_eq!(loaded.ssl_key_path, None);
         assert_eq!(loaded.ssl_cert_path, None);
         assert_eq!(loaded.ssl_ca_cert_path, None);
+    }
+
+    #[tokio::test]
+    async fn ask_secrets_round_trip_into_the_connection_config() {
+        let database = AppDatabase::new_in_memory(tokio::runtime::Handle::current())
+            .await
+            .expect("Failed to create in-memory database");
+        let mut connection = ConnectionData::new_postgres(
+            "pg".to_string(),
+            "localhost".to_string(),
+            5432,
+            "app".to_string(),
+            "postgres".to_string(),
+            String::new(),
+        );
+        connection.ask_secrets = vec![SecretKind::Password, SecretKind::SshPrivateKeyPassword];
+        let id = database
+            .save_connection(&connection)
+            .await
+            .expect("Failed to save connection");
+
+        let loaded = database.load_connections().await.expect("load");
+        assert_eq!(loaded[0].ask_secrets, connection.ask_secrets);
+        let config = loaded[0].to_connection_config().expect("config");
+        assert!(config.asks_for(SecretKind::Password));
+        assert!(!config.asks_for(SecretKind::SshPassword));
+
+        let mut cleared = loaded[0].clone();
+        cleared.id = Some(id);
+        cleared.ask_secrets.clear();
+        database.save_connection(&cleared).await.expect("update");
+        let loaded = database.load_connections().await.expect("load");
+        assert!(loaded[0].ask_secrets.is_empty());
     }
 
     #[tokio::test]

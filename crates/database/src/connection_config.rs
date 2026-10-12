@@ -28,6 +28,20 @@ impl SecretKind {
             Self::SshPrivateKeyPassword => "ssh-private-key-password",
         }
     }
+
+    /// The kind whose [`SecretKind::key`] is `key`.
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.key() == key)
+    }
+
+    /// What the secret is called in a prompt.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Password => "password",
+            Self::SshPassword => "SSH password",
+            Self::SshPrivateKeyPassword => "SSH key passphrase",
+        }
+    }
 }
 
 /// Where connection secrets are read from on demand. `DatabaseService` asks
@@ -83,6 +97,9 @@ pub struct ConnectionConfig {
     /// Minutes without activity after which the connection is closed. `None`
     /// follows the global setting, `Some(0)` never closes it.
     pub idle_timeout_minutes: Option<u32>,
+    /// Secrets that are never stored and are asked for when the connection
+    /// opens instead.
+    pub ask_secrets: Vec<SecretKind>,
 }
 
 impl std::fmt::Debug for ConnectionConfig {
@@ -118,6 +135,7 @@ impl std::fmt::Debug for ConnectionConfig {
             .field("trust_server_certificate", &self.trust_server_certificate)
             .field("read_only", &self.read_only)
             .field("idle_timeout_minutes", &self.idle_timeout_minutes)
+            .field("ask_secrets", &self.ask_secrets)
             .finish()
     }
 }
@@ -159,6 +177,7 @@ impl ConnectionConfig {
             trust_server_certificate: false,
             read_only: false,
             idle_timeout_minutes: None,
+            ask_secrets: Vec::new(),
         }
     }
 
@@ -188,6 +207,7 @@ impl ConnectionConfig {
             trust_server_certificate: false,
             read_only: false,
             idle_timeout_minutes: None,
+            ask_secrets: Vec::new(),
         }
     }
 
@@ -247,6 +267,33 @@ impl ConnectionConfig {
             None => default,
             Some(0) => None,
             Some(minutes) => Some(Duration::from_secs(u64::from(minutes) * 60)),
+        }
+    }
+
+    pub fn with_ask_secrets(mut self, ask_secrets: Vec<SecretKind>) -> Self {
+        self.ask_secrets = ask_secrets;
+        self
+    }
+
+    /// Whether `kind` is asked for on connect rather than stored.
+    pub fn asks_for(&self, kind: SecretKind) -> bool {
+        self.ask_secrets.contains(&kind)
+    }
+
+    /// Whether `kind` plays any part in opening this connection: SQLite has
+    /// no password, SSH secrets need a tunnel, and a key passphrase needs a
+    /// key.
+    pub fn uses_secret(&self, kind: SecretKind) -> bool {
+        match kind {
+            SecretKind::Password => self.db_type != DatabaseType::SQLite,
+            SecretKind::SshPassword => self.requires_ssh_tunnel(),
+            SecretKind::SshPrivateKeyPassword => {
+                self.requires_ssh_tunnel()
+                    && self
+                        .ssh_private_key_path
+                        .as_deref()
+                        .is_some_and(|path| !path.is_empty())
+            }
         }
     }
 

@@ -20,8 +20,9 @@ use gpui_component::{
 use app_database::{ConnectionData, EnvironmentType};
 
 use super::NewConnectionModal;
-use super::shared::{make_input, render_ssh_section, render_ssl_advanced_fields};
+use super::shared::{make_input, render_ssh_section, render_ssl_advanced_fields, secret_field};
 use super::types::host_contains_explicit_port;
+use database::SecretKind;
 
 pub(super) struct ServerFormSpec {
     pub db_type: database::DatabaseType,
@@ -362,7 +363,11 @@ fn optional_value(input: &Entity<InputState>, cx: &App) -> Option<String> {
     }
 }
 
-fn render_base_fields(form: &ServerForm) -> AnyElement {
+fn render_base_fields(
+    form: &ServerForm,
+    ask_secrets: &[SecretKind],
+    cx: &mut Context<NewConnectionModal>,
+) -> AnyElement {
     v_flex()
         .gap_3()
         .child(
@@ -393,13 +398,14 @@ fn render_base_fields(form: &ServerForm) -> AnyElement {
                         .child(div().text_sm().child("User"))
                         .child(Input::new(&form.username_input)),
                 )
-                .child(
-                    v_flex()
-                        .flex_1()
-                        .gap_2()
-                        .child(div().text_sm().child("Password"))
-                        .child(Input::new(&form.password_input).mask_toggle()),
-                ),
+                .child(secret_field(
+                    format!("{}-password-ask", form.spec.id_prefix),
+                    "Password",
+                    &form.password_input,
+                    SecretKind::Password,
+                    ask_secrets,
+                    cx,
+                )),
         )
         .child(
             v_flex()
@@ -415,6 +421,7 @@ fn render_base_fields(form: &ServerForm) -> AnyElement {
 pub(super) fn render(
     select: fn(&mut NewConnectionModal) -> &mut ServerForm,
     form: &ServerForm,
+    ask_secrets: &[SecretKind],
     cx: &mut Context<NewConnectionModal>,
 ) -> AnyElement {
     let prefix = form.spec.id_prefix;
@@ -423,7 +430,7 @@ pub(super) fn render(
 
     v_flex()
         .gap_3()
-        .child(render_base_fields(form))
+        .child(render_base_fields(form, ask_secrets, cx))
         .child(
             v_flex()
                 .flex_1()
@@ -481,6 +488,7 @@ pub(super) fn render(
                 &form.ssh_password_input,
                 &form.ssh_private_key_input,
                 &form.ssh_private_key_password_input,
+                ask_secrets,
                 cx,
             ))
         })
