@@ -1058,8 +1058,11 @@ impl ResultsPanel {
     ) -> SelectedTableData {
         let mut selected_rows_data = Vec::new();
 
-        // Collect selected row data
-        for &row in selected_rows {
+        // In grid order: the selection is a set, and not every format sorts
+        // the rows it is handed.
+        let mut ordered_rows: Vec<usize> = selected_rows.iter().copied().collect();
+        ordered_rows.sort_unstable();
+        for row in ordered_rows {
             if let Some(row_data) = delegate.rows.get(row) {
                 // Hidden columns sit after the visible ones and stay out of
                 // copies and exports.
