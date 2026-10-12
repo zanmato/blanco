@@ -90,10 +90,16 @@ impl Fixture {
     async fn connect(server: Server, runtime: tokio::runtime::Runtime) -> Result<Option<Self>> {
         let service = DatabaseService::new(runtime.handle().clone());
         service.add_connection_config(server.config.clone()).await;
-        let connection = match service
-            .get_or_create_connection(server.config.id, Some(&server.admin_database))
-            .await
-        {
+        // Postgres connects lazily, so only a ping shows whether the server
+        // is there.
+        let reached = async {
+            let connection = service
+                .get_or_create_connection(server.config.id, Some(&server.admin_database))
+                .await?;
+            connection.ping().await?;
+            anyhow::Ok(connection)
+        };
+        let connection = match reached.await {
             Ok(connection) => connection,
             Err(error) if !strict() => {
                 eprintln!(

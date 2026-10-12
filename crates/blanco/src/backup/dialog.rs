@@ -5,7 +5,7 @@ use database::DatabaseService;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
     ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled,
-    Subscription, Window, div, prelude::FluentBuilder, px,
+    Subscription, Window, div, prelude::FluentBuilder, px, uniform_list,
 };
 use gpui_component::{
     ActiveTheme, Disableable as _, IndexPath, Sizable as _, WindowExt,
@@ -20,6 +20,7 @@ use gpui_component::{
     v_flex,
 };
 use std::collections::VecDeque;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -35,6 +36,10 @@ use super::tools::{Compatibility, LocatedTool, ToolProgram, Version, compatibili
 use crate::app_settings::AppSettings;
 use crate::result_ext::ResultExt;
 use crate::settings::ClientToolSettings;
+
+/// The table list of the backup dialog.
+const TABLE_ROW_HEIGHT: f32 = 24.0;
+const MAX_VISIBLE_TABLE_ROWS: usize = 8;
 
 /// Lines of tool output kept for the live view.
 const OUTPUT_LINES: usize = 500;
@@ -709,6 +714,16 @@ impl BackupDialog {
         cx.notify();
     }
 
+    /// A structure only backup: every table without its rows.
+    fn set_all_structure_only(&mut self, structure_only: bool, cx: &mut Context<Self>) {
+        if let Lookup::Ready(tables) = &mut self.tables {
+            for table in tables {
+                table.structure_only = structure_only;
+            }
+        }
+        cx.notify();
+    }
+
     fn update_table(
         &mut self,
         index: usize,
@@ -878,6 +893,12 @@ impl BackupDialog {
                 .into_any_element();
         }
         let all_included = tables.iter().all(|table| table.include);
+        let any_included = tables.iter().any(|table| table.include);
+        let all_structure_only = any_included
+            && tables
+                .iter()
+                .filter(|table| table.include)
+                .all(|table| table.structure_only);
         let header = h_flex()
             .gap_2()
             .px_2()
@@ -901,60 +922,95 @@ impl BackupDialog {
                 ),
             )
             .child(
-                div()
-                    .w(px(110.))
+                // The label comes first so the box sits at the right edge,
+                // above the boxes of the rows.
+                h_flex()
+                    .flex_shrink_0()
+                    .gap_2()
                     .text_xs()
                     .text_color(cx.theme().table_head_foreground)
-                    .child("Structure only"),
+                    .child("Structure only")
+                    .child(
+                        Checkbox::new("backup-all-structure")
+                            .small()
+                            .checked(all_structure_only)
+                            .disabled(!any_included)
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.set_all_structure_only(*checked, cx);
+                            })),
+                    ),
             );
-        let rows = tables.iter().enumerate().map(|(index, table)| {
-            h_flex()
-                .gap_2()
-                .px_2()
-                .py_0p5()
-                .child(
-                    div().flex_1().min_w_0().child(
-                        Checkbox::new(("backup-table", index))
-                            .small()
-                            .label(table.display_name())
-                            .checked(table.include)
-                            .on_click(cx.listener(move |this, checked: &bool, _, cx| {
-                                let checked = *checked;
-                                this.update_table(index, |table| table.include = checked, cx);
-                            })),
-                    ),
-                )
-                .child(
-                    div().w(px(110.)).child(
-                        Checkbox::new(("backup-structure", index))
-                            .small()
-                            .checked(table.structure_only)
-                            .disabled(!table.include)
-                            .on_click(cx.listener(move |this, checked: &bool, _, cx| {
-                                let checked = *checked;
-                                this.update_table(
-                                    index,
-                                    |table| table.structure_only = checked,
-                                    cx,
-                                );
-                            })),
-                    ),
-                )
-        });
+        let row_count = tables.len();
+        let visible_rows = row_count.min(MAX_VISIBLE_TABLE_ROWS) as f32;
         v_flex()
             .border_1()
             .border_color(cx.theme().border)
             .rounded(cx.theme().radius)
             .overflow_hidden()
             .child(header)
+            // Only the rows in view are built: a database can have thousands
+            // of tables, and the dialog is rebuilt on every hover.
             .child(
-                v_flex()
-                    .id("backup-tables")
-                    .max_h(px(180.))
-                    .overflow_y_scroll()
-                    .children(rows),
+                uniform_list(
+                    "backup-tables",
+                    row_count,
+                    cx.processor(|this, range: Range<usize>, _, cx| {
+                        this.render_table_rows(range, cx)
+                    }),
+                )
+                .h(px(TABLE_ROW_HEIGHT * visible_rows)),
             )
             .into_any_element()
+    }
+
+    fn render_table_rows(&self, range: Range<usize>, cx: &mut Context<Self>) -> Vec<gpui::Div> {
+        let Lookup::Ready(tables) = &self.tables else {
+            return Vec::new();
+        };
+        let start = range.start;
+        tables
+            .get(range)
+            .unwrap_or_default()
+            .iter()
+            .enumerate()
+            .map(|(offset, table)| {
+                let index = start + offset;
+                h_flex()
+                    // A list item is not stretched to the list's width.
+                    .w_full()
+                    .h(px(TABLE_ROW_HEIGHT))
+                    .gap_2()
+                    .px_2()
+                    .child(
+                        div().flex_1().min_w_0().child(
+                            Checkbox::new(("backup-table", index))
+                                .small()
+                                .label(table.display_name())
+                                .checked(table.include)
+                                .on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                                    let checked = *checked;
+                                    this.update_table(index, |table| table.include = checked, cx);
+                                })),
+                        ),
+                    )
+                    .child(
+                        div().flex_shrink_0().child(
+                            Checkbox::new(("backup-structure", index))
+                                .small()
+                                .checked(table.structure_only)
+                                .disabled(!table.include)
+                                .on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                                    let checked = *checked;
+                                    this.update_table(
+                                        index,
+                                        |table| table.structure_only = checked,
+                                        cx,
+                                    );
+                                })),
+                        ),
+                    )
+            })
+            .collect()
     }
 }
 
