@@ -3,8 +3,11 @@ use gpui_component::{ActiveTheme, table::Column};
 
 use blanco_core::{QueryResult, connection_trait::ColumnType};
 
-use super::cell_edit_state::CellEditState;
+use super::cell_edit_state::{CellEditState, format_value_for_display};
 use super::compare::CompareKind;
+use super::temporal;
+use crate::app_settings::AppSettings;
+use crate::settings::ResultsSettings;
 
 mod cell_edit;
 mod change_ops;
@@ -12,6 +15,14 @@ mod layout;
 mod render;
 
 pub use layout::ColumnLayout;
+
+/// The grid's display settings. Falls back to the defaults where the app
+/// settings are not installed, as in tests that build a table on its own.
+pub(crate) fn results_settings(cx: &App) -> ResultsSettings {
+    cx.try_global::<AppSettings>()
+        .map(|app_settings| app_settings.settings.results.clone())
+        .unwrap_or_default()
+}
 
 #[derive(Default)]
 pub struct ResultsTableDelegate {
@@ -38,6 +49,9 @@ pub struct ResultsTableDelegate {
     hidden_columns: usize,
     /// How many columns at the start are pinned to the left edge.
     pinned_columns: usize,
+    /// The rows the grid last drew, which decide on which side of its cell
+    /// the edit bubble hangs.
+    visible_rows: std::ops::Range<usize>,
     /// For each column, its index in the query's result.
     source_order: Vec<usize>,
     /// The widths the result opened with.
@@ -95,6 +109,23 @@ impl ResultsTableDelegate {
         }
         self.clear_selection();
         true
+    }
+
+    /// How a stored cell value reads in the grid. Date and time values follow
+    /// the display settings; everything else, and every copy or edit path,
+    /// uses the stored text.
+    pub(crate) fn display_value(
+        &self,
+        col_ix: usize,
+        value: &str,
+        settings: &ResultsSettings,
+    ) -> String {
+        if self.column_types.get(col_ix) == Some(&ColumnType::DateTime)
+            && let Some(text) = temporal::display_text(value, settings)
+        {
+            return text;
+        }
+        format_value_for_display(value)
     }
 
     /// Remove a row at the specified index
@@ -210,6 +241,7 @@ impl ResultsTableDelegate {
 
         // Pre-collect sample rows (cloned) to avoid borrow conflicts with result.rows
         let sample_rows: Vec<Vec<Option<String>>> = result.rows.iter().take(5).cloned().collect();
+        let settings = results_settings(cx);
 
         // Calculate column widths based on actual text measurement
         let column_widths: Vec<f64> = result
@@ -252,6 +284,15 @@ impl ResultsTableDelegate {
                 // Check sample rows to determine content width (limit to first 5 rows for performance)
                 for row in sample_rows.iter() {
                     if let Some(Some(cell_value)) = row.get(i) {
+                        // Dates are measured as displayed, which can be wider
+                        // than the stored text.
+                        let shown_value = if self.column_types.get(i) == Some(&ColumnType::DateTime)
+                        {
+                            temporal::display_text(cell_value, &settings)
+                        } else {
+                            None
+                        };
+                        let cell_value = shown_value.as_ref().unwrap_or(cell_value);
                         // The grid shows one line per cell, and `shape_line`
                         // rejects newlines, so measure the widest line only.
                         let widest_line = cell_value

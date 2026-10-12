@@ -98,6 +98,14 @@ All notable changes to this project will be documented in this file.
   sessions, any other query keeps them for reruns. Copy and export leave
   hidden columns out and follow the order. Settings > Database > Show Row
   Numbers turns the row number column off
+- A cell being edited shows a small bubble at its corner with the actions on
+  its value. SQL sends the text as a SQL expression instead of a value, and
+  date, time and timestamp cells get a button that opens a picker with an
+  editable time and a Now shortcut
+- Dates and timestamps in results are shown in ISO 8601 by default, with SQL,
+  day first and month first formats in the new Results settings, and
+  timestamps with a time zone can be shown in local time or UTC. Copy, export
+  and editing still use the value as the database returns it
 
 ### Fixes
 

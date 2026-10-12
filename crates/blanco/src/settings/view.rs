@@ -3,7 +3,9 @@ use crate::mcp::{McpService, McpStatus};
 use crate::settings::csv_group::csv_group;
 use crate::settings::formatter_page::formatter_page;
 use crate::settings::keybindings_page::keybindings_page;
-use crate::settings::{CompletionAcceptKeysSetting, EditorSettings, Settings};
+use crate::settings::{
+    CompletionAcceptKeysSetting, DateDisplayFormat, EditorSettings, Settings, TimeZoneDisplay,
+};
 use app_database::AppDatabase;
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, FocusHandle, Focusable, IntoElement,
@@ -766,6 +768,91 @@ impl SettingsView {
                         .default_value(default_settings.results.show_row_numbers),
                     )
                     .description("Number the rows of a result. Applies to the next result shown."),
+                ]),
+            ]),
+            SettingPage::new("Results").resettable(true).groups(vec![
+                SettingGroup::new().title("Dates and Times").items(vec![
+                    SettingItem::new(
+                        "Date Format",
+                        SettingField::dropdown(
+                            DateDisplayFormat::ALL
+                                .into_iter()
+                                .map(|format| (format.key().into(), format.label().into()))
+                                .collect(),
+                            move |cx: &App| {
+                                SharedString::from(
+                                    AppSettings::global(cx).settings.results.date_format.key(),
+                                )
+                            },
+                            {
+                                let view_handle = view_handle.clone();
+                                move |val: SharedString, cx: &mut App| {
+                                    let Some(format) = DateDisplayFormat::from_key(&val) else {
+                                        return;
+                                    };
+                                    AppSettings::global_mut(cx).settings.results.date_format =
+                                        format;
+                                    cx.refresh_windows();
+                                    if let Some(view) = view_handle.upgrade() {
+                                        view.update(cx, |view, cx| {
+                                            view.save_setting_debounced(
+                                                "results.date_format".into(),
+                                                format.key().into(),
+                                                false,
+                                                cx,
+                                            );
+                                        });
+                                    }
+                                }
+                            },
+                        )
+                        .default_value(SharedString::from(
+                            default_settings.results.date_format.key(),
+                        )),
+                    )
+                    .description(
+                        "How dates and timestamps are shown in results. Copy, export and editing use the value as the database returns it.",
+                    ),
+                    SettingItem::new(
+                        "Time Zone",
+                        SettingField::dropdown(
+                            TimeZoneDisplay::ALL
+                                .into_iter()
+                                .map(|zone| (zone.key().into(), zone.label().into()))
+                                .collect(),
+                            move |cx: &App| {
+                                SharedString::from(
+                                    AppSettings::global(cx).settings.results.time_zone.key(),
+                                )
+                            },
+                            {
+                                let view_handle = view_handle.clone();
+                                move |val: SharedString, cx: &mut App| {
+                                    let Some(zone) = TimeZoneDisplay::from_key(&val) else {
+                                        return;
+                                    };
+                                    AppSettings::global_mut(cx).settings.results.time_zone = zone;
+                                    cx.refresh_windows();
+                                    if let Some(view) = view_handle.upgrade() {
+                                        view.update(cx, |view, cx| {
+                                            view.save_setting_debounced(
+                                                "results.time_zone".into(),
+                                                zone.key().into(),
+                                                false,
+                                                cx,
+                                            );
+                                        });
+                                    }
+                                }
+                            },
+                        )
+                        .default_value(SharedString::from(
+                            default_settings.results.time_zone.key(),
+                        )),
+                    )
+                    .description(
+                        "The time zone timestamps with a time zone are shown in. The date and time picker uses it too.",
+                    ),
                 ]),
             ]),
             // Appearance Settings Page
