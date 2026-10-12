@@ -35,6 +35,7 @@ mod cell_edit_state;
 mod cell_edit_test;
 mod chart_view;
 mod clipboard;
+mod column_copy;
 mod commit;
 mod compare;
 #[cfg(test)]
@@ -1644,6 +1645,7 @@ impl Render for ResultsPanel {
             .on_action(cx.listener(Self::on_copy_as_sql))
             .on_action(cx.listener(Self::on_copy_as_values))
             .on_action(cx.listener(Self::on_copy_as_markdown))
+            .on_action(cx.listener(Self::on_copy_column_values))
             .on_action(cx.listener(Self::on_export_as_csv))
             .on_action(cx.listener(Self::on_export_as_tsv))
             .on_action(cx.listener(Self::on_export_as_json))

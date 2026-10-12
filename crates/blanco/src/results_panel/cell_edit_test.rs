@@ -990,6 +990,7 @@ async fn test_expanded_text_json_formats_and_minifies(cx: &mut TestAppContext) {
             .results_panel
             .clone()
     });
+
     let table_state = results_panel.read_with(&cx, |panel, _| panel.table_state().clone());
     results_panel.update_in(&mut cx, |panel, window, cx| {
         panel.start_cell_edit(0, 1, window, cx);
@@ -1038,4 +1039,50 @@ async fn test_expanded_text_json_formats_and_minifies(cx: &mut TestAppContext) {
             .map(|input| input.text(cx))
     });
     assert_eq!(inline.as_deref(), Some(r#"{"zeta":2,"alpha":[]}"#));
+}
+
+/// Copying a column as a distinct IN list leaves NULL out and keeps numbers
+/// bare; the plain list keeps every value, NULL included.
+#[gpui::test]
+async fn test_copy_column_values(cx: &mut TestAppContext) {
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    for sql in [
+        "CREATE TABLE picks (id INTEGER, v TEXT)",
+        "INSERT INTO picks VALUES (1, 'a'), (2, NULL), (2, 'it''s')",
+        "SELECT id, v FROM picks",
+    ] {
+        set_editor_text(&harness, sql, &mut cx);
+        run_query(&harness, &mut cx);
+        wait_for_query(&harness, &mut cx).await;
+    }
+    let results_panel = harness.editor_panel.read_with(&cx, |panel, _| {
+        panel
+            .active_query_tab()
+            .expect("query tab")
+            .results_panel
+            .clone()
+    });
+
+    let copy = |column, distinct, as_in_list, cx: &mut VisualTestContext| {
+        results_panel.update_in(cx, |panel, window, cx| {
+            panel.on_copy_column_values(
+                &crate::app::CopyColumnValues {
+                    column,
+                    distinct,
+                    as_in_list,
+                    selected_only: false,
+                },
+                window,
+                cx,
+            );
+        });
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .unwrap_or_default()
+    };
+    assert_eq!(copy(0, true, true, &mut cx), "(1, 2)");
+    assert_eq!(copy(1, false, true, &mut cx), "('a', 'it''s')");
+    assert_eq!(copy(1, false, false, &mut cx), "a\nNULL\nit's");
 }

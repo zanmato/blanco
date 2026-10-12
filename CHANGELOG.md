@@ -12,9 +12,9 @@ All notable changes to this project will be documented in this file.
 - Follow System Appearance in the Appearance settings switches between a
   light and a dark theme of your choice as the system appearance changes,
   live and at startup
-- Expand * into columns: with the caret on a `*` in a select list, Show
-  Code Actions (Ctrl+. or Cmd+.) replaces it with the columns of the tables
-  it covers. `alias.*` keeps its alias, and with several tables each column
+- Expand _ into columns: with the caret on a `_`in a select list, Show
+Code Actions (Ctrl+. or Cmd+.) replaces it with the columns of the tables
+it covers.`alias.\*` keeps its alias, and with several tables each column
   is prefixed with its table. Names are quoted only where the database needs
   it
 - A filter bar above a table's rows narrows them on the server. Build
@@ -62,17 +62,18 @@ All notable changes to this project will be documented in this file.
 - Accept Suggestion With in the Editor settings chooses whether Enter, Tab
   or either accepts a completion suggestion. When Enter does not accept, it
   starts a new line and closes the list
+- Copy a column's values from the column header's context menu or a cell's:
+  one per line, or as an IN list such as `('a', 'b')` with strings escaped
+  for the dialect, numbers left bare and NULL left out, each also as distinct
+  values. From a cell, a selection of several rows copies just those rows
 
 ### Fixes
 
-<<<<<<< HEAD
 - Formatting JSON in the cell editor and the cell comparison no longer sorts
   object keys or rounds large numbers
-=======
 - Exporting an empty table as SQL wrote an INSERT without any rows; the file
   is now empty. Copy as SQL escapes strings for the result's database rather
   than always for PostgreSQL
->>>>>>> 6acfc38 (CSV options for export and copy)
 - Clicking a cell in the results table no longer starts a text selection in
   the SQL view that follows the pointer with no button held
 

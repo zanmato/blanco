@@ -137,6 +137,19 @@ pub struct CopyAsFormat {
 #[action(namespace = blanco_app, no_json)]
 pub struct AddRow;
 
+/// Copy the values of one result column: one per line, or as an IN list.
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct CopyColumnValues {
+    pub column: usize,
+    /// Each value once.
+    pub distinct: bool,
+    /// `('a', 'b')` instead of one value per line.
+    pub as_in_list: bool,
+    /// Only the selected rows when several are selected, else every row.
+    pub selected_only: bool,
+}
+
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
 pub struct DuplicateRow {
