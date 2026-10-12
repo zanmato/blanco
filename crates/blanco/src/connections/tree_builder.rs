@@ -796,7 +796,10 @@ mod tests {
         let schema = TreeItem::new("schema:public", "public", schema_metadata.metadata)
             .children(nested.into_iter().map(|(_, item)| item));
 
-        let filtered = crate::connections::filter_tree_items(&[schema], "2026_eu");
+        let filtered = crate::connections::filter_tree_items(
+            &[schema],
+            &crate::name_filter::NameFilter::parse("2026_eu"),
+        );
         let measurements = &filtered[0].children[0];
         assert_eq!(measurements.id.as_ref(), "table:measurements");
         assert!(measurements.is_expanded());

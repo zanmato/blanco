@@ -1049,18 +1049,20 @@ impl ConnectionsPanel {
             .px_2()
             .pb_2()
             .gap_1()
-            .child(div().flex_1().child(Input::new(&self.filter_input).small()))
             .child(
-                Button::new("connections-tag-filter")
+                div()
+                    .flex_1()
+                    .child(Input::new(&self.filter_input).small().cleanable(true)),
+            )
+            .child({
+                let button = Button::new("connections-tag-filter")
                     .small()
                     .ghost()
-                    .map(|button| match tag_filter {
-                        Some(tag) => button
-                            .label(tag.display_name())
-                            .text_color(environment_color(tag, cx)),
-                        None => button.icon(IconName::Funnel),
+                    .icon(IconName::Funnel)
+                    .tooltip(match tag_filter {
+                        Some(tag) => format!("Showing {} connections", tag.display_name()),
+                        None => "Filter by environment".to_string(),
                     })
-                    .tooltip("Filter by environment")
                     .dropdown_menu(move |menu, _, _| {
                         let set_filter = |tag: Option<EnvironmentType>| {
                             let panel = panel.clone();
@@ -1089,8 +1091,18 @@ impl ConnectionsPanel {
                                 )
                             },
                         )
-                    }),
-            )
+                    });
+                // The connections listed below say which tag is chosen, so
+                // a dot in the tag's color is enough to show a filter is on.
+                match tag_filter {
+                    Some(tag) => gpui_component::badge::Badge::new()
+                        .dot()
+                        .color(environment_color(tag, cx))
+                        .child(button)
+                        .into_any_element(),
+                    None => button.into_any_element(),
+                }
+            })
             .child(
                 Button::new("connections-menu")
                     .icon(IconName::Ellipsis)

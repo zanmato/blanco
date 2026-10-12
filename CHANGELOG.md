@@ -97,7 +97,8 @@ All notable changes to this project will be documented in this file.
   its real host and port
 - The sidebar filter takes `^` to anchor the start of a name, `$` to anchor
   the end and `|` between alternatives, so `^users$|^orders$` shows exactly
-  those two. Matching ignores case
+  those two. Matching ignores case. The column search of the structure tab
+  takes the same syntax
 - A search field in the title bar opens the command palette and shows its
   shortcut
 - Blanco checks for new releases hourly and shows an Update button in the
