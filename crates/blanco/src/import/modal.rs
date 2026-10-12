@@ -958,8 +958,7 @@ impl Render for ImportModal {
                                             .w(px(160.0))
                                             .text_xs()
                                             .font_family(cx.theme().mono_font_family.clone())
-                                            .overflow_hidden()
-                                            .text_ellipsis()
+                                            .truncate()
                                             .child(format!("{}{}", col.name, flags)),
                                     )
                                     .child(div().w(px(200.0)).when_some(select, |row, state| {

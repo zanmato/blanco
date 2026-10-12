@@ -33,6 +33,10 @@ All notable changes to this project will be documented in this file.
   export dialog starts from. Exports can be written as UTF-8, UTF-8 with a
   byte order mark, or UTF-16, and SQL exports can write one INSERT per row
   instead of one for all rows
+- The sidebar follows the active tab: switching tabs, or opening a table
+  from the command palette, selects that tab's table, view or routine,
+  loading and opening the groups above it and scrolling it into view. Follow
+  Active Tab in the General settings turns it off
 - A search field in the title bar opens the command palette and shows its
   shortcut
 - Blanco checks for new releases hourly and shows an Update button in the
@@ -94,6 +98,8 @@ All notable changes to this project will be documented in this file.
 - Exporting an empty table as SQL wrote an INSERT without any rows; the file
   is now empty. Copy as SQL escapes strings for the result's database rather
   than always for PostgreSQL
+- The sidebar selection no longer jumps to another row or disappears when
+  the tree refreshes or a group above it is collapsed and opened again
 - Clicking a cell in the results table no longer starts a text selection in
   the SQL view that follows the pointer with no button held
 

@@ -174,8 +174,7 @@ fn render_graph_node(node_data: NodeRenderData, params: &NodeRenderParams) -> gp
                         .text_size(px(font_size))
                         .text_color(theme.foreground)
                         .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .overflow_hidden()
-                        .text_ellipsis()
+                        .truncate()
                         .child(node_data.title),
                 ),
         )
@@ -199,8 +198,7 @@ fn render_graph_node(node_data: NodeRenderData, params: &NodeRenderParams) -> gp
                                 .child(
                                     div()
                                         .flex_1()
-                                        .overflow_hidden()
-                                        .text_ellipsis()
+                                        .truncate()
                                         .text_size(px(font_size))
                                         .text_color(theme.foreground)
                                         .child(label),
@@ -210,8 +208,7 @@ fn render_graph_node(node_data: NodeRenderData, params: &NodeRenderParams) -> gp
                                         .flex_shrink_0()
                                         .text_size(px(font_size * 0.85))
                                         .text_color(theme.muted_foreground)
-                                        .overflow_hidden()
-                                        .text_ellipsis()
+                                        .truncate()
                                         .child(type_label),
                                 )
                                 .children(badges.into_iter().map(|(badge_label, badge_color)| {

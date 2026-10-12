@@ -190,6 +190,10 @@ pub struct TreeState<D: TreeDelegate> {
     entries: Vec<TreeEntry<D::Metadata>>,
     scroll_handle: UniformListScrollHandle,
     selected_ix: Option<usize>,
+    /// The id of the selected item. The index moves when the entries are
+    /// rebuilt, so the selection is kept by id and looked up again; an item
+    /// hidden by a collapsed parent is selected again once it shows.
+    selected_id: Option<SharedString>,
     right_clicked_index: Option<usize>,
     delegate: D,
 }
@@ -199,6 +203,7 @@ impl<D: TreeDelegate> TreeState<D> {
     pub fn new(delegate: D, cx: &mut App) -> Self {
         Self {
             selected_ix: None,
+            selected_id: None,
             right_clicked_index: None,
             focus_handle: cx.focus_handle(),
             scroll_handle: UniformListScrollHandle::default(),
@@ -263,7 +268,7 @@ impl<D: TreeDelegate> TreeState<D> {
         for item in items.into_iter() {
             self.add_entry(item, 0);
         }
-        self.selected_ix = None;
+        self.reselect();
         cx.notify();
     }
 
@@ -274,8 +279,37 @@ impl<D: TreeDelegate> TreeState<D> {
 
     /// Set the selected index, or `None` to clear selection.
     pub fn set_selected_index(&mut self, ix: Option<usize>, cx: &mut Context<Self>) {
-        self.selected_ix = ix;
+        self.select(ix);
         cx.notify();
+    }
+
+    /// Select the item with `id`, which may be hidden under a collapsed parent
+    /// for now. Returns its index when it is showing.
+    pub fn select_id(
+        &mut self,
+        id: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        self.selected_id = Some(id.into());
+        self.reselect();
+        cx.notify();
+        self.selected_ix
+    }
+
+    fn select(&mut self, ix: Option<usize>) {
+        self.selected_ix = ix;
+        self.selected_id = ix
+            .and_then(|ix| self.entries.get(ix))
+            .map(|e| e.item.id.clone());
+    }
+
+    /// Point the selected index at the selected item again after the entries
+    /// changed.
+    fn reselect(&mut self) {
+        self.selected_ix = self
+            .selected_id
+            .as_ref()
+            .and_then(|id| self.entries.iter().position(|e| &e.item.id == id));
     }
 
     pub fn scroll_to_item(&mut self, ix: usize, strategy: gpui::ScrollStrategy) {
@@ -314,6 +348,7 @@ impl<D: TreeDelegate> TreeState<D> {
 
         entry.item.state.borrow_mut().expanded = !entry.is_expanded();
         self.rebuild_entries();
+        self.reselect();
     }
 
     fn rebuild_entries(&mut self) {
@@ -370,7 +405,7 @@ impl<D: TreeDelegate> TreeState<D> {
             selected_ix = self.entries.len().saturating_sub(1);
         }
 
-        self.selected_ix = Some(selected_ix);
+        self.select(Some(selected_ix));
         self.scroll_handle
             .scroll_to_item(selected_ix, gpui::ScrollStrategy::Top);
         cx.notify();
@@ -384,14 +419,14 @@ impl<D: TreeDelegate> TreeState<D> {
             selected_ix = 0;
         }
 
-        self.selected_ix = Some(selected_ix);
+        self.select(Some(selected_ix));
         self.scroll_handle
             .scroll_to_item(selected_ix, gpui::ScrollStrategy::Bottom);
         cx.notify();
     }
 
     fn on_entry_click(&mut self, ix: usize, _: &mut Window, cx: &mut Context<Self>) {
-        self.selected_ix = Some(ix);
+        self.select(Some(ix));
         self.toggle_expand(ix);
         cx.notify();
     }
@@ -518,5 +553,64 @@ impl<D: TreeDelegate> RenderOnce for Tree<D> {
             .size_full()
             .child(self.state)
             .refine_style(&self.style)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{AppContext as _, TestAppContext};
+
+    struct Plain;
+
+    impl TreeDelegate for Plain {
+        type Metadata = ();
+
+        fn render_item(
+            &self,
+            ix: usize,
+            _: &TreeEntry<()>,
+            _: bool,
+            _: &mut Window,
+            _: &mut App,
+        ) -> ListItem {
+            ListItem::new(ix)
+        }
+    }
+
+    fn items(open: bool) -> Vec<TreeItem<()>> {
+        vec![
+            TreeItem::new("a", "a", ()),
+            TreeItem::new("group", "group", ())
+                .expanded(open)
+                .children([TreeItem::new("leaf", "leaf", ())]),
+        ]
+    }
+
+    #[gpui::test]
+    fn selection_follows_the_item_across_rebuilds(cx: &mut TestAppContext) {
+        let tree = cx.new(|cx| TreeState::new(Plain, cx));
+        tree.update(cx, |tree, cx| {
+            tree.set_items(items(true), cx);
+            assert_eq!(tree.select_id("leaf", cx), Some(2));
+
+            // Collapsing the group hides the item, reopening shows it selected.
+            tree.toggle_expand(1);
+            assert_eq!(tree.selected_index(), None);
+            tree.toggle_expand(1);
+            assert_eq!(tree.selected_index(), Some(2));
+
+            // A rebuild with a new item above keeps the same item selected.
+            let mut rebuilt = vec![TreeItem::new("new", "new", ())];
+            rebuilt.extend(items(true));
+            tree.set_items(rebuilt, cx);
+            assert_eq!(tree.selected_index(), Some(3));
+
+            // An item not built yet is selected once it shows up.
+            tree.set_items(items(false), cx);
+            assert_eq!(tree.select_id("leaf", cx), None);
+            tree.set_items(items(true), cx);
+            assert_eq!(tree.selected_index(), Some(2));
+        });
     }
 }

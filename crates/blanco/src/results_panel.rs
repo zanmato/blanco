@@ -458,6 +458,11 @@ impl ResultsPanel {
             .unwrap_or_default()
     }
 
+    /// The table the shown result was read from, when it came from one.
+    pub fn source_table(&self, cx: &App) -> Option<String> {
+        self.table_state.read(cx).delegate().table_name.clone()
+    }
+
     #[cfg(any(test, feature = "screenshots"))]
     pub fn table_state(&self) -> &Entity<TableState<ResultsTableDelegate>> {
         &self.table_state

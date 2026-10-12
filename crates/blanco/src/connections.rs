@@ -1,6 +1,9 @@
 mod data_loading;
 mod delegate;
+mod reveal;
 mod tree_builder;
+
+pub use reveal::RevealTarget;
 
 pub use data_loading::DatabaseMetadata;
 pub use delegate::ConnectionsTreeDelegate;
@@ -92,6 +95,8 @@ pub struct ConnectionsPanel {
     // Track which object-type category folders (Tables, Views, ...) are
     // expanded, keyed by the category tree item id.
     expanded_categories: std::collections::HashSet<String>,
+    /// An object the tree is opening its way to, see [`Self::reveal`].
+    pending_reveal: Option<reveal::PendingReveal>,
     // Live per-database connection status, keyed by connection id. This is the
     // single source of truth for the "connected" icon color: it is read while
     // *building* tree items so that a rebuild (or the tree widget
@@ -237,6 +242,7 @@ impl ConnectionsPanel {
             loaded_connections,
             expanded_connections,
             expanded_categories,
+            pending_reveal: None,
             connected_databases,
             initial_load_completed: false,
         };
@@ -421,6 +427,11 @@ impl ConnectionsPanel {
         self.tree_state.update(cx, |state, cx| {
             state.set_items(tree_items, cx);
         });
+
+        // A load the reveal waited on has landed; take the next step.
+        if self.pending_reveal.is_some() {
+            self.advance_reveal(cx);
+        }
     }
 
     /// Whether a specific database within a connection currently has a live

@@ -160,6 +160,11 @@ impl EditorPanel {
             .map(|tab| tab.results_panel.clone())
     }
 
+    /// The object the active tab shows, for the sidebar to select.
+    pub fn active_reveal_target(&self, cx: &App) -> Option<crate::connections::RevealTarget> {
+        self.tabs.get(self.active_tab_ix)?.reveal_target(cx)
+    }
+
     #[cfg(any(test, feature = "screenshots"))]
     pub fn active_query_tab(&self) -> Option<&QueryTab> {
         self.tabs.get(self.active_tab_ix).and_then(TabType::query)

@@ -153,6 +153,9 @@ impl Settings {
                 "general.check_for_updates" => {
                     settings.general.check_for_updates = value.parse().unwrap_or(true);
                 }
+                "general.follow_active_tab" => {
+                    settings.general.follow_active_tab = value.parse().unwrap_or(true);
+                }
                 "editor.font_family" => {
                     // Legacy: migrate to appearance.mono_font_family
                     if settings.appearance.mono_font_family.is_empty() {
@@ -405,12 +408,15 @@ pub fn persist_setting(key: &'static str, value: String, cx: &mut App) {
 pub struct GeneralSettings {
     /// Check GitHub hourly for a newer release and offer it in the title bar.
     pub check_for_updates: bool,
+    /// Select the active tab's table in the sidebar, opening its parents.
+    pub follow_active_tab: bool,
 }
 
 impl Default for GeneralSettings {
     fn default() -> Self {
         Self {
             check_for_updates: true,
+            follow_active_tab: true,
         }
     }
 }
