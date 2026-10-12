@@ -74,8 +74,9 @@ All notable changes to this project will be documented in this file.
   refresh the connection. A shortcut is recorded by clicking its field and
   pressing the keys, so only a real key combination can be stored: Escape
   cancels, Backspace unbinds, and each shortcut has its own reset. A shortcut
-  that is also used by another action is flagged. Wrap Tab Navigation in the Editor settings decides whether next
-  and previous tab go around or stop at the ends
+  that is also used by another action is flagged. Wrap Tab Navigation in the
+  Editor settings decides whether next and previous tab go around or stop at
+  the ends
 - Toggle Results Pane hides the results under the editor and keeps the
   toolbar with Run
 - Open a SQLite database directly: pass its path when starting Blanco, drop
