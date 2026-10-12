@@ -153,6 +153,11 @@ All notable changes to this project will be documented in this file.
 - Reopen Closed Tab (Ctrl+Shift+T, Cmd+Shift+T on macOS, rebindable, also in
   the command palette) brings back the most recently closed tabs with their
   text and connection
+- The structure tab lists a table's foreign keys with their columns,
+  referenced table and ON UPDATE and ON DELETE actions. Add Foreign Key picks
+  the referenced table and pairs each column with a referenced one, prefilled
+  from its primary key; Drop Foreign Key is in the row's context menu.
+  SQLite lists its foreign keys but reports changes as unsupported
 
 ### Fixes
 
@@ -172,9 +177,6 @@ All notable changes to this project will be documented in this file.
   Keywords are offered there too once a word is typed
 - Long names in the completion list are shortened in the middle, and the list
   is wider
-
-### Fixes
-
 - Completion offers the columns of tables without an alias, such as in
   `UPDATE users SET` or `DELETE FROM users WHERE`
 - Completion no longer opens while a number is typed, and offers only columns
@@ -182,19 +184,17 @@ All notable changes to this project will be documented in this file.
 - PostgreSQL tables whose names need quoting (mixed case, spaces) listed no
   columns, and a table name shared by two schemas could pick up the other
   schema's keys
-- The structure tab lists a table's foreign keys with their columns,
-  referenced table and ON UPDATE and ON DELETE actions. Add Foreign Key picks
-  the referenced table and pairs each column with a referenced one, prefilled
-  from its primary key; Drop Foreign Key is in the row's context menu.
-  SQLite lists its foreign keys but reports changes as unsupported
-
-### Fixes
-
 - SQLite tables with a composite primary key report every key column, not
   only the first, so editing or deleting a row in the results matches that
   row alone
 - Clicking a cell in the results table no longer starts a text selection in
   the SQL view that follows the pointer with no button held
+- Format SQL replaced the wrong range when text before the statement held
+  non-ASCII characters, mangling the query. Lint markers and script syntax
+  errors were misplaced the same way
+- Show Create Statement on PostgreSQL wrote a stored generated column as a
+  default, which PostgreSQL rejects, and dropped the
+  `GENERATED ... AS IDENTITY` clause of identity columns
 
 ## [0.1.2] - 2026-10-08
 
