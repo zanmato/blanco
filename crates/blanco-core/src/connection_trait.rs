@@ -133,6 +133,8 @@ pub enum ColumnType {
     /// Key/value maps: PostgreSQL's hstore. Values are the server's text
     /// form, which `blanco_core::hstore` reads and writes.
     KeyValue,
+    /// Spatial types (PostGIS geometry, geography), carried as EWKT
+    Geometry,
     /// Unknown/fallback type
     Unknown,
 }

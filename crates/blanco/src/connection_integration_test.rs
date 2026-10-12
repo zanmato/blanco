@@ -3010,6 +3010,7 @@ fn test_binary_values_round_trip() {
                 value: value.to_string(),
                 numeric: false,
                 binary: true,
+                geometry: false,
             });
             let sql = format!("SELECT id FROM blanco_binary_test WHERE {predicate} ORDER BY id");
             runtime
@@ -3091,6 +3092,159 @@ fn test_binary_values_round_trip() {
 
         write("DROP TABLE blanco_binary_test");
     }
+}
+
+/// PostGIS values against a live PostgreSQL that has the extension: both
+/// read paths decode geometry and geography to EWKT, EWKT written back as a
+/// string literal is the same value, WKT typed without an SRID keeps the one
+/// of the value it replaces, and text filters match WKT. Skipped when the
+/// server has no PostGIS; the docker-compose image has it.
+#[test]
+fn test_postgis_values_round_trip() {
+    use blanco_core::geometry::carry_srid;
+    use blanco_core::{ColumnType, FilterCondition, FilterOperator};
+    use database::ConnectionConfig;
+    use futures::StreamExt as _;
+
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let case = postgres_case();
+    let config = ConnectionConfig::new(
+        9111,
+        case.name.to_string(),
+        case.db_type,
+        case.host.clone(),
+        case.port.parse().expect("port"),
+        case.database.clone(),
+        case.username.clone(),
+        Some(case.password.clone()),
+    );
+    let dialect = config.db_type.dialect();
+    let database = Some(case.database.as_str());
+    let service = DatabaseService::new(runtime.handle().clone());
+    let connection = runtime.block_on(async {
+        service.add_connection_config(config.clone()).await;
+        let connection = service
+            .get_or_create_connection(config.id, database)
+            .await?;
+        connection.ping().await?;
+        anyhow::Ok(connection)
+    });
+    let connection = match connection {
+        Ok(connection) => connection,
+        Err(error) if strict() => panic!("PostgreSQL: server unreachable: {error:#}"),
+        Err(error) => {
+            eprintln!(
+                "skip PostgreSQL: server unreachable ({error:#}). Set BLANCO_RUN_DB_TESTS=1 to require."
+            );
+            return;
+        }
+    };
+    let write = |sql: &str| runtime.block_on(connection.execute_write(sql, database, &[]));
+    if let Err(error) = write("CREATE EXTENSION IF NOT EXISTS postgis") {
+        eprintln!("skip PostGIS: the extension is not available ({error:#})");
+        return;
+    }
+    let write = |sql: &str| write(sql).unwrap_or_else(|error| panic!("{sql}: {error:#}"));
+    let literal = |ewkt: &str| dialect.value_literal(ewkt, ColumnType::Geometry);
+
+    write("DROP TABLE IF EXISTS blanco_geometry_test");
+    write(
+        "CREATE TABLE blanco_geometry_test (id integer PRIMARY KEY, shape geometry, \
+         place geography(Point, 4326), located geometry(Point, 4326))",
+    );
+    let shapes = [
+        "SRID=3006;POLYGON((0 0,4 0,4 4,0 4,0 0),(1 1,2 1,2 2,1 1))",
+        "LINESTRING Z (0 0 1,1 1 2)",
+        "GEOMETRYCOLLECTION(POINT(1 2),MULTIPOINT((0 0),(1 1)))",
+        "POINT EMPTY",
+    ];
+    for (id, shape) in shapes.iter().enumerate() {
+        write(&format!(
+            "INSERT INTO blanco_geometry_test VALUES ({id}, {}, {}, {})",
+            literal(shape),
+            literal("SRID=4326;POINT(18.0686 59.3293)"),
+            literal("SRID=4326;POINT(-73.9857 40.7484)"),
+        ));
+    }
+    write("INSERT INTO blanco_geometry_test (id) VALUES (9)");
+
+    let mut expected: Vec<Vec<Option<String>>> = shapes
+        .iter()
+        .map(|shape| {
+            vec![
+                Some(shape.to_string()),
+                Some("SRID=4326;POINT(18.0686 59.3293)".to_string()),
+                Some("SRID=4326;POINT(-73.9857 40.7484)".to_string()),
+            ]
+        })
+        .collect();
+    expected.push(vec![None, None, None]);
+    let select = "SELECT shape, place, located FROM blanco_geometry_test ORDER BY id";
+    let result = runtime
+        .block_on(connection.execute_query(select, database, None))
+        .unwrap_or_else(|error| panic!("select: {error:#}"));
+    assert_eq!(result.column_types, vec![ColumnType::Geometry; 3]);
+    assert_eq!(result.rows, expected, "queried rows");
+
+    // Exports read through the streaming path, which takes the binary
+    // protocol.
+    let streamed = runtime.block_on(async {
+        let (_, column_types, mut rows) = connection
+            .execute_query_stream_rows(select, database)
+            .await
+            .unwrap_or_else(|error| panic!("stream: {error:#}"));
+        assert_eq!(column_types, vec![ColumnType::Geometry; 3]);
+        let mut collected = Vec::new();
+        while let Some(row) = rows.next().await {
+            collected.push(row.unwrap_or_else(|error| panic!("row: {error:#}")));
+        }
+        collected
+    });
+    assert_eq!(streamed, expected, "streamed rows");
+
+    // WKT typed over a value in a column without an SRID in its type keeps
+    // the value's SRID instead of becoming SRID 0.
+    let original = expected[0][0].clone().unwrap_or_default();
+    let typed = carry_srid("POINT(1 2)", &original).expect("SRID carried over");
+    write(&format!(
+        "UPDATE blanco_geometry_test SET shape = {} WHERE id = 0",
+        literal(&typed)
+    ));
+    let reselected = runtime
+        .block_on(connection.execute_query(
+            "SELECT shape FROM blanco_geometry_test WHERE id = 0",
+            database,
+            None,
+        ))
+        .unwrap_or_else(|error| panic!("reselect: {error:#}"));
+    assert_eq!(
+        reselected.rows,
+        vec![vec![Some("SRID=3006;POINT(1 2)".to_string())]]
+    );
+
+    let matching = |operator: FilterOperator, value: &str| -> Vec<String> {
+        let predicate = dialect.filter_predicate(&FilterCondition {
+            column: "shape".to_string(),
+            operator,
+            value: value.to_string(),
+            numeric: false,
+            binary: false,
+            geometry: true,
+        });
+        let sql = format!("SELECT id FROM blanco_geometry_test WHERE {predicate} ORDER BY id");
+        runtime
+            .block_on(connection.execute_query(&sql, database, None))
+            .unwrap_or_else(|error| panic!("{sql}: {error:#}"))
+            .rows
+            .into_iter()
+            .map(|row| row[0].clone().unwrap_or_default())
+            .collect()
+    };
+    assert_eq!(matching(FilterOperator::Contains, "linestring z"), ["1"]);
+    assert_eq!(matching(FilterOperator::StartsWith, "point(1"), ["0"]);
+    assert_eq!(matching(FilterOperator::Like, "%POINT EMPTY"), ["3"]);
+
+    write("DROP TABLE blanco_geometry_test");
 }
 
 /// Reading a table with its large values deferred, against every backend

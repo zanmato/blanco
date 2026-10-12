@@ -102,10 +102,8 @@ impl PostgresConnection {
             let oids: Vec<u32> = unnamed.iter().map(|&(_, oid)| oid).collect();
             let names = type_names(pool, &oids).await?;
             for (column, oid) in unnamed {
-                if let (Some(name), Some(column_type)) =
-                    (names.get(&oid), column_types.get_mut(column))
-                {
-                    *column_type = Self::map_postgres_type(name);
+                if let Some(name) = names.get(&oid) {
+                    name_column(&mut column_types, &mut rows, column, name);
                 }
             }
         }
@@ -176,19 +174,13 @@ impl PostgresConnection {
         }
 
         // The pool's one connection is free again now that the script is
-        // read, so the names come from `pg_type` in one query. The values
-        // are already text and stay as they are; only the column types
-        // change.
+        // read, so the names come from `pg_type` in one query.
         if !unnamed.is_empty() {
             let oids: Vec<u32> = unnamed.iter().map(|&(_, _, oid)| oid).collect();
             let names = type_names(pool, &oids).await?;
             for (result, column, oid) in unnamed {
-                if let (Some(name), Some(column_type)) = (
-                    names.get(&oid),
-                    out.get_mut(result)
-                        .and_then(|result| result.column_types.get_mut(column)),
-                ) {
-                    *column_type = PostgresConnection::map_postgres_type(name);
+                if let (Some(name), Some(result)) = (names.get(&oid), out.get_mut(result)) {
+                    name_column(&mut result.column_types, &mut result.rows, column, name);
                 }
             }
         }
@@ -207,6 +199,32 @@ fn unnamed_columns(row: &sqlx::postgres::PgRow) -> Vec<(usize, u32)> {
         .filter(|(_, col)| col.type_info().name() == "?")
         .filter_map(|(ix, col)| Some((ix, col.type_info().oid()?.0)))
         .collect()
+}
+
+/// Give `column` the type `name`. The values are already the text the
+/// server wrote and stay as they are, except PostGIS values: the server
+/// writes those as hex EWKB, which becomes EWKT as on the binary protocol.
+fn name_column(
+    column_types: &mut [ColumnType],
+    rows: &mut [Vec<Option<String>>],
+    column: usize,
+    name: &str,
+) {
+    let column_type = PostgresConnection::map_postgres_type(name);
+    if column_type == ColumnType::Geometry {
+        for value in rows.iter_mut().filter_map(|row| row.get_mut(column)) {
+            if let Some(ewkt) = value
+                .as_deref()
+                .and_then(blanco_core::binary::decode_lenient)
+                .and_then(|ewkb| blanco_core::geometry::ewkb_to_ewkt(&ewkb))
+            {
+                *value = Some(ewkt);
+            }
+        }
+    }
+    if let Some(slot) = column_types.get_mut(column) {
+        *slot = column_type;
+    }
 }
 
 /// The names of the types `oids`, from `pg_type`. Run once the statement's

@@ -85,6 +85,8 @@ fn postgres(type_name: &str) -> ColumnType {
         // An extension type without a fixed OID, known by its name.
         "hstore" => ColumnType::KeyValue,
         "bytea" => ColumnType::Binary,
+        // PostGIS, and CockroachDB's own spatial types.
+        "geometry" | "geography" => ColumnType::Geometry,
         "array" => ColumnType::Array,
         _ if lower.ends_with("[]") => ColumnType::Array,
         // Network address types: come back as text

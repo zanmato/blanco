@@ -15,9 +15,11 @@ services:
     ports:
       - "3306:3306"
 
-  # PostgreSQL with SSL enabled for testing SSL connections
+  # PostgreSQL with SSL enabled for testing SSL connections, and PostGIS.
+  # docker/postgres replaces the image's own init scripts, which would also
+  # install the topology and tiger geocoder extensions and their schemas.
   postgrestestdb_ssl:
-    image: postgres:17
+    image: postgis/postgis:17-3.5
     environment:
       POSTGRES_USER: blanco
       POSTGRES_PASSWORD: blanco
@@ -32,6 +34,7 @@ services:
       "
     volumes:
       - ./crates/postgres/test_certs:/test_certs:ro
+      - ./docker/postgres:/docker-entrypoint-initdb.d:ro
       - type: tmpfs
         target: /var/lib/postgresql/data
     ports:

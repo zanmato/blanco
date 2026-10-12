@@ -13,6 +13,7 @@ pub mod ddl;
 pub mod deferred;
 pub mod dialect;
 pub mod explain_plan;
+pub mod geometry;
 pub mod hstore;
 pub mod password_mask;
 pub mod statement_stream;

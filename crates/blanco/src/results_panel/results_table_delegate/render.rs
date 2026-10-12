@@ -32,7 +32,7 @@ use crate::app::{
     SetCellNull, ToggleCellExpression,
 };
 use crate::results_panel::cell_edit_state::{
-    CellInput, DisplayText, compare_numeric, display_preview, display_text,
+    CellInput, DisplayText, GeometryPreview, compare_numeric, display_preview, display_text,
 };
 use crate::results_panel::compare::CompareKind;
 use crate::results_panel::foreign_key_popover::ForeignKeyPopover;
@@ -159,6 +159,7 @@ impl ResultsTableDelegate {
         let is_json = self.column_types.get(col_ix).copied() == Some(ColumnType::Json);
         let as_json = self.edit_state.expanded_as_json;
         let json_error = self.edit_state.json_error.clone();
+        let geometry_preview = self.edit_state.geometry_preview.clone();
         let overlay_size = self.edit_state.expanded_size.size();
         // The affordances sit over the editor's own text padding, so they line
         // up with the first line rather than crowding the border.
@@ -220,6 +221,11 @@ impl ResultsTableDelegate {
                                             .border_t_1()
                                             .border_color(cx.theme().border)
                                             .child(format!("Invalid JSON: {error}")),
+                                    )
+                                })
+                                .when_some(geometry_preview, |this, preview| {
+                                    this.child(
+                                        self.render_geometry_preview(preview, row_ix, col_ix, cx),
                                     )
                                 }),
                         )
@@ -286,6 +292,58 @@ impl ResultsTableDelegate {
                 )
                 .with_priority(99),
             )
+    }
+
+    /// The GeoJSON of the WKT in an expanded geometry cell, under the editor,
+    /// or why the WKT does not parse.
+    fn render_geometry_preview(
+        &self,
+        preview: GeometryPreview,
+        row_ix: usize,
+        col_ix: usize,
+        cx: &mut Context<TableState<Self>>,
+    ) -> gpui::AnyElement {
+        match preview {
+            GeometryPreview::Invalid(error) => div()
+                .px_2()
+                .py_1()
+                .text_xs()
+                .text_color(cx.theme().danger)
+                .border_t_1()
+                .border_color(cx.theme().border)
+                .child(format!("Invalid WKT: {error}"))
+                .into_any_element(),
+            GeometryPreview::GeoJson(geojson) => v_flex()
+                .flex_1()
+                .min_h_0()
+                .border_t_1()
+                .border_color(cx.theme().border)
+                .child(
+                    h_flex()
+                        .justify_between()
+                        .px_2()
+                        .py_1()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("GeoJSON")
+                        .child(
+                            Clipboard::new(format!("expanded-geojson-copy-{row_ix}-{col_ix}"))
+                                .value(geojson.clone()),
+                        ),
+                )
+                .child(
+                    div()
+                        .id(("expanded-geojson", row_ix * 1000 + col_ix))
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .px_2()
+                        .pb_1()
+                        .text_size(px(12.))
+                        .child(geojson),
+                )
+                .into_any_element(),
+        }
     }
 
     /// The overlay floats over the table rather than sharing a container
