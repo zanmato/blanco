@@ -31,6 +31,7 @@ mod screenshots;
 mod script_completion;
 mod secret_prompt;
 mod settings;
+mod snippet_completion;
 mod snippets_panel;
 mod sql;
 mod sqlite_file;

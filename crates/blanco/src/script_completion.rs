@@ -269,19 +269,29 @@ impl CompletionProvider for ScriptCompletionProvider {
         offset: usize,
         _trigger: CompletionContext,
         _window: &mut Window,
-        _cx: &mut App,
+        cx: &mut App,
     ) -> Task<Result<CompletionResponse>> {
         let text = rope.slice(0..rope.len()).to_string();
         let (candidates, current_word, start) = analyze(&text, offset);
         let end = start + current_word.len();
         let range = Range::new(rope.offset_to_position(start), rope.offset_to_position(end));
 
-        let items = build_items(
+        let snippets = crate::snippet_completion::SnippetTriggers::for_kind(
+            app_database::EditorKind::Script,
+            cx,
+        );
+        // A member after `.` is never a snippet.
+        let mut items = if text[..start].ends_with('.') {
+            Vec::new()
+        } else {
+            crate::snippet_completion::snippet_items(&snippets, current_word, range)
+        };
+        items.extend(build_items(
             candidates,
             current_word,
             range,
             self.supports_bind_parameters,
-        );
+        ));
         Task::ready(Ok(CompletionResponse::Array(items)))
     }
 

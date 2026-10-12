@@ -94,6 +94,8 @@ fn comment_documentation(comment: Option<&str>) -> Option<lsp_types::Documentati
 /// other schemas, functions and keywords.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum ItemGroup {
+    /// Snippets whose trigger word is being typed.
+    Snippet,
     JoinCondition,
     Column,
     /// CTEs and the tables of the current schema.
@@ -1097,6 +1099,10 @@ impl CompletionProvider for SqlCompletionProvider {
         cx: &mut App,
     ) -> Task<Result<CompletionResponse>> {
         let rope_clone = rope.clone();
+        let snippets = crate::snippet_completion::SnippetTriggers::for_kind(
+            app_database::EditorKind::Query,
+            cx,
+        );
         let provider = self.with_fetch_timeout(
             crate::app_settings::AppSettings::global(cx)
                 .settings
@@ -1171,7 +1177,19 @@ impl CompletionProvider for SqlCompletionProvider {
                     background_executor.timer(Duration::from_millis(300)).await;
                 }
 
-                let groups = match plan {
+                // Where nothing else is offered (a string or a comment)
+                // snippets are not offered either.
+                let snippet_items = if matches!(plan, CompletionPlan::Nothing) {
+                    Vec::new()
+                } else {
+                    crate::snippet_completion::snippet_items(
+                        &snippets,
+                        &context.current_word,
+                        range,
+                    )
+                };
+
+                let mut groups = match plan {
                     CompletionPlan::Columns { sources } => {
                         // Column and function fetches go out together: on a
                         // slow connection the round trips overlap instead of
@@ -1325,6 +1343,8 @@ impl CompletionProvider for SqlCompletionProvider {
                     )],
                     CompletionPlan::Nothing => Vec::new(),
                 };
+
+                groups.push((ItemGroup::Snippet, snippet_items));
 
                 Ok(CompletionResponse::Array(rank_items(
                     groups,
