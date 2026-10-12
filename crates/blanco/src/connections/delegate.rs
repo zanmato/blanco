@@ -15,7 +15,7 @@ use gpui_component::{
 use crate::app::CreateNewQueryTab;
 use crate::app::OpenSchemaGraph;
 use crate::app::OpenTableStructure;
-use crate::app::{BackupDatabase, RestoreDatabase};
+use crate::app::{BackupDatabase, OpenSqlFile, RestoreDatabase, RunSqlFile};
 use crate::connections::{
     ConnectionsPanel, CreateNewQueryTabParams, TreeItemIcon, TreeItemKind, TreeItemMetadata,
 };
@@ -42,6 +42,47 @@ impl ConnectionsTreeDelegate {
                 window.dispatch_action(Box::new(action.clone()), cx);
             },
         ))
+    }
+
+    /// "Open SQL File…" and "Run SQL File…" on a database of a SQL backend.
+    /// They are offered per database so the file never lands on whichever
+    /// connection happens to be active.
+    fn sql_file_items(
+        &self,
+        menu: PopupMenu,
+        context: ConnectionContext,
+        window: &mut Window,
+    ) -> PopupMenu {
+        if !context.db_type.supports_sql() {
+            return menu;
+        }
+        let run_context = context.clone();
+        menu.item(
+            PopupMenuItem::new("Open SQL File…").on_click(window.listener_for(
+                &self.parent,
+                move |_this, _event, window, cx| {
+                    window.dispatch_action(
+                        Box::new(OpenSqlFile {
+                            context: context.clone(),
+                        }),
+                        cx,
+                    );
+                },
+            )),
+        )
+        .item(
+            PopupMenuItem::new("Run SQL File…").on_click(window.listener_for(
+                &self.parent,
+                move |_this, _event, window, cx| {
+                    window.dispatch_action(
+                        Box::new(RunSqlFile {
+                            context: run_context.clone(),
+                        }),
+                        cx,
+                    );
+                },
+            )),
+        )
     }
 
     /// "Back Up…" and "Restore…" for a database whose backend has native
@@ -393,7 +434,10 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                         )),
                     );
                 let menu = match backup_context {
-                    Some(context) => self.backup_items(menu, context, window),
+                    Some(context) => {
+                        let menu = self.sql_file_items(menu.separator(), context.clone(), window);
+                        self.backup_items(menu, context, window)
+                    }
                     None => menu,
                 };
                 menu.separator()
@@ -430,6 +474,18 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                 };
 
                 menu = menu.item(self.new_script_item(metadata, window));
+                menu = self.sql_file_items(
+                    menu,
+                    ConnectionContext {
+                        connection_id,
+                        connection_name: connection_name.clone(),
+                        db_type,
+                        database_name: database_name.clone(),
+                        schema_name: None,
+                        environment_type,
+                    },
+                    window,
+                );
 
                 let connection_name_for_graph = connection_name.clone();
                 let database_name_for_graph = database_name.clone();

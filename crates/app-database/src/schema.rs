@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 /// Schema version stored in SQLite's `PRAGMA user_version`. Bump it and append
 /// a step to [`MIGRATIONS`] for every schema change.
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 /// The complete schema for a fresh database, at [`SCHEMA_VERSION`]. Keep it in
 /// sync with the migrations: a database created from this must be identical
@@ -51,6 +51,7 @@ const BASELINE: &[&str] = &[
         last_run_at INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
+        file_path TEXT,
         FOREIGN KEY (connection_id) REFERENCES connections(id) ON DELETE SET NULL
     )
     "#,
@@ -105,6 +106,7 @@ const MIGRATIONS: &[Migration] = &[
     |pool| Box::pin(migrate_unversioned_to_v1(pool)),
     |pool| Box::pin(migrate_v1_to_v2(pool)),
     |pool| Box::pin(migrate_v2_to_v3(pool)),
+    |pool| Box::pin(migrate_v3_to_v4(pool)),
 ];
 
 /// Columns that may be missing from an unversioned database, per table, in the
@@ -174,6 +176,13 @@ async fn migrate_v1_to_v2(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 
 async fn migrate_v2_to_v3(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query("ALTER TABLE connections ADD COLUMN idle_timeout_minutes INTEGER")
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+async fn migrate_v3_to_v4(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query("ALTER TABLE query_tabs ADD COLUMN file_path TEXT")
         .execute(pool)
         .await?;
     Ok(())

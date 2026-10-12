@@ -77,6 +77,8 @@ actions!(
         ExportAsSQL,
         ExportAsMarkdown,
         ToggleFilterBar,
+        SaveTab,
+        SaveTabAs,
         ClearSelection,
         ToggleRenderWhitespace,
         ToggleWordWrap,
@@ -300,6 +302,21 @@ pub struct OpenTableStructure {
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
 pub struct OpenSchemaGraph {
+    pub context: ConnectionContext,
+}
+
+/// Open `.sql` files in query tabs on a database.
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct OpenSqlFile {
+    pub context: ConnectionContext,
+}
+
+/// Run a `.sql` file on a database, statement by statement, without opening
+/// it in an editor.
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = blanco_app, no_json)]
+pub struct RunSqlFile {
     pub context: ConnectionContext,
 }
 
@@ -1654,14 +1671,48 @@ impl BlancoApp {
         });
     }
 
+    fn on_open_sql_file(
+        &mut self,
+        action: &OpenSqlFile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let context = action.context.clone();
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.prompt_open_sql_files(context, window, cx)
+        });
+    }
+
+    fn on_save_tab(&mut self, _: &SaveTab, window: &mut Window, cx: &mut Context<Self>) {
+        self.editor_panel
+            .update(cx, |panel, cx| panel.save_active_tab(window, cx));
+    }
+
+    fn on_save_tab_as(&mut self, _: &SaveTabAs, window: &mut Window, cx: &mut Context<Self>) {
+        self.editor_panel
+            .update(cx, |panel, cx| panel.save_active_tab_as(window, cx));
+    }
+
+    fn on_run_sql_file(
+        &mut self,
+        action: &RunSqlFile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let context = action.context.clone();
+        self.editor_panel.update(cx, |panel, cx| {
+            panel.prompt_run_sql_file(context, window, cx)
+        });
+    }
+
     fn on_close_active_tab(
         &mut self,
         _: &CloseActiveTab,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.editor_panel.update(cx, |panel, cx| {
-            panel.close_active_tab(cx);
+            panel.close_active_tab(window, cx);
         });
     }
 
@@ -2824,6 +2875,10 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_refresh_snippets))
             .on_action(cx.listener(Self::on_activate_editor_tab))
             .on_action(cx.listener(Self::on_close_active_tab))
+            .on_action(cx.listener(Self::on_open_sql_file))
+            .on_action(cx.listener(Self::on_save_tab))
+            .on_action(cx.listener(Self::on_save_tab_as))
+            .on_action(cx.listener(Self::on_run_sql_file))
             .on_action(cx.listener(Self::on_switch_theme))
             .on_action(cx.listener(Self::on_toggle_render_whitespace))
             .on_action(cx.listener(Self::on_toggle_word_wrap))
@@ -2846,9 +2901,21 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_export_table_data))
             .on_action(cx.listener(Self::on_refresh_connections))
             .drag_over::<ExternalPaths>(|style, _, _, cx| style.bg(cx.theme().drop_target))
+            // A SQLite database opens as a connection; any other file is
+            // SQL for the editor.
             .on_drop(cx.listener(|app, paths: &ExternalPaths, window, cx| {
-                for path in paths.paths() {
+                let (databases, sql_files): (Vec<_>, Vec<_>) = paths
+                    .paths()
+                    .iter()
+                    .cloned()
+                    .partition(|path| sqlite_file::is_sqlite_file(path));
+                for path in &databases {
                     app.open_database_file(path, window, cx);
+                }
+                if !sql_files.is_empty() {
+                    app.editor_panel.update(cx, |panel, cx| {
+                        panel.open_dropped_sql_files(sql_files, window, cx)
+                    });
                 }
             }))
             .size_full()
@@ -3030,12 +3097,15 @@ fn build_menu() -> Vec<Menu> {
     // macOS always shows the first menu as the application menu, titled with
     // the app's name, and that is where Settings and Quit belong there.
     let mut file_items = vec![
-        MenuItem::action("New Connection", OpenNewConnectionModal),
         MenuItem::submenu(Menu {
             name: "Open".into(),
             items: vec![MenuItem::action("SQLite Database…", OpenSqliteFile)],
             disabled: false,
         }),
+        MenuItem::action("Save", SaveTab),
+        MenuItem::action("Save As…", SaveTabAs),
+        MenuItem::separator(),
+        MenuItem::action("New Connection", OpenNewConnectionModal),
         MenuItem::action("Import Connections…", ImportConnections),
         MenuItem::action("Export Connections…", ExportConnections),
         MenuItem::action("Toggle Terminal", OpenTerminal),

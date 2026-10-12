@@ -1,3 +1,4 @@
+mod file_runner;
 mod object_ddl;
 mod parameter_form;
 mod query_execution;
@@ -12,6 +13,9 @@ mod script_execution;
 #[cfg(test)]
 mod script_execution_test;
 mod snippet_editor;
+mod sql_files;
+#[cfg(test)]
+mod sql_files_test;
 mod sql_operations;
 pub(crate) mod tab_access;
 mod tab_actions;
@@ -89,6 +93,8 @@ pub struct EditorPanel {
     /// can't be stopped by dropping their task (they own an OS thread), so Stop
     /// raises this flag and the script thread unwinds itself.
     script_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// A SQL file running statement by statement on a tab's connection.
+    file_run: Option<file_runner::FileRun>,
     _lint_debounce_task: Task<()>,
 }
 
@@ -217,16 +223,21 @@ impl EditorPanel {
     ) {
         let mut moved = Vec::new();
         for index in (0..self.tabs.len()).rev() {
-            let tab = &self.tabs[index];
-            let Some(connection_tab) = tab.connection_tab() else {
+            let is_pinned = self.is_pinned(index);
+            let tab = &mut self.tabs[index];
+            let is_script = matches!(tab, TabType::Script(_));
+            let Some(connection_tab) = tab.connection_tab_mut() else {
                 continue;
             };
             if connection_tab.context.connection_id != from {
                 continue;
             }
             moved.push((
-                matches!(tab, TabType::Script(_)),
-                self.is_pinned(index),
+                is_script,
+                is_pinned,
+                // The recreated tab stays tied to its file, unsaved changes
+                // included.
+                connection_tab.file.take(),
                 TabCreationParams {
                     title: connection_tab.title.clone(),
                     content: Some(connection_tab.editor.read(cx).value().to_string()),
@@ -245,11 +256,14 @@ impl EditorPanel {
             }
         }
         self.active_tab_ix = self.active_tab_ix.min(self.tabs.len().saturating_sub(1));
-        for (is_script, was_pinned, params) in moved.into_iter().rev() {
+        for (is_script, was_pinned, file, params) in moved.into_iter().rev() {
             if is_script {
                 self.create_and_add_script_tab(window, params, cx);
             } else {
                 self.create_and_add_tab_with_connection(window, params, cx);
+            }
+            if let Some(tab) = self.tabs.last_mut().and_then(TabType::connection_tab_mut) {
+                tab.file = file;
             }
             // The tab comes back last and unpinned.
             if was_pinned && let Some(last) = self.tabs.len().checked_sub(1) {
@@ -629,8 +643,8 @@ impl EditorPanel {
         self.tabs.get(self.active_tab_ix)?.context(cx)
     }
 
-    pub fn close_active_tab(&mut self, cx: &mut Context<Self>) {
-        self.close_tab(self.active_tab_ix, cx);
+    pub fn close_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.request_close_tab(self.active_tab_ix, window, cx);
     }
 
     fn set_active_tab(&mut self, ix: usize, _: &mut Window, cx: &mut Context<Self>) {
@@ -671,6 +685,7 @@ impl EditorPanel {
             _run_query_task: Task::ready(()),
             abort_query_task: None,
             script_cancel: None,
+            file_run: None,
             _lint_debounce_task: Task::ready(()),
         };
 
@@ -766,6 +781,9 @@ impl EditorPanel {
                     self.create_and_add_script_tab(window, params, cx);
                 } else {
                     self.create_and_add_tab_with_connection(window, params, cx);
+                }
+                if let Some(path) = &tab_data.file_path {
+                    self.restore_tab_file(self.tabs.len() - 1, path, cx);
                 }
                 restored_count += 1;
             } else {
@@ -888,6 +906,7 @@ impl EditorPanel {
         // also keeps the Ln/Col indicator in the action bar on the cursor.
         let subscription = cx.observe(&editor, |this, editor, cx| {
             this.refresh_statement_outline(&editor, cx);
+            this.refresh_file_dirty(&editor, cx);
             cx.notify();
         });
         self._subscriptions.push(subscription);
@@ -942,6 +961,7 @@ impl EditorPanel {
                 skip_prod_write_confirmation: false,
                 results_hidden: false,
                 terminal: None,
+                file: None,
             },
             sql_view: cx.new(|cx| {
                 SqlView::new(
@@ -1024,7 +1044,10 @@ impl EditorPanel {
         self._subscriptions.push(subscription);
 
         // Re-render so the Ln/Col indicator in the action bar tracks the cursor.
-        let subscription = cx.observe(&editor, |_, _, cx| cx.notify());
+        let subscription = cx.observe(&editor, |this, editor, cx| {
+            this.refresh_file_dirty(&editor, cx);
+            cx.notify();
+        });
         self._subscriptions.push(subscription);
 
         let results_panel = cx.new(|cx| {
@@ -1051,6 +1074,7 @@ impl EditorPanel {
                 skip_prod_write_confirmation: false,
                 results_hidden: false,
                 terminal: None,
+                file: None,
             },
             log_view: cx.new(|cx| {
                 SqlView::new(

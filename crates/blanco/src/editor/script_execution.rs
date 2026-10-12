@@ -75,6 +75,7 @@ impl EditorPanel {
             environment_type: script_tab.context.environment_type,
             tab_kind: app_database::EditorKind::Script,
             last_run_at: Some(run_timestamp),
+            file_path: script_tab.file.as_ref().map(|file| file.path_string()),
         };
 
         let app_database = AppDatabase::global(cx).clone();

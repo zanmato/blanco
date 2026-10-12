@@ -21,9 +21,10 @@ use crate::{
         CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CreateNewQueryTab, CreateNewScriptTab,
         ExplainQuery, ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV,
         ExportConnections, ExportTableData, FormatQuery, ImportConnections, ImportTableData,
-        NewQueryTab, NewSnippet, OpenNewConnectionModal, OpenSettings, OpenSqliteFile,
-        OpenTerminal, RefreshConnections, RestoreDatabase, RollbackChanges, RunQuery, SwitchTheme,
-        ToggleFilterBar, ToggleRenderWhitespace, ToggleResults, ToggleSidebar, ToggleWordWrap,
+        NewQueryTab, NewSnippet, OpenNewConnectionModal, OpenSettings, OpenSqlFile, OpenSqliteFile,
+        OpenTerminal, RefreshConnections, RestoreDatabase, RollbackChanges, RunQuery, RunSqlFile,
+        SaveTab, SaveTabAs, SwitchTheme, ToggleFilterBar, ToggleRenderWhitespace, ToggleResults,
+        ToggleSidebar, ToggleWordWrap,
     },
     connections::ConnectionsPanel,
     editor::EditorPanel,
@@ -103,6 +104,8 @@ pub enum CommandType {
     ExplainQuery,
     FormatQuery,
     ToggleFilterBar,
+    SaveTab,
+    SaveTabAs,
     NewSnippet,
     OpenSettings,
     OpenTerminal,
@@ -139,6 +142,8 @@ pub enum CommandType {
     SwitchTheme(String),
     NewQueryForDatabase(DatabaseRef),
     NewScriptForDatabase(DatabaseRef),
+    OpenSqlFile(DatabaseRef),
+    RunSqlFile(DatabaseRef),
     BackupDatabase(DatabaseRef),
     RestoreDatabase(DatabaseRef),
 }
@@ -749,6 +754,8 @@ fn keybinding_for_command(cmd: &CommandType, window: &Window) -> Option<gpui_com
     let action: Box<dyn gpui::Action> = match cmd {
         CommandType::FormatQuery => Box::new(FormatQuery),
         CommandType::ToggleFilterBar => Box::new(ToggleFilterBar),
+        CommandType::SaveTab => Box::new(SaveTab),
+        CommandType::SaveTabAs => Box::new(SaveTabAs),
         CommandType::OpenSettings => Box::new(OpenSettings),
         CommandType::OpenTerminal => Box::new(OpenTerminal),
         CommandType::CommitChanges => Box::new(CommitChanges),
@@ -774,6 +781,8 @@ fn execute_command(cmd: &CommandType, window: &mut Window, cx: &mut App) {
         CommandType::ExplainQuery => window.dispatch_action(Box::new(ExplainQuery), cx),
         CommandType::FormatQuery => window.dispatch_action(Box::new(FormatQuery), cx),
         CommandType::ToggleFilterBar => window.dispatch_action(Box::new(ToggleFilterBar), cx),
+        CommandType::SaveTab => window.dispatch_action(Box::new(SaveTab), cx),
+        CommandType::SaveTabAs => window.dispatch_action(Box::new(SaveTabAs), cx),
         CommandType::NewSnippet => window.dispatch_action(Box::new(NewSnippet), cx),
         CommandType::OpenSettings => window.dispatch_action(Box::new(OpenSettings), cx),
         CommandType::OpenTerminal => window.dispatch_action(Box::new(OpenTerminal), cx),
@@ -834,6 +843,18 @@ fn execute_command(cmd: &CommandType, window: &mut Window, cx: &mut App) {
                     schema_name: None,
                     environment_type: Some(database.environment_type),
                 },
+            }),
+            cx,
+        ),
+        CommandType::OpenSqlFile(database) => window.dispatch_action(
+            Box::new(OpenSqlFile {
+                context: database.context(),
+            }),
+            cx,
+        ),
+        CommandType::RunSqlFile(database) => window.dispatch_action(
+            Box::new(RunSqlFile {
+                context: database.context(),
             }),
             cx,
         ),
@@ -1096,6 +1117,18 @@ fn leaf(label: impl Into<String>, group: &str, command: CommandType) -> CommandI
 /// The leaf actions shown at the bottom of a navigation drill-down.
 fn database_action_leaves(database: &DatabaseRef) -> Vec<CommandItem> {
     let mut leaves = vec![new_query_leaf(database), new_script_leaf(database)];
+    if database.db_type.supports_sql() {
+        leaves.push(CommandItem {
+            label: "Open SQL file…".into(),
+            group: "Action".into(),
+            kind: ItemKind::Command(CommandType::OpenSqlFile(database.clone())),
+        });
+        leaves.push(CommandItem {
+            label: "Run SQL file…".into(),
+            group: "Action".into(),
+            kind: ItemKind::Command(CommandType::RunSqlFile(database.clone())),
+        });
+    }
     if database.db_type.dialect().client_tools().is_some() && !database.database_name.is_empty() {
         leaves.push(CommandItem {
             label: "Back up…".into(),
@@ -1152,6 +1185,8 @@ fn build_commands(
         leaf("Explain Query", "Query", CommandType::ExplainQuery),
         leaf("Format Query", "Query", CommandType::FormatQuery),
         leaf("Toggle Filter Bar", "Results", CommandType::ToggleFilterBar),
+        leaf("Save", "File", CommandType::SaveTab),
+        leaf("Save As…", "File", CommandType::SaveTabAs),
         leaf("New Snippet", "Tab", CommandType::NewSnippet),
         leaf(
             "New Connection",
@@ -1657,8 +1692,15 @@ mod visual_tests {
         let labels = palette.read_with(&cx, |p, cx| p.filtered_labels(cx));
         assert_eq!(
             labels,
-            vec!["New query", "New script", "Back up…", "Restore…"],
-            "a PostgreSQL database level should hold the new tab and backup leaves, got {labels:?}"
+            vec![
+                "New query",
+                "New script",
+                "Open SQL file…",
+                "Run SQL file…",
+                "Back up…",
+                "Restore…"
+            ],
+            "a PostgreSQL database level should hold the new tab, SQL file and backup leaves, got {labels:?}"
         );
 
         let crumbs = palette.read_with(&cx, |p, cx| p.breadcrumbs_for_test(cx));

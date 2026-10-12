@@ -190,6 +190,7 @@ async fn seed_database(database: &AppDatabase) -> anyhow::Result<()> {
                 environment_type: None,
                 tab_kind,
                 last_run_at: None,
+                file_path: None,
             })
             .await?;
     }
