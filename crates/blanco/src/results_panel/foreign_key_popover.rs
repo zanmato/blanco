@@ -142,14 +142,18 @@ impl Render for ForeignKeyPopover {
                 )
             })
             .when_some(self.open_row.clone(), |this, open_row| {
+                // The popover opens from a grid cell and inherits its mono
+                // font, which is for the data, not for a button.
                 this.child(
-                    Button::new("fk-open-referenced-row")
-                        .label("Open Referenced Row")
-                        .small()
-                        .outline()
-                        .on_click(move |_, window, cx| {
-                            window.dispatch_action(Box::new(open_row.clone()), cx);
-                        }),
+                    v_flex().font_family(cx.theme().font_family.clone()).child(
+                        Button::new("fk-open-referenced-row")
+                            .label("Open Referenced Row")
+                            .small()
+                            .outline()
+                            .on_click(move |_, window, cx| {
+                                window.dispatch_action(Box::new(open_row.clone()), cx);
+                            }),
+                    ),
                 )
             })
     }

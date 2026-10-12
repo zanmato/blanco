@@ -518,9 +518,10 @@ impl ResultsTableDelegate {
                             .value(stored_text.clone()),
                     ),
             )
+            // By name, as the header does: the result's columns need not be
+            // in the table's order.
             .when_some(
-                self.table_columns
-                    .get(col_ix)
+                self.table_column_info(col_ix)
                     .and_then(|c| c.foreign_key.as_ref()),
                 |this, fk_info| {
                     let fk_info = fk_info.clone();

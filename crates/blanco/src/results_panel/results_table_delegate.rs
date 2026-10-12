@@ -283,21 +283,14 @@ impl ResultsTableDelegate {
             .iter()
             .enumerate()
             .map(|(i, col_name)| {
-                // Check if this column has a foreign key
-                let has_foreign_key = result
+                // Matched by name: the result's columns need not be in the
+                // table's order.
+                let table_column = result
                     .table_columns
                     .as_ref()
-                    .and_then(|cols| cols.get(i))
-                    .and_then(|col| col.foreign_key.as_ref())
-                    .is_some();
-
-                // Check if this column is a primary key
-                let is_primary_key = result
-                    .table_columns
-                    .as_ref()
-                    .and_then(|cols| cols.get(i))
-                    .map(|col| col.is_primary_key)
-                    .unwrap_or(false);
+                    .and_then(|cols| cols.iter().find(|col| col.name == *col_name));
+                let has_foreign_key = table_column.is_some_and(|col| col.foreign_key.is_some());
+                let is_primary_key = table_column.is_some_and(|col| col.is_primary_key);
 
                 // Measure column name width
                 let shaped_line = window.text_system().shape_line(
