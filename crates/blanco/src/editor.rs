@@ -19,6 +19,8 @@ mod sql_files_test;
 mod sql_operations;
 pub(crate) mod tab_access;
 mod tab_actions;
+#[cfg(test)]
+mod tab_persistence_test;
 mod table_structure;
 mod tabs;
 mod terminal_pane;
@@ -30,8 +32,8 @@ pub use tabs::{
 
 use blanco_core::ConnectionContext;
 use gpui::{
-    App, AppContext, Context, Entity, FocusHandle, Focusable as _, KeybindingKeystroke, Keystroke,
-    ParentElement as _, Task, WeakEntity, Window,
+    App, AppContext, Context, Entity, EntityId, FocusHandle, Focusable as _, KeybindingKeystroke,
+    Keystroke, ParentElement as _, Task, WeakEntity, Window,
 };
 use gpui_component::{
     ActiveTheme, WindowExt as _,
@@ -40,7 +42,12 @@ use gpui_component::{
     input::{EditorState, InputEvent, TabSize},
     resizable::ResizableState,
 };
-use std::{cell::Cell, collections::HashMap, rc::Rc, sync::Arc};
+use std::{
+    cell::Cell,
+    collections::{HashMap, HashSet},
+    rc::Rc,
+    sync::Arc,
+};
 use tracing::{debug, error, info};
 
 use self::object_ddl::ObjectDdlTab;
@@ -96,7 +103,31 @@ pub struct EditorPanel {
     /// A SQL file running statement by statement on a tab's connection.
     file_run: Option<file_runner::FileRun>,
     _lint_debounce_task: Task<()>,
+    /// Pending saves of edited tab text, keyed by the tab's editor. Each is
+    /// replaced on the next keystroke, so a tab is saved once typing pauses.
+    autosave_tasks: HashMap<EntityId, Task<()>>,
+    /// Tabs whose first save is still being inserted. Their next save waits,
+    /// so a tab never gets two rows.
+    autosave_inserting: HashSet<EntityId>,
+    /// Recently closed tabs, most recent last, for Reopen Closed Tab.
+    closed_tabs: Vec<ClosedTab>,
+    /// The active tab as last written to the settings, to restore it.
+    persisted_active_tab: Option<i64>,
 }
+
+/// A closed tab, kept so Reopen Closed Tab can bring it back.
+struct ClosedTab {
+    is_script: bool,
+    params: TabCreationParams,
+    /// The `.sql` file the tab was tied to.
+    file_path: Option<String>,
+}
+
+/// How many closed tabs Reopen Closed Tab can bring back.
+const MAX_CLOSED_TABS: usize = 20;
+
+/// How long typing must pause before a tab's text is saved.
+const AUTOSAVE_DELAY: std::time::Duration = std::time::Duration::from_millis(750);
 
 /// Events emitted by the editor panel for other parts of the app to react to.
 #[derive(Clone, Debug)]
@@ -311,6 +342,27 @@ impl EditorPanel {
         if tab_index < self.tabs.len() && self.tabs.len() > 1 {
             // Get the db_id before removing the tab
             let db_id = self.tabs.get(tab_index).and_then(TabType::db_id);
+            if let Some(closed) = self.tabs.get(tab_index).and_then(|tab| {
+                let connection_tab = tab.connection_tab()?;
+                self.autosave_tasks
+                    .remove(&connection_tab.editor.entity_id());
+                Some(ClosedTab {
+                    is_script: matches!(tab, TabType::Script(_)),
+                    params: TabCreationParams {
+                        title: connection_tab.title.clone(),
+                        content: Some(connection_tab.editor.read(cx).text().to_string()),
+                        db_id: None,
+                        last_run_at: connection_tab.last_run_at,
+                        context: connection_tab.context.clone(),
+                    },
+                    file_path: connection_tab.file.as_ref().map(|file| file.path_string()),
+                })
+            }) {
+                if self.closed_tabs.len() == MAX_CLOSED_TABS {
+                    self.closed_tabs.remove(0);
+                }
+                self.closed_tabs.push(closed);
+            }
 
             // Remove tab from UI
             self.tabs.remove(tab_index);
@@ -340,6 +392,182 @@ impl EditorPanel {
 
             cx.notify();
         }
+    }
+
+    /// Bring back the most recently closed tab, with its text and connection.
+    pub fn reopen_closed_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(closed) = self.closed_tabs.pop() else {
+            return;
+        };
+        // A new tab is saved shortly after it opens, so the reopened one is
+        // persisted again without waiting for an edit.
+        if closed.is_script {
+            self.create_and_add_script_tab(window, closed.params, cx);
+        } else {
+            self.create_and_add_tab_with_connection(window, closed.params, cx);
+        }
+        // Tied to its file again, and unsaved where its text differs from it.
+        if let Some(path) = closed.file_path
+            && let Some(ix) = self.tabs.len().checked_sub(1)
+        {
+            self.restore_tab_file(ix, &path, cx);
+        }
+        self.focus_active_tab(window, cx);
+    }
+
+    /// Put the keyboard in the active tab. Changing tabs takes the focused
+    /// editor out of the window, and with nothing focused the shortcuts stop
+    /// reaching the app until something is clicked.
+    pub(super) fn focus_active_tab(&self, window: &mut Window, cx: &mut Context<Self>) {
+        match self
+            .tabs
+            .get(self.active_tab_ix)
+            .and_then(TabType::connection_tab)
+        {
+            Some(tab) => tab.editor.update(cx, |editor, cx| editor.focus(window, cx)),
+            None => self.focus_handle.focus(window, cx),
+        }
+    }
+
+    /// Save a tab's text once typing pauses, so nothing typed is lost on a
+    /// crash or restart.
+    fn watch_for_autosave(
+        &mut self,
+        editor: &Entity<EditorState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let subscription = cx.subscribe_in(editor, window, |this, editor, event, _, cx| {
+            if let InputEvent::Change = event {
+                this.schedule_autosave(editor.entity_id(), cx);
+            }
+        });
+        self._subscriptions.push(subscription);
+    }
+
+    fn schedule_autosave(&mut self, editor: EntityId, cx: &mut Context<Self>) {
+        let task = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(AUTOSAVE_DELAY).await;
+            this.update(cx, |this, cx| {
+                this.autosave_tasks.remove(&editor);
+                this.save_tab_for_editor(editor, cx);
+            })
+            .log_err();
+        });
+        self.autosave_tasks.insert(editor, task);
+    }
+
+    /// Write the tab that owns `editor` to the app database: its text,
+    /// position and connection. A new tab gets its row here.
+    fn save_tab_for_editor(&mut self, editor: EntityId, cx: &mut Context<Self>) {
+        if self.autosave_inserting.contains(&editor) {
+            // The first save is still being inserted; try again after it.
+            self.schedule_autosave(editor, cx);
+            return;
+        }
+        let Some((position, tab)) = self.tabs.iter().enumerate().find_map(|(ix, tab)| {
+            let connection_tab = tab.connection_tab()?;
+            (connection_tab.editor.entity_id() == editor).then_some((ix, tab))
+        }) else {
+            return;
+        };
+        let Some(connection_tab) = tab.connection_tab() else {
+            return;
+        };
+        // A connection opened for this session only has no row for the tab to
+        // refer to.
+        if connection_tab.context.is_temporary() {
+            return;
+        }
+        let tab_data = QueryTabData {
+            id: connection_tab.db_id,
+            title: connection_tab.title.clone(),
+            content: connection_tab.editor.read(cx).text().to_string(),
+            position: position as i32,
+            connection_id: Some(connection_tab.context.connection_id),
+            connection_type: Some(connection_tab.context.db_type.as_str().to_string()),
+            connection_name: Some(connection_tab.context.connection_name.clone()),
+            database_name: Some(connection_tab.context.database_name.clone()),
+            schema_name: connection_tab.context.schema_name.clone(),
+            environment_type: connection_tab.context.environment_type,
+            tab_kind: if matches!(tab, TabType::Script(_)) {
+                app_database::EditorKind::Script
+            } else {
+                app_database::EditorKind::Query
+            },
+            last_run_at: connection_tab.last_run_at,
+            file_path: connection_tab.file.as_ref().map(|file| file.path_string()),
+        };
+        let inserting = tab_data.id.is_none();
+        if inserting {
+            self.autosave_inserting.insert(editor);
+        }
+        let last_run_at = tab_data.last_run_at;
+        let app_database = AppDatabase::global(cx).clone();
+        cx.spawn(async move |this, cx| {
+            let saved = app_database.save_query_tab(&tab_data).await;
+            if let (Ok(db_id), Some(last_run_at)) = (&saved, last_run_at)
+                && let Err(error) = app_database
+                    .touch_query_tab_last_run(*db_id, last_run_at)
+                    .await
+            {
+                error!("Failed to save the tab's last run: {error}");
+            }
+            this.update(cx, |this, cx| {
+                this.autosave_inserting.remove(&editor);
+                let db_id = match saved {
+                    Ok(db_id) => db_id,
+                    Err(error) => {
+                        error!("Failed to save tab: {error}");
+                        return;
+                    }
+                };
+                let owner = this
+                    .tabs
+                    .iter_mut()
+                    .filter_map(TabType::connection_tab_mut)
+                    .find(|tab| tab.editor.entity_id() == editor);
+                match owner {
+                    Some(tab) => tab.db_id = Some(db_id),
+                    // Closed while its first save was in flight: drop the row
+                    // so the tab does not come back on the next start.
+                    None if inserting => {
+                        cx.spawn(async move |_, _| {
+                            if let Err(error) = app_database.delete_query_tab(db_id).await {
+                                error!("Failed to remove a closed tab: {error}");
+                            }
+                        })
+                        .detach();
+                    }
+                    None => {}
+                }
+            })
+            .log_err();
+        })
+        .detach();
+    }
+
+    /// Remember the active tab so the next start opens on it.
+    fn persist_active_tab(&mut self, cx: &mut Context<Self>) {
+        let active = self.tabs.get(self.active_tab_ix).and_then(TabType::db_id);
+        if active.is_none() || active == self.persisted_active_tab {
+            return;
+        }
+        self.persisted_active_tab = active;
+        let Some(active) = active else {
+            return;
+        };
+        AppSettings::global_mut(cx).settings.session.active_tab = Some(active);
+        let app_database = AppDatabase::global(cx).clone();
+        cx.spawn(async move |_, _| {
+            if let Err(error) = app_database
+                .save_setting("session.active_tab", &active.to_string(), false)
+                .await
+            {
+                error!("Failed to remember the active tab: {error}");
+            }
+        })
+        .detach();
     }
 
     pub fn rename_tab(&mut self, tab_index: usize, new_name: &str, cx: &mut Context<Self>) {
@@ -647,10 +875,11 @@ impl EditorPanel {
         self.request_close_tab(self.active_tab_ix, window, cx);
     }
 
-    fn set_active_tab(&mut self, ix: usize, _: &mut Window, cx: &mut Context<Self>) {
+    fn set_active_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         if ix < self.tabs.len() {
             self.active_tab_ix = ix;
             self.tabbar_scroll_handle.scroll_to_item(ix);
+            self.focus_active_tab(window, cx);
             cx.notify();
         }
     }
@@ -687,9 +916,25 @@ impl EditorPanel {
             script_cancel: None,
             file_run: None,
             _lint_debounce_task: Task::ready(()),
+            autosave_tasks: HashMap::new(),
+            autosave_inserting: HashSet::new(),
+            closed_tabs: Vec::new(),
+            persisted_active_tab: AppSettings::global(cx).settings.session.active_tab,
         };
 
         panel.restore_saved_tabs_with_connections_sync(saved_tabs, window, cx);
+        // Open on the tab that was active when the app last ran.
+        if let Some(active) = panel.persisted_active_tab
+            && let Some(ix) = panel
+                .tabs
+                .iter()
+                .position(|tab| tab.db_id() == Some(active))
+        {
+            panel.active_tab_ix = ix;
+        }
+        // Every change to the panel may have switched the active tab.
+        let active_tab_subscription = cx.observe_self(|this, cx| this.persist_active_tab(cx));
+        panel._subscriptions.push(active_tab_subscription);
 
         // Enable linting after a short delay so that initial selection range events
         // from restored tabs don't trigger linting for every tab on startup.
@@ -900,6 +1145,7 @@ impl EditorPanel {
             }
         });
         self._subscriptions.push(subscription);
+        self.watch_for_autosave(&editor, window, cx);
 
         // The editor notifies on edits and on cursor moves, which is exactly
         // when the statement under the cursor can change. Re-rendering here
@@ -984,6 +1230,10 @@ impl EditorPanel {
 
         self.tabs.push(TabType::Query(Box::new(query_tab)));
         self.active_tab_ix = self.tabs.len() - 1;
+        if params.db_id.is_none() {
+            // Persist a new tab even before it is edited.
+            self.schedule_autosave(editor.entity_id(), cx);
+        }
         self.scroll_tabbar_to_the_end(window, cx);
 
         cx.notify();
@@ -1001,6 +1251,7 @@ impl EditorPanel {
     ) {
         let editor_settings = AppSettings::global(cx).settings.editor.clone();
         let db_type = params.context.db_type;
+        let params_db_id = params.db_id;
         let editor = cx.new(|cx| {
             let mut editor = EditorState::new(window, cx)
                 .language(SCRIPT_EDITOR_LANGUAGE.to_string())
@@ -1049,6 +1300,8 @@ impl EditorPanel {
             cx.notify();
         });
         self._subscriptions.push(subscription);
+        self.watch_for_autosave(&editor, window, cx);
+        let editor_id = editor.entity_id();
 
         let results_panel = cx.new(|cx| {
             ResultsPanel::new(
@@ -1090,6 +1343,10 @@ impl EditorPanel {
 
         self.tabs.push(TabType::Script(Box::new(script_tab)));
         self.active_tab_ix = self.tabs.len() - 1;
+        if params_db_id.is_none() {
+            // Persist a new tab even before it is edited.
+            self.schedule_autosave(editor_id, cx);
+        }
         self.scroll_tabbar_to_the_end(window, cx);
 
         cx.notify();

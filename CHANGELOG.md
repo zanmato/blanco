@@ -147,6 +147,12 @@ All notable changes to this project will be documented in this file.
 - PostgreSQL partitions and inheritance children are grouped under their
   parent table in the sidebar, collapsed, with the number of partitions next
   to the parent. The sidebar filter still finds a partition by name
+- Tab text is saved shortly after typing stops, not only when a query runs,
+  so a crash or restart no longer loses it. A restart opens every tab with
+  its text and connection, on the tab that was active
+- Reopen Closed Tab (Ctrl+Shift+T, Cmd+Shift+T on macOS, rebindable, also in
+  the command palette) brings back the most recently closed tabs with their
+  text and connection
 
 ### Fixes
 

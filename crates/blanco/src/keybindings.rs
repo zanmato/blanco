@@ -2,8 +2,8 @@ use crate::app::{
     ActivateNextTab, ActivatePreviousTab, CancelQuery, CloseActiveTab, CommitChanges,
     DecreaseEditorFontSize, ExplainQuery, ExportTableData, FormatQuery, ImportTableData,
     IncreaseEditorFontSize, NewQueryTab, OpenSettings, OpenTerminal, RefreshConnections,
-    ResetEditorFontSize, RollbackChanges, RunQuery, SaveTab, SaveTabAs, ToggleCommandPalette,
-    ToggleFilterBar, ToggleResults, ToggleSidebar,
+    ReopenClosedTab, ResetEditorFontSize, RollbackChanges, RunQuery, SaveTab, SaveTabAs,
+    ToggleCommandPalette, ToggleFilterBar, ToggleResults, ToggleSidebar,
 };
 use crate::settings::Settings;
 
@@ -186,6 +186,13 @@ pub const CUSTOMIZABLE_BINDINGS: &[BindingDef] = &[
         context: None,
     },
     BindingDef {
+        action: "ReopenClosedTab",
+        label: "Reopen closed tab",
+        group: "Tabs",
+        default: "secondary-shift-t",
+        context: None,
+    },
+    BindingDef {
         action: "IncreaseEditorFontSize",
         label: "Increase editor font size",
         group: "Editor",
@@ -299,6 +306,7 @@ fn key_binding(action: &str, keystrokes: &str, context: Option<&str>) -> Option<
         "RollbackChanges" => gpui::KeyBinding::new(keystrokes, RollbackChanges, context),
         "OpenSettings" => gpui::KeyBinding::new(keystrokes, OpenSettings, context),
         "OpenTerminal" => gpui::KeyBinding::new(keystrokes, OpenTerminal, context),
+        "ReopenClosedTab" => gpui::KeyBinding::new(keystrokes, ReopenClosedTab, context),
         "IncreaseEditorFontSize" => {
             gpui::KeyBinding::new(keystrokes, IncreaseEditorFontSize, context)
         }

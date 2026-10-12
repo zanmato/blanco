@@ -8,14 +8,13 @@ use gpui_component::{
 use ropey::Rope;
 use std::cell::Cell;
 use std::rc::Rc;
-use tracing::{debug, error};
 
 use crate::app_settings::AppSettings;
 use crate::result_ext::ResultExt;
 use crate::sql::{extract_statement_info, extract_statement_info_with_styles};
 use crate::status_bar::{ActivityReporter, ActivityResult};
 use crate::time_format;
-use app_database::{AppDatabase, EnvironmentType, QueryHistoryData, QueryTabData};
+use app_database::{AppDatabase, EnvironmentType, QueryHistoryData};
 use blanco_core::StatementAccess;
 use database::{DatabaseService, DatabaseServiceTrait};
 use sql_parser::statement_parser::QueryParameter;
@@ -246,75 +245,24 @@ impl EditorPanel {
         if let Some(TabType::Query(query_tab)) = self.tabs.get_mut(tab_index) {
             query_tab.last_run_at = Some(run_timestamp);
         }
+        // Save the tab with its run time. The autosave path inserts a new
+        // tab's row exactly once even while an earlier save is in flight.
+        if let Some(editor) = self
+            .tabs
+            .get(tab_index)
+            .and_then(TabType::connection_tab)
+            .map(|tab| tab.editor.entity_id())
+        {
+            self.save_tab_for_editor(editor, cx);
+        }
         let tab = self.tabs.get(self.active_tab_ix);
 
         if let Some(TabType::Query(query_tab)) = tab {
-            let content = query_tab.editor.read(cx).text().to_string();
-
             let _results_panel = query_tab.results_panel.clone();
             let _sql_view = query_tab.sql_view.clone();
 
-            let tab_data = QueryTabData {
-                id: query_tab.db_id,
-                title: query_tab.title.clone(),
-                content: content,
-                position: tab_index as i32,
-                connection_id: Some(query_tab.context.connection_id),
-                connection_type: Some(query_tab.context.db_type.as_str().to_string()),
-                connection_name: Some(query_tab.context.connection_name.clone()),
-                database_name: Some(query_tab.context.database_name.clone()),
-                schema_name: query_tab.context.schema_name.clone(),
-                environment_type: query_tab.context.environment_type,
-                tab_kind: app_database::EditorKind::Query,
-                last_run_at: Some(run_timestamp),
-                file_path: query_tab.file.as_ref().map(|file| file.path_string()),
-            };
-
-            // Trigger the save operation in background
-            let app_database = AppDatabase::global(cx).clone();
-            let _title = query_tab.title.clone();
             let connection_id = query_tab.context.connection_id;
             let db_type = query_tab.context.db_type;
-
-            // A tab on a temporary connection has no connection row to refer
-            // to, so it is not persisted.
-            let persist = !query_tab.context.is_temporary();
-            if persist {
-                cx.spawn(async move |entity_handle, cx| {
-                    // Create the final tab data with connection_id
-                    let mut final_tab_data = tab_data;
-                    final_tab_data.connection_id = Some(connection_id);
-
-                    // First save to get or create the database ID
-                    let tab_db_id = match app_database.save_query_tab(&final_tab_data).await {
-                        Ok(db_id) => {
-                            debug!("Tab saved successfully with db_id: {}", db_id);
-                            db_id
-                        }
-                        Err(e) => {
-                            error!("Failed to save tab: {}", e);
-                            return;
-                        }
-                    };
-
-                    app_database
-                        .touch_query_tab_last_run(tab_db_id, run_timestamp)
-                        .await
-                        .map_err(anyhow::Error::from)
-                        .log_err();
-
-                    entity_handle
-                        .update(cx, |editor_panel: &mut EditorPanel, _| {
-                            if let Some(tab) = editor_panel.tabs.get_mut(editor_panel.active_tab_ix)
-                                && let TabType::Query(query_tab) = tab
-                            {
-                                query_tab.db_id = Some(tab_db_id);
-                            }
-                        })
-                        .log_err();
-                })
-                .detach();
-            }
 
             // Report the in-flight query to the status bar. The guard moves into
             // the foreground result task: success/error finish it with an

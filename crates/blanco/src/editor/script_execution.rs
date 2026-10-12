@@ -8,12 +8,10 @@ use blanco_core::QueryResult;
 use blanco_ui::SqlViewMessage;
 use gpui::{AppContext as _, Context, SharedString, Window};
 use gpui_component::{RopeExt, WindowExt as _, notification::NotificationType};
-use tracing::{debug, error};
 
 use crate::result_ext::ResultExt;
 use crate::status_bar::{ActivityReporter, ActivityResult};
 use crate::time_format;
-use app_database::{AppDatabase, QueryTabData};
 use database::{DatabaseService, DatabaseServiceTrait};
 use scripting::{ConsoleLevel, ScriptEvent};
 
@@ -33,10 +31,9 @@ impl EditorPanel {
         };
 
         let editor = script_tab.editor.read(cx);
-        let full_text = editor.text().to_string();
         let selected_text = editor.selected_text().to_string();
         let source = if selected_text.trim().is_empty() {
-            full_text.clone()
+            editor.text().to_string()
         } else {
             selected_text
         };
@@ -62,61 +59,13 @@ impl EditorPanel {
         let log_view = script_tab.log_view.clone();
         let editor_entity = script_tab.editor.clone();
 
-        let tab_data = QueryTabData {
-            id: script_tab.db_id,
-            title: script_tab.title.clone(),
-            content: full_text,
-            position: tab_index as i32,
-            connection_id: Some(connection_id),
-            connection_type: Some(script_tab.context.db_type.as_str().to_string()),
-            connection_name: Some(script_tab.context.connection_name.clone()),
-            database_name: Some(database_name.clone()),
-            schema_name: script_tab.context.schema_name.clone(),
-            environment_type: script_tab.context.environment_type,
-            tab_kind: app_database::EditorKind::Script,
-            last_run_at: Some(run_timestamp),
-            file_path: script_tab.file.as_ref().map(|file| file.path_string()),
-        };
-
-        let app_database = AppDatabase::global(cx).clone();
-        // A tab on a temporary connection has no connection row to refer to,
-        // so it is not persisted.
-        let persist = !script_tab.context.is_temporary();
-        if persist {
-            cx.spawn(async move |entity_handle, cx| {
-                let tab_db_id = match app_database.save_query_tab(&tab_data).await {
-                    Ok(db_id) => {
-                        debug!("Script tab saved successfully with db_id: {}", db_id);
-                        db_id
-                    }
-                    Err(e) => {
-                        error!("Failed to save script tab: {}", e);
-                        return;
-                    }
-                };
-
-                app_database
-                    .touch_query_tab_last_run(tab_db_id, run_timestamp)
-                    .await
-                    .map_err(anyhow::Error::from)
-                    .log_err();
-
-                entity_handle
-                    .update(cx, |editor_panel: &mut EditorPanel, _| {
-                        if let Some(TabType::Script(script_tab)) =
-                            editor_panel.tabs.get_mut(tab_index)
-                        {
-                            script_tab.db_id = Some(tab_db_id);
-                        }
-                    })
-                    .log_err();
-            })
-            .detach();
-        }
-
         let activity_label = script_tab.context.connection_name.clone();
         let activity =
             ActivityReporter::global(cx).begin(format!("{activity_label}: running script"));
+
+        // Save the tab with its run time, through the autosave path so a new
+        // tab's row is inserted exactly once.
+        self.save_tab_for_editor(editor_entity.entity_id(), cx);
 
         self.loading = true;
         cx.notify();

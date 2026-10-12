@@ -22,9 +22,9 @@ use crate::{
         ExplainQuery, ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV,
         ExportConnections, ExportTableData, FormatQuery, ImportConnections, ImportTableData,
         NewQueryTab, NewSnippet, OpenNewConnectionModal, OpenSettings, OpenSqlFile, OpenSqliteFile,
-        OpenTerminal, RefreshConnections, RestoreDatabase, RollbackChanges, RunQuery, RunSqlFile,
-        SaveTab, SaveTabAs, SwitchTheme, ToggleFilterBar, ToggleRenderWhitespace, ToggleResults,
-        ToggleSidebar, ToggleWordWrap,
+        OpenTerminal, RefreshConnections, ReopenClosedTab, RestoreDatabase, RollbackChanges,
+        RunQuery, RunSqlFile, SaveTab, SaveTabAs, SwitchTheme, ToggleFilterBar,
+        ToggleRenderWhitespace, ToggleResults, ToggleSidebar, ToggleWordWrap,
     },
     connections::ConnectionsPanel,
     editor::EditorPanel,
@@ -138,6 +138,7 @@ pub enum CommandType {
     ImportTableData,
     ExportTableData,
     RefreshConnections,
+    ReopenClosedTab,
     ActivateEditorTab(usize),
     SwitchTheme(String),
     NewQueryForDatabase(DatabaseRef),
@@ -823,6 +824,7 @@ fn execute_command(cmd: &CommandType, window: &mut Window, cx: &mut App) {
         CommandType::ImportTableData => window.dispatch_action(Box::new(ImportTableData), cx),
         CommandType::ExportTableData => window.dispatch_action(Box::new(ExportTableData), cx),
         CommandType::RefreshConnections => window.dispatch_action(Box::new(RefreshConnections), cx),
+        CommandType::ReopenClosedTab => window.dispatch_action(Box::new(ReopenClosedTab), cx),
         CommandType::ActivateEditorTab(index) => {
             window.dispatch_action(Box::new(ActivateEditorTab { index: *index }), cx)
         }
@@ -1259,6 +1261,7 @@ fn build_commands(
             "Connection",
             CommandType::RefreshConnections,
         ),
+        leaf("Reopen Closed Tab", "Tab", CommandType::ReopenClosedTab),
     ];
 
     add_tab_commands(&mut commands, editor_panel, cx);

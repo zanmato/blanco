@@ -17,7 +17,6 @@ use gpui_component::{
 use super::tabs::{TabFile, TabType, file_name};
 use super::{EditorPanel, TabCreationParams};
 use crate::result_ext::ResultExt as _;
-use app_database::{AppDatabase, QueryTabData};
 use blanco_core::ConnectionContext;
 
 /// Files larger than this open with a pointer to Run SQL File instead, which
@@ -309,58 +308,17 @@ impl EditorPanel {
         true
     }
 
-    /// Store the tab, its text and file in the app database.
+    /// Store the tab, its text and file in the app database now rather
+    /// than after the next pause in typing.
     fn persist_tab(&mut self, ix: usize, cx: &mut Context<Self>) {
-        let Some(tab) = self.tabs.get(ix) else {
-            return;
-        };
-        let tab_kind = match tab {
-            TabType::Script(_) => app_database::EditorKind::Script,
-            _ => app_database::EditorKind::Query,
-        };
-        let Some(tab) = tab.connection_tab() else {
-            return;
-        };
-        let data = QueryTabData {
-            id: tab.db_id,
-            title: tab.title.clone(),
-            content: tab.editor.read(cx).text().to_string(),
-            position: ix as i32,
-            connection_id: Some(tab.context.connection_id),
-            connection_type: Some(tab.context.db_type.as_str().to_string()),
-            connection_name: Some(tab.context.connection_name.clone()),
-            database_name: Some(tab.context.database_name.clone()),
-            schema_name: tab.context.schema_name.clone(),
-            environment_type: tab.context.environment_type,
-            tab_kind,
-            last_run_at: tab.last_run_at,
-            file_path: tab.file.as_ref().map(|file| file.path_string()),
-        };
-        let editor = tab.editor.clone();
-        let app_database = AppDatabase::global(cx).clone();
-        let save = gpui_tokio::Tokio::spawn_result(cx, async move {
-            app_database
-                .save_query_tab(&data)
-                .await
-                .map_err(anyhow::Error::from)
-        });
-        cx.spawn(async move |this, cx| {
-            let Some(db_id) = save.await.log_err() else {
-                return;
-            };
-            this.update(cx, |this, _| {
-                if let Some(tab) = this
-                    .tabs
-                    .iter_mut()
-                    .filter_map(TabType::connection_tab_mut)
-                    .find(|tab| tab.editor == editor)
-                {
-                    tab.db_id = Some(db_id);
-                }
-            })
-            .log_err();
-        })
-        .detach();
+        if let Some(editor) = self
+            .tabs
+            .get(ix)
+            .and_then(TabType::connection_tab)
+            .map(|tab| tab.editor.entity_id())
+        {
+            self.save_tab_for_editor(editor, cx);
+        }
     }
 
     /// Close the tab, asking first when it has unsaved changes to its file.
@@ -374,6 +332,7 @@ impl EditorPanel {
             .map(TabFile::name);
         let Some(name) = unsaved else {
             self.close_tab(ix, cx);
+            self.focus_active_tab(window, cx);
             return;
         };
         let weak = cx.entity().downgrade();
