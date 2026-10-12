@@ -131,6 +131,15 @@ async fn test_closed_tab_reopens_with_its_text(cx: &mut TestAppContext) {
         (tab.title.clone(), tab.editor.read(cx).text().to_string())
     });
     assert_eq!(reopened, ("Keep me".to_string(), "SELECT 42".to_string()));
+    // The keyboard is in the reopened tab, so the shortcut can be pressed
+    // again for the tab closed before it.
+    let focused = harness
+        .editor_panel
+        .update_in(&mut cx, |panel, window, cx| {
+            let tab = panel.active_query_tab().expect("reopened tab");
+            gpui::Focusable::focus_handle(tab.editor.read(cx), cx).is_focused(window)
+        });
+    assert!(focused, "the reopened tab takes the keyboard");
     let tabs = stored_tabs("Keep me", &mut cx);
     assert_eq!(tabs.len(), 1, "the reopened tab is persisted again");
     assert_eq!(tabs[0].content, "SELECT 42");

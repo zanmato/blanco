@@ -332,6 +332,7 @@ impl EditorPanel {
             .map(TabFile::name);
         let Some(name) = unsaved else {
             self.close_tab(ix, cx);
+            self.focus_active_tab(window, cx);
             return;
         };
         let weak = cx.entity().downgrade();

@@ -412,6 +412,21 @@ impl EditorPanel {
         {
             self.restore_tab_file(ix, &path, cx);
         }
+        self.focus_active_tab(window, cx);
+    }
+
+    /// Put the keyboard in the active tab. Changing tabs takes the focused
+    /// editor out of the window, and with nothing focused the shortcuts stop
+    /// reaching the app until something is clicked.
+    pub(super) fn focus_active_tab(&self, window: &mut Window, cx: &mut Context<Self>) {
+        match self
+            .tabs
+            .get(self.active_tab_ix)
+            .and_then(TabType::connection_tab)
+        {
+            Some(tab) => tab.editor.update(cx, |editor, cx| editor.focus(window, cx)),
+            None => self.focus_handle.focus(window, cx),
+        }
     }
 
     /// Save a tab's text once typing pauses, so nothing typed is lost on a
@@ -860,10 +875,11 @@ impl EditorPanel {
         self.request_close_tab(self.active_tab_ix, window, cx);
     }
 
-    fn set_active_tab(&mut self, ix: usize, _: &mut Window, cx: &mut Context<Self>) {
+    fn set_active_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         if ix < self.tabs.len() {
             self.active_tab_ix = ix;
             self.tabbar_scroll_handle.scroll_to_item(ix);
+            self.focus_active_tab(window, cx);
             cx.notify();
         }
     }
