@@ -8,10 +8,10 @@ use crate::mcp::bridge::{
     ConfirmReply, McpRequest, Reply as McpReply, WriteAnswer, WriteConfirmation, send_reply,
 };
 use gpui::{
-    Action, App, AppContext, BorrowAppContext, Context, Entity, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, Menu, MenuItem, ParentElement, Render, SharedString,
-    StatefulInteractiveElement as _, Styled, Subscription, Task, Window, actions, div,
-    prelude::FluentBuilder, px, svg,
+    Action, App, AppContext, BorrowAppContext, Context, Entity, ExternalPaths, FocusHandle,
+    Focusable, InteractiveElement, IntoElement, Menu, MenuItem, ParentElement, Render,
+    SharedString, StatefulInteractiveElement as _, Styled, Subscription, Task, Window, actions,
+    div, prelude::FluentBuilder, px, svg,
 };
 use gpui_component::{
     ActiveTheme, Disableable as _, Icon, IconName, Sizable as _, TitleBar, WindowExt as _,
@@ -43,6 +43,7 @@ use crate::{
     history_panel::{HistoryPanel, HistoryPanelEvent},
     result_ext::ResultExt,
     snippets_panel::{RefreshSnippets, SnippetsPanel, SnippetsPanelEvent},
+    sqlite_file,
     status_bar::{ActivityMessage, ActivityReporter, ActivityResult, StatusBarState, StatusKind},
     update_manager::{UpdateManager, UpdateState},
 };
@@ -59,6 +60,7 @@ actions!(
         OpenNewConnectionModal,
         ImportConnections,
         ExportConnections,
+        OpenSqliteFile,
         NewSnippet,
         CommitChanges,
         RollbackChanges,
@@ -409,6 +411,7 @@ pub struct BlancoApp {
     _action_task: Task<()>,
     _activity_task: Task<()>,
     _idle_disconnect_task: Task<()>,
+    _open_files_task: Task<()>,
     _save_window_bounds_task: Task<()>,
     _save_editor_font_size_task: Task<()>,
     /// Drains MCP requests onto the foreground; see `spawn_mcp_listener`.
@@ -428,6 +431,7 @@ impl BlancoApp {
 
         let action_task = Self::spawn_service_listener(cx);
         let idle_disconnect_task = Self::spawn_idle_disconnect(cx);
+        let open_files_task = Self::spawn_open_file_listener(window, cx);
         let (status_bar, activity_task) = Self::spawn_activity_status(cx);
         let mcp_task = Self::spawn_mcp_listener(window, cx);
         let (mcp_confirmations, mcp_confirmation_task) =
@@ -483,6 +487,7 @@ impl BlancoApp {
             _action_task: action_task,
             _activity_task: activity_task,
             _idle_disconnect_task: idle_disconnect_task,
+            _open_files_task: open_files_task,
             _save_window_bounds_task: Task::ready(()),
             _save_editor_font_size_task: Task::ready(()),
             _mcp_task: mcp_task,
@@ -935,6 +940,103 @@ impl BlancoApp {
         })
     }
 
+    /// Open the database files passed at launch and those the platform asks
+    /// the running app to open.
+    fn spawn_open_file_listener(window: &mut Window, cx: &mut Context<Self>) -> Task<()> {
+        let Some(requests) = cx
+            .try_global::<sqlite_file::OpenFileRequests>()
+            .map(|requests| requests.receiver.clone())
+        else {
+            return Task::ready(());
+        };
+        cx.spawn_in(window, async move |app, cx| {
+            while let Ok(paths) = requests.recv().await {
+                let opened = app.update_in(cx, |app, window, cx| {
+                    for path in &paths {
+                        app.open_database_file(path, window, cx);
+                    }
+                });
+                if opened.is_err() {
+                    break;
+                }
+            }
+        })
+    }
+
+    /// Open the SQLite database at `path` in a new query tab: through its
+    /// saved connection when there is one, otherwise through a temporary
+    /// connection that can be saved later. Files are recognised by their
+    /// header, whatever their extension.
+    pub(crate) fn open_database_file(
+        &mut self,
+        path: &std::path::Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !sqlite_file::is_sqlite_file(path) {
+            window.push_notification(
+                (
+                    NotificationType::Error,
+                    SharedString::from(format!("{} is not a SQLite database.", path.display())),
+                ),
+                cx,
+            );
+            return;
+        }
+        let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+
+        if let Some(connection) = self.sidebar.read(cx).sqlite_connection_for(&path) {
+            self.open_query_tab_for_file(&connection, window, cx);
+            return;
+        }
+
+        let connection = self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.add_temporary_sqlite_connection(&path, cx)
+        });
+        let Some(config) = connection.to_connection_config() else {
+            return;
+        };
+        let db_service = database::DatabaseService::global(cx).clone();
+        cx.spawn_in(window, async move |app, cx| {
+            db_service.add_connection_config(config).await;
+            app.update_in(cx, |app, window, cx| {
+                if let Some(id) = connection.id {
+                    app.sidebar.update(cx, |sidebar, cx| {
+                        sidebar.expand_connection(id, window, cx);
+                    });
+                }
+                app.open_query_tab_for_file(&connection, window, cx);
+            })
+            .log_err();
+        })
+        .detach();
+    }
+
+    fn open_query_tab_for_file(
+        &mut self,
+        connection: &ConnectionData,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(connection_id) = connection.id else {
+            return;
+        };
+        let action = CreateNewQueryTab {
+            table_name: None,
+            inspect_key: false,
+            context: ConnectionContext {
+                connection_id,
+                connection_name: connection.name.clone(),
+                db_type: connection.db_type,
+                // The sidebar addresses a SQLite database by its schema.
+                database_name: "main".to_string(),
+                schema_name: None,
+                environment_type: Some(connection.environment_type),
+            },
+        };
+        self.on_create_new_query_tab(&action, window, cx);
+    }
+
     /// Create the status-bar entity and the background task that folds
     /// app-wide `ActivityMessage`s (reported through the global
     /// `ActivityReporter`) into it.
@@ -1009,12 +1111,24 @@ impl BlancoApp {
                     app.edit_connection_with_secrets(*connection_data.clone(), window, cx);
                 }
                 ConnectionsPanelEvent::DuplicateConnection { connection_data } => {
-                    app.open_new_connection_modal(Some(*connection_data.clone()), window, cx);
+                    app.open_new_connection_modal(Some(*connection_data.clone()), None, window, cx);
+                }
+                ConnectionsPanelEvent::SaveTemporaryConnection { connection_data } => {
+                    let temporary_id = connection_data.id;
+                    let prefill = ConnectionData {
+                        id: None,
+                        ..*connection_data.clone()
+                    };
+                    app.open_new_connection_modal(Some(prefill), temporary_id, window, cx);
                 }
                 // First-run experience: if the initial load found no saved connections,
                 // greet the user with the new connection dialog instead of an empty window.
+                // Not when Blanco was started to open a database file.
                 ConnectionsPanelEvent::FirstLoadCompleted => {
-                    if sidebar.read(cx).connections.is_empty() {
+                    let opening_files = cx
+                        .try_global::<sqlite_file::OpenFileRequests>()
+                        .is_some_and(|requests| requests.at_launch);
+                    if sidebar.read(cx).connections.is_empty() && !opening_files {
                         app.on_new_connection_modal(&OpenNewConnectionModal, window, cx);
                     }
                 }
@@ -1667,6 +1781,32 @@ impl BlancoApp {
             .update(cx, |sidebar, cx| sidebar.import_connections(window, cx));
     }
 
+    fn on_open_sqlite_file(
+        &mut self,
+        _: &OpenSqliteFile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Open SQLite database".into()),
+        });
+        cx.spawn_in(window, async move |app, cx| {
+            let Ok(Ok(Some(paths))) = paths.await else {
+                return;
+            };
+            app.update_in(cx, |app, window, cx| {
+                for path in &paths {
+                    app.open_database_file(path, window, cx);
+                }
+            })
+            .log_err();
+        })
+        .detach();
+    }
+
     fn on_export_connections(
         &mut self,
         _: &ExportConnections,
@@ -2028,14 +2168,17 @@ impl BlancoApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.open_new_connection_modal(None, window, cx);
+        self.open_new_connection_modal(None, None, window, cx);
     }
 
     /// Open the new connection dialog, filled in from `prefill` when given.
-    /// `prefill` has no id, so saving creates a connection.
+    /// `prefill` has no id, so saving creates a connection. When it saves a
+    /// temporary connection, `replaces_temporary` is that connection's id: the
+    /// saved one takes its place in the sidebar and takes over its tabs.
     fn open_new_connection_modal(
         &mut self,
         prefill: Option<ConnectionData>,
+        replaces_temporary: Option<i64>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -2045,6 +2188,7 @@ impl BlancoApp {
         let content_for_focus = modal_content.clone();
 
         let sidebar = self.sidebar.clone();
+        let editor_panel = self.editor_panel.clone();
         window.open_dialog(cx, move |modal, _window, _cx| {
             let content_clone = modal_content.clone();
 
@@ -2084,11 +2228,13 @@ impl BlancoApp {
                 .on_ok({
                     let content = content_clone;
                     let sidebar = sidebar.clone();
+                    let editor_panel = editor_panel.clone();
                     move |_, window, cx| {
                         if let Some(conn_data) = content.read(cx).get_connection_data(cx) {
                             let app_database = AppDatabase::global(cx).clone();
                             let db_service = database::DatabaseService::global(cx).clone();
                             let sidebar = sidebar.clone();
+                            let editor_panel = editor_panel.clone();
                             window
                                 .spawn(cx, async move |cx| {
                                     let result: anyhow::Result<()> = async {
@@ -2133,8 +2279,31 @@ impl BlancoApp {
                                                 .await;
                                         }
                                         sidebar.update_in(cx, |panel, _window, cx| {
+                                            if let Some(temporary_id) = replaces_temporary {
+                                                panel.close_temporary_connection(temporary_id, cx);
+                                            }
                                             panel.reload_connections(cx);
                                         })?;
+                                        if let Some(temporary_id) = replaces_temporary {
+                                            let context = ConnectionContext {
+                                                connection_id,
+                                                connection_name: connection_data.name.clone(),
+                                                db_type: connection_data.db_type,
+                                                database_name: String::new(),
+                                                schema_name: None,
+                                                environment_type: Some(
+                                                    connection_data.environment_type,
+                                                ),
+                                            };
+                                            editor_panel.update_in(cx, |panel, window, cx| {
+                                                panel.move_tabs_to_connection(
+                                                    temporary_id,
+                                                    &context,
+                                                    window,
+                                                    cx,
+                                                );
+                                            })?;
+                                        }
                                         Ok(())
                                     }
                                     .await;
@@ -2590,6 +2759,7 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_toggle_command_palette))
             .on_action(cx.listener(Self::on_import_connections))
             .on_action(cx.listener(Self::on_export_connections))
+            .on_action(cx.listener(Self::on_open_sqlite_file))
             .on_action(cx.listener(Self::on_new_query_tab))
             .on_action(cx.listener(Self::on_activate_next_tab))
             .on_action(cx.listener(Self::on_activate_previous_tab))
@@ -2598,6 +2768,12 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_import_table_data))
             .on_action(cx.listener(Self::on_export_table_data))
             .on_action(cx.listener(Self::on_refresh_connections))
+            .drag_over::<ExternalPaths>(|style, _, _, cx| style.bg(cx.theme().drop_target))
+            .on_drop(cx.listener(|app, paths: &ExternalPaths, window, cx| {
+                for path in paths.paths() {
+                    app.open_database_file(path, window, cx);
+                }
+            }))
             .size_full()
             .overflow_hidden()
             .bg(cx.theme().background)
@@ -2778,6 +2954,11 @@ fn build_menu() -> Vec<Menu> {
     // the app's name, and that is where Settings and Quit belong there.
     let mut file_items = vec![
         MenuItem::action("New Connection", OpenNewConnectionModal),
+        MenuItem::submenu(Menu {
+            name: "Open".into(),
+            items: vec![MenuItem::action("SQLite Database…", OpenSqliteFile)],
+            disabled: false,
+        }),
         MenuItem::action("Import Connections…", ImportConnections),
         MenuItem::action("Export Connections…", ExportConnections),
         MenuItem::action("Toggle Terminal", OpenTerminal),

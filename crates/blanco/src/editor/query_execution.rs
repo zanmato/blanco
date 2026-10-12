@@ -275,40 +275,45 @@ impl EditorPanel {
             let connection_id = query_tab.context.connection_id;
             let db_type = query_tab.context.db_type;
 
-            cx.spawn(async move |entity_handle, cx| {
-                // Create the final tab data with connection_id
-                let mut final_tab_data = tab_data;
-                final_tab_data.connection_id = Some(connection_id);
+            // A tab on a temporary connection has no connection row to refer
+            // to, so it is not persisted.
+            let persist = !query_tab.context.is_temporary();
+            if persist {
+                cx.spawn(async move |entity_handle, cx| {
+                    // Create the final tab data with connection_id
+                    let mut final_tab_data = tab_data;
+                    final_tab_data.connection_id = Some(connection_id);
 
-                // First save to get or create the database ID
-                let tab_db_id = match app_database.save_query_tab(&final_tab_data).await {
-                    Ok(db_id) => {
-                        debug!("Tab saved successfully with db_id: {}", db_id);
-                        db_id
-                    }
-                    Err(e) => {
-                        error!("Failed to save tab: {}", e);
-                        return;
-                    }
-                };
-
-                app_database
-                    .touch_query_tab_last_run(tab_db_id, run_timestamp)
-                    .await
-                    .map_err(anyhow::Error::from)
-                    .log_err();
-
-                entity_handle
-                    .update(cx, |editor_panel: &mut EditorPanel, _| {
-                        if let Some(tab) = editor_panel.tabs.get_mut(editor_panel.active_tab_ix)
-                            && let TabType::Query(query_tab) = tab
-                        {
-                            query_tab.db_id = Some(tab_db_id);
+                    // First save to get or create the database ID
+                    let tab_db_id = match app_database.save_query_tab(&final_tab_data).await {
+                        Ok(db_id) => {
+                            debug!("Tab saved successfully with db_id: {}", db_id);
+                            db_id
                         }
-                    })
-                    .log_err();
-            })
-            .detach();
+                        Err(e) => {
+                            error!("Failed to save tab: {}", e);
+                            return;
+                        }
+                    };
+
+                    app_database
+                        .touch_query_tab_last_run(tab_db_id, run_timestamp)
+                        .await
+                        .map_err(anyhow::Error::from)
+                        .log_err();
+
+                    entity_handle
+                        .update(cx, |editor_panel: &mut EditorPanel, _| {
+                            if let Some(tab) = editor_panel.tabs.get_mut(editor_panel.active_tab_ix)
+                                && let TabType::Query(query_tab) = tab
+                            {
+                                query_tab.db_id = Some(tab_db_id);
+                            }
+                        })
+                        .log_err();
+                })
+                .detach();
+            }
 
             // Report the in-flight query to the status bar. The guard moves into
             // the foreground result task: success/error finish it with an

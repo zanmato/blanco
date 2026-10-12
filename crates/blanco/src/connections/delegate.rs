@@ -255,6 +255,32 @@ impl TreeDelegate for ConnectionsTreeDelegate {
         let metadata = &entry.item().metadata;
 
         match metadata.kind {
+            // A temporary connection has no saved row to edit, copy or
+            // remove: it is saved or closed instead.
+            TreeItemKind::Connection if metadata.connection_id < 0 => {
+                let connection_id = metadata.connection_id;
+                menu.item(PopupMenuItem::new("Refresh").on_click(window.listener_for(
+                    &self.parent,
+                    move |this, _event, _window, cx| {
+                        this.refresh_connection(connection_id, cx);
+                    },
+                )))
+                .item(
+                    PopupMenuItem::new("Save Connection…").on_click(window.listener_for(
+                        &self.parent,
+                        move |this, _event, _window, cx| {
+                            this.save_temporary_connection(connection_id, cx);
+                        },
+                    )),
+                )
+                .separator()
+                .item(PopupMenuItem::new("Close").on_click(window.listener_for(
+                    &self.parent,
+                    move |this, _event, _window, cx| {
+                        this.close_temporary_connection(connection_id, cx);
+                    },
+                )))
+            }
             TreeItemKind::Connection => {
                 let connection_id = metadata.connection_id;
                 let connection_name = metadata.connection_name.clone();

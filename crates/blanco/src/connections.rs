@@ -44,6 +44,12 @@ pub enum ConnectionsPanelEvent {
     DuplicateConnection {
         connection_data: Box<ConnectionData>,
     },
+    /// Open the new connection dialog to save a temporary connection, filled
+    /// in from it. `connection_data` keeps the temporary id, so the caller can
+    /// replace the temporary connection once the new one is saved.
+    SaveTemporaryConnection {
+        connection_data: Box<ConnectionData>,
+    },
     /// The initial async connection load finished. Connections load off the foreground
     /// thread, so anything that depends on whether the user has connections (like the
     /// first-run dialog) must wait for this instead of reading `connections` at startup.
@@ -68,7 +74,12 @@ impl std::fmt::Debug for TreeItemIcon {
 }
 
 pub struct ConnectionsPanel {
+    /// Saved connections followed by the temporary ones.
     pub connections: Vec<ConnectionData>,
+    /// Connections opened for this session only (a SQLite file opened
+    /// directly), kept apart so a reload from the app database keeps them.
+    temporary_connections: Vec<ConnectionData>,
+    next_temporary_id: i64,
     _selected_connection_id: Option<i64>,
     database_metadata: std::collections::HashMap<i64, DatabaseMetadata>, // Store metadata per connection
     tree_state: Entity<TreeState<ConnectionsTreeDelegate>>,
@@ -216,6 +227,8 @@ impl ConnectionsPanel {
 
         let mut panel = Self {
             connections: Vec::new(),
+            temporary_connections: Vec::new(),
+            next_temporary_id: -1,
             _selected_connection_id: None,
             database_metadata,
             tree_state,
@@ -247,6 +260,8 @@ impl ConnectionsPanel {
             this_handle
                 .update(cx, |this, cx| {
                     this.connections = connections;
+                    this.connections
+                        .extend(this.temporary_connections.iter().cloned());
                     this.update_tree_items(cx);
                     if !this.initial_load_completed {
                         this.initial_load_completed = true;
@@ -274,6 +289,68 @@ impl ConnectionsPanel {
     pub fn selected_connection_id(&self, cx: &App) -> Option<i64> {
         let entry = self.tree_state.read(cx).selected_entry()?;
         Some(entry.item().metadata.connection_id)
+    }
+
+    /// The saved or temporary SQLite connection for the database file at
+    /// `path`, if there is one.
+    pub fn sqlite_connection_for(&self, path: &std::path::Path) -> Option<ConnectionData> {
+        let canonical = |path: &std::path::Path| path.canonicalize().ok();
+        let wanted = canonical(path)?;
+        self.connections
+            .iter()
+            .filter(|connection| connection.db_type == database::DatabaseType::SQLite)
+            .find(|connection| {
+                connection
+                    .database_path
+                    .as_deref()
+                    .and_then(|stored| canonical(std::path::Path::new(stored)))
+                    .is_some_and(|stored| stored == wanted)
+            })
+            .cloned()
+    }
+
+    /// Add a temporary connection to the SQLite database at `path`, shown in
+    /// the sidebar until it is closed or saved.
+    pub fn add_temporary_sqlite_connection(
+        &mut self,
+        path: &std::path::Path,
+        cx: &mut Context<Self>,
+    ) -> ConnectionData {
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+        let mut connection = ConnectionData::new_sqlite(name, path.to_string_lossy().into_owned());
+        let id = self.next_temporary_id;
+        self.next_temporary_id -= 1;
+        connection.id = Some(id);
+        self.temporary_connections.push(connection.clone());
+        self.connections.push(connection.clone());
+        self.update_tree_items(cx);
+        connection
+    }
+
+    /// Drop a temporary connection from the sidebar and close it.
+    pub fn close_temporary_connection(&mut self, connection_id: i64, cx: &mut Context<Self>) {
+        self.temporary_connections
+            .retain(|connection| connection.id != Some(connection_id));
+        self.connections
+            .retain(|connection| connection.id != Some(connection_id));
+        self.disconnect_connection(connection_id, cx);
+    }
+
+    /// Ask the app to save a temporary connection through the connection
+    /// dialog.
+    pub fn save_temporary_connection(&mut self, connection_id: i64, cx: &mut Context<Self>) {
+        if let Some(connection) = self
+            .temporary_connections
+            .iter()
+            .find(|connection| connection.id == Some(connection_id))
+        {
+            cx.emit(ConnectionsPanelEvent::SaveTemporaryConnection {
+                connection_data: Box::new(connection.clone()),
+            });
+        }
     }
 
     /// Refresh the live connection statuses, then rebuild the tree from them.

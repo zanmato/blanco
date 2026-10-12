@@ -179,6 +179,13 @@ impl ConnectionData {
         self.name.clone()
     }
 
+    /// Opened for this session only and not saved, see
+    /// `ConnectionContext::is_temporary`. Temporary connections use negative
+    /// ids so they never collide with saved ones.
+    pub fn is_temporary(&self) -> bool {
+        self.id.is_some_and(|id| id < 0)
+    }
+
     /// The one database to list for this connection, when it is restricted to
     /// the database it was configured with. `None` lists everything on the
     /// server, which is also what an empty database name falls back to.
