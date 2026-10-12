@@ -988,13 +988,6 @@ impl Render for EditorPanel {
             .flex_1()
             .h_full()
             .overflow_hidden()
-            // Dropping files on the editor opens them in query tabs.
-            .drag_over::<gpui::ExternalPaths>(|style, _, _, cx| style.bg(cx.theme().drop_target))
-            .on_drop(
-                cx.listener(|this, paths: &gpui::ExternalPaths, window, cx| {
-                    this.open_sql_files(paths.paths().to_vec(), window, cx);
-                }),
-            )
             .on_action(
                 cx.listener(|this, action: &ExecuteSubstitutedQuery, window, cx| {
                     this.execute_query(

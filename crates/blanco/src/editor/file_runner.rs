@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use blanco_core::ConnectionContext;
 use blanco_core::statement_stream::StatementSplitter;
 use database::DatabaseService;
 use gpui::{
@@ -21,7 +22,7 @@ use gpui_component::{
 };
 
 use super::tabs::{TabType, file_name};
-use super::{EditorPanel, ProdWritePrompt};
+use super::{EditorPanel, ProdWritePrompt, TabCreationParams};
 use crate::result_ext::ResultExt as _;
 use crate::status_bar::{ActivityReporter, ActivityResult};
 
@@ -187,18 +188,15 @@ where
 }
 
 impl EditorPanel {
-    /// Ask for a script and run it on the active query tab's connection.
-    pub fn prompt_run_sql_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let ix = self.active_tab_ix;
-        let Some(tab) = self.tabs.get(ix).and_then(TabType::query) else {
-            Self::push_error(
-                "Run SQL File runs on a query tab's connection; open a query tab first",
-                window,
-                cx,
-            );
-            return;
-        };
-        if !tab.context.db_type.supports_sql() {
+    /// Ask for a script and run it on `context`'s database, in a new query
+    /// tab named after the file that shows its progress and log.
+    pub fn prompt_run_sql_file(
+        &mut self,
+        context: ConnectionContext,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !context.db_type.supports_sql() {
             Self::push_error("Run SQL File needs a SQL connection", window, cx);
             return;
         }
@@ -206,8 +204,8 @@ impl EditorPanel {
             Self::push_error("A file is already running", window, cx);
             return;
         }
-        let is_prod = tab.context.is_prod();
-        let connection_name = tab.context.connection_name.clone();
+        let is_prod = context.is_prod();
+        let connection_name = context.connection_name.clone();
         let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: true,
             directories: false,
@@ -225,6 +223,20 @@ impl EditorPanel {
                 return;
             };
             this.update_in(cx, |this, window, cx| {
+                this.create_and_add_tab_with_connection(
+                    window,
+                    TabCreationParams {
+                        title: file_name(&path),
+                        content: None,
+                        db_id: None,
+                        last_run_at: None,
+                        context,
+                    },
+                    cx,
+                );
+                let Some(ix) = this.tabs.len().checked_sub(1) else {
+                    return;
+                };
                 if is_prod {
                     let name = file_name(&path);
                     this.confirm_prod_write(
@@ -237,7 +249,8 @@ impl EditorPanel {
                             tab_index: ix,
                         },
                         move |this, window, cx| this.start_file_run(ix, path.clone(), window, cx),
-                        None,
+                        // The tab was opened for this run alone.
+                        Some(Box::new(move |this, cx| this.close_tab(ix, cx))),
                         window,
                         cx,
                     );

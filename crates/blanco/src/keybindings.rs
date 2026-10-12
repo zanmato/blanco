@@ -1,9 +1,9 @@
 use crate::app::{
     ActivateNextTab, ActivatePreviousTab, CancelQuery, CloseActiveTab, CommitChanges,
     DecreaseEditorFontSize, ExplainQuery, ExportTableData, FormatQuery, ImportTableData,
-    IncreaseEditorFontSize, NewQueryTab, OpenSettings, OpenSqlFile, OpenTerminal,
-    RefreshConnections, ResetEditorFontSize, RollbackChanges, RunQuery, RunSqlFile, SaveTab,
-    SaveTabAs, ToggleCommandPalette, ToggleFilterBar, ToggleResults, ToggleSidebar,
+    IncreaseEditorFontSize, NewQueryTab, OpenSettings, OpenTerminal, RefreshConnections,
+    ResetEditorFontSize, RollbackChanges, RunQuery, SaveTab, SaveTabAs, ToggleCommandPalette,
+    ToggleFilterBar, ToggleResults, ToggleSidebar,
 };
 use crate::settings::Settings;
 
@@ -67,13 +67,6 @@ pub const CUSTOMIZABLE_BINDINGS: &[BindingDef] = &[
         context: None,
     },
     BindingDef {
-        action: "OpenSqlFile",
-        label: "Open SQL file",
-        group: "File",
-        default: "secondary-o",
-        context: Some(NOT_TERMINAL),
-    },
-    BindingDef {
         action: "SaveTab",
         label: "Save tab to its file",
         group: "File",
@@ -86,13 +79,6 @@ pub const CUSTOMIZABLE_BINDINGS: &[BindingDef] = &[
         group: "File",
         default: "secondary-shift-s",
         context: Some(NOT_TERMINAL),
-    },
-    BindingDef {
-        action: "RunSqlFile",
-        label: "Run SQL file",
-        group: "File",
-        default: "",
-        context: None,
     },
     BindingDef {
         action: "CommitChanges",
@@ -307,10 +293,8 @@ fn key_binding(action: &str, keystrokes: &str, context: Option<&str>) -> Option<
         "FormatQuery" => gpui::KeyBinding::new(keystrokes, FormatQuery, context),
         "ToggleCommandPalette" => gpui::KeyBinding::new(keystrokes, ToggleCommandPalette, context),
         "ToggleFilterBar" => gpui::KeyBinding::new(keystrokes, ToggleFilterBar, context),
-        "OpenSqlFile" => gpui::KeyBinding::new(keystrokes, OpenSqlFile, context),
         "SaveTab" => gpui::KeyBinding::new(keystrokes, SaveTab, context),
         "SaveTabAs" => gpui::KeyBinding::new(keystrokes, SaveTabAs, context),
-        "RunSqlFile" => gpui::KeyBinding::new(keystrokes, RunSqlFile, context),
         "CommitChanges" => gpui::KeyBinding::new(keystrokes, CommitChanges, context),
         "RollbackChanges" => gpui::KeyBinding::new(keystrokes, RollbackChanges, context),
         "OpenSettings" => gpui::KeyBinding::new(keystrokes, OpenSettings, context),

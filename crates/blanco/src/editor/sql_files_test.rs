@@ -33,7 +33,8 @@ async fn open_edit_save_and_reopen_a_sql_file(cx: &mut TestAppContext) {
     harness
         .editor_panel
         .update_in(&mut cx, |panel, window, cx| {
-            panel.open_sql_files(vec![path.clone()], window, cx)
+            let context = panel.active_context(cx).expect("query tab context");
+            panel.open_sql_files(vec![path.clone()], context, window, cx)
         });
     cx.run_until_parked();
     assert_eq!(tab_count(&harness, &cx), tabs_before + 1);
@@ -68,7 +69,8 @@ async fn open_edit_save_and_reopen_a_sql_file(cx: &mut TestAppContext) {
         .editor_panel
         .update_in(&mut cx, |panel, window, cx| {
             panel.activate_tab(0, window, cx);
-            panel.open_sql_files(vec![path.clone()], window, cx);
+            let context = panel.active_context(cx).expect("query tab context");
+            panel.open_sql_files(vec![path.clone()], context, window, cx);
         });
     cx.run_until_parked();
     assert_eq!(tab_count(&harness, &cx), tabs_before + 1);

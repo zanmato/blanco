@@ -18,6 +18,7 @@ use super::tabs::{TabFile, TabType, file_name};
 use super::{EditorPanel, TabCreationParams};
 use crate::result_ext::ResultExt as _;
 use app_database::{AppDatabase, QueryTabData};
+use blanco_core::ConnectionContext;
 
 /// Files larger than this open with a pointer to Run SQL File instead, which
 /// streams them without loading the editor.
@@ -64,8 +65,13 @@ impl EditorPanel {
         window.push_notification((NotificationType::Error, message), cx);
     }
 
-    /// Ask for `.sql` files and open them.
-    pub fn prompt_open_sql_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Ask for `.sql` files and open them on `context`'s database.
+    pub fn prompt_open_sql_files(
+        &mut self,
+        context: ConnectionContext,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: true,
             directories: false,
@@ -77,17 +83,16 @@ impl EditorPanel {
                 return;
             };
             this.update_in(cx, |this, window, cx| {
-                this.open_sql_files(paths, window, cx)
+                this.open_sql_files(paths, context, window, cx)
             })
             .log_err();
         })
         .detach();
     }
 
-    /// Open each file in a new query tab on the active tab's connection. A
-    /// file already open is brought forward rather than read again, so an
-    /// open tab's text is never replaced.
-    pub fn open_sql_files(
+    /// Open files dropped on the window. A drop names no database, so they
+    /// open on the active tab's connection.
+    pub fn open_dropped_sql_files(
         &mut self,
         paths: Vec<PathBuf>,
         window: &mut Window,
@@ -101,12 +106,25 @@ impl EditorPanel {
             .map(|tab| tab.context.clone())
         else {
             Self::notify_error(
-                "Open a query tab on a connection first: a SQL file opens on the active tab's connection".to_string(),
+                "Open a query tab on a connection first: a dropped SQL file opens on the active tab's connection".to_string(),
                 window,
                 cx,
             );
             return;
         };
+        self.open_sql_files(paths, context, window, cx);
+    }
+
+    /// Open each file in a new query tab on `context`'s database. A file
+    /// already open is brought forward rather than read again, so an open
+    /// tab's text is never replaced.
+    pub fn open_sql_files(
+        &mut self,
+        paths: Vec<PathBuf>,
+        context: ConnectionContext,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         for path in paths {
             if let Some(ix) = self.tab_for_file(&path) {
                 self.activate_tab(ix, window, cx);
