@@ -1,4 +1,6 @@
 use gpui::{TestAppContext, VisualTestContext};
+use gpui_component::menu::PopupMenu;
+use gpui_component::table::{TableDelegate as _, TableSelection};
 
 use crate::app::DeleteRow;
 use crate::results_panel::{CellInput, ResultsTableDelegate};
@@ -1085,4 +1087,46 @@ async fn test_copy_column_values(cx: &mut TestAppContext) {
     assert_eq!(copy(0, true, true, &mut cx), "(1, 2)");
     assert_eq!(copy(1, false, true, &mut cx), "('a', 'it''s')");
     assert_eq!(copy(1, false, false, &mut cx), "a\nNULL\nit's");
+}
+
+/// A result column can be selected from its header, and the header's context
+/// menu offers the column copies.
+#[gpui::test]
+async fn test_column_header_selects_and_has_a_menu(cx: &mut TestAppContext) {
+    let harness = TestHarness::new(cx);
+    let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
+
+    set_editor_text(&harness, "SELECT 1 AS id, 'a' AS v", &mut cx);
+    run_query(&harness, &mut cx);
+    wait_for_query(&harness, &mut cx).await;
+
+    let table_state = harness.editor_panel.read_with(&cx, |panel, cx| {
+        panel
+            .active_query_tab()
+            .expect("query tab")
+            .results_panel
+            .read(cx)
+            .table_state()
+            .clone()
+    });
+
+    assert!(table_state.read_with(&cx, |state, _| state.col_selectable));
+    table_state.update(&mut cx, |state, cx| {
+        state.set_selection(TableSelection::Column(1), cx);
+    });
+    assert_eq!(
+        table_state.read_with(&cx, |state, _| state.selection()),
+        TableSelection::Column(1)
+    );
+
+    let menu = cx.update(|window, cx| {
+        PopupMenu::build(window, cx, move |menu, window, cx| {
+            table_state.update(cx, |state, cx| {
+                state
+                    .delegate_mut()
+                    .column_context_menu(1, menu, window, cx)
+            })
+        })
+    });
+    assert!(!menu.read_with(&cx, |menu, _| menu.is_empty()));
 }

@@ -14,7 +14,7 @@ use gpui_component::{
     clipboard::Clipboard,
     h_flex,
     input::{Editor, EditorState, Input, InputState, MoveLeft, MoveRight},
-    menu::{ContextMenuExt as _, PopupMenu},
+    menu::PopupMenu,
     table::{Column, ColumnSort, TableDelegate, TableState},
     tooltip::Tooltip,
     v_flex,
@@ -693,7 +693,6 @@ impl TableDelegate for ResultsTableDelegate {
                         )
                     }),
             )
-            .context_menu(move |menu, _, _| column_copy_items(menu, col_ix, false))
     }
 
     fn render_td(
@@ -770,6 +769,16 @@ impl TableDelegate for ResultsTableDelegate {
         // Add extra space to ensure all columns are scrollable
         // This compensates for any viewport calculation issues
         div().w(px(30.0)).h_full().flex_shrink_0()
+    }
+
+    fn column_context_menu(
+        &mut self,
+        col_ix: usize,
+        menu: PopupMenu,
+        _window: &mut Window,
+        _cx: &mut Context<TableState<Self>>,
+    ) -> PopupMenu {
+        column_copy_items(menu, col_ix, false)
     }
 
     fn context_menu(
@@ -953,8 +962,24 @@ fn column_copy_items(menu: PopupMenu, column: usize, selected_only: bool) -> Pop
             selected_only,
         })
     };
-    menu.menu("Copy Column Values", copy(false, false))
-        .menu("Copy Distinct Column Values", copy(true, false))
-        .menu("Copy Column as IN List", copy(false, true))
-        .menu("Copy Distinct Column as IN List", copy(true, true))
+    menu.menu_with_icon(
+        "Copy Column Values",
+        Icon::new(IconName::List),
+        copy(false, false),
+    )
+    .menu_with_icon(
+        "Copy Distinct Column Values",
+        Icon::new(IconName::List),
+        copy(true, false),
+    )
+    .menu_with_icon(
+        "Copy Column as IN List",
+        Icon::new(IconName::Parentheses),
+        copy(false, true),
+    )
+    .menu_with_icon(
+        "Copy Distinct Column as IN List",
+        Icon::new(IconName::Parentheses),
+        copy(true, true),
+    )
 }

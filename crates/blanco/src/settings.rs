@@ -807,9 +807,7 @@ mod appearance_tests {
             assert_eq!(Theme::global(cx).mono_font_family, "JetBrains Mono");
         });
     }
-}
 
-mod tests {
     #[test]
     fn test_completion_accept_keys_round_trip() {
         for setting in [

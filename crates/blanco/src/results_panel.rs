@@ -180,7 +180,6 @@ impl ResultsPanel {
             TableState::new(delegate, window, cx)
                 .row_selectable(true)
                 .cell_selectable(true)
-                .col_selectable(false)
                 .row_numbers(true)
         });
 
