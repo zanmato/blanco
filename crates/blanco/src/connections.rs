@@ -32,7 +32,7 @@ use gpui_component::{
     dialog::{DialogAction, DialogClose, DialogFooter},
     h_flex,
     input::{Input, InputEvent, InputState},
-    menu::DropdownMenu as _,
+    menu::{DropdownMenu as _, PopupMenuItem},
     notification::NotificationType,
     v_flex,
 };
@@ -107,6 +107,8 @@ pub struct ConnectionsPanel {
     // colors, instead of being patched onto the flattened entries afterwards.
     connected_databases: std::collections::HashMap<i64, std::collections::HashSet<String>>,
     initial_load_completed: bool,
+    /// Show only connections with this environment tag.
+    tag_filter: Option<EnvironmentType>,
 }
 
 /// Type of tree item in the metadata context
@@ -264,6 +266,7 @@ impl ConnectionsPanel {
             expanded_tables,
             connected_databases,
             initial_load_completed: false,
+            tag_filter: None,
         };
 
         panel.reload_connections(cx);
@@ -426,6 +429,10 @@ impl ConnectionsPanel {
         let tree_items: Vec<TreeItem<TreeItemMetadata>> = self
             .connections
             .iter()
+            .filter(|connection| {
+                self.tag_filter
+                    .is_none_or(|tag| connection.environment_type == tag)
+            })
             .map(|connection| {
                 self.build_connection_tree_item_with_expand(
                     connection,
@@ -770,8 +777,12 @@ impl ConnectionsPanel {
                     .default_value(&table_name)
             })
         });
-        let is_prod = metadata.environment_type == Some(EnvironmentType::Prod);
-        let prod_note = if is_prod { " on a PROD connection" } else { "" };
+        let prod_note = match metadata.environment_type {
+            Some(environment) if environment.confirms_writes() => {
+                format!(" on a {environment} connection")
+            }
+            _ => String::new(),
+        };
         let title = format!(
             "{} {}?",
             operation.label(),
@@ -1028,12 +1039,55 @@ impl ConnectionsPanel {
         Tree::new(&self.tree_state)
     }
 
-    fn render_filter(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_filter(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let tag_filter = self.tag_filter;
+        let panel = cx.entity().downgrade();
         h_flex()
             .px_2()
             .pb_2()
             .gap_1()
             .child(div().flex_1().child(Input::new(&self.filter_input).small()))
+            .child(
+                Button::new("connections-tag-filter")
+                    .small()
+                    .ghost()
+                    .map(|button| match tag_filter {
+                        Some(tag) => button
+                            .label(tag.display_name())
+                            .text_color(environment_color(tag, cx)),
+                        None => button.icon(IconName::Funnel),
+                    })
+                    .tooltip("Filter by environment")
+                    .dropdown_menu(move |menu, _, _| {
+                        let set_filter = |tag: Option<EnvironmentType>| {
+                            let panel = panel.clone();
+                            move |_: &gpui::ClickEvent, _: &mut Window, cx: &mut App| {
+                                panel
+                                    .update(cx, |panel, cx| {
+                                        panel.tag_filter = tag;
+                                        panel.rebuild_tree(cx);
+                                        cx.notify();
+                                    })
+                                    .ok();
+                            }
+                        };
+                        blanco_core::environment_tags().into_iter().fold(
+                            menu.item(
+                                PopupMenuItem::new("All environments")
+                                    .checked(tag_filter.is_none())
+                                    .on_click(set_filter(None)),
+                            )
+                            .separator(),
+                            |menu, tag| {
+                                menu.item(
+                                    PopupMenuItem::new(tag.name.clone())
+                                        .checked(tag_filter == Some(tag.id))
+                                        .on_click(set_filter(Some(tag.id))),
+                                )
+                            },
+                        )
+                    }),
+            )
             .child(
                 Button::new("connections-menu")
                     .icon(IconName::Ellipsis)
@@ -1507,13 +1561,33 @@ fn connection_type_icon(db_type: database::DatabaseType) -> IconName {
 }
 
 /// Theme color for an environment chip. Lives here rather than on
-/// `EnvironmentType` so the app-database crate stays free of UI dependencies.
+/// `EnvironmentType` so blanco-core stays free of UI dependencies.
 pub fn environment_color(environment_type: EnvironmentType, cx: &App) -> gpui::Rgba {
-    match environment_type {
-        EnvironmentType::Dev => cx.theme().blue.into(),
-        EnvironmentType::Test => cx.theme().green.into(),
-        EnvironmentType::Prod => cx.theme().red.into(),
+    tag_color(&environment_type.tag().color, cx)
+}
+
+/// The color a tag is drawn in: a hex value such as `#ff8800` as it is, or
+/// the theme color one of `TAG_COLORS` names, which follows light and dark
+/// themes.
+pub fn tag_color(color: &str, cx: &App) -> gpui::Rgba {
+    use gpui_component::Colorize as _;
+
+    if color.starts_with('#')
+        && let Ok(custom) = gpui::Hsla::parse_hex(color)
+    {
+        return custom.into();
     }
+    let theme = cx.theme();
+    match color {
+        "gray" => theme.muted_foreground,
+        "cyan" => theme.cyan,
+        "green" => theme.green,
+        "yellow" => theme.yellow,
+        "red" => theme.red,
+        "magenta" => theme.magenta,
+        _ => theme.blue,
+    }
+    .into()
 }
 
 #[cfg(test)]

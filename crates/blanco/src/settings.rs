@@ -1,4 +1,5 @@
 mod csv_group;
+mod environments_page;
 mod formatter_page;
 mod keybindings_page;
 mod view;

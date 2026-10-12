@@ -25,7 +25,10 @@ pub use connection_trait::{
     TableSchemaInfo, WriteOperation,
 };
 
-pub use connection_context::{ConnectionContext, EnvironmentType};
+pub use connection_context::{
+    ConnectionContext, EnvironmentTag, EnvironmentType, TAG_COLORS, environment_tags,
+    set_custom_environment_tags,
+};
 pub use database_service::{ConnectionStatus, DatabaseService};
 pub use database_type::{DatabaseType, ParamStyles};
 pub use dialect::{ClientTools, Dialect, UpsertStyle, ValuesQueryStyle};

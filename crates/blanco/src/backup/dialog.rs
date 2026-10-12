@@ -1234,7 +1234,7 @@ impl RestoreDialog {
         let Some(check) = self.check(program).and_then(Lookup::ready).cloned() else {
             return;
         };
-        if self.context.is_prod() && !self.confirming_prod {
+        if self.context.confirms_writes() && !self.confirming_prod {
             self.confirming_prod = true;
             cx.notify();
             return;
@@ -1369,7 +1369,7 @@ impl RestoreDialog {
                 .child(
                     Button::new("restore-start")
                         .primary()
-                        .label(if this.context.is_prod() {
+                        .label(if this.context.confirms_writes() {
                             "Restore…"
                         } else {
                             "Restore"

@@ -128,6 +128,13 @@ fn main() {
             }
         }
 
+        // Environment tags are needed to label anything, so load them first.
+        let app_database = AppDatabase::global(cx).clone();
+        match runtime_handle.block_on(async move { app_database.load_environment_tags().await }) {
+            Ok(tags) => blanco_core::set_custom_environment_tags(tags),
+            Err(error) => tracing::error!("Failed to load environment tags: {error}"),
+        }
+
         let app_database = AppDatabase::global(cx).clone();
         let legacy_credentials = runtime_handle.block_on({
             let app_database = app_database.clone();

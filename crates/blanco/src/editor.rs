@@ -59,17 +59,17 @@ use crate::results_panel::ResultsPanel;
 use crate::script_completion::ScriptCompletionProvider;
 use crate::settings::SettingsView;
 use crate::sql::{SqlCompletionProvider, SqlSignatureHelpProvider, SqruffService};
+use app_database::AppDatabase;
 use app_database::QueryTabData;
-use app_database::{AppDatabase, EnvironmentType};
 use blanco_ui::SqlView;
 use database::{DatabaseService, DatabaseServiceTrait};
 
 /// What the PROD write confirmation dialog shows, and which tab remembers
 /// the "don't ask again" choice.
 pub(crate) struct ProdWritePrompt {
-    pub title: &'static str,
+    pub title: String,
     pub message: String,
-    pub confirm_label: &'static str,
+    pub confirm_label: String,
     pub tab_index: usize,
 }
 
@@ -1398,15 +1398,17 @@ impl EditorPanel {
         let Some(TabType::Query(query_tab)) = self.tabs.get(self.active_tab_ix) else {
             return;
         };
-        if query_tab.context.environment_type == Some(EnvironmentType::Prod) {
+        if let Some(environment) = query_tab.context.environment_type
+            && environment.confirms_writes()
+        {
             let connection_name = query_tab.context.connection_name.clone();
             self.confirm_prod_write(
                 ProdWritePrompt {
-                    title: "Commit edits to PROD?",
+                    title: format!("Commit edits to {environment}?"),
                     message: format!(
-                        "\"{connection_name}\" is tagged as a production connection. The pending grid edits will be written to it."
+                        "\"{connection_name}\" is tagged {environment}. The pending grid edits will be written to it."
                     ),
-                    confirm_label: "Commit to PROD",
+                    confirm_label: format!("Commit to {environment}"),
                     tab_index: self.active_tab_ix,
                 },
                 |panel, window, cx| panel.commit_current_changes_unchecked(window, cx),
@@ -1483,7 +1485,7 @@ impl EditorPanel {
             let weak_on_close = weak_panel.clone();
             let on_cancel = on_cancel.clone();
             dialog
-                .title(title)
+                .title(title.clone())
                 .child(message.clone())
                 .footer(
                     DialogFooter::new()
@@ -1503,7 +1505,7 @@ impl EditorPanel {
                         .child(
                             Button::new("prod-write-confirm")
                                 .danger()
-                                .label(confirm_label)
+                                .label(confirm_label.clone())
                                 .on_click(move |_, window, cx| run_once(false, window, cx)),
                         ),
                 )
