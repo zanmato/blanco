@@ -90,6 +90,14 @@ All notable changes to this project will be documented in this file.
   connection opens as an unsaved connection in the sidebar, which Save
   Connection in its context menu turns into a saved one, tabs included. The
   .deb and the macOS app register Blanco as a handler for SQLite files
+- Result columns can be hidden, reordered and pinned. The Columns button in
+  the results tab strip lists every column with a checkbox and a pin, with a
+  search; the menu of a cell or a column header hides or pins that column;
+  dragging a header moves it.
+  A whole table remembers its layout and column widths per table across
+  sessions, any other query keeps them for reruns. Copy and export leave
+  hidden columns out and follow the order. Settings > Database > Show Row
+  Numbers turns the row number column off
 
 ### Fixes
 

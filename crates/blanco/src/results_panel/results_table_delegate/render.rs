@@ -27,8 +27,8 @@ use crate::app::{
     AddRow, ClearCompareSelection, CompareCellWithSelected, CompareRowWithSelected, CopyAsCSV,
     CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CopyAsVALUES, CopyColumnValues, DeleteRow,
     DuplicateRow, ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV,
-    FilterByCellValue, SelectCellForCompare, SelectRowForCompare, SetCellDefault, SetCellNull,
-    ToggleCellExpression,
+    FilterByCellValue, HideResultColumn, PinResultColumn, SelectCellForCompare,
+    SelectRowForCompare, SetCellDefault, SetCellNull, ToggleCellExpression,
 };
 use crate::results_panel::cell_edit_state::{CellInput, compare_numeric, format_value_for_display};
 use crate::results_panel::compare::CompareKind;
@@ -590,9 +590,41 @@ impl ResultsTableDelegate {
     }
 }
 
+impl ResultsTableDelegate {
+    /// The entries that hide and pin column `col`, shared by the header and
+    /// cell menus.
+    fn column_layout_items(&self, menu: PopupMenu, col: usize) -> PopupMenu {
+        let can_rearrange = self.can_rearrange_columns();
+        let is_pinned = col < self.pinned_column_count();
+        menu.menu_with_icon_and_disabled(
+            "Hide Column",
+            Icon::new(IconName::EyeOff),
+            Box::new(HideResultColumn { col }),
+            !can_rearrange || self.visible_column_count() <= 1,
+        )
+        .menu_with_icon_and_disabled(
+            if is_pinned {
+                "Unpin Column"
+            } else {
+                "Pin Column"
+            },
+            Icon::new(if is_pinned {
+                IconName::PinOff
+            } else {
+                IconName::Pin
+            }),
+            Box::new(PinResultColumn {
+                col,
+                pinned: !is_pinned,
+            }),
+            !can_rearrange,
+        )
+    }
+}
+
 impl TableDelegate for ResultsTableDelegate {
     fn columns_count(&self, _: &App) -> usize {
-        self.columns.len()
+        self.visible_column_count()
     }
 
     fn rows_count(&self, _: &App) -> usize {
@@ -613,7 +645,7 @@ impl TableDelegate for ResultsTableDelegate {
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
         let col = &self.columns[col_ix];
-        let col_info = self.table_columns.get(col_ix);
+        let col_info = self.table_column_info(col_ix);
         let has_fk = col_info.is_some_and(|c| c.foreign_key.is_some());
         let is_pk = self
             .table_columns
@@ -745,6 +777,22 @@ impl TableDelegate for ResultsTableDelegate {
         self.sort_rows(keys);
     }
 
+    fn move_column(
+        &mut self,
+        col_ix: usize,
+        to_ix: usize,
+        _: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) {
+        // The table moves its own column state after this returns. When the
+        // move is refused (edits pending, or across the pinned edge), rebuild
+        // that state from the columns as they are.
+        if !self.move_visible_column(col_ix, to_ix) {
+            let state = cx.entity();
+            cx.defer(move |cx| state.update(cx, |state, cx| state.refresh(cx)));
+        }
+    }
+
     fn visible_rows_changed(
         &mut self,
         _visible_range: Range<usize>,
@@ -778,7 +826,7 @@ impl TableDelegate for ResultsTableDelegate {
         _window: &mut Window,
         _cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
-        column_copy_items(menu, col_ix, false)
+        self.column_layout_items(column_copy_items(menu, col_ix, false).separator(), col_ix)
     }
 
     fn context_menu(
@@ -790,8 +838,7 @@ impl TableDelegate for ResultsTableDelegate {
     ) -> PopupMenu {
         // Check if the column is nullable (cell.1 is the 0-based data column index)
         let is_nullable = self
-            .table_columns
-            .get(cell.1)
+            .table_column_info(cell.1)
             .is_some_and(|c| c.is_nullable);
         // "Set DEFAULT" only makes sense on a pending new row whose column has
         // a server default: it reverts the cell so the INSERT omits the column.
@@ -910,6 +957,8 @@ impl TableDelegate for ResultsTableDelegate {
                 }),
             )
         })
+        .separator()
+        .map(|menu| self.column_layout_items(menu, cell.1))
         .separator()
         .menu_with_icon(
             "Select Cell for Comparison",

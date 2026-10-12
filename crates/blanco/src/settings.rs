@@ -346,6 +346,9 @@ impl Settings {
                 "results.filter_operator" => {
                     settings.results.filter_operator = value.clone();
                 }
+                "results.show_row_numbers" => {
+                    settings.results.show_row_numbers = value.parse().unwrap_or(true);
+                }
                 key if key.starts_with("keybinding.") => {
                     let action = key.trim_start_matches("keybinding.").to_string();
                     if !action.is_empty() {
@@ -360,7 +363,7 @@ impl Settings {
     }
 }
 
-/// The result grid's server-side filter bar.
+/// The result grid and its server-side filter bar.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResultsSettings {
     /// Whether the filter bar is shown above a table's rows.
@@ -368,6 +371,9 @@ pub struct ResultsSettings {
     /// The operator a new filter condition starts with, by
     /// `FilterOperator::key`.
     pub filter_operator: String,
+    /// Whether the grid shows the row number column. Applies to results
+    /// shown after the change.
+    pub show_row_numbers: bool,
 }
 
 impl Default for ResultsSettings {
@@ -375,6 +381,7 @@ impl Default for ResultsSettings {
         Self {
             filter_bar_open: false,
             filter_operator: blanco_core::FilterOperator::Equals.key().to_string(),
+            show_row_numbers: true,
         }
     }
 }

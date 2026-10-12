@@ -244,7 +244,10 @@ impl ResultsPanel {
                                         // mismatch means the query no longer matches
                                         // this grid and the stale rows are kept.
                                         if delegate.columns.len() == result.columns.len() {
-                                            delegate.rows = result.rows;
+                                            // The refresh comes in the query's
+                                            // column order; keep the grid's.
+                                            delegate.rows =
+                                                delegate.arrange_source_rows(result.rows);
                                             state.refresh(cx);
                                         } else {
                                             tracing::warn!(

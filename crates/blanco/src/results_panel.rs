@@ -36,6 +36,9 @@ mod cell_edit_test;
 mod chart_view;
 mod clipboard;
 mod column_copy;
+mod column_layout;
+#[cfg(test)]
+mod column_layout_test;
 mod commit;
 mod compare;
 #[cfg(test)]
@@ -54,7 +57,8 @@ mod table_operations;
 // Re-exports
 pub use cell_edit_state::{CellInput, ChangeType, TableChange};
 pub use chart_view::{ChartView, ResultViewMode};
-pub use results_table_delegate::ResultsTableDelegate;
+pub use column_layout::ColumnLayouts;
+pub use results_table_delegate::{ColumnLayout, ResultsTableDelegate};
 
 // Response structure for table operations
 #[derive(Debug, Clone)]
@@ -123,6 +127,8 @@ pub struct ResultsPanel {
     last_diff_view: Option<Entity<blanco_ui::DiffView>>,
     /// Whether the server-side filter bar is shown for table results.
     filter_bar_open: bool,
+    /// Search field of the Columns menu.
+    column_search: Entity<InputState>,
     _subscriptions: Vec<Subscription>, // Store subscriptions to prevent them from being dropped
 }
 
@@ -143,6 +149,14 @@ impl ResultsPanel {
             cx,
         );
         let table_state = initial_tab.table_state.clone();
+        let column_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search columns"));
+        // The Columns menu filters as the search changes.
+        let column_search_subscription =
+            cx.subscribe(&column_search, |_, _, event: &InputEvent, cx| {
+                if let InputEvent::Change = event {
+                    cx.notify();
+                }
+            });
 
         Self {
             table_state,
@@ -161,7 +175,12 @@ impl ResultsPanel {
             compare_selection: None,
             last_diff_view: None,
             filter_bar_open: AppSettings::global(cx).settings.results.filter_bar_open,
-            _subscriptions: vec![],
+            column_search,
+            _subscriptions: vec![
+                column_search_subscription,
+                // The row number setting applies to open grids at once.
+                cx.observe_global::<crate::app_settings::AppSettings>(|_, cx| cx.notify()),
+            ],
         }
     }
 
@@ -181,12 +200,34 @@ impl ResultsPanel {
                 .row_selectable(true)
                 .cell_selectable(true)
                 .row_numbers(true)
+                .row_header(
+                    crate::app_settings::AppSettings::global(cx)
+                        .settings
+                        .results
+                        .show_row_numbers,
+                )
         });
 
         let subscription = cx.subscribe_in(
             &table_state,
             window,
             move |panel, table_state, event: &TableEvent, window, cx| {
+                match event {
+                    // The delegate keeps the widths so they survive a
+                    // rearrangement and are remembered with the layout.
+                    TableEvent::ColumnWidthsChanged(widths) => {
+                        table_state.update(cx, |state, _| {
+                            state.delegate_mut().set_column_widths(widths)
+                        });
+                        panel.remember_column_layout(table_state, cx);
+                        return;
+                    }
+                    TableEvent::MoveColumn(..) => {
+                        panel.remember_column_layout(table_state, cx);
+                        return;
+                    }
+                    _ => {}
+                }
                 if let TableEvent::DoubleClickedCell(row_ix, col_ix) = event {
                     // Only handle events on the currently active tab.
                     if panel.table_state.entity_id() != table_state.entity_id() {
@@ -373,6 +414,7 @@ impl ResultsPanel {
                         state.delegate_mut().set_query_result(result, window, cx);
                         state.refresh(cx);
                     });
+                    self.restore_column_layout(&tab.table_state, cx);
                     tab.chart_view.update(cx, |view, cx| {
                         view.rebuild_column_selects(window, cx);
                     });
@@ -586,7 +628,7 @@ impl ResultsPanel {
 
         let (row_count, col_count) = {
             let delegate = self.table_state.read(cx).delegate();
-            (delegate.rows.len(), delegate.columns.len())
+            (delegate.rows.len(), delegate.visible_column_count())
         };
         let target = if forward {
             if col + 1 < col_count {
@@ -996,8 +1038,11 @@ impl ResultsPanel {
         // Collect selected row data
         for &row in selected_rows {
             if let Some(row_data) = delegate.rows.get(row) {
+                // Hidden columns sit after the visible ones and stay out of
+                // copies and exports.
                 let cells: Vec<SelectedCell> = row_data
                     .iter()
+                    .take(delegate.visible_column_count())
                     .enumerate()
                     .map(|(col, value)| SelectedCell {
                         col,
@@ -1017,6 +1062,7 @@ impl ResultsPanel {
             columns: delegate
                 .columns
                 .iter()
+                .take(delegate.visible_column_count())
                 .map(|c| c.name.to_string())
                 .collect::<Vec<_>>(),
             selected_rows: selected_rows_data,
@@ -1240,6 +1286,7 @@ impl ResultsPanel {
                         .flex_shrink_0()
                         .gap_1()
                         .px_2()
+                        .when(is_table, |this| this.child(self.render_column_menu(cx)))
                         .when(has_plan, |this| {
                             this.child(
                                 Button::new("view-mode-plan")
@@ -1618,6 +1665,17 @@ impl Focusable for ResultsPanel {
 impl Render for ResultsPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let filter_bar = self.visible_filter_bar(window, cx);
+        // Follow the row number setting in grids already open.
+        let show_row_numbers = crate::app_settings::AppSettings::global(cx)
+            .settings
+            .results
+            .show_row_numbers;
+        if self.table_state.read(cx).row_header != show_row_numbers {
+            self.table_state.update(cx, |state, cx| {
+                state.row_header = show_row_numbers;
+                state.refresh(cx);
+            });
+        }
         let active = self.active_tab;
         let border_color = cx.theme().border;
         let show_strip = self.has_results;
@@ -1672,6 +1730,8 @@ impl Render for ResultsPanel {
             .on_action(cx.listener(Self::on_edit_prev_cell))
             .on_action(cx.listener(Self::on_input_enter))
             .on_action(cx.listener(Self::on_input_escape))
+            .on_action(cx.listener(Self::on_hide_result_column))
+            .on_action(cx.listener(Self::on_pin_result_column))
             .when(show_strip, |this| this.child(self.render_tab_strip(cx)))
             .when_some(filter_bar.filter(|_| show_strip), |this, bar| {
                 this.child(bar)
