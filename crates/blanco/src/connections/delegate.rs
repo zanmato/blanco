@@ -202,9 +202,11 @@ impl TreeDelegate for ConnectionsTreeDelegate {
                     .child(
                         div()
                             .flex_1()
-                            .overflow_hidden()
                             .text_sm()
-                            .text_ellipsis()
+                            // Never wraps: text less than a pixel too wide is
+                            // not truncated, and would wrap its last
+                            // character onto a second line instead.
+                            .truncate()
                             .child(item.label.clone()),
                     )
                     .when_some(environment_label, |this, label| this.child(label))
