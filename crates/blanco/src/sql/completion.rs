@@ -14,14 +14,15 @@ use crate::sql::functions;
 use cache::columns_key;
 
 use sql_parser::statement_parser::{
-    self, CompletionContext as TsCompletionContext, SqlClause, TableAlias, ident_eq,
+    self, CompletionContext as TsCompletionContext, DerivedRelation, SqlClause, TableAlias,
+    ident_eq,
 };
 
 use anyhow::Result;
 use database::DatabaseServiceTrait;
 use futures::FutureExt as _;
 use futures::future::Shared;
-use gpui::{App, AppContext as _, BackgroundExecutor, Task, Window};
+use gpui::{App, AppContext as _, BackgroundExecutor, Pixels, Task, Window, px};
 use gpui_component::input::{CompletionProvider, Rope, RopeExt};
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
@@ -32,6 +33,14 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 const CACHE_TTL_SECONDS: u64 = 300; // 5 minutes cache TTL
+
+/// Widest the completion menu grows. The default fits short identifiers but
+/// cuts off long table and column names together with their type.
+pub const COMPLETION_MENU_MAX_WIDTH: Pixels = px(480.);
+
+/// Labels longer than this are shortened in the middle, so both the prefix
+/// being typed and the distinguishing end of a long name stay visible.
+const MAX_LABEL_CHARS: usize = 48;
 
 /// Default schema used when a tab has no explicit schema, keyed by backend:
 /// PostgreSQL uses `public`, SQL Server uses `dbo`, and the schema-less backends
@@ -67,6 +76,21 @@ struct TableRef {
 struct ColumnCandidate {
     name: String,
     data_type: Option<String>,
+}
+
+/// What a completion item offers. Items are listed in this order, so where a
+/// name is expected the names of the query and the current schema come before
+/// other schemas, functions and keywords.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ItemGroup {
+    JoinCondition,
+    Column,
+    /// CTEs and the tables of the current schema.
+    Relation,
+    /// Other schemas, whose tables are one `.` away.
+    Schema,
+    Function,
+    Keyword,
 }
 
 /// Where a set of completable columns comes from.
@@ -463,6 +487,11 @@ fn is_valid_identifier(word: &str) -> bool {
         && !word.chars().next().is_none_or(|c| c.is_ascii_digit())
 }
 
+/// A word that starts with a digit is a number being typed, never a name.
+fn is_number_literal(word: &str) -> bool {
+    word.starts_with(|c: char| c.is_ascii_digit())
+}
+
 pub(crate) fn is_sql_keyword(word: &str) -> bool {
     SQL_KEYWORDS.contains(&word.to_uppercase().as_str())
 }
@@ -503,23 +532,41 @@ fn split_schema_qualified(name: &str, default_schema: &str) -> (String, String) 
     }
 }
 
-/// Look up the static columns of a CTE / derived table referenced by `name`,
-/// either directly (`FROM cte`) or via an alias that maps to such a relation.
-fn lookup_derived_columns(context: &TsCompletionContext, name: &str) -> Option<Vec<String>> {
-    if let Some((_, columns)) = context
-        .cte_columns
+/// Look up the CTE or derived table referenced by `name`, either directly
+/// (`FROM cte`) or via an alias that maps to such a relation.
+fn lookup_derived_relation<'a>(
+    context: &'a TsCompletionContext,
+    name: &str,
+) -> Option<&'a DerivedRelation> {
+    if let Some(relation) = context
+        .derived_relations
         .iter()
-        .find(|(key, _)| ident_eq(key, name))
+        .find(|relation| ident_eq(&relation.name, name))
     {
-        return Some(columns.clone());
+        return Some(relation);
     }
-    // `name` may be a table alias that resolves to a CTE name.
     let resolved = resolve_table_alias(&context.table_aliases, name)?;
     context
-        .cte_columns
+        .derived_relations
         .iter()
-        .find(|(key, _)| ident_eq(key, &resolved))
-        .map(|(_, columns)| columns.clone())
+        .find(|relation| ident_eq(&relation.name, &resolved))
+}
+
+/// The column sources of a CTE or derived table: the columns it names, and the
+/// tables it selects `*` from.
+fn derived_sources(relation: &DerivedRelation, current_schema: &str) -> Vec<ColumnSource> {
+    let mut sources = Vec::new();
+    if !relation.columns.is_empty() {
+        sources.push(ColumnSource::Static(relation.columns.clone()));
+    }
+    for table_name in &relation.all_columns_of {
+        let (schema, table) = split_schema_qualified(table_name, current_schema);
+        push_unique(
+            &mut sources,
+            ColumnSource::Table(TableRef { schema, table }),
+        );
+    }
+    sources
 }
 
 /// Push a source unless an equal one is already present (de-dupes repeated
@@ -539,15 +586,19 @@ fn plan_completion(
     known_schemas: &[String],
     supports_schemas: bool,
 ) -> CompletionPlan {
+    if is_number_literal(&context.current_word) {
+        return CompletionPlan::Nothing;
+    }
+
     if context.is_dot_notation {
         let Some(name) = context.dot_table_name.as_deref() else {
             return CompletionPlan::Nothing;
         };
 
-        // A CTE or derived-table referenced by this name -> its static columns.
-        if let Some(columns) = lookup_derived_columns(context, name) {
+        // A CTE or derived-table referenced by this name -> its columns.
+        if let Some(relation) = lookup_derived_relation(context, name) {
             return CompletionPlan::Columns {
-                sources: vec![ColumnSource::Static(columns)],
+                sources: derived_sources(relation, current_schema),
             };
         }
 
@@ -585,16 +636,18 @@ fn plan_completion(
     if is_column_clause(context.clause) {
         // Offer columns from every relation in scope (all FROM/JOIN relations),
         // not just the first. Real tables are fetched from the database; CTEs and
-        // derived tables contribute their statically-known projection columns.
+        // derived tables contribute their projection columns.
         let mut sources: Vec<ColumnSource> = Vec::new();
         let mut covered_derived: Vec<&str> = Vec::new();
 
         for alias in &context.table_aliases {
-            // A relation aliased to a CTE/derived name uses its static columns
+            // A relation aliased to a CTE/derived name uses its columns
             // (e.g. `FROM cte c` or `FROM (subquery) c`).
-            if let Some(columns) = lookup_derived_columns(context, &alias.alias) {
-                covered_derived.push(&alias.alias);
-                push_unique(&mut sources, ColumnSource::Static(columns));
+            if let Some(relation) = lookup_derived_relation(context, &alias.alias) {
+                covered_derived.push(&relation.name);
+                for source in derived_sources(relation, current_schema) {
+                    push_unique(&mut sources, source);
+                }
                 continue;
             }
             let (schema, table) = split_schema_qualified(&alias.table_name, current_schema);
@@ -604,14 +657,16 @@ fn plan_completion(
             );
         }
 
-        // Derived relations referenced without a separate alias (e.g. `FROM cte`
-        // or `FROM (subquery) sub`) are not in `table_aliases`, so add them here.
-        for (name, columns) in &context.cte_columns {
+        // Derived tables (`FROM (subquery) sub`) have no table name, so they
+        // are not in `table_aliases`.
+        for relation in &context.derived_relations {
             if !covered_derived
                 .iter()
-                .any(|covered| ident_eq(covered, name.as_str()))
+                .any(|covered| ident_eq(covered, &relation.name))
             {
-                push_unique(&mut sources, ColumnSource::Static(columns.clone()));
+                for source in derived_sources(relation, current_schema) {
+                    push_unique(&mut sources, source);
+                }
             }
         }
 
@@ -724,6 +779,28 @@ fn build_table_items(
         .collect()
 }
 
+/// Build completion items for the CTEs the statement defines. Like tables,
+/// each inserts `name <abbrev>`.
+fn build_cte_items(cte_names: &[String], current_word: &str, range: Range) -> Vec<CompletionItem> {
+    filter_and_sort(cte_names, current_word)
+        .into_iter()
+        .map(|name| {
+            let insert_text = generate_table_abbreviation(&name);
+            CompletionItem {
+                label: name,
+                kind: Some(CompletionItemKind::CLASS),
+                text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
+                    range,
+                    insert_text.clone(),
+                ))),
+                detail: Some("CTE".to_string()),
+                insert_text: Some(insert_text),
+                ..Default::default()
+            }
+        })
+        .collect()
+}
+
 /// Build schema-namespace completion items. Inserting one yields the bare
 /// schema name; the user then types `.` to drill into it.
 fn build_schema_items(schemas: &[String], current_word: &str, range: Range) -> Vec<CompletionItem> {
@@ -762,26 +839,23 @@ fn build_function_items(
     let needle = current_word.to_lowercase();
     let matches = |name: &str| name.to_lowercase().starts_with(&needle);
 
-    let make_item = |name: &str,
-                     detail: String,
-                     documentation: Option<lsp_types::Documentation>,
-                     sort_prefix: &str| {
-        let insert_text = format!("{name}($0)");
-        CompletionItem {
-            label: name.to_string(),
-            kind: Some(CompletionItemKind::FUNCTION),
-            text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
-                range,
-                insert_text.clone(),
-            ))),
-            detail: Some(detail),
-            documentation,
-            insert_text: Some(insert_text),
-            insert_text_format: Some(InsertTextFormat::SNIPPET),
-            sort_text: Some(format!("{sort_prefix}{}", name.to_lowercase())),
-            ..Default::default()
-        }
-    };
+    let make_item =
+        |name: &str, detail: String, documentation: Option<lsp_types::Documentation>| {
+            let insert_text = format!("{name}($0)");
+            CompletionItem {
+                label: name.to_string(),
+                kind: Some(CompletionItemKind::FUNCTION),
+                text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
+                    range,
+                    insert_text.clone(),
+                ))),
+                detail: Some(detail),
+                documentation,
+                insert_text: Some(insert_text),
+                insert_text_format: Some(InsertTextFormat::SNIPPET),
+                ..Default::default()
+            }
+        };
 
     let mut items: Vec<CompletionItem> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -814,7 +888,7 @@ fn build_function_items(
                     value: comment.to_string(),
                 })
             });
-        items.push(make_item(&function.name, detail, documentation, "0"));
+        items.push(make_item(&function.name, detail, documentation));
     }
 
     let mut builtins: Vec<&functions::FunctionGroup> = functions::function_groups(driver)
@@ -833,12 +907,7 @@ fn build_function_items(
         if group.overloads.len() > 1 {
             detail.push_str(&format!(" (+{} overloads)", group.overloads.len() - 1));
         }
-        items.push(make_item(
-            group.name,
-            detail,
-            first.lsp_documentation(),
-            "1",
-        ));
+        items.push(make_item(group.name, detail, first.lsp_documentation()));
     }
     items
 }
@@ -952,6 +1021,68 @@ fn build_keyword_items(current_word: &str, range: Range) -> Vec<CompletionItem> 
         .collect()
 }
 
+/// Shorten `text` to `max_chars` by replacing its middle with an ellipsis,
+/// keeping at least `min_head` leading characters.
+fn elide_middle(text: &str, max_chars: usize, min_head: usize) -> String {
+    let count = text.chars().count();
+    if count <= max_chars {
+        return text.to_string();
+    }
+    let head = (max_chars.saturating_sub(1) / 2).max(min_head);
+    let tail = max_chars.saturating_sub(head + 1);
+    if head + tail >= count {
+        return text.to_string();
+    }
+    let mut elided: String = text.chars().take(head).collect();
+    elided.push('…');
+    elided.extend(text.chars().skip(count - tail));
+    elided
+}
+
+/// Flatten the item groups into the order they are listed in, and number the
+/// items in `sort_text` so a client that sorts keeps that order.
+///
+/// The menu highlights as many leading bytes of a label as the user has typed,
+/// so an elided label keeps the typed prefix ahead of the ellipsis.
+fn rank_items(
+    mut groups: Vec<(ItemGroup, Vec<CompletionItem>)>,
+    current_word: &str,
+) -> Vec<CompletionItem> {
+    groups.sort_by_key(|(group, _)| *group);
+    let min_head = current_word.chars().count() + 1;
+    groups
+        .into_iter()
+        .flat_map(|(_, items)| items)
+        .enumerate()
+        .map(|(position, item)| CompletionItem {
+            label: elide_middle(&item.label, MAX_LABEL_CHARS, min_head),
+            sort_text: Some(format!("{position:05}")),
+            ..item
+        })
+        .collect()
+}
+
+/// Keyword items for a position where a name is expected. They follow the
+/// names, only once a word is being typed (an empty word would bury the names
+/// under every keyword), and not when a function item already offers the word.
+fn keyword_items_after_names(
+    current_word: &str,
+    range: Range,
+    function_items: &[CompletionItem],
+) -> Vec<CompletionItem> {
+    if current_word.is_empty() {
+        return Vec::new();
+    }
+    build_keyword_items(current_word, range)
+        .into_iter()
+        .filter(|keyword| {
+            !function_items
+                .iter()
+                .any(|function| function.label.eq_ignore_ascii_case(&keyword.label))
+        })
+        .collect()
+}
+
 impl CompletionProvider for SqlCompletionProvider {
     fn completions(
         &self,
@@ -981,6 +1112,9 @@ impl CompletionProvider for SqlCompletionProvider {
                 let Some(context) = context else {
                     return Ok(CompletionResponse::Array(Vec::new()));
                 };
+                if is_number_literal(&context.current_word) {
+                    return Ok(CompletionResponse::Array(Vec::new()));
+                }
 
                 // Debounce before any DB roundtrip, but only if something we need
                 // is not already cached. We may sleep at most once.
@@ -1033,7 +1167,7 @@ impl CompletionProvider for SqlCompletionProvider {
                     background_executor.timer(Duration::from_millis(300)).await;
                 }
 
-                let items = match plan {
+                let groups = match plan {
                     CompletionPlan::Columns { sources } => {
                         // Column and function fetches go out together: on a
                         // slow connection the round trips overlap instead of
@@ -1099,71 +1233,97 @@ impl CompletionProvider for SqlCompletionProvider {
                             _ => "query columns".to_string(),
                         };
 
-                        let mut items = Vec::new();
-                        // In an ON clause, offer ready-made foreign-key join
-                        // conditions first so they rank above raw columns.
-                        if context.clause == Some(SqlClause::On) {
-                            items.extend(build_join_condition_items(
-                                &context.table_aliases,
-                                &fetched_tables,
-                                &provider.current_schema,
+                        let mut groups = vec![(
+                            ItemGroup::Column,
+                            build_column_items(&all_columns, &context.current_word, range, &detail),
+                        )];
+                        // After `name.` only that relation's columns fit.
+                        if !context.is_dot_notation {
+                            // In an ON clause, offer ready-made foreign-key
+                            // join conditions above raw columns.
+                            if context.clause == Some(SqlClause::On) {
+                                groups.push((
+                                    ItemGroup::JoinCondition,
+                                    build_join_condition_items(
+                                        &context.table_aliases,
+                                        &fetched_tables,
+                                        &provider.current_schema,
+                                        &context.current_word,
+                                        range,
+                                    ),
+                                ));
+                            }
+                            let user_functions = user_functions.unwrap_or_else(|error| {
+                                tracing::warn!("Completing without user functions: {error:#}");
+                                Arc::new(Vec::new())
+                            });
+                            let function_items = build_function_items(
+                                provider.driver,
+                                &user_functions,
                                 &context.current_word,
                                 range,
+                            );
+                            groups.push((
+                                ItemGroup::Keyword,
+                                keyword_items_after_names(
+                                    &context.current_word,
+                                    range,
+                                    &function_items,
+                                ),
                             ));
+                            groups.push((ItemGroup::Function, function_items));
                         }
-                        items.extend(build_column_items(
-                            &all_columns,
-                            &context.current_word,
-                            range,
-                            &detail,
-                        ));
-                        // Expression clauses also accept function calls, so offer
-                        // built-in functions after the columns.
-                        let user_functions = user_functions.unwrap_or_else(|error| {
-                            tracing::warn!("Completing without user functions: {error:#}");
-                            Arc::new(Vec::new())
-                        });
-                        items.extend(build_function_items(
-                            provider.driver,
-                            &user_functions,
-                            &context.current_word,
-                            range,
-                        ));
-                        items
+                        groups
                     }
                     CompletionPlan::SchemaTables { schema } => {
-                        match provider.get_cached_tables(&schema).await {
+                        let tables = match provider.get_cached_tables(&schema).await {
                             Ok(entities) => {
                                 build_table_items(&entities, &context.current_word, range)
                             }
                             Err(_) => Vec::new(),
-                        }
+                        };
+                        vec![(ItemGroup::Relation, tables)]
                     }
                     CompletionPlan::TablesAndSchemas => {
-                        match provider.get_cached_tables(&provider.current_schema).await {
-                            Ok(entities) => {
-                                let mut items =
-                                    build_table_items(&entities, &context.current_word, range);
-                                let other_schemas: Vec<String> = schemas
-                                    .iter()
-                                    .filter(|s| *s != &provider.current_schema)
-                                    .cloned()
-                                    .collect();
-                                items.extend(build_schema_items(
-                                    &other_schemas,
-                                    &context.current_word,
-                                    range,
-                                ));
-                                items
-                            }
-                            Err(_) => Vec::new(),
-                        }
+                        let tables =
+                            match provider.get_cached_tables(&provider.current_schema).await {
+                                Ok(entities) => {
+                                    build_table_items(&entities, &context.current_word, range)
+                                }
+                                Err(_) => Vec::new(),
+                            };
+                        let other_schemas: Vec<String> = schemas
+                            .iter()
+                            .filter(|s| *s != &provider.current_schema)
+                            .cloned()
+                            .collect();
+                        vec![
+                            (
+                                ItemGroup::Relation,
+                                build_cte_items(&context.cte_names, &context.current_word, range),
+                            ),
+                            (ItemGroup::Relation, tables),
+                            (
+                                ItemGroup::Schema,
+                                build_schema_items(&other_schemas, &context.current_word, range),
+                            ),
+                            (
+                                ItemGroup::Keyword,
+                                keyword_items_after_names(&context.current_word, range, &[]),
+                            ),
+                        ]
                     }
-                    CompletionPlan::Keywords => build_keyword_items(&context.current_word, range),
+                    CompletionPlan::Keywords => vec![(
+                        ItemGroup::Keyword,
+                        build_keyword_items(&context.current_word, range),
+                    )],
                     CompletionPlan::Nothing => Vec::new(),
                 };
 
-                Ok(CompletionResponse::Array(items))
+                Ok(CompletionResponse::Array(rank_items(
+                    groups,
+                    &context.current_word,
+                )))
             })
             .await
         })
@@ -1381,7 +1541,8 @@ mod tests {
     fn test_completion_context_keyword_in_string() {
         let c = ctx_end("SELECT * FROM users WHERE name = 'FROM orders' AND ");
         assert_eq!(c.clause, Some(SqlClause::Where));
-        assert_eq!(c.table_aliases.len(), 0);
+        assert_eq!(c.table_aliases.len(), 1);
+        assert_eq!(c.table_aliases[0].table_name, "users");
     }
 
     #[test]
@@ -1498,7 +1659,8 @@ mod tests {
             table_aliases: aliases,
             is_dot_notation: true,
             dot_table_name: Some("sales".to_string()),
-            cte_columns: Vec::new(),
+            derived_relations: Vec::new(),
+            cte_names: Vec::new(),
             enclosing_call: None,
         };
         let plan = plan_completion(&context, "public", &schemas(&["public", "sales"]), true);
@@ -1545,7 +1707,8 @@ mod tests {
             table_aliases: aliases,
             is_dot_notation: false,
             dot_table_name: None,
-            cte_columns: Vec::new(),
+            derived_relations: Vec::new(),
+            cte_names: Vec::new(),
             enclosing_call: None,
         };
         let plan = plan_completion(&context, "public", &schemas(&["public", "sales"]), true);
@@ -1625,6 +1788,194 @@ mod tests {
         );
     }
 
+    /// Plan at the `|` in `sql`, the way the editor asks while the user types.
+    fn plan_at_marker(sql: &str) -> CompletionPlan {
+        let cursor = sql.find('|').expect("sql has a cursor marker");
+        let text = sql.replacen('|', "", 1);
+        plan_completion(
+            &ctx(&text, cursor),
+            "public",
+            &schemas(&["public", "sales"]),
+            true,
+        )
+    }
+
+    fn table_source(schema: &str, table: &str) -> ColumnSource {
+        ColumnSource::Table(TableRef {
+            schema: schema.to_string(),
+            table: table.to_string(),
+        })
+    }
+
+    #[test]
+    fn test_plan_derived_columns_after_name_in_select_list() {
+        // An unfinished `x.` in the select list breaks the statement apart;
+        // the FROM clause after it must still resolve.
+        let expected = static_columns_plan(&["a", "b"]);
+        assert_eq!(
+            plan_at_marker("WITH cte AS (SELECT a, b FROM users) SELECT c.| FROM cte c"),
+            expected
+        );
+        assert_eq!(
+            plan_at_marker("WITH cte AS (SELECT a, b FROM users) SELECT cte.| FROM cte"),
+            expected
+        );
+        assert_eq!(
+            plan_at_marker("SELECT sub.| FROM (SELECT a, b FROM users) sub"),
+            expected
+        );
+        assert_eq!(
+            plan_at_marker(
+                "SELECT o.id, sub.| FROM orders o JOIN (SELECT a, b FROM users) AS sub ON true"
+            ),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_plan_table_alias_in_select_list() {
+        assert_eq!(
+            plan_at_marker("SELECT u.| FROM sales.users u"),
+            columns_plan("sales", "users")
+        );
+    }
+
+    #[test]
+    fn test_plan_columns_of_select_list_before_from() {
+        assert_eq!(
+            plan_at_marker("WITH cte AS (SELECT a, b FROM users) SELECT | FROM cte"),
+            static_columns_plan(&["a", "b"])
+        );
+    }
+
+    #[test]
+    fn test_plan_cte_column_list_names_the_columns() {
+        assert_eq!(
+            plan_at_marker(
+                "WITH cte(x, y) AS (SELECT a, b FROM users) SELECT * FROM cte WHERE cte.|"
+            ),
+            static_columns_plan(&["x", "y"])
+        );
+    }
+
+    #[test]
+    fn test_plan_cte_star_resolves_to_its_tables() {
+        assert_eq!(
+            plan_at_marker("WITH recent AS (SELECT * FROM sales.orders) SELECT r.| FROM recent r"),
+            columns_plan("sales", "orders")
+        );
+        assert_eq!(
+            plan_at_marker(
+                "WITH paid AS (SELECT o.*, u.name FROM orders o JOIN users u ON u.id = o.user_id) \
+                 SELECT * FROM paid WHERE paid.|"
+            ),
+            CompletionPlan::Columns {
+                sources: vec![
+                    ColumnSource::Static(vec!["name".to_string()]),
+                    table_source("public", "orders"),
+                ]
+            }
+        );
+        // `*` of an earlier CTE takes that CTE's columns.
+        assert_eq!(
+            plan_at_marker(
+                "WITH a AS (SELECT x FROM t), b AS (SELECT * FROM a) SELECT * FROM b WHERE b.|"
+            ),
+            static_columns_plan(&["x"])
+        );
+    }
+
+    #[test]
+    fn test_plan_cte_columns_skip_unnamed_expressions() {
+        // Function calls are named after the function, as PostgreSQL does;
+        // a bare literal has no usable name.
+        assert_eq!(
+            plan_at_marker(
+                "WITH totals AS (SELECT user_id, count(*), sum(total) AS spent, 1 FROM orders GROUP BY user_id) \
+                 SELECT * FROM totals t WHERE t.|"
+            ),
+            static_columns_plan(&["user_id", "count", "spent"])
+        );
+    }
+
+    #[test]
+    fn test_plan_inside_cte_body_uses_its_own_tables() {
+        assert_eq!(
+            plan_at_marker("WITH a AS (SELECT | FROM users u) SELECT * FROM orders o"),
+            columns_plan("public", "users")
+        );
+        // The outer query does not see the tables inside a CTE body.
+        assert_eq!(
+            plan_at_marker("WITH a AS (SELECT x FROM t) SELECT * FROM a WHERE |"),
+            static_columns_plan(&["x"])
+        );
+    }
+
+    #[test]
+    fn test_plan_correlated_subquery_sees_outer_tables() {
+        assert_eq!(
+            plan_at_marker(
+                "SELECT * FROM users u WHERE EXISTS (SELECT 1 FROM orders o WHERE o.user_id = u.id AND |)"
+            ),
+            CompletionPlan::Columns {
+                sources: vec![
+                    table_source("public", "orders"),
+                    table_source("public", "users"),
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn test_plan_columns_of_unaliased_tables() {
+        assert_eq!(
+            plan_at_marker("SELECT * FROM users WHERE |"),
+            columns_plan("public", "users")
+        );
+        assert_eq!(
+            plan_at_marker("UPDATE users SET |"),
+            columns_plan("public", "users")
+        );
+        assert_eq!(
+            plan_at_marker("DELETE FROM sales.orders WHERE |"),
+            columns_plan("sales", "orders")
+        );
+        assert_eq!(
+            plan_at_marker("SELECT * FROM users WHERE users.|"),
+            columns_plan("public", "users")
+        );
+    }
+
+    #[test]
+    fn test_completion_context_lists_ctes_for_from() {
+        let context =
+            ctx_end("WITH recent AS (SELECT 1 AS x), paid AS (SELECT 2 AS y) SELECT * FROM ");
+        assert_eq!(context.cte_names, vec!["recent", "paid"]);
+        // The placeholder standing in for the word being typed never shows up.
+        assert!(context.table_aliases.is_empty());
+        assert_eq!(
+            plan_completion(&context, "public", &schemas(&["public"]), true),
+            CompletionPlan::TablesAndSchemas
+        );
+    }
+
+    #[test]
+    fn test_plan_nothing_while_typing_a_number() {
+        assert_eq!(
+            plan_at_marker("SELECT * FROM users WHERE id = 12|"),
+            CompletionPlan::Nothing
+        );
+        assert_eq!(
+            plan_at_marker("SELECT * FROM users WHERE price > 1.5|"),
+            CompletionPlan::Nothing
+        );
+        assert_eq!(
+            plan_at_marker("SELECT * FROM users LIMIT 1|"),
+            CompletionPlan::Nothing
+        );
+        assert_eq!(plan_at_marker("SELECT 1e|"), CompletionPlan::Nothing);
+    }
+
     #[test]
     fn test_plan_column_clause_without_tables_still_columns() {
         // `SELECT ` with no FROM yet is still a column/expression context, so the
@@ -1647,7 +1998,8 @@ mod tests {
             table_aliases: Vec::new(),
             is_dot_notation: false,
             dot_table_name: None,
-            cte_columns: Vec::new(),
+            derived_relations: Vec::new(),
+            cte_names: Vec::new(),
             enclosing_call: None,
         };
         assert_eq!(
@@ -1806,15 +2158,111 @@ mod tests {
             items[0].detail.as_deref(),
             Some("split_words(text text) -> text[]")
         );
-        assert!(items[0].sort_text.as_deref().unwrap_or("").starts_with('0'));
-        assert!(items.iter().any(|item| item.label == "split_part"));
-        assert!(
-            items.iter().skip(1).all(|item| item
-                .sort_text
-                .as_deref()
-                .unwrap_or("")
-                .starts_with('1'))
+        assert!(items.iter().skip(1).any(|item| item.label == "split_part"));
+    }
+
+    fn labelled(label: &str) -> CompletionItem {
+        CompletionItem {
+            label: label.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_rank_items_lists_names_before_functions_and_keywords() {
+        let items = rank_items(
+            vec![
+                (ItemGroup::Keyword, vec![labelled("WHERE")]),
+                (ItemGroup::Function, vec![labelled("whatever_fn")]),
+                (ItemGroup::Schema, vec![labelled("warehouse")]),
+                (
+                    ItemGroup::Relation,
+                    vec![labelled("wcte"), labelled("widgets")],
+                ),
+                (ItemGroup::Column, vec![labelled("weight")]),
+                (ItemGroup::JoinCondition, vec![labelled("w.id = o.w_id")]),
+            ],
+            "w",
         );
+        let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "w.id = o.w_id",
+                "weight",
+                "wcte",
+                "widgets",
+                "warehouse",
+                "whatever_fn",
+                "WHERE"
+            ]
+        );
+        let sort_texts: Vec<&str> = items
+            .iter()
+            .filter_map(|item| item.sort_text.as_deref())
+            .collect();
+        assert_eq!(sort_texts.len(), items.len());
+        assert!(sort_texts.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    #[test]
+    fn test_keywords_after_names_only_for_a_typed_word() {
+        assert!(keyword_items_after_names("", dummy_range(), &[]).is_empty());
+        let keywords = keyword_items_after_names("wh", dummy_range(), &[]);
+        assert_eq!(keywords.len(), 2);
+        assert!(keywords.iter().any(|item| item.label == "WHERE"));
+        // `count` is offered as a function, so the COUNT keyword is not.
+        let functions = build_function_items(DatabaseType::PostgreSQL, &[], "cou", dummy_range());
+        assert!(functions.iter().any(|item| item.label == "count"));
+        assert!(keyword_items_after_names("cou", dummy_range(), &functions).is_empty());
+    }
+
+    #[test]
+    fn test_build_cte_items_insert_alias_abbreviation() {
+        let items = build_cte_items(
+            &["recent_orders".to_string(), "paid".to_string()],
+            "re",
+            dummy_range(),
+        );
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].label, "recent_orders");
+        assert_eq!(items[0].insert_text.as_deref(), Some("recent_orders ro"));
+        assert_eq!(items[0].detail.as_deref(), Some("CTE"));
+    }
+
+    #[test]
+    fn test_elide_middle_keeps_both_ends() {
+        assert_eq!(elide_middle("orders", 10, 1), "orders");
+        let name = "customer_subscription_billing_history_archive_2024_q3";
+        let elided = elide_middle(name, 20, 1);
+        assert_eq!(elided.chars().count(), 20);
+        assert_eq!(elided, "customer_…ve_2024_q3");
+        // The typed prefix stays ahead of the ellipsis.
+        let elided = elide_middle(name, 20, 14);
+        assert!(elided.starts_with("customer_subsc…"), "{elided}");
+        assert_eq!(elided.chars().count(), 20);
+        // Multibyte characters are cut on character boundaries.
+        assert_eq!(elide_middle("åäöåäöåäöåäö", 5, 1), "åä…äö");
+    }
+
+    #[test]
+    fn test_rank_items_elides_long_labels_but_inserts_the_full_name() {
+        let name = "customer_subscription_billing_history_archive_2024_q3_rollup";
+        let columns = vec![ColumnCandidate {
+            name: name.to_string(),
+            data_type: Some("text".to_string()),
+        }];
+        let items = rank_items(
+            vec![(
+                ItemGroup::Column,
+                build_column_items(&columns, "cust", dummy_range(), "t"),
+            )],
+            "cust",
+        );
+        assert_eq!(items[0].label.chars().count(), MAX_LABEL_CHARS);
+        assert!(items[0].label.starts_with("cust"));
+        assert!(items[0].label.ends_with("q3_rollup"));
+        assert_eq!(items[0].insert_text.as_deref(), Some(name));
     }
 
     fn plain_column(name: &str) -> ColumnInfo {
