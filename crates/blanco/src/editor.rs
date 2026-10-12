@@ -253,7 +253,7 @@ impl EditorPanel {
             }
             // The tab comes back last and unpinned.
             if was_pinned && let Some(last) = self.tabs.len().checked_sub(1) {
-                self.toggle_pin(last, cx);
+                self.toggle_pin(last, window, cx);
             }
         }
         cx.notify();
@@ -1069,6 +1069,27 @@ impl EditorPanel {
         self.scroll_tabbar_to_the_end(window, cx);
 
         cx.notify();
+    }
+
+    /// Bring the tab at `ix` into view once the strip has laid out its new
+    /// order, scrolling no further than needed. `from` is the offset to scroll
+    /// from when something else has moved the strip in the meantime.
+    fn scroll_tabbar_to_tab(
+        &self,
+        ix: usize,
+        from: Option<gpui::Point<gpui::Pixels>>,
+        window: &mut Window,
+    ) {
+        let scroll_handle = self.tabbar_scroll_handle.clone();
+        window.on_next_frame(move |window, _| {
+            window.on_next_frame(move |window, _| {
+                if let Some(offset) = from {
+                    scroll_handle.set_offset(offset);
+                }
+                scroll_handle.scroll_to_item(ix);
+                window.refresh();
+            })
+        });
     }
 
     fn scroll_tabbar_to_the_end(&self, window: &mut Window, _: &mut Context<Self>) {

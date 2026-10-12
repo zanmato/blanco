@@ -11,27 +11,18 @@ impl EditorPanel {
         ix < self.pinned_count
     }
 
-    /// The strip group a tab is listed under: its connection, or "Other".
-    fn tab_group(&self, ix: usize, cx: &gpui::App) -> Option<String> {
-        self.tabs
-            .get(ix)
-            .map(|tab| tab.context(cx).map(|context| context.connection_name))
-            .map(|group| group.unwrap_or_default())
-    }
-
-    /// Whether the tab at `from` may be dropped at `to`: tabs move within
-    /// their connection's group, and pinned and unpinned tabs stay apart.
-    pub(super) fn can_move_tab(&self, from: usize, to: usize, cx: &gpui::App) -> bool {
+    /// Whether the tab at `from` may be dropped at `to`. The strip mixes the
+    /// tabs of every connection, so only pinned and unpinned tabs stay apart.
+    pub(super) fn can_move_tab(&self, from: usize, to: usize) -> bool {
         from != to
+            && from < self.tabs.len()
             && to < self.tabs.len()
             && self.is_pinned(from) == self.is_pinned(to)
-            && self.tab_group(from, cx).is_some()
-            && self.tab_group(from, cx) == self.tab_group(to, cx)
     }
 
     /// Move the tab at `from` to `to`, keeping the same tab active.
     pub(super) fn move_tab(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
-        if !self.can_move_tab(from, to, cx) {
+        if !self.can_move_tab(from, to) {
             return;
         }
         self.reposition_tab(from, to);
@@ -48,17 +39,19 @@ impl EditorPanel {
 
     /// Pin the tab, moving it to the end of the pinned tabs, or unpin it,
     /// moving it to the start of the others.
-    pub(super) fn toggle_pin(&mut self, ix: usize, cx: &mut Context<Self>) {
+    pub(super) fn toggle_pin(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         if ix >= self.tabs.len() {
             return;
         }
-        if self.is_pinned(ix) {
+        let target = if self.is_pinned(ix) {
             self.pinned_count -= 1;
-            self.reposition_tab(ix, self.pinned_count);
+            self.pinned_count
         } else {
-            self.reposition_tab(ix, self.pinned_count);
             self.pinned_count += 1;
-        }
+            self.pinned_count - 1
+        };
+        self.reposition_tab(ix, target);
+        self.scroll_tabbar_to_tab(target, None, window);
         self.save_tab_positions(cx);
         cx.notify();
     }
@@ -88,6 +81,9 @@ impl EditorPanel {
             context: base.context.clone(),
         };
         let is_script = matches!(tab, TabType::Script(_));
+        // Adding a tab scrolls the strip to its end, where new tabs appear.
+        // The copy goes next to its original, so scroll from here instead.
+        let scroll_offset = self.tabbar_scroll_handle.offset();
         if is_script {
             self.create_and_add_script_tab(window, params, cx);
         } else {
@@ -98,6 +94,7 @@ impl EditorPanel {
         let target = (ix + 1).max(self.pinned_count);
         self.reposition_tab(new_ix, target);
         self.active_tab_ix = target;
+        self.scroll_tabbar_to_tab(target, Some(scroll_offset), window);
         self.save_tab_positions(cx);
         cx.notify();
     }
@@ -215,18 +212,20 @@ mod tests {
         // Pinning moves the tab to the front, and pinned tabs stay put.
         harness
             .editor_panel
-            .update(&mut cx, |panel, cx| panel.toggle_pin(3, cx));
+            .update_in(&mut cx, |panel, window, cx| panel.toggle_pin(3, window, cx));
         assert_eq!(titles(&harness, &cx), ["d", "b", "c", "a"]);
         harness.editor_panel.update(&mut cx, |panel, cx| {
-            assert!(!panel.can_move_tab(1, 0, cx), "unpinned cannot pass pinned");
+            assert!(!panel.can_move_tab(1, 0), "unpinned cannot pass pinned");
             panel.close_other_tabs(2, cx);
         });
         assert_eq!(titles(&harness, &cx), ["d", "c"]);
 
-        harness.editor_panel.update(&mut cx, |panel, cx| {
-            panel.toggle_pin(0, cx);
-            panel.close_tabs_to_the_right(0, cx);
-        });
+        harness
+            .editor_panel
+            .update_in(&mut cx, |panel, window, cx| {
+                panel.toggle_pin(0, window, cx);
+                panel.close_tabs_to_the_right(0, cx);
+            });
         assert_eq!(titles(&harness, &cx), ["d"]);
     }
 
@@ -241,7 +240,7 @@ mod tests {
         harness
             .editor_panel
             .update_in(&mut cx, |panel, window, cx| {
-                panel.toggle_pin(2, cx);
+                panel.toggle_pin(2, window, cx);
                 let context = panel.tabs[0].context(cx).expect("query tab context");
                 let from = context.connection_id;
                 panel.move_tabs_to_connection(from, &context, window, cx);

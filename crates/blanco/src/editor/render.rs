@@ -165,8 +165,14 @@ impl EditorPanel {
                 cx.stop_propagation();
                 cx.new(|_| dragged.clone())
             })
-            .drag_over::<DraggedTab>(|style, _, _, cx| {
-                style.border_l_2().border_color(cx.theme().drag_border)
+            // A tab dragged rightwards lands after the one it is dropped on.
+            .drag_over::<DraggedTab>(move |style, dragged, _, cx| {
+                if dragged.ix < ix {
+                    style.border_r_2()
+                } else {
+                    style.border_l_2()
+                }
+                .border_color(cx.theme().drag_border)
             })
             .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
                 this.move_tab(dragged.ix, ix, cx);
@@ -215,7 +221,7 @@ impl EditorPanel {
             .item(item(
                 if pinned { "Unpin" } else { "Pin" },
                 true,
-                |panel, ix, _, cx| panel.toggle_pin(ix, cx),
+                |panel, ix, window, cx| panel.toggle_pin(ix, window, cx),
             ))
             .separator()
             .item(item("Close", closable, |panel, ix, _, cx| {
