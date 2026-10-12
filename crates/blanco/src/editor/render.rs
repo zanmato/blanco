@@ -196,6 +196,7 @@ impl EditorPanel {
         let panel = cx.entity().downgrade();
         let pinned = self.is_pinned(ix);
         let can_duplicate = self.can_duplicate_tab(ix);
+        let can_move = self.can_move_tab_to_new_window(ix);
         let closable = self.tabs.len() > 1;
         let has_others = (self.pinned_count..self.tabs.len()).any(|other| other != ix);
         let has_right = (ix + 1).max(self.pinned_count) < self.tabs.len();
@@ -225,6 +226,9 @@ impl EditorPanel {
                 true,
                 |panel, ix, window, cx| panel.toggle_pin(ix, window, cx),
             ))
+            .item(item("Move to New Window", can_move, |panel, ix, _, cx| {
+                panel.move_tab_to_new_window(ix, cx)
+            }))
             .separator()
             .item(item("Close", closable, |panel, ix, window, cx| {
                 panel.request_close_tab(ix, window, cx)

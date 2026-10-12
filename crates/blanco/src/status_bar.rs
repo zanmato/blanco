@@ -4,14 +4,14 @@
 //! `cx`) reports work by calling [`ActivityReporter::begin`], which returns an
 //! [`ActivityGuard`]. The guard sends a `Begin` message immediately and an `End`
 //! message when finished or dropped, so even error paths that bail out with `?`
-//! clear the line. A single listener task in `app.rs` folds these messages into
-//! the [`StatusBarState`] entity that the bar renders.
+//! clear the line. A single listener task folds these messages into the
+//! [`StatusBarState`] entity that every window's bar renders.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use gpui::{Context, Global, SharedString, Task};
+use gpui::{App, AppContext as _, Context, Entity, Global, SharedString, Task};
 use smol::channel;
 
 /// How long a finished activity's outcome lingers before the bar returns to idle.
@@ -24,7 +24,7 @@ pub enum ActivityResult {
     Err(SharedString),
 }
 
-/// Messages sent over the activity channel to the listener task in `app.rs`.
+/// Messages sent over the activity channel to the listener task.
 #[derive(Debug)]
 pub enum ActivityMessage {
     Begin {
@@ -138,8 +138,9 @@ pub struct StatusLine {
     pub text: SharedString,
 }
 
-/// Entity holding live activity state. Mutated only by the listener task in
-/// `app.rs`; the app observes it and re-renders the status bar.
+/// Entity holding live activity state. Mutated only by the listener task
+/// started in [`StatusBarState::shared`]; each window observes it and
+/// re-renders its status bar.
 pub struct StatusBarState {
     active: Vec<(u64, SharedString)>,
     transient: Option<(ActivityResult, Instant)>,
@@ -156,7 +157,40 @@ impl Default for StatusBarState {
     }
 }
 
+/// The one [`StatusBarState`] all windows show, so work started in one window
+/// is reported in each.
+struct SharedStatusBar(Entity<StatusBarState>);
+
+impl Global for SharedStatusBar {}
+
 impl StatusBarState {
+    /// The state every window's status bar shows. The first call installs the
+    /// global [`ActivityReporter`] and the task feeding its messages in.
+    pub fn shared(cx: &mut App) -> Entity<Self> {
+        if let Some(shared) = cx.try_global::<SharedStatusBar>() {
+            return shared.0.clone();
+        }
+        let status_bar = cx.new(|_| Self::default());
+        let (sender, receiver) = channel::unbounded::<ActivityMessage>();
+        cx.set_global(ActivityReporter::new(sender));
+        cx.spawn({
+            let status_bar = status_bar.downgrade();
+            async move |cx| {
+                while let Ok(message) = receiver.recv().await {
+                    if status_bar
+                        .update(cx, |state, cx| state.apply(message, cx))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+        })
+        .detach();
+        cx.set_global(SharedStatusBar(status_bar.clone()));
+        status_bar
+    }
+
     /// Apply one channel message, scheduling the transient-clear timer as needed.
     pub fn apply(&mut self, message: ActivityMessage, cx: &mut Context<Self>) {
         match message {

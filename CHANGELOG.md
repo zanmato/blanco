@@ -17,6 +17,14 @@ All notable changes to this project will be documented in this file.
   cell shows the start of its value and its size, and the full value loads
   when the cell is opened, copied, compared or its row duplicated. Table
   exports always write full values. Off by default
+- Multiple windows: New Window (`secondary-shift-n`, File menu or command
+  palette) opens another window with its own tabs over the same connections,
+  and Move to New Window in a tab's menu (or Move Tab to New Window in the
+  command palette) gives a tab a window of its own. Every window open at quit
+  comes back on the next start with its tabs, size and place, on the display
+  it was on. Closing one of several windows closes its tabs, asking first about
+  unsaved file changes; Close Window is `secondary-shift-w`, and `alt-f4` now
+  closes the window rather than quitting on Linux and Windows
 - Sort a result by several columns: Shift-click another column's sort icon
   to add it as the next sort key. With more than one key, each sorted header
   shows its place, and a plain click goes back to sorting by one column

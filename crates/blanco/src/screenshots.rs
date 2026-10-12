@@ -8,7 +8,9 @@
 
 use std::time::Duration;
 
-use app_database::{AppDatabase, ConnectionData, EditorKind, QueryTabData, SnippetData};
+use app_database::{
+    AppDatabase, ConnectionData, EditorKind, QueryTabData, SnippetData, WindowGeometry,
+};
 use gpui::{App, AsyncWindowContext, Entity, Window};
 use tokio::runtime::Handle;
 
@@ -18,8 +20,8 @@ use crate::results_panel::CellInput;
 
 // The visible frame is 1600x1000. On Linux the client-side frame adds a 20px
 // shadow inset on every side, which the capture script crops away.
-const WINDOW_WIDTH: &str = "1640";
-const WINDOW_HEIGHT: &str = "1040";
+const WINDOW_WIDTH: f32 = 1640.;
+const WINDOW_HEIGHT: f32 = 1040.;
 
 const REVENUE_QUERY: &str = r#"-- Orders waiting to ship
 SELECT COUNT(*) AS pending FROM orders WHERE status = 'pending';
@@ -160,15 +162,22 @@ async fn seed_database(database: &AppDatabase) -> anyhow::Result<()> {
     let theme = std::env::var("BLANCO_THEME").unwrap_or_else(|_| "Catppuccin Mocha".into());
     for (key, value) in [
         ("appearance.theme", theme.as_str()),
-        ("window.x", "0"),
-        ("window.y", "0"),
-        ("window.width", WINDOW_WIDTH),
-        ("window.height", WINDOW_HEIGHT),
-        ("window.maximized", "false"),
         ("mcp.enabled", "false"),
     ] {
         database.save_setting(key, value, false).await?;
     }
+    let window_id = database
+        .create_window(
+            Some(WindowGeometry {
+                x: 0.,
+                y: 0.,
+                width: WINDOW_WIDTH,
+                height: WINDOW_HEIGHT,
+                maximized: false,
+            }),
+            None,
+        )
+        .await?;
 
     let tabs = [
         ("Revenue", REVENUE_QUERY, EditorKind::Query),
@@ -191,6 +200,7 @@ async fn seed_database(database: &AppDatabase) -> anyhow::Result<()> {
                 tab_kind,
                 last_run_at: None,
                 file_path: None,
+                window_id: Some(window_id),
             })
             .await?;
     }

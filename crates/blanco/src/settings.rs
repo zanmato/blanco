@@ -138,13 +138,6 @@ pub struct Settings {
     pub client_tools: ClientToolSettings,
     #[serde(default)]
     pub backup: BackupSettings,
-    /// Last known window geometry, restored on the next startup. Empty until the
-    /// window has been moved or resized at least once.
-    #[serde(default)]
-    pub window: WindowSettings,
-    /// State of the last session that is restored on the next start.
-    #[serde(default)]
-    pub session: SessionSettings,
     /// User overrides for keyboard shortcuts, keyed by action identifier (see
     /// `crate::keybindings`). Only entries that differ from the built-in
     /// defaults are stored here; an empty string means the action is unbound.
@@ -159,9 +152,6 @@ impl Settings {
 
         for (key, value) in values {
             match key.as_str() {
-                "session.active_tab" => {
-                    settings.session.active_tab = value.parse().ok();
-                }
                 "general.check_for_updates" => {
                     settings.general.check_for_updates = value.parse().unwrap_or(true);
                 }
@@ -365,21 +355,6 @@ impl Settings {
                 }
                 "backup.directory" => {
                     settings.backup.directory = value.clone();
-                }
-                "window.x" => {
-                    settings.window.x = value.parse().ok();
-                }
-                "window.y" => {
-                    settings.window.y = value.parse().ok();
-                }
-                "window.width" => {
-                    settings.window.width = value.parse().ok();
-                }
-                "window.height" => {
-                    settings.window.height = value.parse().ok();
-                }
-                "window.maximized" => {
-                    settings.window.maximized = value.parse().unwrap_or_default();
                 }
                 "results.filter_bar_open" => {
                     settings.results.filter_bar_open = value.parse().unwrap_or_default();
@@ -685,26 +660,6 @@ impl Default for BackupSettings {
             directory: String::new(),
         }
     }
-}
-
-/// Persisted window geometry, in logical pixels. `width`/`height` are `None`
-/// until the window has been sized at least once, in which case the startup
-/// code falls back to a centered default. Position is best-effort: some
-/// platforms (e.g. Wayland) ignore client-requested window positions.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct WindowSettings {
-    pub x: Option<f32>,
-    pub y: Option<f32>,
-    pub width: Option<f32>,
-    pub height: Option<f32>,
-    pub maximized: bool,
-}
-
-/// What the next start restores from the last session.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct SessionSettings {
-    /// App database id of the tab that was active.
-    pub active_tab: Option<i64>,
 }
 
 /// The built-in MCP server. Off by default: it grants whoever holds the token

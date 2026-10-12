@@ -3,9 +3,9 @@
 //! Tab operations need the window and the `EditorPanel`, which only exist on
 //! the foreground thread, so a tool builds an [`McpRequest`] carrying a
 //! one-shot reply channel, sends it through [`McpBridgeClient`], and awaits the
-//! answer. `BlancoApp` drains the other end in a foreground task and answers
-//! each request in place. `smol::channel` is runtime-agnostic, so both sides
-//! can await it.
+//! answer. `windows` drains the other end in a foreground task and hands each
+//! request to the `BlancoApp` of the window it concerns. `smol::channel` is
+//! runtime-agnostic, so both sides can await it.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -190,6 +190,21 @@ pub(crate) enum McpRequest {
     },
 }
 
+impl McpRequest {
+    /// The stable id of the tab the request names, if it names one by id.
+    /// Ids are unique across windows, so it tells which window answers.
+    pub(crate) fn tab_id(&self) -> Option<u64> {
+        match self {
+            Self::ReadTab { tab, .. }
+            | Self::WriteTab { tab, .. }
+            | Self::SetActiveTab { tab, .. }
+            | Self::TabConnection { tab, .. }
+            | Self::RunTab { tab, .. } => tab.id,
+            Self::ListTabs { .. } | Self::CreateQueryTab { .. } | Self::ConfirmWrite { .. } => None,
+        }
+    }
+}
+
 /// The tokio-side handle. Cheap to clone; every MCP session shares one.
 #[derive(Clone)]
 pub(crate) struct McpBridgeClient {
@@ -197,7 +212,7 @@ pub(crate) struct McpBridgeClient {
 }
 
 impl McpBridgeClient {
-    /// A client and the receiver `BlancoApp` drains.
+    /// A client and the receiver `windows` drains.
     pub(crate) fn channel() -> (Self, smol::channel::Receiver<McpRequest>) {
         let (sender, receiver) = smol::channel::unbounded();
         (Self { sender }, receiver)

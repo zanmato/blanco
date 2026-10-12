@@ -70,11 +70,16 @@ async fn settle(cx: &mut VisualTestContext) {
 
 /// The stored tabs titled `title`. The harness opens a tab of its own, which
 /// is left out.
-fn stored_tabs(title: &str, cx: &mut VisualTestContext) -> Vec<QueryTabData> {
+fn stored_tabs(
+    harness: &TestHarness,
+    title: &str,
+    cx: &mut VisualTestContext,
+) -> Vec<QueryTabData> {
+    let window_id = harness.window_id;
     let tabs = cx.update(|_, cx| {
         let db = AppDatabase::global(cx).clone();
         gpui_tokio::Tokio::handle(cx)
-            .block_on(async move { db.load_query_tabs().await })
+            .block_on(async move { db.load_query_tabs(window_id).await })
             .expect("load tabs")
     });
     tabs.into_iter().filter(|tab| tab.title == title).collect()
@@ -91,7 +96,7 @@ async fn test_typed_text_is_saved_without_running(cx: &mut TestAppContext) {
     type_into_active_tab(&harness, "SELECT 'typed since'", &mut cx);
     settle(&mut cx).await;
 
-    let tabs = stored_tabs("Draft", &mut cx);
+    let tabs = stored_tabs(&harness, "Draft", &mut cx);
     assert_eq!(tabs.len(), 1, "one row per tab, however often it is saved");
     assert_eq!(tabs[0].title, "Draft");
     assert_eq!(tabs[0].content, "SELECT 'typed since'");
@@ -106,7 +111,7 @@ async fn test_closed_tab_reopens_with_its_text(cx: &mut TestAppContext) {
     open_tab(&harness, "Keep me", context, &mut cx);
     type_into_active_tab(&harness, "SELECT 42", &mut cx);
     settle(&mut cx).await;
-    assert_eq!(stored_tabs("Keep me", &mut cx).len(), 1);
+    assert_eq!(stored_tabs(&harness, "Keep me", &mut cx).len(), 1);
 
     harness
         .editor_panel
@@ -115,7 +120,7 @@ async fn test_closed_tab_reopens_with_its_text(cx: &mut TestAppContext) {
         });
     settle(&mut cx).await;
     assert!(
-        stored_tabs("Keep me", &mut cx).is_empty(),
+        stored_tabs(&harness, "Keep me", &mut cx).is_empty(),
         "a closed tab is not restored"
     );
 
@@ -140,7 +145,7 @@ async fn test_closed_tab_reopens_with_its_text(cx: &mut TestAppContext) {
             gpui::Focusable::focus_handle(tab.editor.read(cx), cx).is_focused(window)
         });
     assert!(focused, "the reopened tab takes the keyboard");
-    let tabs = stored_tabs("Keep me", &mut cx);
+    let tabs = stored_tabs(&harness, "Keep me", &mut cx);
     assert_eq!(tabs.len(), 1, "the reopened tab is persisted again");
     assert_eq!(tabs[0].content, "SELECT 42");
 }

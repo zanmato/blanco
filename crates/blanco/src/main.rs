@@ -40,20 +40,17 @@ mod status_bar;
 mod test_harness;
 mod time_format;
 mod update_manager;
+mod windows;
 
 use assets::Assets;
 use database::DatabaseService;
-use gpui::{AppContext, AssetSource as _, SharedString, WindowBounds, WindowOptions, px, size};
+use gpui::{AssetSource as _, SharedString};
 use gpui_component::{Theme, ThemeRegistry};
 use gpui_platform::application;
 use std::path::PathBuf;
 
 use crate::{app_settings::AppSettings, settings::Settings};
 use app_database::AppDatabase;
-
-/// Matches `StartupWMClass` in `resources/blanco.desktop`, so the desktop
-/// attributes windows and notifications to the installed launcher.
-const APP_ID: &str = "com.blanco.sql-editor";
 
 fn main() {
     // Honour `RUST_LOG` when set, otherwise default to a useful baseline so
@@ -246,74 +243,12 @@ fn main() {
         update_manager::UpdateManager::start_polling(cx);
 
         cx.set_text_rendering_mode(gpui::TextRenderingMode::Subpixel);
-        cx.set_app_identity(APP_ID, "Blanco");
+        cx.set_app_identity(windows::APP_ID, "Blanco");
 
-        // Restore the window geometry saved on the last run
-        let window_bounds = {
-            let window = &AppSettings::global(cx).settings.window;
-            match (window.width, window.height) {
-                (Some(width), Some(height)) => {
-                    let bounds = gpui::Bounds {
-                        origin: gpui::point(
-                            px(window.x.unwrap_or_default()),
-                            px(window.y.unwrap_or_default()),
-                        ),
-                        size: size(px(width), px(height)),
-                    };
-                    if window.maximized {
-                        WindowBounds::Maximized(bounds)
-                    } else {
-                        WindowBounds::Windowed(bounds)
-                    }
-                }
-                _ => WindowBounds::Windowed(gpui::Bounds::centered(
-                    None,
-                    size(px(1400.), px(900.)),
-                    cx,
-                )),
-            }
-        };
-
-        let window_options = WindowOptions {
-            window_bounds: Some(window_bounds),
-            titlebar: Some(gpui::TitlebarOptions {
-                title: Some("Blanco".into()),
-                appears_transparent: true,
-                traffic_light_position: Some(gpui::Point {
-                    x: px(8.0),
-                    y: px(6.0),
-                }),
-            }),
-            window_decorations: Some(gpui::WindowDecorations::Client),
-            window_min_size: Some(size(px(1024.), px(768.))),
-            focus: true,
-            show: true,
-            kind: gpui::WindowKind::Normal,
-            is_movable: true,
-            app_owns_titlebar_drag: true,
-            // Matches gpui's own default: throttle to 30fps while inactive.
-            inactive_frame_interval: Some(std::time::Duration::from_micros(33_333)),
-            is_minimizable: true,
-            is_resizable: true,
-            tabbing_identifier: None,
-            display_id: None,
-            window_background: gpui::WindowBackgroundAppearance::Opaque,
-            app_id: Some(APP_ID.into()),
-            icon: None,
-        };
-
-        cx.spawn(async move |cx| {
-            cx.open_window(window_options, |window, cx| {
-                let blanco_app = cx.new(|cx| app::BlancoApp::new(window, cx));
-                #[cfg(feature = "screenshots")]
-                if let Some(scene) = screenshots::Scene::from_env() {
-                    screenshots::stage(scene, blanco_app.clone(), window, cx);
-                }
-                cx.new(|cx| gpui_component::Root::new(blanco_app, window, cx))
-            })?;
-            Ok::<_, anyhow::Error>(())
-        })
-        .detach();
+        app::init_menus(cx);
+        windows::init(cx);
+        cx.spawn(async move |cx| cx.update(windows::restore))
+            .detach();
 
         cx.activate(true);
     });

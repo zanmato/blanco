@@ -8,10 +8,10 @@ use crate::mcp::bridge::{
     ConfirmReply, McpRequest, Reply as McpReply, WriteAnswer, WriteConfirmation, send_reply,
 };
 use gpui::{
-    Action, App, AppContext, BorrowAppContext, Context, Entity, ExternalPaths, FocusHandle,
-    Focusable, InteractiveElement, IntoElement, Menu, MenuItem, ParentElement, Render,
-    SharedString, StatefulInteractiveElement as _, Styled, Subscription, Task, Window, actions,
-    div, prelude::FluentBuilder, px, svg,
+    Action, App, AppContext, Context, Entity, ExternalPaths, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, Menu, MenuItem, ParentElement, Render, SharedString,
+    StatefulInteractiveElement as _, Styled, Subscription, Task, Window, actions, div,
+    prelude::FluentBuilder, px, svg,
 };
 use gpui_component::{
     ActiveTheme, Disableable as _, Icon, IconName, Sizable as _, TitleBar, WindowExt as _,
@@ -44,7 +44,7 @@ use crate::{
     result_ext::ResultExt,
     snippets_panel::{RefreshSnippets, SnippetsPanel, SnippetsPanelEvent},
     sqlite_file,
-    status_bar::{ActivityMessage, ActivityReporter, ActivityResult, StatusBarState, StatusKind},
+    status_bar::{ActivityReporter, StatusBarState, StatusKind},
     update_manager::{UpdateManager, UpdateState},
 };
 use app_database::{AppDatabase, ConnectionData};
@@ -54,6 +54,9 @@ actions!(
     blanco_app,
     [
         Quit,
+        NewWindow,
+        CloseWindow,
+        MoveTabToNewWindow,
         OpenConnection,
         OpenSettings,
         OpenTerminal,
@@ -371,49 +374,10 @@ pub struct EditConnection {
     pub connection_id: i64,
 }
 
-// Action for database connection state
-#[derive(Action, Clone, PartialEq, Eq)]
-#[action(namespace = blanco_app, no_json)]
-pub struct DatabaseConnected {
-    pub connection_id: i64,
-    pub database_name: String,
-}
-
 // Action for formatting the current SQL query
 #[derive(Action, Clone, PartialEq, Eq)]
 #[action(namespace = blanco_app, no_json)]
 pub struct FormatQuery;
-
-impl From<database::DatabaseConnectedMessage> for DatabaseConnected {
-    fn from(msg: database::DatabaseConnectedMessage) -> Self {
-        Self {
-            connection_id: msg.connection_id,
-            database_name: msg.database_name,
-        }
-    }
-}
-
-// Action dispatched when the database service detects that a connection has
-// dropped (e.g. the server closed an idle connection overnight, or an SSH
-// tunnel died). Lets the sidebar reflect the disconnected state.
-#[derive(Action, Clone, PartialEq, Eq)]
-#[action(namespace = blanco_app, no_json)]
-pub struct DatabaseDisconnected {
-    pub connection_id: i64,
-    pub database_name: String,
-    /// Closed after its idle timeout rather than lost.
-    pub idle: bool,
-}
-
-impl From<database::DatabaseDisconnectedMessage> for DatabaseDisconnected {
-    fn from(msg: database::DatabaseDisconnectedMessage) -> Self {
-        Self {
-            connection_id: msg.connection_id,
-            database_name: msg.database_name,
-            idle: msg.idle,
-        }
-    }
-}
 
 /// Corner radius of the sidebar and editor cards. Deliberately separate from
 /// `theme.radius`, which stays smaller for the controls inside the cards.
@@ -461,7 +425,7 @@ type QueuedConfirmation = (WriteConfirmation, channel::Sender<WriteAnswer>);
 
 /// One tag for every write confirmation, so a burst of requests keeps a single
 /// notification instead of stacking one per statement.
-const MCP_CONFIRMATION_NOTIFICATION_TAG: &str = "mcp-write-confirmation";
+pub(crate) const MCP_CONFIRMATION_NOTIFICATION_TAG: &str = "mcp-write-confirmation";
 
 pub struct BlancoApp {
     focus_handle: FocusHandle,
@@ -480,14 +444,13 @@ pub struct BlancoApp {
     main_resize_state: Entity<ResizableState>,
     status_bar: Entity<StatusBarState>,
     _subscriptions: Vec<Subscription>,
-    _action_task: Task<()>,
-    _activity_task: Task<()>,
-    _idle_disconnect_task: Task<()>,
-    _open_files_task: Task<()>,
+    /// The window's row in the app database's `windows` table.
+    window_id: i64,
+    /// Set once the user agreed to lose unsaved file changes by closing the
+    /// window, so the close that follows is not asked about again.
+    close_confirmed: bool,
     _save_window_bounds_task: Task<()>,
     _save_editor_font_size_task: Task<()>,
-    /// Drains MCP requests onto the foreground; see `spawn_mcp_listener`.
-    _mcp_task: Task<()>,
     /// `run_tab` callers waiting for their query tab's run to end, matched to
     /// `EditorPanelEvent::QueryRunEnded` by tab index in arrival order.
     mcp_run_replies: VecDeque<(usize, McpReply<serde_json::Value>)>,
@@ -498,14 +461,13 @@ pub struct BlancoApp {
 }
 
 impl BlancoApp {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        init_menus(cx);
-
-        let action_task = Self::spawn_service_listener(cx);
-        let idle_disconnect_task = Self::spawn_idle_disconnect(cx);
-        let open_files_task = Self::spawn_open_file_listener(window, cx);
-        let (status_bar, activity_task) = Self::spawn_activity_status(cx);
-        let mcp_task = Self::spawn_mcp_listener(window, cx);
+    /// The app shown in the window stored as `saved`, with its saved tabs.
+    pub fn new(
+        saved: &app_database::WindowData,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let status_bar = StatusBarState::shared(cx);
         let (mcp_confirmations, mcp_confirmation_task) =
             Self::spawn_mcp_confirmation_queue(window, cx);
 
@@ -514,8 +476,10 @@ impl BlancoApp {
         let history_panel = cx.new(|cx| HistoryPanel::new(window, cx));
         let main_resize_state = cx.new(|_| ResizableState::default());
 
-        let saved_tabs = Self::load_saved_tabs(cx);
-        let editor_panel = cx.new(|cx| EditorPanel::new_with_saved_tabs(window, cx, saved_tabs));
+        let saved_tabs = Self::load_saved_tabs(saved.id, cx);
+        let editor_panel = cx.new(|cx| {
+            EditorPanel::new_with_saved_tabs(window, cx, saved.id, saved.active_tab_id, saved_tabs)
+        });
         let command_palette = cx.new(|cx| {
             CommandPalette::new(sidebar.downgrade(), editor_panel.downgrade(), window, cx)
         });
@@ -530,14 +494,10 @@ impl BlancoApp {
             window,
             cx,
         );
-        subscriptions.push(Self::wire_mcp_confirmation_notification(window, cx));
+        subscriptions.push(Self::wire_window_activation(saved.id, window, cx));
         if let Some(update_manager) = UpdateManager::try_global(cx) {
             let update_state = update_manager.state.clone();
-            let just_updated = update_manager.updated_from.is_some();
             subscriptions.push(cx.observe(&update_state, |_, _, cx| cx.notify()));
-            if just_updated {
-                Self::notify_updated(window, cx);
-            }
         }
 
         let focus_handle = cx.focus_handle();
@@ -557,13 +517,10 @@ impl BlancoApp {
             main_resize_state,
             status_bar,
             _subscriptions: subscriptions,
-            _action_task: action_task,
-            _activity_task: activity_task,
-            _idle_disconnect_task: idle_disconnect_task,
-            _open_files_task: open_files_task,
+            window_id: saved.id,
+            close_confirmed: false,
             _save_window_bounds_task: Task::ready(()),
             _save_editor_font_size_task: Task::ready(()),
-            _mcp_task: mcp_task,
             mcp_run_replies: VecDeque::new(),
             mcp_confirmations,
             _mcp_confirmation_task: mcp_confirmation_task,
@@ -571,7 +528,7 @@ impl BlancoApp {
     }
 
     /// Tell the user the update they restarted for is the build now running.
-    fn notify_updated(window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn notify_updated(window: &mut Window, cx: &mut Context<Self>) {
         let version = env!("CARGO_PKG_VERSION");
         window.defer(cx, move |window, cx| {
             window.push_notification(
@@ -586,51 +543,21 @@ impl BlancoApp {
         });
     }
 
-    /// Clicking the write confirmation's or a finished backup's system
-    /// notification brings Blanco's window forward, and the notification goes
-    /// away once the window is in front by any route.
-    fn wire_mcp_confirmation_notification(
+    /// Track the window coming to the front, for requests that name no
+    /// window and for the order windows reopen in. A pending write
+    /// confirmation's or finished backup's system notification goes away once
+    /// a window is in front by any route.
+    fn wire_window_activation(
+        window_id: i64,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Subscription {
-        let window_handle = window.window_handle();
-        cx.on_system_notification_response(move |response, cx| {
-            if response.tag != MCP_CONFIRMATION_NOTIFICATION_TAG
-                && response.tag != crate::backup::NOTIFICATION_TAG
-            {
-                return;
-            }
-            cx.activate(true);
-            window_handle
-                .update(cx, |_, window, _| window.activate_window())
-                .log_err();
-        });
-        cx.observe_window_activation(window, |_, window, cx| {
+        cx.observe_window_activation(window, move |_, window, cx| {
             if window.is_window_active() {
+                crate::windows::note_activated(window_id, cx);
                 cx.dismiss_system_notification(MCP_CONFIRMATION_NOTIFICATION_TAG);
                 cx.dismiss_system_notification(crate::backup::NOTIFICATION_TAG);
             }
-        })
-    }
-
-    /// Answer MCP requests on the foreground. The receiver is handed over by
-    /// `McpService` once; a second `BlancoApp` (tests) gets no listener.
-    fn spawn_mcp_listener(window: &mut Window, cx: &mut Context<Self>) -> Task<()> {
-        let Some(receiver) = McpService::take_bridge_receiver(cx) else {
-            return Task::ready(());
-        };
-        cx.spawn_in(window, async move |weak_app, cx| {
-            while let Ok(request) = receiver.recv().await {
-                if weak_app
-                    .update_in(cx, |app, window, cx| {
-                        app.handle_mcp_request(request, window, cx);
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-            info!("MCP bridge listener ended");
         })
     }
 
@@ -700,7 +627,7 @@ impl BlancoApp {
         (sender, task)
     }
 
-    fn handle_mcp_request(
+    pub(crate) fn handle_mcp_request(
         &mut self,
         request: McpRequest,
         window: &mut Window,
@@ -946,101 +873,6 @@ impl BlancoApp {
         });
     }
 
-    /// Spawn the background task that translates `DatabaseServiceMessage`s
-    /// (emitted from any context, including tokio tasks without a `cx`) into
-    /// dispatched `DatabaseConnected`/`DatabaseDisconnected` actions. Installs
-    /// the message sender on the global `DatabaseService`.
-    fn spawn_service_listener(cx: &mut Context<Self>) -> Task<()> {
-        let (action_sender, action_receiver) =
-            channel::unbounded::<database::DatabaseServiceMessage>();
-
-        cx.update_global::<database::DatabaseService, _>(
-            |db_service: &mut database::DatabaseService, _cx| {
-                db_service.set_action_sender(action_sender);
-            },
-        );
-
-        cx.spawn(async move |_weak_handle, cx| {
-            info!("DatabaseServiceMessage listener task started");
-            while let Ok(msg) = action_receiver.recv().await {
-                match msg {
-                    database::DatabaseServiceMessage::Connected(conn_msg) => {
-                        info!(
-                            "DatabaseServiceMessage::Connected received for connection_id: {}, database_name: {}",
-                            conn_msg.connection_id, conn_msg.database_name
-                        );
-                        _weak_handle.update(cx, |_, cx| {
-                            info!("Dispatching DatabaseConnected action to app");
-                            cx.dispatch_action(&DatabaseConnected::from(conn_msg));
-                        }).log_err();
-                    }
-                    database::DatabaseServiceMessage::Disconnected(disconn_msg) => {
-                        info!(
-                            "DatabaseServiceMessage::Disconnected received for connection_id: {}, database_name: {}",
-                            disconn_msg.connection_id, disconn_msg.database_name
-                        );
-                        _weak_handle.update(cx, |_, cx| {
-                            cx.dispatch_action(&DatabaseDisconnected::from(disconn_msg));
-                        }).log_err();
-                    }
-                }
-            }
-            info!("DatabaseServiceMessage listener task ended");
-        })
-    }
-
-    /// Close connections that have sat unused past their idle timeout. A
-    /// connection with uncommitted grid edits is kept open, and the service
-    /// itself skips one with a query running.
-    fn spawn_idle_disconnect(cx: &mut Context<Self>) -> Task<()> {
-        const SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
-        cx.spawn(async move |app, cx| {
-            loop {
-                cx.background_executor().timer(SWEEP_INTERVAL).await;
-                let Ok((db_service, default_timeout, keep)) = app.update(cx, |app, cx| {
-                    let default_timeout = AppSettings::global(cx)
-                        .settings
-                        .database
-                        .idle_disconnect_timeout();
-                    let keep = app.editor_panel.read(cx).connections_with_pending_edits(cx);
-                    (
-                        database::DatabaseService::global(cx).clone(),
-                        default_timeout,
-                        keep,
-                    )
-                }) else {
-                    break;
-                };
-                db_service
-                    .disconnect_idle_connections(default_timeout, &keep)
-                    .await;
-            }
-        })
-    }
-
-    /// Open the database files passed at launch and those the platform asks
-    /// the running app to open.
-    fn spawn_open_file_listener(window: &mut Window, cx: &mut Context<Self>) -> Task<()> {
-        let Some(requests) = cx
-            .try_global::<sqlite_file::OpenFileRequests>()
-            .map(|requests| requests.receiver.clone())
-        else {
-            return Task::ready(());
-        };
-        cx.spawn_in(window, async move |app, cx| {
-            while let Ok(paths) = requests.recv().await {
-                let opened = app.update_in(cx, |app, window, cx| {
-                    for path in &paths {
-                        app.open_database_file(path, window, cx);
-                    }
-                });
-                if opened.is_err() {
-                    break;
-                }
-            }
-        })
-    }
-
     /// Open the SQLite database at `path` in a new query tab: through its
     /// saved connection when there is one, otherwise through a temporary
     /// connection that can be saved later. Files are recognised by their
@@ -1115,34 +947,14 @@ impl BlancoApp {
         self.on_create_new_query_tab(&action, window, cx);
     }
 
-    /// Create the status-bar entity and the background task that folds
-    /// app-wide `ActivityMessage`s (reported through the global
-    /// `ActivityReporter`) into it.
-    fn spawn_activity_status(cx: &mut Context<Self>) -> (Entity<StatusBarState>, Task<()>) {
-        let status_bar = cx.new(|_| StatusBarState::default());
-        let (activity_sender, activity_receiver) = channel::unbounded::<ActivityMessage>();
-        cx.set_global(ActivityReporter::new(activity_sender));
-        let activity_task = cx.spawn({
-            let status_bar = status_bar.downgrade();
-            async move |_weak_handle, cx| {
-                while let Ok(message) = activity_receiver.recv().await {
-                    status_bar
-                        .update(cx, |state, cx| state.apply(message, cx))
-                        .log_err();
-                }
-            }
-        });
-        (status_bar, activity_task)
-    }
-
     /// Synchronously load the persisted query tabs from the app database. Blocks
     /// on the tokio runtime because the app cannot render until it knows which
     /// tabs to restore. Load failures degrade to an empty tab set.
-    fn load_saved_tabs(cx: &mut Context<Self>) -> Vec<app_database::QueryTabData> {
-        info!("Loading saved tabs from database");
+    fn load_saved_tabs(window_id: i64, cx: &mut Context<Self>) -> Vec<app_database::QueryTabData> {
+        info!("Loading saved tabs of window {window_id} from database");
         let app_database = AppDatabase::global(cx);
         gpui_tokio::Tokio::handle(cx).block_on(async {
-            match app_database.load_query_tabs().await {
+            match app_database.load_query_tabs(window_id).await {
                 Ok(tabs) => {
                     info!("Loaded {} tabs from database", tabs.len());
                     for tab in &tabs {
@@ -1290,51 +1102,124 @@ impl BlancoApp {
         }
     }
 
-    #[cfg(any(test, feature = "screenshots"))]
-    pub fn editor_panel(&self) -> &Entity<EditorPanel> {
+    pub(crate) fn editor_panel(&self) -> &Entity<EditorPanel> {
         &self.editor_panel
     }
 
-    /// Persist the current window geometry to the app settings database so it
-    /// can be restored on the next launch. Called on every resize/move, so the
-    /// database write is debounced to avoid hammering it during a drag.
+    #[cfg(test)]
+    pub(crate) fn window_id(&self) -> i64 {
+        self.window_id
+    }
+
+    pub(crate) fn sidebar(&self) -> &Entity<ConnectionsPanel> {
+        &self.sidebar
+    }
+
+    /// Show a tab moved here from another window.
+    pub(crate) fn adopt_tab(
+        &mut self,
+        tab: crate::editor::MovedTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.editor_panel
+            .update(cx, |panel, cx| panel.adopt_tab(tab, window, cx));
+    }
+
+    /// Whether the window may close now. Closing one of several windows
+    /// discards its tabs, so unsaved changes to their files are asked about
+    /// first. The last window closing quits, which keeps the tabs.
+    pub(crate) fn may_close_window(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.close_confirmed || crate::windows::count(cx) <= 1 {
+            return true;
+        }
+        let unsaved = self.editor_panel.read(cx).unsaved_file_names();
+        if unsaved.is_empty() {
+            return true;
+        }
+        let message = match unsaved.as_slice() {
+            [name] => format!("Your changes to {name} are lost if you close the window."),
+            names => format!(
+                "Your changes to {} files are lost if you close the window: {}.",
+                names.len(),
+                names.join(", ")
+            ),
+        };
+        let app = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let app = app.clone();
+            dialog
+                .title("Close the window without saving?")
+                .child(message.clone())
+                .footer(
+                    DialogFooter::new()
+                        .child(
+                            DialogClose::new().child(
+                                Button::new("close-window-cancel").label("Cancel").outline(),
+                            ),
+                        )
+                        .child(
+                            Button::new("close-window-discard")
+                                .danger()
+                                .label("Close Window")
+                                .on_click(move |_, window, cx| {
+                                    app.update(cx, |app, _| app.close_confirmed = true)
+                                        .log_err();
+                                    window.close_dialog(cx);
+                                    window.remove_window();
+                                }),
+                        ),
+                )
+        });
+        false
+    }
+
+    fn on_close_window(&mut self, _: &CloseWindow, window: &mut Window, cx: &mut Context<Self>) {
+        if self.may_close_window(window, cx) {
+            window.remove_window();
+        }
+    }
+
+    fn on_move_tab_to_new_window(
+        &mut self,
+        _: &MoveTabToNewWindow,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.editor_panel.update(cx, |panel, cx| {
+            let active = panel.active_tab_index();
+            panel.move_tab_to_new_window(active, cx);
+        });
+    }
+
+    /// Store the window's geometry and display so the next start reopens it
+    /// there. Called on every resize and move, so the write is debounced to
+    /// avoid hammering the database during a drag.
     fn persist_window_bounds(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (maximized, bounds) = match window.window_bounds() {
             gpui::WindowBounds::Maximized(bounds) => (true, bounds),
             gpui::WindowBounds::Fullscreen(bounds) => (true, bounds),
             gpui::WindowBounds::Windowed(bounds) => (false, bounds),
         };
-
-        let x = f32::from(bounds.origin.x);
-        let y = f32::from(bounds.origin.y);
-        let width = f32::from(bounds.size.width);
-        let height = f32::from(bounds.size.height);
-
-        cx.update_global::<AppSettings, _>(|app_settings, _| {
-            let window = &mut app_settings.settings.window;
-            window.x = Some(x);
-            window.y = Some(y);
-            window.width = Some(width);
-            window.height = Some(height);
-            window.maximized = maximized;
-        });
-
+        let geometry = app_database::WindowGeometry {
+            x: f32::from(bounds.origin.x),
+            y: f32::from(bounds.origin.y),
+            width: f32::from(bounds.size.width),
+            height: f32::from(bounds.size.height),
+            maximized,
+        };
+        let display_uuid = crate::windows::display_uuid(window, cx);
+        let window_id = self.window_id;
         let db = AppDatabase::global(cx).clone();
         self._save_window_bounds_task = cx.spawn(async move |_, cx| {
             cx.background_executor()
                 .timer(std::time::Duration::from_millis(500))
                 .await;
-            let values = [
-                ("window.x", x.to_string()),
-                ("window.y", y.to_string()),
-                ("window.width", width.to_string()),
-                ("window.height", height.to_string()),
-                ("window.maximized", maximized.to_string()),
-            ];
-            for (key, value) in values {
-                if let Err(e) = db.save_setting(key, &value, false).await {
-                    error!("Failed to save {}: {}", key, e);
-                }
+            if let Err(error) = db
+                .save_window_geometry(window_id, geometry, display_uuid)
+                .await
+            {
+                error!("Failed to save the window's geometry: {error}");
             }
         });
     }
@@ -1377,38 +1262,44 @@ impl BlancoApp {
         } else {
             px(28.)
         };
-        TitleBar::new().child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .w_full()
-                // macOS has no window controls after the toggle, so without
-                // this it touches the window edge instead of lining up with
-                // the cards below.
-                .when(cfg!(target_os = "macos"), |this| this.pr(PANEL_GAP))
-                .child(
-                    h_flex()
-                        .items_center()
-                        .gap_x_3()
-                        .child(
-                            svg()
-                                .h(logo_height)
-                                .w(logo_height * LOGO_ASPECT_RATIO)
-                                .text_color(window.text_style().color)
-                                .path("images/blanco.svg"),
-                        )
-                        .children(self.app_menu_bar.clone()),
-                )
-                .child(self.render_palette_trigger(window, cx))
-                .child(
-                    h_flex()
-                        .items_center()
-                        .gap_x_2()
-                        .children(self.render_update_button(cx))
-                        .child(self.render_sidebar_toggle(cx)),
-                ),
-        )
+        let app = cx.entity().downgrade();
+        TitleBar::new()
+            .on_close_window(move |_, window, cx| {
+                app.update(cx, |app, cx| app.on_close_window(&CloseWindow, window, cx))
+                    .log_err();
+            })
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .w_full()
+                    // macOS has no window controls after the toggle, so without
+                    // this it touches the window edge instead of lining up with
+                    // the cards below.
+                    .when(cfg!(target_os = "macos"), |this| this.pr(PANEL_GAP))
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_x_3()
+                            .child(
+                                svg()
+                                    .h(logo_height)
+                                    .w(logo_height * LOGO_ASPECT_RATIO)
+                                    .text_color(window.text_style().color)
+                                    .path("images/blanco.svg"),
+                            )
+                            .children(self.app_menu_bar.clone()),
+                    )
+                    .child(self.render_palette_trigger(window, cx))
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_x_2()
+                            .children(self.render_update_button(cx))
+                            .child(self.render_sidebar_toggle(cx)),
+                    ),
+            )
     }
 
     /// Looks like a search field but only opens the command palette, so the
@@ -2001,42 +1892,16 @@ impl BlancoApp {
         });
     }
 
-    fn on_database_connected(
-        &mut self,
-        action: &DatabaseConnected,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    /// Mark a connection as connected in this window's sidebar.
+    pub(crate) fn on_database_connected(&mut self, connection_id: i64, cx: &mut Context<Self>) {
         self.sidebar.update(cx, |sidebar, cx| {
-            // Mark the connection as connected and refresh the sidebar view
-            sidebar.validate_connection_as_connected(action.connection_id, cx);
-        });
-        self.status_bar.update(cx, |state, cx| {
-            state.flash(
-                ActivityResult::Ok(format!("connected to {}", action.database_name).into()),
-                cx,
-            );
+            sidebar.validate_connection_as_connected(connection_id, cx);
         });
     }
 
-    fn on_database_disconnected(
-        &mut self,
-        action: &DatabaseDisconnected,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn on_database_disconnected(&mut self, connection_id: i64, cx: &mut Context<Self>) {
         self.sidebar.update(cx, |sidebar, cx| {
-            sidebar.mark_connection_disconnected(action.connection_id, cx);
-        });
-        self.status_bar.update(cx, |state, cx| {
-            let result = if action.idle {
-                ActivityResult::Ok(
-                    format!("closed idle connection {}", action.database_name).into(),
-                )
-            } else {
-                ActivityResult::Err(format!("disconnected from {}", action.database_name).into())
-            };
-            state.flash(result, cx);
+            sidebar.mark_connection_disconnected(connection_id, cx);
         });
     }
 
@@ -2389,7 +2254,6 @@ impl BlancoApp {
         let content_for_focus = modal_content.clone();
 
         let sidebar = self.sidebar.clone();
-        let editor_panel = self.editor_panel.clone();
         window.open_dialog(cx, move |modal, _window, _cx| {
             let content_clone = modal_content.clone();
 
@@ -2429,13 +2293,11 @@ impl BlancoApp {
                 .on_ok({
                     let content = content_clone;
                     let sidebar = sidebar.clone();
-                    let editor_panel = editor_panel.clone();
                     move |_, window, cx| {
                         if let Some(conn_data) = content.read(cx).get_connection_data(cx) {
                             let app_database = AppDatabase::global(cx).clone();
                             let db_service = database::DatabaseService::global(cx).clone();
                             let sidebar = sidebar.clone();
-                            let editor_panel = editor_panel.clone();
                             window
                                 .spawn(cx, async move |cx| {
                                     let result: anyhow::Result<()> = async {
@@ -2483,7 +2345,7 @@ impl BlancoApp {
                                             if let Some(temporary_id) = replaces_temporary {
                                                 panel.close_temporary_connection(temporary_id, cx);
                                             }
-                                            panel.reload_connections(cx);
+                                            crate::windows::reload_connections(cx);
                                         })?;
                                         if let Some(temporary_id) = replaces_temporary {
                                             let context = ConnectionContext {
@@ -2496,13 +2358,12 @@ impl BlancoApp {
                                                     connection_data.environment_type,
                                                 ),
                                             };
-                                            editor_panel.update_in(cx, |panel, window, cx| {
-                                                panel.move_tabs_to_connection(
+                                            cx.update(|_, cx| {
+                                                crate::windows::move_tabs_to_connection(
                                                     temporary_id,
-                                                    &context,
-                                                    window,
+                                                    context,
                                                     cx,
-                                                );
+                                                )
                                             })?;
                                         }
                                         Ok(())
@@ -2606,7 +2467,6 @@ impl BlancoApp {
         let content_for_focus = modal_content.clone();
 
         let connection_data_clone = connection_data.clone();
-        let sidebar = self.sidebar.clone();
 
         window.open_dialog(cx, move |modal, _window, _cx| {
             let content_clone = modal_content.clone();
@@ -2647,7 +2507,6 @@ impl BlancoApp {
                 .on_ok({
                     let content = content_clone;
                     let conn_data_ref = connection_data_clone.clone();
-                    let sidebar = sidebar.clone();
                     move |_, window, cx| {
                         if let Some(mut conn_data) = content.read(cx).get_connection_data(cx) {
                             let original_id = conn_data_ref.id;
@@ -2655,7 +2514,6 @@ impl BlancoApp {
 
                             let app_database = AppDatabase::global(cx).clone();
                             let db_service = database::DatabaseService::global(cx).clone();
-                            let sidebar = sidebar.clone();
                             window
                                 .spawn(cx, async move |cx| {
                                     let result: anyhow::Result<()> = async {
@@ -2678,9 +2536,7 @@ impl BlancoApp {
                                                 .add_connection_config(config.without_secrets())
                                                 .await;
                                         }
-                                        sidebar.update_in(cx, |panel, _window, cx| {
-                                            panel.reload_connections(cx);
-                                        })?;
+                                        cx.update(|_, cx| crate::windows::reload_connections(cx))?;
                                         Ok(())
                                     }
                                     .await;
@@ -2928,6 +2784,8 @@ impl Render for BlancoApp {
             .flex()
             .flex_col()
             .on_action(cx.listener(Self::on_quit))
+            .on_action(cx.listener(Self::on_close_window))
+            .on_action(cx.listener(Self::on_move_tab_to_new_window))
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::on_settings))
             .on_action(cx.listener(Self::on_open_terminal))
@@ -2944,8 +2802,6 @@ impl Render for BlancoApp {
             .on_action(cx.listener(Self::on_commit_changes))
             .on_action(cx.listener(Self::on_rollback_changes))
             .on_action(cx.listener(Self::on_rename_tab))
-            .on_action(cx.listener(Self::on_database_connected))
-            .on_action(cx.listener(Self::on_database_disconnected))
             .on_action(cx.listener(Self::on_open_snippet_editor))
             .on_action(cx.listener(Self::on_refresh_snippets))
             .on_action(cx.listener(Self::on_activate_editor_tab))
@@ -3074,7 +2930,8 @@ impl Render for BlancoApp {
 /// Width over height of `images/blanco.svg` (2304x512).
 const LOGO_ASPECT_RATIO: f32 = 4.5;
 
-fn init_menus(cx: &mut App) {
+/// Bind the app's keys and install its menus. Called once at startup.
+pub(crate) fn init_menus(cx: &mut App) {
     // User-customizable shortcuts, resolved from settings (defaults overlaid
     // with any user overrides).
     let settings = AppSettings::global(cx).settings.clone();
@@ -3085,7 +2942,7 @@ fn init_menus(cx: &mut App) {
         #[cfg(target_os = "macos")]
         gpui::KeyBinding::new("cmd-q", Quit, None),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("alt-f4", Quit, None),
+        gpui::KeyBinding::new("alt-f4", CloseWindow, None),
     ]);
 
     // Results-table cell editing. "DataTable" is the table's own key context;
@@ -3180,6 +3037,8 @@ fn build_menu() -> Vec<Menu> {
     // macOS always shows the first menu as the application menu, titled with
     // the app's name, and that is where Settings and Quit belong there.
     let mut file_items = vec![
+        MenuItem::action("New Window", NewWindow),
+        MenuItem::separator(),
         MenuItem::submenu(Menu {
             name: "Open".into(),
             items: vec![MenuItem::action("SQLite Database…", OpenSqliteFile)],
@@ -3193,6 +3052,8 @@ fn build_menu() -> Vec<Menu> {
         MenuItem::action("Export Connections…", ExportConnections),
         MenuItem::action("Toggle Terminal", OpenTerminal),
         MenuItem::action("New Snippet", NewSnippet),
+        MenuItem::separator(),
+        MenuItem::action("Close Window", CloseWindow),
     ];
     let mut menus = Vec::new();
     if cfg!(target_os = "macos") {
@@ -3376,7 +3237,7 @@ mod tests {
     #[gpui::test]
     async fn test_mcp_write_confirmation_notifies_when_in_background(cx: &mut TestAppContext) {
         let harness = FullAppHarness::new(cx);
-        cx.update(|cx| cx.set_app_identity(crate::APP_ID, "Blanco"));
+        cx.update(|cx| cx.set_app_identity(crate::windows::APP_ID, "Blanco"));
         let mut cx = VisualTestContext::from_window(harness.window_handle.into(), cx);
         let app = harness.app;
         cx.run_until_parked();
