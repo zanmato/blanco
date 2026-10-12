@@ -325,6 +325,8 @@ impl Connection for SqliteConnection {
                     character_maximum_length: None, // SQLite doesn't provide this info in PRAGMA
                     foreign_key: foreign_keys.get(&column_name).cloned(),
                     comment: None,
+                    numeric_precision: None,
+                    numeric_scale: None,
                 };
                 columns.push(column_info);
             }

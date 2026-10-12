@@ -297,6 +297,42 @@ pub struct ColumnInfo {
     /// The comment stored on the column, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
+    /// Precision and scale of exact numeric types (`numeric(10, 2)`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub numeric_precision: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub numeric_scale: Option<i32>,
+}
+
+impl ColumnInfo {
+    /// The type with its length, or precision and scale, when the type name
+    /// does not carry them already: `character varying(255)`,
+    /// `numeric(10,2)`.
+    pub fn display_type(&self) -> String {
+        if self.data_type.contains('(') {
+            return self.data_type.clone();
+        }
+        let exact_numeric = matches!(
+            self.data_type.to_ascii_lowercase().as_str(),
+            "numeric" | "decimal"
+        );
+        match (
+            self.character_maximum_length,
+            self.numeric_precision.filter(|_| exact_numeric),
+            self.numeric_scale,
+        ) {
+            // MySQL reports 4294967295 for LONGTEXT and the like; a length
+            // that large is not one anybody declared.
+            (Some(length), _, _) if length > 0 && length < 1 << 30 => {
+                format!("{}({length})", self.data_type)
+            }
+            (_, Some(precision), Some(scale)) if scale > 0 => {
+                format!("{}({precision},{scale})", self.data_type)
+            }
+            (_, Some(precision), _) => format!("{}({precision})", self.data_type),
+            _ => self.data_type.clone(),
+        }
+    }
 }
 
 /// Information about a table in the database schema
@@ -801,7 +837,7 @@ pub trait ConnectionFactory: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use super::ForeignKeyInfo;
+    use super::{ColumnInfo, ForeignKeyInfo};
 
     #[test]
     fn foreign_key_from_parts_requires_table_and_column() {
@@ -822,5 +858,64 @@ mod tests {
             ForeignKeyInfo::from_parts(None::<&str>, Some("id"), None),
             None
         );
+    }
+
+    fn column(data_type: &str) -> ColumnInfo {
+        ColumnInfo {
+            name: "c".to_string(),
+            data_type: data_type.to_string(),
+            is_nullable: true,
+            is_primary_key: false,
+            default_value: None,
+            character_maximum_length: None,
+            foreign_key: None,
+            comment: None,
+            numeric_precision: None,
+            numeric_scale: None,
+        }
+    }
+
+    #[test]
+    fn display_type_adds_length_precision_and_scale() {
+        let varchar = ColumnInfo {
+            character_maximum_length: Some(255),
+            ..column("character varying")
+        };
+        assert_eq!(varchar.display_type(), "character varying(255)");
+
+        let money = ColumnInfo {
+            numeric_precision: Some(10),
+            numeric_scale: Some(2),
+            ..column("numeric")
+        };
+        assert_eq!(money.display_type(), "numeric(10,2)");
+
+        let whole = ColumnInfo {
+            numeric_precision: Some(12),
+            numeric_scale: Some(0),
+            ..column("decimal")
+        };
+        assert_eq!(whole.display_type(), "decimal(12)");
+
+        // Integers report a precision too, which nobody declared.
+        let int = ColumnInfo {
+            numeric_precision: Some(32),
+            numeric_scale: Some(0),
+            ..column("integer")
+        };
+        assert_eq!(int.display_type(), "integer");
+
+        // Types that already carry their arguments are left alone, and
+        // MySQL's LONGTEXT length is not shown.
+        let declared = ColumnInfo {
+            character_maximum_length: Some(11),
+            ..column("int(11)")
+        };
+        assert_eq!(declared.display_type(), "int(11)");
+        let longtext = ColumnInfo {
+            character_maximum_length: Some(i32::MAX),
+            ..column("longtext")
+        };
+        assert_eq!(longtext.display_type(), "longtext");
     }
 }

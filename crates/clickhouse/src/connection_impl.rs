@@ -298,6 +298,8 @@ impl Connection for ClickhouseConnection {
                     character_maximum_length: None,
                     foreign_key: None,
                     comment,
+                    numeric_precision: None,
+                    numeric_scale: None,
                 }
             })
             .collect())

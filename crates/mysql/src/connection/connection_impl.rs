@@ -752,7 +752,9 @@ impl Connection for MysqlConnection {
                 fk.REFERENCED_TABLE_NAME AS fk_table,
                 fk.REFERENCED_COLUMN_NAME AS fk_column,
                 fk.CONSTRAINT_NAME AS fk_constraint,
-                NULLIF(c.COLUMN_COMMENT, '') AS column_comment
+                NULLIF(c.COLUMN_COMMENT, '') AS column_comment,
+                CAST(c.NUMERIC_PRECISION AS SIGNED) AS numeric_precision,
+                CAST(c.NUMERIC_SCALE AS SIGNED) AS numeric_scale
             FROM INFORMATION_SCHEMA.COLUMNS c
             LEFT JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE fk
                 ON fk.TABLE_SCHEMA = c.TABLE_SCHEMA
@@ -782,6 +784,16 @@ impl Connection for MysqlConnection {
             let fk_column: Option<String> = row.try_get(7).ok();
             let fk_constraint: Option<String> = row.try_get(8).ok();
             let comment: Option<String> = row.try_get(9).ok().flatten();
+            let numeric_precision = row
+                .try_get::<Option<i64>, _>(10)
+                .ok()
+                .flatten()
+                .and_then(|v| i32::try_from(v).ok());
+            let numeric_scale = row
+                .try_get::<Option<i64>, _>(11)
+                .ok()
+                .flatten()
+                .and_then(|v| i32::try_from(v).ok());
 
             let foreign_key = ForeignKeyInfo::from_parts(fk_table, fk_column, fk_constraint);
 
@@ -796,6 +808,8 @@ impl Connection for MysqlConnection {
                 character_maximum_length: max_length,
                 foreign_key,
                 comment,
+                numeric_precision,
+                numeric_scale,
             });
         }
 

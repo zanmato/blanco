@@ -1,18 +1,20 @@
+use std::cmp::Ordering;
+
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
-    Styled, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
+    Styled, Subscription, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme, Sizable as _, StyledExt, WindowExt as _,
+    ActiveTheme, Icon, IconName, Sizable as _, StyledExt, WindowExt as _,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     dialog::{DialogAction, DialogClose, DialogFooter},
     h_flex,
-    input::{Input, InputState},
+    input::{Input, InputEvent, InputState},
     menu::{PopupMenu, PopupMenuItem},
     notification::NotificationType,
     scroll::ScrollableElement,
-    table::{Column, DataTable, TableDelegate, TableState},
+    table::{Column, ColumnSort, DataTable, TableDelegate, TableState},
     v_flex,
 };
 
@@ -42,6 +44,9 @@ pub struct TableStructureTab {
     ddl_loaded: bool,
     ddl_loading: bool,
     ddl_error: Option<String>,
+    /// Filters the columns grid by name.
+    column_search: Entity<InputState>,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl TableStructureTab {
@@ -58,10 +63,24 @@ impl TableStructureTab {
         let highlight_theme = cx.theme().highlight_theme.clone();
         let ddl_log = cx.new(|cx| SqlView::new(1, highlight_theme, "sql", cx));
 
+        let indexes = order_indexes(indexes, &columns);
         let tab = cx.entity().downgrade();
         let columns_table_state =
             Self::columns_table(columns.clone(), false, tab.clone(), window, cx);
         let indexes_table_state = Self::indexes_table(indexes.clone(), false, tab, window, cx);
+
+        let column_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search columns"));
+        let search_subscription =
+            cx.subscribe(&column_search, |this, search, event: &InputEvent, cx| {
+                if let InputEvent::Change = event {
+                    let filter = search.read(cx).value().to_string();
+                    this.columns_table_state.update(cx, |table, cx| {
+                        table.delegate_mut().set_filter(filter);
+                        table.clear_selection(cx);
+                        cx.notify();
+                    });
+                }
+            });
 
         Self {
             title,
@@ -80,6 +99,8 @@ impl TableStructureTab {
             ddl_loaded: false,
             ddl_loading: false,
             ddl_error: None,
+            column_search,
+            _subscriptions: vec![search_subscription],
         }
     }
 
@@ -256,9 +277,22 @@ impl TableStructureTab {
         cx: &mut Context<Self>,
     ) {
         let tab = cx.entity().downgrade();
+        // Keep the search and sort the user had across a reload.
+        let (filter, sort) = {
+            let delegate = self.columns_table_state.read(cx).delegate();
+            (delegate.filter.clone(), delegate.sort)
+        };
         self.columns = columns.clone();
         self.columns_table_state =
             Self::columns_table(columns, self.can_edit_structure(), tab, window, cx);
+        self.columns_table_state.update(cx, |table, cx| {
+            let delegate = table.delegate_mut();
+            delegate.set_filter(filter);
+            if let Some((col_ix, sort)) = sort {
+                delegate.set_sort(col_ix, sort);
+            }
+            table.refresh(cx);
+        });
         cx.notify();
     }
 
@@ -269,6 +303,7 @@ impl TableStructureTab {
         cx: &mut Context<Self>,
     ) {
         let tab = cx.entity().downgrade();
+        let indexes = order_indexes(indexes, &self.columns);
         self.indexes = indexes.clone();
         self.indexes_table_state =
             Self::indexes_table(indexes, self.can_edit_structure(), tab, window, cx);
@@ -905,11 +940,27 @@ impl Render for TableStructureTab {
                                     .min_h(px(150.))
                                     .gap_2()
                                     .child(
-                                        div()
-                                            .text_lg()
-                                            .font_semibold()
-                                            .text_color(theme.foreground)
-                                            .child("Columns"),
+                                        h_flex()
+                                            .justify_between()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .text_lg()
+                                                    .font_semibold()
+                                                    .text_color(theme.foreground)
+                                                    .child("Columns"),
+                                            )
+                                            .child(
+                                                Input::new(&self.column_search)
+                                                    .small()
+                                                    .w(px(220.))
+                                                    .cleanable(true)
+                                                    .prefix(
+                                                        Icon::new(IconName::Search)
+                                                            .small()
+                                                            .text_color(theme.muted_foreground),
+                                                    ),
+                                            ),
                                     )
                                     .child(
                                         div()
@@ -999,6 +1050,10 @@ impl Render for TableStructureTab {
 #[derive(Clone)]
 pub struct ColumnsTableDelegate {
     columns: Vec<ColumnInfo>,
+    /// Indices into `columns` in display order, after the search and sort.
+    rows: Vec<usize>,
+    filter: String,
+    sort: Option<(usize, ColumnSort)>,
     column_defs: Vec<Column>,
     editable: bool,
     tab: WeakEntity<TableStructureTab>,
@@ -1048,13 +1103,127 @@ impl ColumnsTableDelegate {
             },
         ];
 
+        let column_defs = column_defs.into_iter().map(Column::sortable).collect();
+        let rows = (0..columns.len()).collect();
         Self {
             columns,
+            rows,
+            filter: String::new(),
+            sort: None,
             column_defs,
             editable,
             tab,
         }
     }
+
+    fn set_filter(&mut self, filter: String) {
+        self.filter = filter;
+        self.rows = column_rows(&self.columns, &self.filter, self.sort);
+    }
+
+    fn set_sort(&mut self, col_ix: usize, sort: ColumnSort) {
+        // The table asks for column definitions again on refresh, so they
+        // carry the sort state.
+        for (ix, def) in self.column_defs.iter_mut().enumerate() {
+            *def = def.clone().sort(if ix == col_ix {
+                sort
+            } else {
+                ColumnSort::Default
+            });
+        }
+        self.sort = (sort != ColumnSort::Default).then_some((col_ix, sort));
+        self.rows = column_rows(&self.columns, &self.filter, self.sort);
+    }
+}
+
+/// The text a cell of the columns grid shows. `ordinal` is the column's
+/// position in the table, which the `#` column keeps under any sort.
+fn column_cell(col: &ColumnInfo, ordinal: usize, col_ix: usize) -> String {
+    match col_ix {
+        0 => (ordinal + 1).to_string(),
+        1 => col.name.clone(),
+        2 => col.display_type(),
+        3 => if col.is_nullable { "Yes" } else { "No" }.to_string(),
+        4 => col.default_value.clone().unwrap_or_default(),
+        5 => col
+            .foreign_key
+            .as_ref()
+            .map(|fk| format!("{}({})", fk.foreign_table_name, fk.foreign_column_name))
+            .unwrap_or_default(),
+        6 => col.comment.clone().unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+/// The columns grid's rows: indices into `columns` whose name contains
+/// `filter` (ignoring case), ordered by `sort`. Without a sort, or between
+/// equal values, rows keep the table's column order.
+fn column_rows(
+    columns: &[ColumnInfo],
+    filter: &str,
+    sort: Option<(usize, ColumnSort)>,
+) -> Vec<usize> {
+    let filter = filter.trim().to_lowercase();
+    let mut rows: Vec<usize> = (0..columns.len())
+        .filter(|&ix| filter.is_empty() || columns[ix].name.to_lowercase().contains(&filter))
+        .collect();
+    let Some((col_ix, sort)) = sort else {
+        return rows;
+    };
+    let compare = |a: &usize, b: &usize| match col_ix {
+        0 => a.cmp(b),
+        _ => compare_text(
+            &column_cell(&columns[*a], *a, col_ix),
+            &column_cell(&columns[*b], *b, col_ix),
+        ),
+    };
+    match sort {
+        ColumnSort::Ascending => rows.sort_by(compare),
+        ColumnSort::Descending => rows.sort_by(|a, b| compare(b, a)),
+        ColumnSort::Default => {}
+    }
+    rows
+}
+
+/// Case-insensitive, falling back to the exact text so the order is total.
+fn compare_text(a: &str, b: &str) -> Ordering {
+    a.to_lowercase()
+        .cmp(&b.to_lowercase())
+        .then_with(|| a.cmp(b))
+}
+
+/// The indexes grid's order: the primary key first, then the rest by name.
+/// Backends return indexes in whatever order their catalog yields, which can
+/// change between reloads.
+fn order_indexes(mut indexes: Vec<IndexInfo>, columns: &[ColumnInfo]) -> Vec<IndexInfo> {
+    let mut primary_key: Vec<&str> = columns
+        .iter()
+        .filter(|col| col.is_primary_key)
+        .map(|col| col.name.as_str())
+        .collect();
+    primary_key.sort_unstable();
+    // Named like a key by its backend (MySQL `PRIMARY`, Postgres `<table>_pkey`,
+    // SQL Server `PK__…`) ranks before a unique index that merely covers the
+    // key's columns, so a duplicate unique index never takes the key's place.
+    let rank = |index: &IndexInfo| {
+        let name = index.name.to_ascii_lowercase();
+        let covers_key = index.is_unique && !primary_key.is_empty() && {
+            let mut names: Vec<&str> = index.column_names.iter().map(String::as_str).collect();
+            names.sort_unstable();
+            names == primary_key
+        };
+        if name == "primary" || (covers_key && (name.ends_with("_pkey") || name.starts_with("pk_")))
+        {
+            0
+        } else if covers_key {
+            1
+        } else {
+            2
+        }
+    };
+    indexes
+        .sort_by_cached_key(|index| (rank(index), index.name.to_lowercase(), index.name.clone()));
+    indexes
 }
 
 impl TableDelegate for ColumnsTableDelegate {
@@ -1065,9 +1234,14 @@ impl TableDelegate for ColumnsTableDelegate {
         _window: &mut Window,
         _cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
-        if !self.editable || row_ix >= self.columns.len() {
+        if !self.editable {
             return menu;
         }
+        // Actions address the tab's column list, not the filtered and sorted
+        // row the menu was opened on.
+        let Some(&column_ix) = self.rows.get(row_ix) else {
+            return menu;
+        };
         let tab = self.tab.clone();
         let item = |label: &'static str,
                     action: fn(
@@ -1078,7 +1252,7 @@ impl TableDelegate for ColumnsTableDelegate {
         )| {
             let tab = tab.clone();
             PopupMenuItem::new(label).on_click(move |_, window, cx| {
-                tab.update(cx, |tab, cx| action(tab, row_ix, window, cx))
+                tab.update(cx, |tab, cx| action(tab, column_ix, window, cx))
                     .log_err();
             })
         };
@@ -1098,7 +1272,17 @@ impl TableDelegate for ColumnsTableDelegate {
     }
 
     fn rows_count(&self, _: &App) -> usize {
-        self.columns.len()
+        self.rows.len()
+    }
+
+    fn perform_sort(
+        &mut self,
+        col_ix: usize,
+        sort: ColumnSort,
+        _window: &mut Window,
+        _cx: &mut Context<TableState<Self>>,
+    ) {
+        self.set_sort(col_ix, sort);
     }
 
     fn column(&self, col_ix: usize, _: &App) -> Column {
@@ -1129,21 +1313,11 @@ impl TableDelegate for ColumnsTableDelegate {
         _window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let col = &self.columns[row_ix];
-        let value = match col_ix {
-            0 => (row_ix + 1).to_string(),
-            1 => col.name.clone(),
-            2 => col.data_type.clone(),
-            3 => if col.is_nullable { "Yes" } else { "No" }.to_string(),
-            4 => col.default_value.clone().unwrap_or_default(),
-            5 => col
-                .foreign_key
-                .as_ref()
-                .map(|fk| format!("{}({})", fk.foreign_table_name, fk.foreign_column_name))
-                .unwrap_or_default(),
-            6 => col.comment.clone().unwrap_or_default(),
-            _ => String::new(),
-        };
+        let value = self
+            .rows
+            .get(row_ix)
+            .map(|&ix| column_cell(&self.columns[ix], ix, col_ix))
+            .unwrap_or_default();
 
         div()
             .h_full()
@@ -1289,5 +1463,140 @@ impl TableDelegate for IndexesTableDelegate {
             .text_size(px(12.))
             .text_color(cx.theme().foreground)
             .child(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{column_rows, order_indexes};
+    use blanco_core::{ColumnInfo, IndexInfo};
+    use gpui_component::table::ColumnSort;
+
+    fn column(name: &str, data_type: &str, is_primary_key: bool) -> ColumnInfo {
+        ColumnInfo {
+            name: name.to_string(),
+            data_type: data_type.to_string(),
+            is_nullable: !is_primary_key,
+            is_primary_key,
+            default_value: None,
+            character_maximum_length: None,
+            foreign_key: None,
+            comment: None,
+            numeric_precision: None,
+            numeric_scale: None,
+        }
+    }
+
+    fn index(name: &str, is_unique: bool, columns: &[&str]) -> IndexInfo {
+        IndexInfo {
+            name: name.to_string(),
+            algorithm: "btree".to_string(),
+            is_unique,
+            column_names: columns.iter().map(|c| c.to_string()).collect(),
+            condition: None,
+            comment: None,
+        }
+    }
+
+    fn columns() -> Vec<ColumnInfo> {
+        vec![
+            column("id", "integer", true),
+            column("Email", "text", false),
+            column("created_at", "timestamp", false),
+            column("email_verified", "boolean", false),
+        ]
+    }
+
+    #[test]
+    fn column_rows_sort_and_restore_table_order() {
+        let columns = columns();
+        assert_eq!(column_rows(&columns, "", None), vec![0, 1, 2, 3]);
+        // Name ignores case.
+        assert_eq!(
+            column_rows(&columns, "", Some((1, ColumnSort::Ascending))),
+            vec![2, 1, 3, 0]
+        );
+        assert_eq!(
+            column_rows(&columns, "", Some((1, ColumnSort::Descending))),
+            vec![0, 3, 1, 2]
+        );
+        // Type.
+        assert_eq!(
+            column_rows(&columns, "", Some((2, ColumnSort::Ascending))),
+            vec![3, 0, 1, 2]
+        );
+        // The `#` column sorts by position, not as text.
+        let many: Vec<ColumnInfo> = (0..12)
+            .map(|ix| column(&format!("c{ix}"), "text", false))
+            .collect();
+        assert_eq!(
+            column_rows(&many, "", Some((0, ColumnSort::Descending)))[..3],
+            [11, 10, 9]
+        );
+        assert_eq!(
+            column_rows(&columns, "", Some((1, ColumnSort::Default))),
+            vec![0, 1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn column_rows_filter_names_ignoring_case() {
+        let columns = columns();
+        assert_eq!(column_rows(&columns, "EMAIL", None), vec![1, 3]);
+        assert_eq!(column_rows(&columns, "  at ", None), vec![2]);
+        assert_eq!(
+            column_rows(&columns, "email", Some((1, ColumnSort::Descending))),
+            vec![3, 1]
+        );
+        assert!(column_rows(&columns, "missing", None).is_empty());
+    }
+
+    #[test]
+    fn order_indexes_puts_primary_key_first() {
+        let names = |indexes: Vec<IndexInfo>| {
+            indexes
+                .into_iter()
+                .map(|index| index.name)
+                .collect::<Vec<_>>()
+        };
+        let columns = columns();
+
+        // Postgres: the key is named `<table>_pkey`; a unique index over the
+        // same column follows it, and the rest go by name.
+        let indexes = vec![
+            index("users_email_key", true, &["Email"]),
+            index("a_id_unique", true, &["id"]),
+            index("users_pkey", true, &["id"]),
+            index("Created_idx", false, &["created_at"]),
+        ];
+        assert_eq!(
+            names(order_indexes(indexes, &columns)),
+            [
+                "users_pkey",
+                "a_id_unique",
+                "Created_idx",
+                "users_email_key"
+            ]
+        );
+
+        // MySQL names the key PRIMARY.
+        let indexes = vec![
+            index("email", true, &["Email"]),
+            index("PRIMARY", true, &["id"]),
+        ];
+        assert_eq!(
+            names(order_indexes(indexes, &columns)),
+            ["PRIMARY", "email"]
+        );
+
+        // SQLite's key index has a generated name; it is found by its columns.
+        let indexes = vec![
+            index("idx_email", false, &["Email"]),
+            index("sqlite_autoindex_users_1", true, &["id"]),
+        ];
+        assert_eq!(
+            names(order_indexes(indexes, &columns)),
+            ["sqlite_autoindex_users_1", "idx_email"]
+        );
     }
 }

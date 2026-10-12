@@ -649,6 +649,8 @@ mod tests {
                     character_maximum_length: None,
                     foreign_key: None,
                     comment: None,
+                    numeric_precision: None,
+                    numeric_scale: None,
                 },
                 ColumnInfo {
                     name: "name".to_string(),
@@ -659,6 +661,8 @@ mod tests {
                     character_maximum_length: None,
                     foreign_key: None,
                     comment: None,
+                    numeric_precision: None,
+                    numeric_scale: None,
                 },
             ],
             columns: vec![
@@ -717,6 +721,8 @@ mod tests {
             character_maximum_length: None,
             foreign_key: None,
             comment: None,
+            numeric_precision: None,
+            numeric_scale: None,
         }
     }
 

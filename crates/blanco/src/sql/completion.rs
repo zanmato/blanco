@@ -2312,6 +2312,8 @@ mod tests {
             character_maximum_length: None,
             foreign_key: None,
             comment: None,
+            numeric_precision: None,
+            numeric_scale: None,
         }
     }
 

@@ -559,4 +559,59 @@ mod tests {
             .await?;
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_postgres_columns_report_length_precision_and_scale()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::PostgresConnection;
+
+        let test_name = "test_postgres_columns_report_length_precision_and_scale";
+        let conn = PostgresConnection::from_connection_string(&default_connection_string())?;
+        if let Err(e) = conn.ping().await {
+            return handle_unreachable(test_name, &e);
+        }
+
+        conn.execute_query(
+            "DROP TABLE IF EXISTS column_type_display_test",
+            Some("blanco"),
+            None,
+        )
+        .await?;
+        conn.execute_query(
+            "CREATE TABLE column_type_display_test (
+                id INTEGER PRIMARY KEY,
+                price NUMERIC(10, 2),
+                quantity DECIMAL(12),
+                code VARCHAR(16),
+                note TEXT
+            )",
+            Some("blanco"),
+            None,
+        )
+        .await?;
+
+        let columns = conn
+            .get_columns_for_table("column_type_display_test", Some("public"))
+            .await?;
+        let types: Vec<(String, String)> = columns
+            .iter()
+            .map(|col| (col.name.clone(), col.display_type()))
+            .collect();
+
+        conn.execute_query("DROP TABLE column_type_display_test", Some("blanco"), None)
+            .await?;
+
+        let type_of = |name: &str| {
+            types
+                .iter()
+                .find(|(column, _)| column == name)
+                .map(|(_, data_type)| data_type.as_str())
+        };
+        assert_eq!(type_of("id"), Some("integer"));
+        assert_eq!(type_of("price"), Some("numeric(10,2)"));
+        assert_eq!(type_of("quantity"), Some("numeric(12)"));
+        assert_eq!(type_of("code"), Some("character varying(16)"));
+        assert_eq!(type_of("note"), Some("text"));
+        Ok(())
+    }
 }
