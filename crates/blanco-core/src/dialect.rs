@@ -33,6 +33,27 @@ pub struct ValuesQueryStyle {
     pub row_keyword: bool,
 }
 
+/// The family of native command line tools (dump, restore, shell) that can
+/// back up and restore a backend's databases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ClientTools {
+    /// `pg_dump`, `pg_restore` and `psql`.
+    PostgreSql,
+    /// `mysqldump` and `mysql`, or their `mariadb-dump` and `mariadb` names.
+    MySql,
+}
+
+impl ClientTools {
+    /// A query whose single value is the server's version string, in the
+    /// form the tools print theirs (`16.4 (Debian ...)`, `10.11.6-MariaDB`).
+    pub fn server_version_query(&self) -> &'static str {
+        match self {
+            ClientTools::PostgreSql => "SHOW server_version",
+            ClientTools::MySql => "SELECT VERSION()",
+        }
+    }
+}
+
 impl DatabaseType {
     /// Every supported backend, in the order the connection dialog lists
     /// them. Index into it with [`DatabaseType::index`].
@@ -131,6 +152,19 @@ impl Dialect {
     /// tab.
     pub fn supports_column_ddl(&self) -> bool {
         self.supports_sql()
+    }
+
+    /// The native client tools that back up and restore this backend, `None`
+    /// where Blanco does not drive them.
+    pub fn client_tools(&self) -> Option<ClientTools> {
+        match self.0 {
+            DatabaseType::PostgreSQL => Some(ClientTools::PostgreSql),
+            DatabaseType::MySQL => Some(ClientTools::MySql),
+            DatabaseType::SQLite
+            | DatabaseType::ClickHouse
+            | DatabaseType::MsSql
+            | DatabaseType::Redis => None,
+        }
     }
 
     // ----- sidebar / editor facts -----
@@ -233,6 +267,29 @@ impl Dialect {
             | DatabaseType::SQLite
             | DatabaseType::ClickHouse
             | DatabaseType::Redis => None,
+        }
+    }
+
+    /// Whether `schema` holds the server's own catalog rather than user
+    /// objects, such as PostgreSQL's `pg_catalog`.
+    pub fn is_system_schema(&self, schema: &str) -> bool {
+        match self.0 {
+            DatabaseType::PostgreSQL => {
+                schema == "information_schema"
+                    || schema == "pg_catalog"
+                    || schema.starts_with("pg_toast")
+                    || schema.starts_with("pg_temp")
+            }
+            DatabaseType::MsSql => schema == "sys" || schema == "INFORMATION_SCHEMA",
+            DatabaseType::MySQL => matches!(
+                schema,
+                "information_schema" | "mysql" | "performance_schema" | "sys"
+            ),
+            DatabaseType::ClickHouse => matches!(
+                schema,
+                "system" | "information_schema" | "INFORMATION_SCHEMA"
+            ),
+            DatabaseType::SQLite | DatabaseType::Redis => false,
         }
     }
 
@@ -478,6 +535,24 @@ mod tests {
 
     fn dialect(db_type: DatabaseType) -> Dialect {
         db_type.dialect()
+    }
+
+    #[test]
+    fn client_tools_and_system_schemas() {
+        assert_eq!(
+            dialect(DatabaseType::PostgreSQL).client_tools(),
+            Some(ClientTools::PostgreSql)
+        );
+        assert_eq!(
+            dialect(DatabaseType::MySQL).client_tools(),
+            Some(ClientTools::MySql)
+        );
+        assert_eq!(dialect(DatabaseType::SQLite).client_tools(), None);
+        assert_eq!(dialect(DatabaseType::Redis).client_tools(), None);
+        let postgres = dialect(DatabaseType::PostgreSQL);
+        assert!(postgres.is_system_schema("pg_catalog"));
+        assert!(postgres.is_system_schema("pg_toast_temp_1"));
+        assert!(!postgres.is_system_schema("public"));
     }
 
     #[test]

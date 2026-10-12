@@ -48,6 +48,17 @@ type SharedActionSender = Arc<StdMutex<Option<channel::Sender<DatabaseServiceMes
 pub type DatabaseConfigId = i64; // Connection ID from app_database
 pub type ConnectionId = (DatabaseConfigId, String); // (config_id, database_name)
 
+/// How an external client tool reaches one database. Holds the password, so
+/// it is built right before the tool starts and dropped with it.
+#[derive(Clone, Debug)]
+pub struct ClientToolEndpoint {
+    pub config: ConnectionConfig,
+    pub database: String,
+    /// Port of the SSH tunnel on `127.0.0.1`, `None` to connect to
+    /// `config.host` and `config.port` directly.
+    pub tunnel_port: Option<u16>,
+}
+
 /// Main database service that manages connections and SSH tunnels internally
 pub struct DatabaseService {
     // Connection storage
@@ -324,6 +335,40 @@ impl DatabaseService {
             connection_id
         );
         Ok(conn_arc)
+    }
+
+    /// Where an external client tool such as `pg_dump` reaches `database`:
+    /// the connection's settings with its password, and the local port of its
+    /// SSH tunnel when it has one. Opening the connection first starts the
+    /// tunnel and keeps it registered, so it outlives the tool's run unless the
+    /// user disconnects.
+    pub async fn client_tool_endpoint(
+        &self,
+        config_id: DatabaseConfigId,
+        database: &str,
+    ) -> Result<ClientToolEndpoint> {
+        self.get_or_create_connection(config_id, Some(database))
+            .await?;
+        let mut config = self.get_connection_config(config_id).await.ok_or_else(|| {
+            anyhow::anyhow!("Connection configuration not found for ID: {}", config_id)
+        })?;
+        self.resolve_secrets(&mut config).await?;
+        let tunnel_port = if config.requires_ssh_tunnel() {
+            let tunnels = self.ssh_tunnels.read().await;
+            let tunnel = tunnels
+                .get(&config_id)
+                .ok_or_else(|| anyhow::anyhow!("The SSH tunnel for this connection is closed"))?
+                .lock()
+                .map_err(|error| anyhow::anyhow!("Failed to lock SSH tunnel mutex: {}", error))?;
+            Some(tunnel.get_info().local_port)
+        } else {
+            None
+        };
+        Ok(ClientToolEndpoint {
+            config,
+            database: database.to_string(),
+            tunnel_port,
+        })
     }
 
     /// Disconnect a connection
