@@ -145,6 +145,8 @@ fn convert_to_json_value(value: Option<&str>, column_type: &ColumnType) -> serde
             parse_numeric(value).unwrap_or_else(|| infer_json_type(value))
         }
         ColumnType::Json => parse_json(value).unwrap_or_else(|| infer_json_type(value)),
+        // Hex EWKB can read like a number.
+        ColumnType::Geometry => serde_json::Value::String(value.to_string()),
         _ => infer_json_type(value),
     }
 }

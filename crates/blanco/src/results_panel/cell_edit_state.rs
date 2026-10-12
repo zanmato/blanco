@@ -128,6 +128,28 @@ pub enum ChangeType {
     DeleteRow,
 }
 
+/// The GeoJSON of the WKT in an expanded geometry cell, or why the WKT does
+/// not parse.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GeometryPreview {
+    GeoJson(String),
+    Invalid(String),
+}
+
+impl GeometryPreview {
+    /// `None` for what PostGIS reads but the parser does not: hex EWKB and
+    /// curve types.
+    pub fn of(text: &str) -> Option<Self> {
+        if let Some(error) = blanco_core::geometry::edit_error(text) {
+            return Some(Self::Invalid(error));
+        }
+        let geometry = blanco_core::geometry::parse_ewkt(text).ok()?;
+        serde_json::to_string_pretty(&geometry.to_geojson())
+            .ok()
+            .map(Self::GeoJson)
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct CellEditState {
     pub editing_cell: Option<(usize, usize)>,  // (row, col)
@@ -151,6 +173,8 @@ pub struct CellEditState {
     pub expanded_as_json: bool,
     /// Why the expanded JSON text does not parse, shown under the editor.
     pub json_error: Option<String>,
+    /// What the expanded editor of a geometry cell shows under its WKT.
+    pub geometry_preview: Option<GeometryPreview>,
     /// The open date and time picker of the cell being edited.
     pub date_picker: Option<Entity<DateTimePicker>>,
     /// The viewer a binary cell is expanded into. It takes the place of the

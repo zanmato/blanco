@@ -120,6 +120,8 @@ pub enum ColumnType {
     Array,
     /// Binary types: bytea, blob, binary
     Binary,
+    /// Spatial types (PostGIS geometry, geography), carried as EWKT
+    Geometry,
     /// Unknown/fallback type
     Unknown,
 }

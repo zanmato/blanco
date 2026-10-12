@@ -59,6 +59,13 @@ pub(super) fn format_pg_interval(interval: sqlx::postgres::types::PgInterval) ->
     parts.join(" ")
 }
 
+/// EWKB bytes as the uppercase hex PostGIS itself writes and reads.
+fn hex_text(bytes: &[u8]) -> String {
+    blanco_core::binary::encode(bytes)
+        .trim_start_matches("0x")
+        .to_ascii_uppercase()
+}
+
 impl PostgresConnection {
     /// Extract the base type from an array type (e.g., "TEXT[]" -> Some("TEXT"))
     fn extract_base_array_type(array_type: &str) -> Option<&str> {
@@ -161,6 +168,8 @@ impl PostgresConnection {
             "uuid" => ColumnType::Uuid,
             "json" | "jsonb" | "jsonpath" => ColumnType::Json,
             "bytea" => ColumnType::Binary,
+            // PostGIS
+            "geometry" | "geography" => ColumnType::Geometry,
             "array" => ColumnType::Array,
             _ if lower.ends_with("[]") => ColumnType::Array,
             // Network address types: come back as text
@@ -555,6 +564,32 @@ impl PostgresConnection {
         }
     }
 
+    /// A PostGIS value as EWKT. PostGIS sends EWKB, as hex in the text
+    /// protocol and as the bytes themselves in the binary one. Shapes the
+    /// decoder does not know (curves, surfaces) keep their hex, which PostGIS
+    /// reads back just the same.
+    fn handle_geometry_type(
+        row: &sqlx::postgres::PgRow,
+        column_index: usize,
+        column_type: &str,
+    ) -> Option<String> {
+        let raw_value = row.try_get_raw(column_index).ok()?;
+        let bytes = raw_value.as_bytes().ok()?;
+        let ewkt = match raw_value.format() {
+            sqlx::postgres::PgValueFormat::Text => {
+                blanco_core::binary::decode_lenient(std::str::from_utf8(bytes).ok()?)
+                    .and_then(|ewkb| blanco_core::geometry::ewkb_to_ewkt(&ewkb))
+            }
+            sqlx::postgres::PgValueFormat::Binary => blanco_core::geometry::ewkb_to_ewkt(bytes),
+        };
+        ewkt.or_else(|| match raw_value.format() {
+            sqlx::postgres::PgValueFormat::Text => {
+                Self::as_text_or_marker(row, column_index, column_type)
+            }
+            sqlx::postgres::PgValueFormat::Binary => Some(hex_text(bytes)),
+        })
+    }
+
     /// Convert a PostgreSQL row value to string representation. `None` means SQL NULL.
     pub(super) fn convert_row_value_to_string(
         &self,
@@ -589,6 +624,7 @@ impl PostgresConnection {
             ColumnType::Uuid => self.handle_uuid_type(row, column_index, raw_type),
             ColumnType::Json => self.handle_json_type(row, column_index, raw_type),
             ColumnType::Binary => Self::handle_binary_type(row, column_index, raw_type),
+            ColumnType::Geometry => Self::handle_geometry_type(row, column_index, raw_type),
             ColumnType::Unknown => self.handle_unknown_type(row, column_index, raw_type),
         };
 

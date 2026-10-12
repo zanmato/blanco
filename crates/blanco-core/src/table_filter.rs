@@ -136,6 +136,9 @@ pub struct FilterCondition {
     /// The column holds bytes, so a value written as hex is compared as the
     /// bytes it spells rather than as its digits.
     pub binary: bool,
+    /// The column holds PostGIS geometries, so text operators match their
+    /// WKT rather than the hex of their bytes.
+    pub geometry: bool,
 }
 
 impl Dialect {
@@ -150,6 +153,11 @@ impl Dialect {
             return predicate;
         }
         let literal = |value: &str| self.filter_literal(value.trim(), condition.numeric);
+        let text = if condition.geometry {
+            format!("ST_AsText({column})")
+        } else {
+            column.clone()
+        };
         match condition.operator {
             FilterOperator::Equals => format!("{column} = {}", literal(value)),
             FilterOperator::NotEquals => format!("{column} <> {}", literal(value)),
@@ -157,12 +165,12 @@ impl Dialect {
             FilterOperator::LessOrEqual => format!("{column} <= {}", literal(value)),
             FilterOperator::Greater => format!("{column} > {}", literal(value)),
             FilterOperator::GreaterOrEqual => format!("{column} >= {}", literal(value)),
-            FilterOperator::Contains => self.text_match(&column, value, "%", "%", false),
-            FilterOperator::NotContains => self.text_match(&column, value, "%", "%", true),
-            FilterOperator::StartsWith => self.text_match(&column, value, "", "%", false),
-            FilterOperator::EndsWith => self.text_match(&column, value, "%", "", false),
-            FilterOperator::Like => format!("{column} LIKE {}", self.string_literal(value)),
-            FilterOperator::NotLike => format!("{column} NOT LIKE {}", self.string_literal(value)),
+            FilterOperator::Contains => self.text_match(&text, value, "%", "%", false),
+            FilterOperator::NotContains => self.text_match(&text, value, "%", "%", true),
+            FilterOperator::StartsWith => self.text_match(&text, value, "", "%", false),
+            FilterOperator::EndsWith => self.text_match(&text, value, "%", "", false),
+            FilterOperator::Like => format!("{text} LIKE {}", self.string_literal(value)),
+            FilterOperator::NotLike => format!("{text} NOT LIKE {}", self.string_literal(value)),
             FilterOperator::In | FilterOperator::NotIn => {
                 let values = value
                     .split(',')
@@ -414,6 +422,7 @@ mod tests {
             value: value.to_string(),
             numeric: false,
             binary: false,
+            geometry: false,
         }
     }
 
@@ -425,6 +434,7 @@ mod tests {
             value: value.to_string(),
             numeric: false,
             binary: true,
+            geometry: false,
         };
         let pg = DatabaseType::PostgreSQL.dialect();
         assert_eq!(
@@ -476,6 +486,7 @@ mod tests {
             pg.filter_predicate(&FilterCondition {
                 numeric: true,
                 binary: false,
+                geometry: false,
                 ..condition("id", FilterOperator::Greater, " 42 ")
             }),
             "\"id\" > 42"
@@ -485,6 +496,7 @@ mod tests {
             pg.filter_predicate(&FilterCondition {
                 numeric: true,
                 binary: false,
+                geometry: false,
                 ..condition("id", FilterOperator::Equals, "1; DROP TABLE x")
             }),
             "\"id\" = '1; DROP TABLE x'"
@@ -493,6 +505,7 @@ mod tests {
             pg.filter_predicate(&FilterCondition {
                 numeric: true,
                 binary: false,
+                geometry: false,
                 ..condition("id", FilterOperator::In, "1, 2,,3")
             }),
             "\"id\" IN (1, 2, 3)"
@@ -512,6 +525,27 @@ mod tests {
                 "a"
             )),
             "[na]]me] <> 'a'"
+        );
+    }
+
+    #[test]
+    fn geometry_columns_match_their_wkt() {
+        let geometry = |operator, value: &str| FilterCondition {
+            geometry: true,
+            ..condition("location", operator, value)
+        };
+        let pg = DatabaseType::PostgreSQL.dialect();
+        assert_eq!(
+            pg.filter_predicate(&geometry(FilterOperator::Contains, "POINT(18")),
+            "LOWER(CAST(ST_AsText(\"location\") AS TEXT)) LIKE '%point(18%'"
+        );
+        assert_eq!(
+            pg.filter_predicate(&geometry(FilterOperator::Like, "POLYGON%")),
+            "ST_AsText(\"location\") LIKE 'POLYGON%'"
+        );
+        assert_eq!(
+            pg.filter_predicate(&geometry(FilterOperator::IsNull, "")),
+            "\"location\" IS NULL"
         );
     }
 

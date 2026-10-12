@@ -815,7 +815,7 @@ impl ResultsPanel {
                     .as_ref()
                     .map(|input| input.text(cx))
                     .unwrap_or_default();
-                table.delegate_mut().recheck_expanded_json(&new_text);
+                table.delegate_mut().recheck_expanded_text(&new_text);
                 table
                     .delegate_mut()
                     .edit_state
@@ -874,6 +874,8 @@ impl ResultsPanel {
 
             delegate.update_cell_value(row, col, Some(new_value.clone()));
             committed_value = delegate.commit_cell_edit(row, col).and_then(|v| v);
+            // The delegate may complete the text, as with a geometry's SRID.
+            let new_value = committed_value.clone().unwrap_or_else(|| new_value.clone());
 
             if let (Some(old_val), Some(tbl_name)) = (&old_value, &table_name)
                 && old_val != &new_value
@@ -919,7 +921,7 @@ impl ResultsPanel {
                         row,
                         Some(col),
                         Some(old_val.clone()),
-                        Some(new_value.clone()),
+                        Some(new_value),
                         primary_key_values,
                         None,
                     );
