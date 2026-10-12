@@ -49,6 +49,9 @@ pub struct ResultsTableDelegate {
     hidden_columns: usize,
     /// How many columns at the start are pinned to the left edge.
     pinned_columns: usize,
+    /// The rows the grid last drew, which decide on which side of its cell
+    /// the edit bubble hangs.
+    visible_rows: std::ops::Range<usize>,
     /// For each column, its index in the query's result.
     source_order: Vec<usize>,
     /// The widths the result opened with.

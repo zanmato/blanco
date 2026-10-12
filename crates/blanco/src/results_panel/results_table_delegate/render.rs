@@ -9,7 +9,7 @@ use gpui::{
 };
 use gpui_component::popover::{Popover, PopoverState};
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, Sizable, Size,
+    ActiveTheme, Disableable, Icon, Selectable, Sizable, Size,
     button::{Button, ButtonVariants},
     clipboard::Clipboard,
     h_flex,
@@ -88,30 +88,26 @@ fn swallow_boundary_movement<T: InteractiveElement>(element: T) -> T {
 
 impl ResultsTableDelegate {
     /// Switches the cell being edited between quoted data and SQL the server
-    /// evaluates. Filled in while on, so the mode reads at a glance whatever
-    /// colour the column type gives the text.
-    fn render_expression_toggle(&self, cx: &mut Context<TableState<Self>>) -> impl IntoElement {
-        let is_expression = self.edit_state.editing_as_expression;
-        div()
-            .id("cell-expression-toggle")
-            .cursor_pointer()
-            .rounded(px(2.))
-            .when(is_expression, |this| {
-                this.bg(cx.theme().primary)
-                    .text_color(cx.theme().primary_foreground)
-            })
-            .tooltip(|window, cx| {
-                Tooltip::new("Evaluate as SQL expression")
-                    .action(&ToggleCellExpression, Some("CellEditor"))
-                    .build(window, cx)
-            })
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|table, _event, _window, cx| {
-                    Self::toggle_editing_expression(table, cx);
-                }),
+    /// evaluates. `key_context` is the editor it sits in, for the shortcut in
+    /// its tooltip.
+    fn render_expression_button(
+        &self,
+        key_context: &'static str,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        Button::new("cell-expression-toggle")
+            .label("SQL")
+            .ghost()
+            .xsmall()
+            .selected(self.edit_state.editing_as_expression)
+            .tooltip_with_action(
+                "Send as a SQL expression instead of a value",
+                &ToggleCellExpression,
+                Some(key_context),
             )
-            .child(Icon::new(IconName::SquareFunction).text_xs())
+            .on_click(cx.listener(|table, _, _, cx| {
+                Self::toggle_editing_expression(table, cx);
+            }))
     }
 
     /// Expanded inline editor: an absolutely-positioned, larger input overlay
@@ -230,7 +226,7 @@ impl ResultsTableDelegate {
                                         ),
                                     )
                                 })
-                                .child(self.render_expression_toggle(cx))
+                                .child(self.render_expression_button("ExpandedCellEditor", cx))
                                 .child(
                                     div()
                                         .cursor_pointer()
@@ -291,7 +287,8 @@ impl ResultsTableDelegate {
             )
     }
 
-    /// Normal single-line inline editor with an expand (maximize) affordance.
+    /// Normal single-line inline editor with an expand (maximize) affordance
+    /// and the bubble of actions on its value.
     fn render_inline_cell(
         &self,
         input: Entity<InputState>,
@@ -338,29 +335,71 @@ impl ResultsTableDelegate {
                     .text_size(px(12.))
                     .pl_0()
                     .suffix(
-                        h_flex()
-                            .gap(px(2.))
-                            .child(self.render_expression_toggle(cx))
-                            .child(
-                                div()
-                                    .cursor_pointer()
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |table, _event, window, cx| {
-                                            Self::handle_maximize(
-                                                table, row_ix, col_ix, is_json, window, cx,
-                                            );
-                                        }),
-                                    )
-                                    .child(Icon::new(IconName::Maximize).text_xs()),
-                            ),
+                        div()
+                            .cursor_pointer()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |table, _event, window, cx| {
+                                    Self::handle_maximize(
+                                        table, row_ix, col_ix, is_json, window, cx,
+                                    );
+                                }),
+                            )
+                            .child(Icon::new(IconName::Maximize).text_xs()),
                     ),
             )
-            // Beside the input rather than in its suffix, so keys typed into
-            // the picker do not reach the input's own bindings.
-            .when_some(self.temporal_shape(row_ix, col_ix), |this, shape| {
-                this.child(self.render_date_time_picker(shape, row_ix, col_ix, cx))
+            .when(self.is_editable(), |this| {
+                this.relative()
+                    .child(self.render_cell_bubble(row_ix, col_ix, cx))
             })
+    }
+
+    /// The actions on the value being edited, in a bubble hanging off the
+    /// cell's bottom right corner where they have room for a label. It is a
+    /// sibling of the input rather than its suffix, so keys typed into the
+    /// date picker do not reach the input's own bindings.
+    fn render_cell_bubble(
+        &self,
+        row_ix: usize,
+        col_ix: usize,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        // Below the last visible rows there is no grid left to draw over.
+        let above = row_ix + 2 >= self.visible_rows.end && row_ix >= self.visible_rows.start + 2;
+        div()
+            .absolute()
+            .right_0()
+            .map(|this| {
+                if above {
+                    this.bottom(gpui::relative(1.))
+                } else {
+                    this.top(gpui::relative(1.))
+                }
+            })
+            .child(
+                gpui::deferred(
+                    h_flex()
+                        .my(px(2.))
+                        .p(px(2.))
+                        .gap(px(2.))
+                        .rounded(cx.theme().radius)
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .bg(cx.theme().popover)
+                        .text_color(cx.theme().popover_foreground)
+                        .font_family(cx.theme().font_family.clone())
+                        .shadow_md()
+                        // Drawn over the cells around it, which must not get
+                        // its clicks or hovers.
+                        .occlude()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(self.render_expression_button("CellEditor", cx))
+                        .when_some(self.temporal_shape(row_ix, col_ix), |this, shape| {
+                            this.child(self.render_date_time_picker(shape, row_ix, col_ix, cx))
+                        }),
+                )
+                .with_priority(99),
+            )
     }
 
     /// Calendar button of a date or time cell editor and the picker it opens.
@@ -388,6 +427,13 @@ impl ResultsTableDelegate {
             .trigger(
                 Button::new(("cell-date-time-picker-trigger", row_ix * 1000 + col_ix))
                     .icon(IconName::Calendar)
+                    .label(match shape {
+                        TemporalShape::Date => "Pick Date",
+                        TemporalShape::Time => "Pick Time",
+                        TemporalShape::Timestamp | TemporalShape::TimestampWithTimeZone => {
+                            "Pick Date and Time"
+                        }
+                    })
                     .ghost()
                     .xsmall()
                     .disabled(!self.is_editable()),
@@ -836,10 +882,11 @@ impl TableDelegate for ResultsTableDelegate {
 
     fn visible_rows_changed(
         &mut self,
-        _visible_range: Range<usize>,
+        visible_range: Range<usize>,
         _: &mut Window,
         _: &mut Context<TableState<Self>>,
     ) {
+        self.visible_rows = visible_range;
     }
 
     fn visible_columns_changed(
