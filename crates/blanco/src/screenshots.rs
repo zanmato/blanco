@@ -230,6 +230,7 @@ async fn seed_database(database: &AppDatabase) -> anyhow::Result<()> {
                 parent_id: None,
                 is_group: true,
                 position: group_position as i32,
+                trigger: None,
             })
             .await?;
         for (position, (name, content, kind)) in snippets.iter().enumerate() {
@@ -242,6 +243,7 @@ async fn seed_database(database: &AppDatabase) -> anyhow::Result<()> {
                     parent_id: Some(group_id),
                     is_group: false,
                     position: position as i32,
+                    trigger: None,
                 })
                 .await?;
         }
