@@ -217,6 +217,15 @@ All notable changes to this project will be documented in this file.
 - Show Create Statement on PostgreSQL wrote a stored generated column as a
   default, which PostgreSQL rejects, and dropped the
   `GENERATED ... AS IDENTITY` clause of identity columns
+- Exporting a table shows how many rows are written, stops when the dialog is
+  closed, removing the partial file, and reports success or failure in a
+  notification instead of only in the log. A row that fails to arrive now
+  fails the export, where it was skipped and the file looked complete. Tables
+  whose names need quoting, such as mixed case, can be exported
+- Copy and export as TSV took time quadratic in the number of selected rows,
+  so a large selection could take many seconds
+- Copy and export as JSON, Markdown, SQL and VALUES write the selected rows
+  in grid order, where they could come out shuffled
 
 ## [0.1.2] - 2026-10-08
 
