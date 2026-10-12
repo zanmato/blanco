@@ -1670,17 +1670,18 @@ fn column_cell(col: &ColumnInfo, ordinal: usize, col_ix: usize) -> String {
     }
 }
 
-/// The columns grid's rows: indices into `columns` whose name contains
-/// `filter` (ignoring case), ordered by `sort`. Without a sort, or between
-/// equal values, rows keep the table's column order.
+/// The columns grid's rows: indices into `columns` whose name matches
+/// `filter` (the sidebar's syntax: `^`, `$` and `|`, ignoring case), ordered
+/// by `sort`. Without a sort, or between equal values, rows keep the table's
+/// column order.
 fn column_rows(
     columns: &[ColumnInfo],
     filter: &str,
     sort: Option<(usize, ColumnSort)>,
 ) -> Vec<usize> {
-    let filter = filter.trim().to_lowercase();
+    let filter = crate::name_filter::NameFilter::parse(filter);
     let mut rows: Vec<usize> = (0..columns.len())
-        .filter(|&ix| filter.is_empty() || columns[ix].name.to_lowercase().contains(&filter))
+        .filter(|&ix| filter.is_empty() || filter.matches(&columns[ix].name))
         .collect();
     let Some((col_ix, sort)) = sort else {
         return rows;
@@ -2202,6 +2203,9 @@ mod tests {
             vec![3, 1]
         );
         assert!(column_rows(&columns, "missing", None).is_empty());
+        // The sidebar filter's anchors and alternatives.
+        assert_eq!(column_rows(&columns, "^email$", None), vec![1]);
+        assert_eq!(column_rows(&columns, "^id | _at$", None), vec![0, 2]);
     }
 
     #[test]

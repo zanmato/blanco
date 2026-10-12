@@ -21,6 +21,8 @@ use blanco_core::ConnectionContext;
 use blanco_core::DatabaseService as DatabaseServiceTrait;
 use blanco_ui::IconName;
 use blanco_ui::tree::{Tree, TreeItem, TreeState};
+
+use crate::name_filter::NameFilter;
 use database::DatabaseService;
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, IntoElement, ParentElement, Render,
@@ -444,7 +446,7 @@ impl ConnectionsPanel {
             })
             .collect();
 
-        let filter = self.filter_input.read(cx).value().trim().to_lowercase();
+        let filter = NameFilter::parse(&self.filter_input.read(cx).value());
         let tree_items = if filter.is_empty() {
             tree_items
         } else {
@@ -1047,18 +1049,20 @@ impl ConnectionsPanel {
             .px_2()
             .pb_2()
             .gap_1()
-            .child(div().flex_1().child(Input::new(&self.filter_input).small()))
             .child(
-                Button::new("connections-tag-filter")
+                div()
+                    .flex_1()
+                    .child(Input::new(&self.filter_input).small().cleanable(true)),
+            )
+            .child({
+                let button = Button::new("connections-tag-filter")
                     .small()
                     .ghost()
-                    .map(|button| match tag_filter {
-                        Some(tag) => button
-                            .label(tag.display_name())
-                            .text_color(environment_color(tag, cx)),
-                        None => button.icon(IconName::Funnel),
+                    .icon(IconName::Funnel)
+                    .tooltip(match tag_filter {
+                        Some(tag) => format!("Showing {} connections", tag.display_name()),
+                        None => "Filter by environment".to_string(),
                     })
-                    .tooltip("Filter by environment")
                     .dropdown_menu(move |menu, _, _| {
                         let set_filter = |tag: Option<EnvironmentType>| {
                             let panel = panel.clone();
@@ -1087,8 +1091,18 @@ impl ConnectionsPanel {
                                 )
                             },
                         )
-                    }),
-            )
+                    });
+                // The connections listed below say which tag is chosen, so
+                // a dot in the tag's color is enough to show a filter is on.
+                match tag_filter {
+                    Some(tag) => gpui_component::badge::Badge::new()
+                        .dot()
+                        .color(environment_color(tag, cx))
+                        .child(button)
+                        .into_any_element(),
+                    None => button.into_any_element(),
+                }
+            })
             .child(
                 Button::new("connections-menu")
                     .icon(IconName::Ellipsis)
@@ -1517,13 +1531,13 @@ impl Render for ConnectionsPanel {
 /// the filter restores the previous layout.
 fn filter_tree_items(
     items: &[TreeItem<TreeItemMetadata>],
-    needle: &str,
+    filter: &NameFilter,
 ) -> Vec<TreeItem<TreeItemMetadata>> {
     items
         .iter()
         .filter_map(|item| {
-            let matching_children = filter_tree_items(&item.children, needle);
-            let label_matches = item.label.to_lowercase().contains(needle);
+            let matching_children = filter_tree_items(&item.children, filter);
+            let label_matches = filter.matches(&item.label);
             if !label_matches && matching_children.is_empty() {
                 return None;
             }
@@ -1647,7 +1661,7 @@ mod tests {
             ),
         ];
 
-        let filtered = filter_tree_items(&tree, "user");
+        let filtered = filter_tree_items(&tree, &NameFilter::parse("user"));
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].id.as_ref(), "local");
         assert!(filtered[0].is_expanded());
@@ -1663,7 +1677,7 @@ mod tests {
             "staging",
             vec![item("public", vec![item("invoices", vec![])])],
         )];
-        let filtered = filter_tree_items(&tree, "stag");
+        let filtered = filter_tree_items(&tree, &NameFilter::parse("stag"));
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].children.len(), 1);
         assert!(
