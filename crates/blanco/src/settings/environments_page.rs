@@ -277,13 +277,11 @@ impl SettingFieldElement for EnvironmentTagsField {
 }
 
 pub(super) fn environments_page(editor: Entity<EnvironmentTagsEditor>) -> SettingPage {
-    SettingPage::new("Environments").groups(vec![
-        SettingGroup::new().title("Tags").items(vec![
+    SettingPage::new("Environments").groups(vec![SettingGroup::new().title("Tags").items(vec![
             SettingItem::new(
                 "Environment Tags",
                 SettingField::element(EnvironmentTagsField(editor)),
             )
             .description("Tag connections with an environment."),
-        ]),
-    ])
+        ])])
 }
