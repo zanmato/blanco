@@ -111,6 +111,15 @@ as the keyring store, showing one dialog at a time. A connection without a passw
 or with a typed one, is pinged on open so a refusal surfaces while it can be asked
 for; PostgreSQL's pools otherwise only fail at the first query.
 
+A PostgreSQL connection without a password gets one from the password file
+(`database::pgpass`, libpq's rules: `PGPASSFILE`, else `~/.pgpass`) in
+`DatabaseService::apply_password_file`. That is the only lookup: the Postgres
+driver's own is switched off in `PostgresConnection::connect_options`, because it
+matches an SSH tunnel's local end and reads `~/.pgpass` even when `PGPASSFILE`
+is set. Tests that connect without a password call
+`DatabaseService::set_password_file` with a temporary path, so they do not
+depend on the home directory of whoever runs them.
+
 ## Updates
 
 `update_manager::UpdateManager` (a global installed in `main.rs`) asks GitHub for the

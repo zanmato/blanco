@@ -86,6 +86,10 @@ pub struct DatabaseService {
     // Asks the user for secrets that are not stored
     secret_prompt: Arc<dyn SecretPrompt>,
 
+    // The PostgreSQL password file to read in place of the one the
+    // environment names (`PGPASSFILE`, else `~/.pgpass`)
+    password_file: Option<std::path::PathBuf>,
+
     // Secrets the user typed at a prompt, kept for reconnects until the
     // connection is closed or edited. The lock is held across a prompt so
     // connections opening together ask once and share the answer.
@@ -125,6 +129,7 @@ impl DatabaseService {
             action_sender: Arc::new(StdMutex::new(None)),
             secret_store: Arc::new(NoSecretStore),
             secret_prompt: Arc::new(NoSecretPrompt),
+            password_file: None,
             session_secrets: Arc::new(smol::lock::Mutex::new(HashMap::new())),
             runtime_handle,
         }
@@ -140,6 +145,43 @@ impl DatabaseService {
 
     pub fn set_secret_prompt(&mut self, prompt: Arc<dyn SecretPrompt>) {
         self.secret_prompt = prompt;
+    }
+
+    /// Read PostgreSQL passwords from the file at `path` rather than the one
+    /// the environment names. A path with no file there finds no passwords,
+    /// which is how tests stay clear of the `~/.pgpass` of whoever runs them.
+    pub fn set_password_file(&mut self, path: impl Into<std::path::PathBuf>) {
+        self.password_file = Some(path.into());
+    }
+
+    /// For a PostgreSQL connection without a password, take one from the
+    /// password file, matched against the configured host and port rather
+    /// than an SSH tunnel's local end, and the database being opened. This
+    /// is the only lookup: the driver's own is switched off, since it
+    /// matches the tunnel's end and reads `~/.pgpass` whatever
+    /// `PGPASSFILE` says.
+    fn apply_password_file(&self, config: &mut ConnectionConfig, database: Option<&str>) {
+        if config.db_type != DatabaseType::PostgreSQL
+            || config
+                .password
+                .as_deref()
+                .is_some_and(|password| !password.is_empty())
+        {
+            return;
+        }
+        let database = database.unwrap_or(&config.database);
+        if let Some(password) = crate::pgpass::lookup(
+            self.password_file.as_deref(),
+            &config.host,
+            config.port,
+            database,
+            &config.username,
+        )
+        .filter(|password| !password.is_empty())
+        {
+            tracing::debug!("Using the password file's password for {}", config.name);
+            config.password = Some(password);
+        }
     }
 
     /// Drop the secrets typed for `config_id` this session, so the next
@@ -328,7 +370,7 @@ impl DatabaseService {
             let from_user = self
                 .resolve_secrets_asking(&mut attempt_config, rejected.take())
                 .await?;
-            apply_password_file(&mut attempt_config, database);
+            self.apply_password_file(&mut attempt_config, database);
             match self
                 .open_connection(&attempt_config, database, &from_user)
                 .await
@@ -858,7 +900,7 @@ impl DatabaseService {
                 }
             }
         }
-        apply_password_file(&mut asked, None);
+        self.apply_password_file(&mut asked, None);
         let config = &asked;
         let mut connection_host = None;
         let mut connection_port = None;
@@ -1114,6 +1156,7 @@ impl Clone for DatabaseService {
             action_sender: Arc::clone(&self.action_sender),
             secret_store: Arc::clone(&self.secret_store),
             secret_prompt: Arc::clone(&self.secret_prompt),
+            password_file: self.password_file.clone(),
             session_secrets: Arc::clone(&self.session_secrets),
             runtime_handle: self.runtime_handle.clone(),
         }
@@ -1126,28 +1169,6 @@ impl DatabaseService {
     /// Get the global DatabaseService instance
     pub fn global(cx: &gpui::App) -> &Self {
         cx.global::<Self>()
-    }
-}
-
-/// For a PostgreSQL connection without a password, take one from the
-/// password file (`~/.pgpass`), matched against the configured host and port
-/// rather than an SSH tunnel's local end, and the database being opened.
-fn apply_password_file(config: &mut ConnectionConfig, database: Option<&str>) {
-    if config.db_type != DatabaseType::PostgreSQL
-        || config
-            .password
-            .as_deref()
-            .is_some_and(|password| !password.is_empty())
-    {
-        return;
-    }
-    let database = database.unwrap_or(&config.database);
-    if let Some(password) =
-        crate::pgpass::lookup(&config.host, config.port, database, &config.username)
-            .filter(|password| !password.is_empty())
-    {
-        tracing::debug!("Using the password file's password for {}", config.name);
-        config.password = Some(password);
     }
 }
 
@@ -1229,8 +1250,11 @@ mod tests {
             use std::os::unix::fs::PermissionsExt as _;
             std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).expect("chmod");
         }
-        // No other test in this crate reads PGPASSFILE.
-        std::env::set_var("PGPASSFILE", &file);
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let mut service = DatabaseService::new(runtime.handle().clone());
+        service.set_password_file(&file);
+        let apply_password_file =
+            |config: &mut ConnectionConfig, database| service.apply_password_file(config, database);
 
         let postgres = |password: Option<&str>| {
             ConnectionConfig::new(
@@ -1281,8 +1305,6 @@ mod tests {
         let mut config = postgres(None);
         apply_password_file(&mut config, None);
         assert_eq!(config.password.as_deref(), Some("edited"));
-
-        std::env::remove_var("PGPASSFILE");
     }
 
     fn sqlite_config(id: i64, path: &std::path::Path) -> ConnectionConfig {

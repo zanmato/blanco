@@ -51,8 +51,9 @@ impl Connection for PostgresConnection {
         // Bound the connect so an unreachable host fails fast. `smol::Timer` is
         // driven by the global async-io reactor, so it works even though this
         // runs on the tokio runtime.
+        let options = Self::connect_options(&connection_string)?;
         let connect = async {
-            sqlx::postgres::PgConnection::connect(&connection_string)
+            sqlx::postgres::PgConnection::connect_with(&options)
                 .await
                 .map_err(|e| blanco_core::tag_sqlx(e).context("Failed to connect to PostgreSQL"))
         };

@@ -1455,6 +1455,10 @@ fn password_prompt_round_trip(case: DriverCase, id: i64) {
     });
     let mut service = DatabaseService::new(runtime.handle().clone());
     service.set_secret_prompt(prompt.clone());
+    // No password file: the test is about being asked, whatever is in the
+    // `~/.pgpass` of whoever runs it.
+    let password_file_dir = tempfile::tempdir().expect("temp dir");
+    service.set_password_file(password_file_dir.path().join("pgpass"));
 
     let config = ConnectionConfig::new(
         id,
@@ -1545,4 +1549,83 @@ fn password_prompt_round_trip(case: DriverCase, id: i64) {
         );
     });
     assert_eq!(prompt.asked.lock().unwrap().len(), 4);
+}
+
+/// A PostgreSQL connection without a password takes it from the password
+/// file the service is pointed at, and is asked for one when the file has no
+/// line for it. The file is a temporary one, so neither outcome depends on
+/// the `~/.pgpass` of whoever runs the test.
+#[test]
+fn test_password_file_against_postgres() {
+    use database::ConnectionConfig;
+    use std::sync::Arc;
+
+    let case = postgres_case();
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let directory = tempfile::tempdir().expect("temp dir");
+    let password_file = directory.path().join("pgpass");
+    let write_password_file = |contents: String| {
+        std::fs::write(&password_file, contents).expect("write password file");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&password_file, std::fs::Permissions::from_mode(0o600))
+                .expect("chmod");
+        }
+    };
+    let connect = |id: i64| {
+        let prompt = Arc::new(ScriptedPrompt {
+            answers: std::sync::Mutex::new(vec![None]),
+            asked: std::sync::Mutex::new(Vec::new()),
+        });
+        let mut service = DatabaseService::new(runtime.handle().clone());
+        service.set_secret_prompt(prompt.clone());
+        service.set_password_file(&password_file);
+        let config = ConnectionConfig::new(
+            id,
+            "from-password-file".to_string(),
+            case.db_type,
+            case.host.clone(),
+            case.port.parse().expect("port"),
+            case.database.clone(),
+            case.username.clone(),
+            None,
+        );
+        let database = Some(case.database.as_str());
+        let outcome = runtime.block_on(async {
+            service.add_connection_config(config.clone()).await;
+            let connection = service
+                .get_or_create_connection(config.id, database)
+                .await?;
+            connection.execute_query("SELECT 1", database, None).await
+        });
+        let asked = prompt.asked.lock().unwrap().len();
+        (outcome, asked)
+    };
+
+    write_password_file(format!(
+        "{}:{}:*:{}:{}\n",
+        case.host, case.port, case.username, case.password
+    ));
+    let (outcome, asked) = connect(9301);
+    match outcome {
+        Ok(_) => assert_eq!(asked, 0, "the file's password needs no prompt"),
+        Err(error) if !strict() && !is_auth_error(&case, &format!("{error:#}")) => {
+            eprintln!(
+                "skip {}: server unreachable ({error:#}). Set BLANCO_RUN_DB_TESTS=1 to require.",
+                case.label
+            );
+            return;
+        }
+        Err(error) => panic!("{}: {error:#}", case.label),
+    }
+
+    // No line for this server: nothing is found, so the user is asked.
+    write_password_file(format!(
+        "elsewhere:{}:*:{}:{}\n",
+        case.port, case.username, case.password
+    ));
+    let (outcome, asked) = connect(9302);
+    assert!(outcome.is_err(), "the prompt was dismissed");
+    assert_eq!(asked, 1, "a missing password is asked for");
 }

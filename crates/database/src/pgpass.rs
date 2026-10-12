@@ -28,10 +28,20 @@ pub fn password_file() -> Option<PathBuf> {
     }
 }
 
-/// Look up the password for a connection in the password file. A missing or
-/// unreadable file finds nothing.
-pub fn lookup(host: &str, port: u16, database: &str, user: &str) -> Option<String> {
-    let path = password_file()?;
+/// Look up the password for a connection in the password file at `path`,
+/// or in the one in effect when none is given. A missing or unreadable file
+/// finds nothing.
+pub fn lookup(
+    path: Option<&Path>,
+    host: &str,
+    port: u16,
+    database: &str,
+    user: &str,
+) -> Option<String> {
+    let path = match path {
+        Some(path) => path.to_path_buf(),
+        None => password_file()?,
+    };
     let contents = read_password_file(&path)?;
     find_password(&contents, host, port, database, user)
 }

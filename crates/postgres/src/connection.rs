@@ -128,6 +128,28 @@ impl PostgresConnection {
         Ok(parsed.to_string())
     }
 
+    /// The driver options for `connection_string`, with the driver's own
+    /// password file lookup switched off. `DatabaseService` has already done
+    /// that lookup, against the configured host rather than an SSH tunnel's
+    /// local end, and the driver's would read `~/.pgpass` whatever
+    /// `PGPASSFILE` says. The driver sends an absent password as an empty
+    /// one, so setting it empty changes nothing but that lookup.
+    pub(crate) fn connect_options(
+        connection_string: &str,
+    ) -> Result<sqlx::postgres::PgConnectOptions> {
+        use std::str::FromStr as _;
+
+        let options = sqlx::postgres::PgConnectOptions::from_str(connection_string)
+            .map_err(|e| anyhow::anyhow!("Failed to parse connection string: {}", e))?;
+        let has_password = url::Url::parse(connection_string)
+            .is_ok_and(|url| url.password().is_some_and(|password| !password.is_empty()));
+        Ok(if has_password {
+            options
+        } else {
+            options.password("")
+        })
+    }
+
     /// Get or create a connection pool for a specific database
     pub(crate) async fn get_or_create_pool(&self, database: &str) -> Result<sqlx::PgPool> {
         let mut pools = self.pools.write().await;
@@ -142,7 +164,7 @@ impl PostgresConnection {
             // Bound how long acquiring (and therefore establishing) a connection
             // may take so an unreachable host fails fast instead of hanging.
             .acquire_timeout(blanco_core::connect_timeout())
-            .connect(&database_connection_string)
+            .connect_with(Self::connect_options(&database_connection_string)?)
             .await
             .map_err(|e| {
                 blanco_core::tag_sqlx(e)
