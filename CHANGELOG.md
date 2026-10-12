@@ -165,7 +165,8 @@ All notable changes to this project will be documented in this file.
   passphrase leaves that secret unsaved and asks for it in a dialog when the
   connection opens. The answer is kept in memory for reconnects until you
   disconnect. A connection saved without a password also asks when the
-  server wants one, and asks again when it refuses what was typed
+  server wants one, and asks again when it refuses what was typed. An
+  exported connection keeps the setting
 
 ### Fixes
 
