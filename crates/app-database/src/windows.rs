@@ -51,6 +51,9 @@ impl AppDatabase {
         display_uuid: Option<String>,
     ) -> Result<i64, sqlx::Error> {
         let now = chrono::Utc::now().timestamp();
+        // In milliseconds, as `touch_window_active` writes it: a new window
+        // must not sort as older than every window activated before it.
+        let last_active_at = chrono::Utc::now().timestamp_millis();
         let pool = self.pool();
         self.run(async move {
             let result = sqlx::query(
@@ -65,7 +68,7 @@ impl AppDatabase {
             .bind(geometry.map(|geometry| geometry.height))
             .bind(geometry.is_some_and(|geometry| geometry.maximized))
             .bind(display_uuid)
-            .bind(now)
+            .bind(last_active_at)
             .bind(now)
             .bind(now)
             .execute(&pool)

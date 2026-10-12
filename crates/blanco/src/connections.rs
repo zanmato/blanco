@@ -82,7 +82,6 @@ pub struct ConnectionsPanel {
     /// Connections opened for this session only (a SQLite file opened
     /// directly), kept apart so a reload from the app database keeps them.
     temporary_connections: Vec<ConnectionData>,
-    next_temporary_id: i64,
     _selected_connection_id: Option<i64>,
     database_metadata: std::collections::HashMap<i64, DatabaseMetadata>, // Store metadata per connection
     tree_state: Entity<TreeState<ConnectionsTreeDelegate>>,
@@ -253,7 +252,6 @@ impl ConnectionsPanel {
         let mut panel = Self {
             connections: Vec::new(),
             temporary_connections: Vec::new(),
-            next_temporary_id: -1,
             _selected_connection_id: None,
             database_metadata,
             tree_state,
@@ -349,8 +347,11 @@ impl ConnectionsPanel {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.display().to_string());
         let mut connection = ConnectionData::new_sqlite(name, path.to_string_lossy().into_owned());
-        let id = self.next_temporary_id;
-        self.next_temporary_id -= 1;
+        // Every window's sidebar draws from the same ids: the connection is
+        // registered with the one `DatabaseService` under it.
+        static NEXT_TEMPORARY_ID: std::sync::atomic::AtomicI64 =
+            std::sync::atomic::AtomicI64::new(-1);
+        let id = NEXT_TEMPORARY_ID.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
         connection.id = Some(id);
         self.temporary_connections.push(connection.clone());
         self.connections.push(connection.clone());
