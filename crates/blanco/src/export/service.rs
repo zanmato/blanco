@@ -4,7 +4,7 @@ use futures::{SinkExt, StreamExt};
 use smol::fs::File;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 
 use super::modal::ExportOptions;
 use blanco_core::ColumnType;
@@ -14,7 +14,6 @@ use transformers::{DataTransformer, SelectedTableData};
 #[derive(Clone, Debug)]
 pub struct ExportProgress {
     pub exported_rows: usize,
-    pub total_rows: usize,
     pub _current_file_size: u64,
     pub _is_complete: bool,
 }
@@ -70,9 +69,8 @@ impl ExportService {
         }
 
         // Create channels for producer-consumer pattern
-        let (mut sender, receiver) = mpsc::channel::<StreamRowData>(1000);
-        let exported_rows = Arc::new(AtomicUsize::new(0));
-        let is_cancelled = Arc::new(AtomicUsize::new(0));
+        let (mut sender, receiver) = mpsc::channel::<anyhow::Result<StreamRowData>>(1000);
+        let is_cancelled = Arc::clone(&options.cancel);
 
         // Get the streaming query results
         let (columns, column_types, mut row_stream) = connection
@@ -85,45 +83,39 @@ impl ExportService {
             .map_err(|e| anyhow::anyhow!("Failed to initialize transformer: {}", e))?;
 
         // Clone needed data for the background task
-        let exported_rows_clone = exported_rows.clone();
         let is_cancelled_clone = is_cancelled.clone();
         let columns_clone = columns.clone();
         let column_types_clone = column_types.clone();
 
         // Start the producer task in the background
         smol::spawn(async move {
-            let mut row_count = 0;
-
             // Process the stream and send rows through the channel
             while let Some(row_result) = row_stream.next().await {
                 // Check for cancellation
-                if is_cancelled_clone.load(Ordering::Relaxed) == 1 {
+                if is_cancelled_clone.load(Ordering::Relaxed) {
                     tracing::info!("Export cancelled by user");
                     break;
                 }
 
-                let row_data = match row_result {
-                    Ok(row) => row,
-                    Err(e) => {
-                        tracing::error!("Error fetching row: {}", e);
-                        continue;
-                    }
-                };
-
-                let stream_data = StreamRowData {
-                    columns: columns_clone.clone(),
-                    column_types: column_types_clone.clone(),
-                    row_data,
-                };
+                // A row that fails to arrive ends the export with its error.
+                // Skipping it would write a file that looks complete.
+                let failed = row_result.is_err();
+                let stream_data = row_result
+                    .map(|row_data| StreamRowData {
+                        columns: columns_clone.clone(),
+                        column_types: column_types_clone.clone(),
+                        row_data,
+                    })
+                    .map_err(|error| anyhow::anyhow!("Failed to read a row: {error}"));
 
                 // Send row through channel
                 if (sender.send(stream_data).await).is_err() {
                     tracing::info!("Export receiver disconnected, stopping producer");
                     break;
                 }
-
-                row_count += 1;
-                exported_rows_clone.store(row_count, Ordering::Relaxed);
+                if failed {
+                    break;
+                }
             }
 
             // Send completion signal
@@ -158,9 +150,10 @@ impl ExportService {
         let mut stream = receiver;
         while let Some(stream_data) = StreamExt::next(&mut stream).await {
             // Check for cancellation
-            if is_cancelled.load(Ordering::Relaxed) == 1 {
+            if is_cancelled.load(Ordering::Relaxed) {
                 return Ok(ExportResult::Cancelled);
             }
+            let stream_data = stream_data?;
 
             // Transform row using transformer
             let row_output = transformer
@@ -183,12 +176,17 @@ impl ExportService {
             // Update progress
             let progress = ExportProgress {
                 exported_rows: rows_written,
-                total_rows: rows_written, // Estimate since we don't know total in advance
                 _current_file_size: bytes_written as u64,
                 _is_complete: false,
             };
 
             progress_callback(progress);
+        }
+
+        // The producer stops sending when it sees the flag, which ends the
+        // loop above without a row to notice it on.
+        if is_cancelled.load(Ordering::Relaxed) {
+            return Ok(ExportResult::Cancelled);
         }
 
         // Finalize transformer output
@@ -215,7 +213,6 @@ impl ExportService {
         // Send final progress update
         let final_progress = ExportProgress {
             exported_rows: rows_written,
-            total_rows: rows_written,
             _current_file_size: file_size,
             _is_complete: true,
         };
@@ -298,6 +295,7 @@ mod tests {
         let path = dir.path().join("out.csv");
         let options = ExportOptions {
             encoding: TextEncoding::Utf16Le,
+            ..Default::default()
         };
         ExportService::new()
             .export_data_streaming_with_transformer(
@@ -316,5 +314,87 @@ mod tests {
         let mut expected = vec![0xFF, 0xFE];
         expected.extend(TextEncoding::Utf16Le.encode("name\nå\n").iter());
         assert_eq!(bytes, expected);
+    }
+
+    async fn sqlite_connection(dir: &std::path::Path) -> sqlite::SqliteConnection {
+        let connection_string = format!("sqlite:{}", dir.join("export.db").display());
+        let mut connection =
+            sqlite::SqliteConnection::new(connection_string.clone()).expect("sqlite");
+        connection
+            .connect(&connection_string)
+            .await
+            .expect("connect");
+        connection
+    }
+
+    /// A table whose name needs quoting, holding values with a tab, a line
+    /// break and a quote, comes back out of a TSV export unchanged.
+    #[tokio::test]
+    async fn tsv_export_keeps_tabs_line_breaks_and_quotes() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let connection = sqlite_connection(dir.path()).await;
+        for statement in [
+            "CREATE TABLE \"Mixed Case\" (id INTEGER, note TEXT)",
+            "INSERT INTO \"Mixed Case\" VALUES (1, 'a' || char(9) || 'b'), \
+             (2, 'two' || char(10) || 'lines'), (3, 'say \"hi\"'), (4, NULL)",
+        ] {
+            connection
+                .execute_query(statement, None, None)
+                .await
+                .expect("setup");
+        }
+        let query = format!(
+            "SELECT * FROM {} ORDER BY id",
+            blanco_core::DatabaseType::SQLite
+                .dialect()
+                .quote_qualified(None, "Mixed Case")
+        );
+
+        let path = dir.path().join("out.tsv");
+        let result = ExportService::new()
+            .export_data_streaming_with_transformer(
+                &connection,
+                &query,
+                None,
+                &transformers::TsvTransformer,
+                &path,
+                &ExportOptions::default(),
+                |_| {},
+            )
+            .await
+            .expect("export");
+        assert!(matches!(
+            result,
+            ExportResult::Success {
+                rows_exported: 4,
+                ..
+            }
+        ));
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read export"),
+            "id\tnote\n1\t\"a\tb\"\n2\t\"two\nlines\"\n3\t\"say \"\"hi\"\"\"\n4\t\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_export_stops_and_says_so() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let connection = sqlite_connection(dir.path()).await;
+        let options = ExportOptions::default();
+        options.cancel.store(true, Ordering::Relaxed);
+
+        let result = ExportService::new()
+            .export_data_streaming_with_transformer(
+                &connection,
+                "SELECT 1 AS n UNION ALL SELECT 2",
+                None,
+                &CsvTransformer::new(CsvOptions::default()),
+                &dir.path().join("out.csv"),
+                &options,
+                |_| {},
+            )
+            .await
+            .expect("export");
+        assert!(matches!(result, ExportResult::Cancelled));
     }
 }

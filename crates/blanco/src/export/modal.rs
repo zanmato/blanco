@@ -3,26 +3,32 @@ use chrono::Local;
 use database::DatabaseService;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
-    Styled, Subscription, Window, div, prelude::FluentBuilder, px,
+    SharedString, Styled, Subscription, Task, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     ActiveTheme, IndexPath, WindowExt,
-    button::Button,
+    button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
+    dialog::{DialogClose, DialogFooter},
     h_flex,
     input::{Input, InputState},
+    notification::NotificationType,
     scroll::ScrollableElement,
     select::{Select, SelectEvent, SelectState},
     v_flex,
 };
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::Duration;
 use transformers::{
     CsvOptions, CsvQuoting, CsvTransformer, DataTransformer, JsonTransformer, MarkdownTransformer,
     SqlTransformer, TextEncoding, TsvTransformer,
 };
 
+use super::service::ExportResult;
 use crate::app_settings::AppSettings;
+use crate::result_ext::ResultExt as _;
 use crate::settings::CsvDelimiter;
 
 /// Export format options
@@ -60,6 +66,8 @@ impl ExportFormat {
 #[derive(Clone, Default)]
 pub struct ExportOptions {
     pub encoding: TextEncoding,
+    /// Set to stop a running export.
+    pub cancel: Arc<AtomicBool>,
 }
 
 type OptionSelect = Entity<SelectState<Vec<String>>>;
@@ -156,10 +164,14 @@ pub struct ExportModal {
     /// SQL output as one INSERT holding every row.
     sql_multi_row: bool,
     is_exporting: bool,
-    export_progress: f32,
-    exported_rows: usize,
-    total_rows: usize,
-    is_cancelled: bool,
+    /// Rows written so far, counted by the export task.
+    exported_rows: Arc<AtomicUsize>,
+    /// Stops the running export when set.
+    cancel: Arc<AtomicBool>,
+    /// The dialog went away while the export ran, so finishing must not
+    /// close whatever dialog is open by then.
+    dialog_closed: bool,
+    _progress_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
     format_changed: AtomicBool,
 }
@@ -226,10 +238,10 @@ impl ExportModal {
             csv,
             sql_multi_row: true,
             is_exporting: false,
-            export_progress: 0.0,
-            exported_rows: 0,
-            total_rows: 0, // We'll estimate this later
-            is_cancelled: false,
+            exported_rows: Arc::new(AtomicUsize::new(0)),
+            cancel: Arc::new(AtomicBool::new(false)),
+            dialog_closed: false,
+            _progress_task: None,
             _subscriptions: vec![subscription, delimiter_subscription],
             format_changed: AtomicBool::new(false),
         }
@@ -303,155 +315,208 @@ impl ExportModal {
         .detach();
     }
 
+    /// Stops a running export. Called when the dialog closes.
+    pub fn cancel(&mut self) {
+        self.dialog_closed = true;
+        if self.is_exporting {
+            self.cancel.store(true, Ordering::Relaxed);
+        }
+    }
+
     pub fn start_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_exporting {
             return;
         }
 
-        // Validate inputs
-        match self.get_full_file_path(cx) {
-            Ok(file_path) => {
-                let format = self.get_selected_format(cx);
-                let options = ExportOptions {
-                    encoding: chosen(&self.encoding_select, &TextEncoding::ALL, cx),
-                };
-                let csv_options = self.csv.options(cx);
-                let sql_multi_row = self.sql_multi_row;
-
-                self.is_exporting = true;
-                self.is_cancelled = false;
-                self.export_progress = 0.0;
-                self.exported_rows = 0;
-                cx.notify();
-
-                let connection_id = self.context.connection_id;
-                let database_name = self.context.database_name.clone();
-                let schema_name = self.context.schema_name.clone();
-                let table_name_param = self.table_name.clone();
-                let db_type = self.context.db_type;
-
-                let table_name_for_query = if let Some(schema) = &schema_name {
-                    format!("{}.{}", schema, table_name_param)
-                } else {
-                    table_name_param.clone()
-                };
-
-                let select_query = format!("SELECT * FROM {}", table_name_for_query);
-
-                let db_service = DatabaseService::global(cx).clone();
-
-                cx.spawn_in(window, async move |entity, window| {
-                    let result = window
-                        .background_spawn(async move {
-                            let connection = db_service
-                                .get_or_create_connection(connection_id, None)
-                                .await?;
-
-                            let transformer: Box<dyn DataTransformer> = match format {
-                                ExportFormat::Csv => Box::new(CsvTransformer::new(csv_options)),
-                                ExportFormat::Tsv => Box::new(TsvTransformer),
-                                ExportFormat::Markdown => Box::new(MarkdownTransformer),
-                                ExportFormat::Json => Box::new(JsonTransformer::new()),
-                                ExportFormat::Sql => {
-                                    let table_name_for_sql = if let Some(schema) = &schema_name {
-                                        format!("{}.{}", schema, table_name_param)
-                                    } else {
-                                        table_name_param.clone()
-                                    };
-                                    Box::new(
-                                        SqlTransformer::with_table_name(
-                                            table_name_for_sql,
-                                            db_type,
-                                        )
-                                        .multi_row(sql_multi_row),
-                                    )
-                                }
-                            };
-
-                            let export_service = super::service::ExportService::new();
-
-                            export_service
-                                .export_data_streaming_with_transformer(
-                                    connection.as_ref(),
-                                    &select_query,
-                                    Some(database_name.as_str()),
-                                    transformer.as_ref(),
-                                    &file_path,
-                                    &options,
-                                    move |progress| {
-                                        tracing::info!(
-                                            "Export progress: {}/{} rows",
-                                            progress.exported_rows,
-                                            progress.total_rows
-                                        );
-                                    },
-                                )
-                                .await?;
-
-                            tracing::info!(
-                                "Export completed successfully: {} -> {}",
-                                table_name_for_query,
-                                file_path.display()
-                            );
-                            Ok::<(), anyhow::Error>(())
-                        })
-                        .await;
-
-                    if let Err(e) = &result {
-                        tracing::error!("Export failed: {}", e);
-                    }
-
-                    entity
-                        .update_in(window, |modal, _, cx| {
-                            modal.is_exporting = false;
-                            cx.notify();
-                        })
-                        .ok();
-
-                    window
-                        .update(|window, cx| {
-                            window.close_dialog(cx);
-                        })
-                        .ok();
-                })
-                .detach();
-            }
+        let file_path = match self.get_full_file_path(cx) {
+            Ok(file_path) => file_path,
             Err(error) => {
-                tracing::error!("Export error: {}", error);
+                window
+                    .push_notification((NotificationType::Warning, SharedString::from(error)), cx);
+                return;
             }
-        }
+        };
+        let format = self.get_selected_format(cx);
+        self.cancel = Arc::new(AtomicBool::new(false));
+        let options = ExportOptions {
+            encoding: chosen(&self.encoding_select, &TextEncoding::ALL, cx),
+            cancel: Arc::clone(&self.cancel),
+        };
+        let csv_options = self.csv.options(cx);
+        let sql_multi_row = self.sql_multi_row;
+
+        self.is_exporting = true;
+        self.exported_rows.store(0, Ordering::Relaxed);
+        cx.notify();
+
+        // The row count is written from the export task, so redraw on a timer
+        // while it runs.
+        self._progress_task = Some(cx.spawn(async move |modal, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(200))
+                    .await;
+                let running = modal
+                    .update(cx, |modal, cx| {
+                        cx.notify();
+                        modal.is_exporting
+                    })
+                    .unwrap_or(false);
+                if !running {
+                    break;
+                }
+            }
+        }));
+
+        let connection_id = self.context.connection_id;
+        let database_name = self.context.database_name.clone();
+        let schema_name = self.context.schema_name.clone();
+        let table_name = self.table_name.clone();
+        let db_type = self.context.db_type;
+        // Quoted, so a name with capitals, spaces or a reserved word is read
+        // as the table it is.
+        let select_query = format!(
+            "SELECT * FROM {}",
+            db_type
+                .dialect()
+                .quote_qualified(schema_name.as_deref(), &table_name)
+        );
+        let exported_rows = Arc::clone(&self.exported_rows);
+        let db_service = DatabaseService::global(cx).clone();
+
+        cx.spawn_in(window, async move |entity, window| {
+            let export_path = file_path.clone();
+            let result = window
+                .background_spawn(async move {
+                    let connection = db_service
+                        .get_or_create_connection(connection_id, None)
+                        .await?;
+
+                    let transformer: Box<dyn DataTransformer> = match format {
+                        ExportFormat::Csv => Box::new(CsvTransformer::new(csv_options)),
+                        ExportFormat::Tsv => Box::new(TsvTransformer),
+                        ExportFormat::Markdown => Box::new(MarkdownTransformer),
+                        ExportFormat::Json => Box::new(JsonTransformer::new()),
+                        ExportFormat::Sql => {
+                            let table_name_for_sql = match &schema_name {
+                                Some(schema) => format!("{schema}.{table_name}"),
+                                None => table_name.clone(),
+                            };
+                            Box::new(
+                                SqlTransformer::with_table_name(table_name_for_sql, db_type)
+                                    .multi_row(sql_multi_row),
+                            )
+                        }
+                    };
+
+                    super::service::ExportService::new()
+                        .export_data_streaming_with_transformer(
+                            connection.as_ref(),
+                            &select_query,
+                            Some(database_name.as_str()),
+                            transformer.as_ref(),
+                            &export_path,
+                            &options,
+                            move |progress| {
+                                exported_rows.store(progress.exported_rows, Ordering::Relaxed);
+                            },
+                        )
+                        .await
+                })
+                .await;
+
+            let message = match &result {
+                Ok(ExportResult::Success {
+                    file_path,
+                    rows_exported,
+                    ..
+                }) => Some((
+                    NotificationType::Success,
+                    format!("Exported {rows_exported} rows to {file_path}"),
+                )),
+                // A cancelled or failed export leaves a partial file behind,
+                // which is not something to keep.
+                Ok(ExportResult::Cancelled) => {
+                    remove_partial_file(&file_path).await;
+                    None
+                }
+                Err(error) => {
+                    remove_partial_file(&file_path).await;
+                    tracing::error!("Export failed: {error:#}");
+                    Some((NotificationType::Error, format!("Export failed: {error:#}")))
+                }
+            };
+
+            entity
+                .update_in(window, |modal, window, cx| {
+                    modal.is_exporting = false;
+                    if let Some((kind, message)) = message {
+                        window.push_notification((kind, SharedString::from(message)), cx);
+                    }
+                    if !modal.dialog_closed {
+                        window.close_dialog(cx);
+                    }
+                    cx.notify();
+                })
+                .log_err();
+        })
+        .detach();
     }
 
-    fn render_progress_bar(&self, cx: &App) -> impl IntoElement {
-        if self.is_exporting {
-            v_flex()
-                .gap_2()
-                .child(div().text_sm().child(format!(
-                    "Exporting... {}/{} rows ({:.1}%)",
-                    self.exported_rows,
-                    self.total_rows,
-                    self.export_progress * 100.0
-                )))
-                .child(
-                    div()
-                        .w_full()
-                        .h_2()
-                        .bg(cx.theme().muted_foreground.opacity(0.2))
-                        .rounded(cx.theme().radius)
-                        .child(
-                            div()
-                                .h_full()
-                                .bg(cx.theme().primary)
-                                .rounded(cx.theme().radius)
-                                .when(self.export_progress > 0.0, |this| {
-                                    this.w(px((200.0 * self.export_progress).max(1.0)))
-                                }),
-                        ),
-                )
-        } else {
-            div() // Empty div when not exporting
-        }
+    /// The total is not known while rows stream in, so this counts up.
+    fn render_progress(&self, cx: &App) -> impl IntoElement {
+        div().when(self.is_exporting, |this| {
+            this.text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child(format!(
+                    "Exporting… {} rows written. Close the dialog to stop.",
+                    self.exported_rows.load(Ordering::Relaxed)
+                ))
+        })
     }
+}
+
+async fn remove_partial_file(path: &std::path::Path) {
+    if let Err(error) = smol::fs::remove_file(path).await
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::error!("Failed to remove {}: {error}", path.display());
+    }
+}
+
+/// Opens the export dialog for `modal`. Closing the dialog while the export
+/// runs cancels it.
+pub fn open_export_dialog(modal: Entity<ExportModal>, window: &mut Window, cx: &mut App) {
+    window.open_dialog(cx, move |dialog, _window, cx| {
+        let is_exporting = modal.read(cx).is_exporting();
+        dialog
+            .title("Export Table Data")
+            .h(px(600.0))
+            .child(modal.clone())
+            .on_close({
+                let modal = modal.clone();
+                move |_, _, cx| modal.update(cx, |modal, _| modal.cancel())
+            })
+            .footer(
+                DialogFooter::new()
+                    .child(
+                        DialogClose::new()
+                            .child(Button::new("export-cancel").label("Cancel").outline()),
+                    )
+                    .child(
+                        Button::new("export-submit")
+                            .primary()
+                            .label("Export")
+                            .loading(is_exporting)
+                            .on_click({
+                                let modal = modal.clone();
+                                move |_, window, cx| {
+                                    modal.update(cx, |modal, cx| modal.start_export(window, cx));
+                                }
+                            }),
+                    ),
+            )
+    });
 }
 
 impl ExportModal {
@@ -604,7 +669,7 @@ impl Render for ExportModal {
                 ),
                 _ => this,
             })
-            .child(self.render_progress_bar(cx))
+            .child(self.render_progress(cx))
             .overflow_y_scrollbar()
     }
 }
