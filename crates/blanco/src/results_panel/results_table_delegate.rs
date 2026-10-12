@@ -59,6 +59,40 @@ pub struct ResultsTableDelegate {
 }
 
 impl ResultsTableDelegate {
+    /// The request that opens the row a foreign key cell references in a new
+    /// tab, or `None` when the cell is no foreign key or holds NULL.
+    pub fn referenced_row_request(
+        &self,
+        row_ix: usize,
+        col_ix: usize,
+    ) -> Option<crate::app::ShowQueryInNewTab> {
+        // By name: the result's columns can be reordered, hidden or a subset
+        // of the table's.
+        let foreign_key = self.table_column_info(col_ix)?.foreign_key.as_ref()?;
+        let value = self.rows.get(row_ix)?.get(col_ix)?.as_ref()?;
+        let numeric = self
+            .column_types
+            .get(col_ix)
+            .is_some_and(ColumnType::is_numeric);
+        let sql = self.db_type?.dialect().referenced_row_query(
+            &foreign_key.foreign_table_name,
+            &foreign_key.foreign_column_name,
+            value,
+            numeric,
+        );
+        let (schema_name, table) = match foreign_key.foreign_table_name.rsplit_once('.') {
+            Some((schema, table)) => (Some(schema.to_string()), table),
+            None => (None, foreign_key.foreign_table_name.as_str()),
+        };
+        Some(crate::app::ShowQueryInNewTab {
+            connection_id: self.connection_id,
+            database_name: self.database_name.to_string(),
+            schema_name,
+            title: table.to_string(),
+            sql,
+        })
+    }
+
     /// Whether the grid currently shows a filtered subset of the result.
     pub fn is_filtered(&self) -> bool {
         self.unfiltered_rows.is_some()
@@ -249,21 +283,14 @@ impl ResultsTableDelegate {
             .iter()
             .enumerate()
             .map(|(i, col_name)| {
-                // Check if this column has a foreign key
-                let has_foreign_key = result
+                // Matched by name: the result's columns need not be in the
+                // table's order.
+                let table_column = result
                     .table_columns
                     .as_ref()
-                    .and_then(|cols| cols.get(i))
-                    .and_then(|col| col.foreign_key.as_ref())
-                    .is_some();
-
-                // Check if this column is a primary key
-                let is_primary_key = result
-                    .table_columns
-                    .as_ref()
-                    .and_then(|cols| cols.get(i))
-                    .map(|col| col.is_primary_key)
-                    .unwrap_or(false);
+                    .and_then(|cols| cols.iter().find(|col| col.name == *col_name));
+                let has_foreign_key = table_column.is_some_and(|col| col.foreign_key.is_some());
+                let is_primary_key = table_column.is_some_and(|col| col.is_primary_key);
 
                 // Measure column name width
                 let shaped_line = window.text_system().shape_line(
@@ -451,6 +478,68 @@ mod tests {
         // An expression is SQL for the server, not JSON.
         delegate.edit_state.expression_cells.insert((2, 1));
         assert_eq!(delegate.invalid_json_edit(), None);
+    }
+
+    #[test]
+    fn test_referenced_row_request() {
+        let customer_id = ColumnInfo {
+            name: "customer_id".to_string(),
+            data_type: "integer".to_string(),
+            is_nullable: true,
+            is_primary_key: false,
+            default_value: None,
+            character_maximum_length: None,
+            foreign_key: Some(blanco_core::ForeignKeyInfo {
+                foreign_table_name: "sales.customers".to_string(),
+                foreign_column_name: "id".to_string(),
+                constraint_name: None,
+            }),
+            comment: None,
+            numeric_precision: None,
+            numeric_scale: None,
+        };
+        let note = ColumnInfo {
+            name: "note".to_string(),
+            foreign_key: None,
+            ..customer_id.clone()
+        };
+        let delegate = ResultsTableDelegate {
+            connection_id: 7,
+            database_name: "shop".into(),
+            db_type: Some(database::DatabaseType::PostgreSQL),
+            // The result shows the table's columns in another order.
+            columns: vec![
+                Column::new("note", "note"),
+                Column::new("customer_id", "customer_id"),
+            ],
+            column_types: vec![ColumnType::Text, ColumnType::Integer],
+            rows: vec![
+                vec![Some("hi".to_string()), Some("42".to_string())],
+                vec![None, None],
+            ],
+            table_columns: vec![customer_id, note],
+            ..Default::default()
+        };
+
+        let request = delegate
+            .referenced_row_request(0, 1)
+            .expect("a foreign key cell");
+        assert_eq!(request.connection_id, 7);
+        assert_eq!(request.database_name, "shop");
+        assert_eq!(request.schema_name.as_deref(), Some("sales"));
+        assert_eq!(request.title, "customers");
+        assert_eq!(
+            request.sql,
+            r#"SELECT * FROM "sales"."customers" WHERE "id" = 42"#
+        );
+        assert!(
+            delegate.referenced_row_request(0, 0).is_none(),
+            "not a foreign key"
+        );
+        assert!(
+            delegate.referenced_row_request(1, 1).is_none(),
+            "NULL references nothing"
+        );
     }
 
     #[test]

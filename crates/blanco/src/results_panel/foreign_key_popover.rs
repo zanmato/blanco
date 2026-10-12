@@ -5,8 +5,11 @@ use gpui::{
     App, AsyncApp, Context, FocusHandle, Focusable, FontWeight, Render, SharedString, WeakEntity,
     Window, div, px,
 };
+use gpui_component::button::Button;
 use gpui_component::scroll::ScrollableElement as _;
-use gpui_component::{ActiveTheme, v_flex};
+use gpui_component::{ActiveTheme, Sizable as _, v_flex};
+
+use crate::app::ShowQueryInNewTab;
 
 /// Popover component for displaying foreign key lookup results
 pub struct ForeignKeyPopover {
@@ -16,6 +19,8 @@ pub struct ForeignKeyPopover {
     is_loading: bool,
     error: Option<String>,
     focus_handle: FocusHandle,
+    /// Opens the referenced row in a new tab.
+    open_row: Option<ShowQueryInNewTab>,
 }
 
 impl ForeignKeyPopover {
@@ -25,6 +30,7 @@ impl ForeignKeyPopover {
         reference_value: &str,
         connection_id: i64,
         database_name: Option<SharedString>,
+        open_row: Option<ShowQueryInNewTab>,
         cx: &mut Context<Self>,
     ) -> Self {
         let focus_handle = cx.focus_handle();
@@ -76,6 +82,7 @@ impl ForeignKeyPopover {
             is_loading: true,
             error: None,
             focus_handle,
+            open_row,
         }
     }
 }
@@ -132,6 +139,21 @@ impl Render for ForeignKeyPopover {
                         .when(!result.rows.is_empty(), |this| {
                             this.child(self.render_results(result, cx))
                         }),
+                )
+            })
+            .when_some(self.open_row.clone(), |this, open_row| {
+                // The popover opens from a grid cell and inherits its mono
+                // font, which is for the data, not for a button.
+                this.child(
+                    v_flex().font_family(cx.theme().font_family.clone()).child(
+                        Button::new("fk-open-referenced-row")
+                            .label("Open Referenced Row")
+                            .small()
+                            .outline()
+                            .on_click(move |_, window, cx| {
+                                window.dispatch_action(Box::new(open_row.clone()), cx);
+                            }),
+                    ),
                 )
             })
     }

@@ -27,7 +27,7 @@ use crate::app::{
     AddRow, ClearCompareSelection, CompareCellWithSelected, CompareRowWithSelected, CopyAsCSV,
     CopyAsJSON, CopyAsMarkdown, CopyAsSQL, CopyAsTSV, CopyAsVALUES, CopyColumnValues, DeleteRow,
     DuplicateRow, ExportAsCSV, ExportAsJSON, ExportAsMarkdown, ExportAsSQL, ExportAsTSV,
-    FilterByCellValue, HideResultColumn, PinResultColumn, SelectCellForCompare,
+    FilterByCellValue, HideResultColumn, OpenReferencedRow, PinResultColumn, SelectCellForCompare,
     SelectRowForCompare, SetCellDefault, SetCellNull, ToggleCellExpression,
 };
 use crate::results_panel::cell_edit_state::{CellInput, compare_numeric, format_value_for_display};
@@ -518,13 +518,15 @@ impl ResultsTableDelegate {
                             .value(stored_text.clone()),
                     ),
             )
+            // By name, as the header does: the result's columns need not be
+            // in the table's order.
             .when_some(
-                self.table_columns
-                    .get(col_ix)
+                self.table_column_info(col_ix)
                     .and_then(|c| c.foreign_key.as_ref()),
                 |this, fk_info| {
                     let fk_info = fk_info.clone();
                     let cell_value = stored_text.clone();
+                    let open_row = self.referenced_row_request(row_ix, col_ix);
                     let popover_id = format!("fk-popover-{}-{}", row_ix, col_ix);
                     let connection_id = self.connection_id;
                     let database_name = if self.database_name.is_empty() {
@@ -563,6 +565,7 @@ impl ResultsTableDelegate {
                                                         &cell_value,
                                                         connection_id,
                                                         database_name_clone,
+                                                        open_row.clone(),
                                                         cx,
                                                     )
                                                 },
@@ -948,7 +951,16 @@ impl TableDelegate for ResultsTableDelegate {
                 .table_column_info(cell.1)
                 .is_some_and(|info| info.default_value.is_some());
 
-        menu.menu_with_icon(
+        let follows_foreign_key = self.referenced_row_request(cell.0, cell.1).is_some();
+        menu.when(follows_foreign_key, |menu| {
+            menu.menu_with_icon(
+                "Open Referenced Row",
+                Icon::new(IconName::ExternalLink),
+                Box::new(OpenReferencedRow),
+            )
+            .separator()
+        })
+        .menu_with_icon(
             "Copy as CSV",
             Icon::new(IconName::Sheet),
             Box::new(CopyAsCSV),

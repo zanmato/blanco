@@ -158,6 +158,9 @@ All notable changes to this project will be documented in this file.
   the referenced table and pairs each column with a referenced one, prefilled
   from its primary key; Drop Foreign Key is in the row's context menu.
   SQLite lists its foreign keys but reports changes as unsupported
+- Open Referenced Row, in the foreign key popover of a cell and in the cell
+  context menu (Alt+Enter, rebindable), opens the referenced table in a new
+  tab with a query limited to the matching key and runs it
 
 ### Fixes
 

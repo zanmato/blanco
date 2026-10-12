@@ -410,6 +410,35 @@ impl Dialect {
 
     // ----- statement shapes -----
 
+    /// The rows of `table` (a possibly schema-qualified path) whose `column`
+    /// equals `value`, as for following a foreign key to the row it
+    /// references. A numeric value is written bare when `numeric`, since
+    /// ClickHouse does not compare a number column with a string.
+    pub fn referenced_row_query(
+        &self,
+        table: &str,
+        column: &str,
+        value: &str,
+        numeric: bool,
+    ) -> String {
+        let number = value.trim();
+        let is_number = number
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '-' | '+' | '.' | 'e' | 'E'))
+            && number.parse::<f64>().is_ok();
+        let literal = if numeric && is_number {
+            number.to_string()
+        } else {
+            self.string_literal(value)
+        };
+        format!(
+            "SELECT * FROM {} WHERE {} = {}",
+            self.quote_path(table),
+            self.quote_identifier(column),
+            literal
+        )
+    }
+
     /// Row limiting for a `SELECT`: SQL Server has no `LIMIT`, so the limit
     /// becomes `TOP n` right after `SELECT` (or `SELECT DISTINCT`); every other
     /// backend gets a trailing `LIMIT n`. `sql` is returned unchanged when it
@@ -564,6 +593,32 @@ mod tests {
         assert!(postgres.is_system_schema("pg_catalog"));
         assert!(postgres.is_system_schema("pg_toast_temp_1"));
         assert!(!postgres.is_system_schema("public"));
+    }
+
+    #[test]
+    fn referenced_row_query_quotes_for_the_dialect() {
+        assert_eq!(
+            dialect(DatabaseType::PostgreSQL).referenced_row_query(
+                "public.users",
+                "id",
+                "42",
+                true
+            ),
+            r#"SELECT * FROM "public"."users" WHERE "id" = 42"#
+        );
+        assert_eq!(
+            dialect(DatabaseType::MySQL).referenced_row_query("users", "code", "O'Brien", false),
+            "SELECT * FROM `users` WHERE `code` = 'O''Brien'"
+        );
+        // Not a number after all: quoted rather than spliced in.
+        assert_eq!(
+            dialect(DatabaseType::MsSql).referenced_row_query("users", "id", "1; DROP", true),
+            "SELECT * FROM [users] WHERE [id] = '1; DROP'"
+        );
+        assert_eq!(
+            dialect(DatabaseType::SQLite).referenced_row_query("t", "x", "NaN", true),
+            r#"SELECT * FROM "t" WHERE "x" = 'NaN'"#
+        );
     }
 
     #[test]
